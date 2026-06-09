@@ -103,12 +103,19 @@ Container rules for Web and Pwn:
   normalized to a stable lowercase Docker-safe identifier using only
   `[a-z0-9][a-z0-9_.-]`. Use the same identifier for the built image tag,
   validation commands, and `metadata.docker_image`.
-- Apply least privilege by default. In the final Web/Pwn image create a fixed
-  non-zero `ctf` user/group, set `WORKDIR /home/ctf`, copy challenge files
-  with `ctf` ownership, and end the Dockerfile with `USER ctf`. The service
-  process must run as `ctf`, not root.
+- Apply least privilege by default. Pwn images normally create a fixed
+  non-zero `ctf` user/group, use `WORKDIR /home/ctf`, copy challenge files
+  with `ctf` ownership, and end with `USER ctf`.
+- Web images MUST reuse the base image's appropriate non-root service user and
+  conventional application directory when available, such as
+  `www-data:/var/www/html` for Apache/PHP or the selected Tomcat image's
+  `tomcat` account/application directory. Create `ctf` only if the base image
+  has no suitable service account. Never leave the service running as root.
 - Keep challenge files read-only at runtime where practical. Create only the
-  narrow writable directories the service needs, owned by `ctf`.
+  narrow writable directories the service needs, owned by its runtime user.
+- `deploy/docker-compose.yml` MUST NOT use `volumes` (neither bind mounts nor
+  named volumes). Copy all source, configuration, startup assets, and required
+  initial data into the image during `docker build`.
 - Web services must listen on an unprivileged container port such as `8080`.
   If the matrix requests host port `80`, map it to that internal port instead
   of adding a bind capability or running as root.
@@ -143,9 +150,10 @@ Pwn rules:
 
 - Run the real build command.
 - Web/Pwn: run `docker build` and record the image tag.
-- Web/Pwn: confirm Compose resolves `FLAG`, `image`, and `container_name` as
-  required; verify the running process UID is the unprivileged `ctf` user;
-  then build and run that exact Compose configuration.
+- Web/Pwn: confirm Compose resolves `FLAG`, `image`, and `container_name`,
+  defines no `volumes`, and runs with the intended non-root account (`ctf` for
+  ordinary Pwn, or the selected Web base image's service user); then build and
+  run that exact Compose configuration.
 - Re: run the compiler, then inspect the produced artifact with `file`.
 - Record build commands, compiler/runtime versions, and artifact SHA-256 in
   `metadata.json`.

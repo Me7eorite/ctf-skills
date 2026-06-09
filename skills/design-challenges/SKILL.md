@@ -141,11 +141,19 @@ the author ticket or generated prompt:
   it to a stable Docker-safe lowercase identifier using only
   `[a-z0-9][a-z0-9_.-]`; use the same identifier in build, validation, metadata,
   and delivery commands.
-- Apply least privilege to Web and Pwn images by default. In the final image
-  create an unprivileged `ctf` user/group, set `WORKDIR /home/ctf`, copy
-  challenge files with `ctf` ownership, and finish with `USER ctf`. The
-  service must run as `ctf`, not root. Prefer a fixed non-zero UID/GID for
-  reproducibility.
+- Apply least privilege to Web and Pwn images by default. Pwn images normally
+  create an unprivileged `ctf` user/group, use `/home/ctf`, and finish with
+  `USER ctf`.
+- Web images SHOULD reuse the non-root service user and conventional content
+  directory supplied by the selected base image when available, such as
+  `www-data` with `/var/www/html` for Apache/PHP or `tomcat` with the image's
+  standard Tomcat application directory. Create `ctf` only when the base
+  image has no appropriate service account. The final process must not run as
+  root.
+- Do not define Compose `volumes` for generated challenges. Copy source,
+  configuration, startup assets, and required initial data into the image at
+  build time. Create required writable directories inside the image with
+  ownership assigned to the runtime user.
 - Web services should listen on an unprivileged container port such as `8080`;
   Compose may map a requested host port such as `80` to that internal port.
   Do not grant a Linux capability merely to bind a low port.

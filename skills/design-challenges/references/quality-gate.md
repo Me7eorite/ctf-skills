@@ -30,10 +30,14 @@ Apply this checklist before finalizing a challenge or challenge pack.
 - No real malware behavior is required.
 - Remote services are containerized or otherwise isolated.
 - Destructive-looking actions are confined to disposable artifacts.
-- Web/Pwn containers run as an unprivileged `ctf` user from `/home/ctf`
-  unless the challenge has a documented technical exception.
-- Dockerfiles end with `USER ctf`; copied challenge files have intentional
-  ownership and only required runtime paths are writable.
+- Pwn containers run as unprivileged `ctf` from `/home/ctf` unless the
+  challenge has a documented technical exception.
+- Web containers reuse an appropriate non-root base-image service user and
+  conventional Web directory where available; they do not create `ctf`
+  unnecessarily.
+- Dockerfiles end with the intended non-root runtime user; copied challenge
+  files have intentional ownership and only required paths are writable.
+- Compose files contain no `volumes`; required content is built into the image.
 - Web services bind a non-privileged internal port; host port `80` is mapped
   to it rather than obtained through root or an added capability.
 - Compose avoids `privileged: true`, broad capabilities, host devices, host

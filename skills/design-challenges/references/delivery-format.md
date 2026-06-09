@@ -55,13 +55,20 @@ Container authoring conventions:
   stable lowercase Docker identifier (`[a-z0-9][a-z0-9_.-]`). Use that same
   name for build tags, validation commands, `metadata.docker_image`, and
   delivery inventory fields.
-- Web and Pwn images must run with least privilege by default. The final image
-  creates an unprivileged `ctf` user/group, uses `/home/ctf` as the working
-  directory, assigns challenge files to `ctf`, and ends with `USER ctf`.
-  Prefer a fixed non-zero UID/GID so ownership is reproducible.
+- Pwn images run with least privilege by default: create an unprivileged
+  `ctf` user/group, place the challenge under `/home/ctf`, assign intentional
+  ownership, and end with `USER ctf`.
+- Web images reuse the base image's established non-root service account and
+  standard application directory when available. Examples include
+  `www-data` with `/var/www/html` for Apache/PHP and `tomcat` with the
+  selected Tomcat image's conventional application directory. Create a
+  separate `ctf` user only if the base image has no suitable account.
 - Keep application and challenge files read-only at runtime where practical.
-  Create narrowly scoped writable directories owned by `ctf` only for data
-  the service genuinely needs to modify.
+  Create narrowly scoped writable directories owned by the selected runtime
+  user only for data the service genuinely needs to modify.
+- `docker-compose.yml` must not define `volumes`, including bind mounts and
+  named volumes. All source, configuration, startup assets, and seed data must
+  be copied into the image during `docker build`.
 - Web services should bind an unprivileged container port such as `8080`.
   When the delivery port is `80`, map host port `80` to that internal port
   instead of granting bind capabilities or running as root.

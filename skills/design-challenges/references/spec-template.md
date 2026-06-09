@@ -49,10 +49,13 @@ When the user asks for deliverable-ready output, package plans, handoff manifest
 - Flag injection: Compose defines `environment.FLAG` as `${FLAG}`; validation
   sets the host-side value, and the service does not bake plaintext into image
   layers, the Compose file, or source
-- Runtime identity: final image creates and uses unprivileged user `ctf`,
-  places the challenge under `/home/ctf`, and runs with `USER ctf`
+- Runtime identity: Pwn defaults to `ctf` under `/home/ctf`; Web reuses an
+  appropriate base-image service user and standard Web directory (for example
+  `www-data:/var/www/html` or the Tomcat image's `tomcat` account/directory)
 - Runtime permissions: list only required writable paths/capabilities; use
   `none` when no exception to the least-privilege default is needed
+- Compose storage: no `volumes`; all required files and initial data are built
+  into the image
 - Web port: bind an unprivileged container port and map the requested host port
 - Apt source: retain upstream by default; when the target build network needs
   a mirror, use an organizer-approved source for the same distro release
