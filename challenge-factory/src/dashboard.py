@@ -10,6 +10,7 @@ from pathlib import Path
 
 from jsonio import read_json
 from paths import ProjectPaths
+from seeds import SeedStore
 from shards import ShardQueue
 from state import StateStore
 
@@ -144,6 +145,7 @@ class DashboardService:
     def __init__(self, paths: ProjectPaths, tasks: TaskManager | None = None):
         self.paths = paths
         self.queue = ShardQueue(paths)
+        self.seeds = SeedStore(paths)
         self.store = StateStore(paths)
         self.tasks = tasks or TaskManager(paths)
 
@@ -168,6 +170,7 @@ class DashboardService:
                 },
             },
             "challenges": challenges,
+            "seeds": self.seeds.list(),
             "shards": shards,
             "logs": self._logs(),
             "validation": read_json(self.paths.reports / "validation.json", {}),
@@ -186,6 +189,15 @@ class DashboardService:
         if state == "running" and self.tasks.state().get("running"):
             raise RuntimeError("cannot requeue while local task is running")
         return self.queue.requeue(name, state)
+
+    def save_seed(self, seed: object) -> dict:
+        return self.seeds.save(seed)
+
+    def delete_seed(self, challenge_id: str) -> None:
+        self.seeds.delete(challenge_id)
+
+    def enqueue_seeds(self, size: int) -> list[Path]:
+        return self.seeds.enqueue(size)
 
     def _shards(self) -> tuple[dict[str, int], list[dict]]:
         counts = {}

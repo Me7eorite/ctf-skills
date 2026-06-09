@@ -27,6 +27,7 @@ py-modules = [
   "packing",
   "paths",
   "reports",
+  "seeds",
   "shards",
   "state",
   "validation",

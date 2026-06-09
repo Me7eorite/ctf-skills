@@ -86,6 +86,37 @@ class WebserverTests(unittest.TestCase):
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.json()["ok"], False)
 
+    def test_seed_crud_and_enqueue(self):
+        seed = {
+            "id": "web-0001",
+            "title": "Demo",
+            "category": "web",
+            "difficulty": "easy",
+            "points": 100,
+            "port": 8080,
+            "primary_technique": "auth bypass",
+            "learning_objective": "Understand trust boundaries",
+            "runtime": "node",
+        }
+        with self._client() as client:
+            saved = client.post("/api/seeds", json=seed)
+            state = client.get("/api/state")
+            enqueued = client.post("/api/seeds/enqueue", json={"size": 5})
+            deleted = client.delete("/api/seeds/web-0001")
+
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(state.json()["seeds"][0]["runtime"], "node")
+        self.assertEqual(enqueued.status_code, 201)
+        self.assertEqual(enqueued.json()["shards"], ["web-0001-0001.json"])
+        self.assertEqual(deleted.status_code, 200)
+
+    def test_invalid_seed_returns_bad_request(self):
+        with self._client() as client:
+            response = client.post("/api/seeds", json={"id": "bad"})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("title", response.json()["message"])
+
 
 if __name__ == "__main__":
     unittest.main()

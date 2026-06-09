@@ -76,6 +76,12 @@ The dashboard provides queue, challenge, build, validation, log, and live
 per-challenge pipeline views. It can also start one local worker, re-run
 validation, and retry failed shards.
 
+The **种子配置** view manages the matrix-compatible inputs used for generation.
+Create or edit Web/Pwn/Reverse seeds, put category-specific values such as
+`runtime`, `framework`, `compiler`, `mitigations`, or `target_platform` in the
+advanced JSON field, choose a shard size, then click **生成分片**. The resulting
+files enter the normal pending queue and can be processed by **启动 Worker**.
+
 Hermes reports `design`, `implement`, `build`, `validate`, and `document`
 events through the local `progress` command. Runner-owned claim, failure, and
 completion events provide a fallback even when an agent exits unexpectedly.

@@ -13,17 +13,27 @@ SUPPORTED_CATEGORIES = {"web", "pwn", "re"}
 
 
 def split_matrix(matrix: Path, output: Path, size: int) -> list[Path]:
+    return split_challenges(read_jsonl(matrix), output, size)
+
+
+def split_challenges(
+    rows: list[dict],
+    output: Path,
+    size: int,
+    *,
+    overwrite: bool = True,
+) -> list[Path]:
     if size < 1:
         raise ValueError("shard size must be at least 1")
 
     grouped: dict[str, list[dict]] = defaultdict(list)
-    for row in read_jsonl(matrix):
+    for row in rows:
         category = row.get("category")
         if category in SUPPORTED_CATEGORIES:
             grouped[category].append(row)
 
     output.mkdir(parents=True, exist_ok=True)
-    created = []
+    planned: list[tuple[Path, list[dict]]] = []
     for rows in grouped.values():
         rows.sort(key=lambda item: item["id"])
         for index in range(0, len(rows), size):
@@ -32,9 +42,12 @@ def split_matrix(matrix: Path, output: Path, size: int) -> list[Path]:
             start = chunk[0]["id"].split("-", 1)[1]
             end = chunk[-1]["id"].split("-", 1)[1]
             path = output / f"{category}-{start}-{end}.json"
-            write_json(path, {"challenges": chunk})
-            created.append(path)
-    return created
+            if path.exists() and not overwrite:
+                raise FileExistsError(f"分片已存在: {path.name}")
+            planned.append((path, chunk))
+    for path, chunk in planned:
+        write_json(path, {"challenges": chunk})
+    return [path for path, _ in planned]
 
 
 class ShardQueue:

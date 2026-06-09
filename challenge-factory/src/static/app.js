@@ -3,12 +3,14 @@ const appState = {
   view: "overview",
   category: "all",
   search: "",
+  editingSeedId: null,
   timer: null,
 };
 
 const labels = {
   overview: "生产概览",
   progress: "实时进度",
+  seeds: "种子配置",
   challenges: "题目",
   shards: "任务分片",
   logs: "运行日志",
@@ -59,7 +61,7 @@ function showToast(message, error = false) {
 async function api(path, options = {}) {
   const response = await fetch(path, options);
   const payload = await response.json();
-  if (!response.ok) throw new Error(payload.message || payload.error || "请求失败");
+  if (!response.ok) throw new Error(payload.message || payload.detail || payload.error || "请求失败");
   return payload;
 }
 
@@ -197,6 +199,35 @@ function renderChallengeTable() {
   `).join("") : `<tr><td colspan="7" class="px-4 py-16 text-center text-sm text-neutral-500">没有匹配的题目</td></tr>`;
 }
 
+function renderSeeds() {
+  const seeds = appState.data.seeds || [];
+  document.querySelector("#seedCountLabel").textContent = `${seeds.length} 个种子，保存后可生成待处理分片`;
+  document.querySelector("#seedList").innerHTML = seeds.length ? seeds.map((seed) => `
+    <article class="border border-line bg-white p-4 shadow-panel">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-2">
+            <span class="font-mono text-sm font-semibold">${escapeHtml(seed.id)}</span>
+            <span class="px-2 py-1 text-xs font-medium ${categoryMeta[seed.category]?.soft || "bg-neutral-100"}">${categoryMeta[seed.category]?.label || escapeHtml(seed.category)}</span>
+            <span class="px-2 py-1 text-xs capitalize ${statusClass("queued")}">${escapeHtml(seed.difficulty)}</span>
+          </div>
+          <h3 class="mt-3 text-sm font-medium">${escapeHtml(seed.title)}</h3>
+          <p class="mt-1 text-xs leading-5 text-neutral-500">${escapeHtml(seed.learning_objective)}</p>
+          <div class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-neutral-500">
+            <span>${escapeHtml(seed.primary_technique)}</span>
+            <span>${escapeHtml(seed.points)} 分</span>
+            ${seed.port ? `<span>端口 ${escapeHtml(seed.port)}</span>` : ""}
+          </div>
+        </div>
+        <div class="flex gap-2">
+          <button class="edit-seed grid size-9 place-items-center border border-line hover:bg-neutral-50" data-id="${escapeHtml(seed.id)}" title="编辑"><i data-lucide="pencil" class="size-4"></i></button>
+          <button class="delete-seed grid size-9 place-items-center border border-rose-200 text-rose-700 hover:bg-rose-50" data-id="${escapeHtml(seed.id)}" title="删除"><i data-lucide="trash-2" class="size-4"></i></button>
+        </div>
+      </div>
+    </article>
+  `).join("") : `<div class="border border-dashed border-line bg-white py-16 text-center text-sm text-neutral-500">还没有种子，请先在左侧配置第一道题</div>`;
+}
+
 function renderShards() {
   const states = [["pending", "待处理"], ["running", "运行中"], ["failed", "失败"], ["done", "已完成"]];
   document.querySelector("#shardColumns").innerHTML = states.map(([key, label]) => {
@@ -241,6 +272,7 @@ function render() {
   renderMetrics();
   renderRecent();
   renderProgress();
+  renderSeeds();
   renderChallengeTable();
   renderShards();
   renderLogs();
@@ -261,6 +293,117 @@ function bindDynamicEvents() {
     }
   }));
   document.querySelectorAll(".log-button").forEach((button) => button.addEventListener("click", () => openLog(button.dataset.name)));
+  document.querySelectorAll(".edit-seed").forEach((button) => button.addEventListener("click", () => editSeed(button.dataset.id)));
+  document.querySelectorAll(".delete-seed").forEach((button) => button.addEventListener("click", () => deleteSeed(button.dataset.id)));
+}
+
+const seedCoreFields = new Set([
+  "id", "title", "category", "difficulty", "points", "port", "template",
+  "primary_technique", "learning_objective",
+]);
+
+function resetSeedForm() {
+  appState.editingSeedId = null;
+  document.querySelector("#seedForm").reset();
+  document.querySelector("#seedPoints").value = 100;
+  document.querySelector("#seedPort").value = 8080;
+  document.querySelector("#seedAdvanced").value = "";
+  document.querySelector("#seedId").disabled = false;
+  document.querySelector("#seedFormTitle").textContent = "新增题目种子";
+  updateSeedCategoryFields();
+}
+
+function updateSeedCategoryFields() {
+  const reverse = document.querySelector("#seedCategory").value === "re";
+  const port = document.querySelector("#seedPort");
+  port.disabled = reverse;
+  port.classList.toggle("bg-neutral-100", reverse);
+  if (reverse) port.value = "";
+  else if (!port.value) port.value = document.querySelector("#seedCategory").value === "pwn" ? 9001 : 8080;
+}
+
+function editSeed(challengeId) {
+  const seed = appState.data.seeds.find((item) => item.id === challengeId);
+  if (!seed) return;
+  appState.editingSeedId = challengeId;
+  document.querySelector("#seedId").value = seed.id;
+  document.querySelector("#seedId").disabled = true;
+  document.querySelector("#seedTitle").value = seed.title || "";
+  document.querySelector("#seedCategory").value = seed.category || "web";
+  document.querySelector("#seedDifficulty").value = seed.difficulty || "easy";
+  document.querySelector("#seedPoints").value = seed.points || 100;
+  document.querySelector("#seedPort").value = seed.port || "";
+  document.querySelector("#seedTemplate").value = seed.template || "";
+  document.querySelector("#seedTechnique").value = seed.primary_technique || "";
+  document.querySelector("#seedObjective").value = seed.learning_objective || "";
+  updateSeedCategoryFields();
+  const advanced = Object.fromEntries(Object.entries(seed).filter(([key]) => !seedCoreFields.has(key)));
+  document.querySelector("#seedAdvanced").value = Object.keys(advanced).length ? JSON.stringify(advanced, null, 2) : "";
+  document.querySelector("#seedFormTitle").textContent = `编辑 ${seed.id}`;
+  setView("seeds");
+  document.querySelector("#seedForm").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function deleteSeed(challengeId) {
+  try {
+    const result = await api(`/api/seeds/${encodeURIComponent(challengeId)}`, { method: "DELETE" });
+    showToast(result.message);
+    if (appState.editingSeedId === challengeId) resetSeedForm();
+    await loadState();
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+async function saveSeed(event) {
+  event.preventDefault();
+  try {
+    const advancedText = document.querySelector("#seedAdvanced").value.trim();
+    const advanced = advancedText ? JSON.parse(advancedText) : {};
+    const category = document.querySelector("#seedCategory").value;
+    const seed = {
+      ...advanced,
+      id: document.querySelector("#seedId").value.trim(),
+      title: document.querySelector("#seedTitle").value.trim(),
+      category,
+      difficulty: document.querySelector("#seedDifficulty").value,
+      points: Number(document.querySelector("#seedPoints").value),
+      template: document.querySelector("#seedTemplate").value.trim(),
+      primary_technique: document.querySelector("#seedTechnique").value.trim(),
+      learning_objective: document.querySelector("#seedObjective").value.trim(),
+    };
+    const port = Number(document.querySelector("#seedPort").value);
+    if (category !== "re" || port) seed.port = port;
+    Object.keys(seed).forEach((key) => {
+      if (seed[key] === "") delete seed[key];
+    });
+    await api("/api/seeds", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(seed),
+    });
+    showToast(`${seed.id} 已保存`);
+    resetSeedForm();
+    await loadState();
+  } catch (error) {
+    showToast(error instanceof SyntaxError ? "高级 JSON 格式不正确" : error.message, true);
+  }
+}
+
+async function enqueueSeeds() {
+  try {
+    const size = Number(document.querySelector("#seedShardSize").value);
+    const result = await api("/api/seeds/enqueue", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ size }),
+    });
+    showToast(result.message);
+    setView("shards");
+    await loadState();
+  } catch (error) {
+    showToast(error.message, true);
+  }
 }
 
 async function openLog(name) {
@@ -292,6 +435,10 @@ document.querySelector("#workerButton").addEventListener("click", () => runActio
 document.querySelector("#validateButton").addEventListener("click", () => runAction("validate"));
 document.querySelector("#mobileWorkerButton").addEventListener("click", () => runAction("worker"));
 document.querySelector("#mobileValidateButton").addEventListener("click", () => runAction("validate"));
+document.querySelector("#seedForm").addEventListener("submit", saveSeed);
+document.querySelector("#resetSeedButton").addEventListener("click", resetSeedForm);
+document.querySelector("#enqueueSeedsButton").addEventListener("click", enqueueSeeds);
+document.querySelector("#seedCategory").addEventListener("change", updateSeedCategoryFields);
 document.querySelector("#challengeSearch").addEventListener("input", (event) => {
   appState.search = event.target.value;
   renderChallengeTable();

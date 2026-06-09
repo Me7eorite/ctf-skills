@@ -45,6 +45,52 @@ def create_app(service: DashboardService) -> FastAPI:
     def post_validate_action() -> JSONResponse:
         return _action_response(*service.tasks.start("validate"))
 
+    @app.post("/api/seeds")
+    async def post_seed(request: Request) -> JSONResponse:
+        try:
+            seed = service.save_seed(await request.json())
+        except ValueError as exc:
+            return JSONResponse(
+                {"ok": False, "message": str(exc)},
+                status_code=HTTPStatus.BAD_REQUEST,
+            )
+        return JSONResponse({"ok": True, "seed": seed})
+
+    @app.delete("/api/seeds/{challenge_id}")
+    def delete_seed(challenge_id: str) -> JSONResponse:
+        try:
+            service.delete_seed(challenge_id)
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND, detail="seed not found"
+            )
+        return JSONResponse({"ok": True, "message": f"{challenge_id} 已删除"})
+
+    @app.post("/api/seeds/enqueue")
+    async def enqueue_seeds(request: Request) -> JSONResponse:
+        try:
+            payload = await request.json()
+            size = int(payload.get("size", 5))
+            created = service.enqueue_seeds(size)
+        except (TypeError, ValueError) as exc:
+            return JSONResponse(
+                {"ok": False, "message": str(exc)},
+                status_code=HTTPStatus.BAD_REQUEST,
+            )
+        except FileExistsError as exc:
+            return JSONResponse(
+                {"ok": False, "message": str(exc)},
+                status_code=HTTPStatus.CONFLICT,
+            )
+        return JSONResponse(
+            {
+                "ok": True,
+                "message": f"已创建 {len(created)} 个待处理分片",
+                "shards": [path.name for path in created],
+            },
+            status_code=HTTPStatus.CREATED,
+        )
+
     @app.post("/api/shards/{state}/{name:path}/requeue")
     def post_requeue_shard(state: str, name: str) -> JSONResponse:
         if state not in {"failed", "running"}:
@@ -53,7 +99,7 @@ def create_app(service: DashboardService) -> FastAPI:
             )
         try:
             destination = service.requeue_shard(name, state)
-        except (FileNotFoundError, RuntimeError) as exc:
+        except (FileNotFoundError, RuntimeError):
             return JSONResponse(
                 {"ok": False, "message": "当前无法重新入队该分片"},
                 status_code=HTTPStatus.CONFLICT,

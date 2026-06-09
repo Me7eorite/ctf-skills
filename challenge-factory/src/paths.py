@@ -39,6 +39,10 @@ class ProjectPaths:
         return self.work / "资源包"
 
     @property
+    def challenge_seeds(self) -> Path:
+        return self.work / "challenge-seeds.json"
+
+    @property
     def logs(self) -> Path:
         return self.work / "logs"
 
