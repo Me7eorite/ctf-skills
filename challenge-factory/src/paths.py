@@ -35,6 +35,10 @@ class ProjectPaths:
         return self.work / "reports"
 
     @property
+    def delivery_bundle(self) -> Path:
+        return self.work / "资源包"
+
+    @property
     def logs(self) -> Path:
         return self.work / "logs"
 

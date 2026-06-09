@@ -5,6 +5,8 @@ description = "File-backed Hermes CTF challenge generation control plane"
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.110",
+  "openpyxl>=3.1",
+  "reportlab>=4.4",
   "uvicorn[standard]>=0.27",
 ]
 
@@ -22,6 +24,7 @@ py-modules = [
   "dashboard",
   "hermes",
   "jsonio",
+  "packing",
   "paths",
   "reports",
   "shards",

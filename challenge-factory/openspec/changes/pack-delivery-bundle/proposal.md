@@ -27,23 +27,24 @@ emits the `资源包/` tree per spec v2, and produces both xlsx inventories.
 - New `src/packing.py` module that:
   - Walks `work/challenges/<cat>/<id>-<slug>/` for every challenge with a
     `metadata.json`.
-  - For each challenge, emits a `工具/js-{cat}-{id}exp.zip` containing
+  - For each challenge, emits a `工具/js-{prefix}-{id}exp.zip` containing
     `wp.md` (from `writeup/`) and the contents of `solve/`.
-  - Emits an `题库资源/deploy/enclosure/js-{cat}-{id}.zip` according to the
+  - Emits an `题库资源/deploy/enclosure/js-{prefix}-{id}.zip` according to the
     delivery-spec category table (crypto/re/stego/forensics/misc/etc.:
     required; web: skipped; pwn: optional via flag).
   - For containerized categories (web, pwn), zips the working `deploy/`
-    tree into `题库资源/deploy/js-{cat}-{id}.zip` AND emits a tar under
+    tree into `题库资源/deploy/js-{prefix}-{id}.zip` AND emits a tar under
     `虚拟机资源/docker-tar/<id>[<port>]-<YYYYMMDD>.tar` via `docker save`.
     Containerized packs are skipped with a clear warning when the docker
     CLI is unavailable; the rest of the bundle still produces.
   - Renders `writeup/wp.md` to a Chinese-safe PDF at
-    `题库资源/deploy/report/js-{cat}-{id}.pdf`.
+    `题库资源/deploy/report/js-{prefix}-{id}.pdf`. Prefixes follow the
+    delivery table, including `reverse` for the internal `re` category.
 - Aggregates:
   - `题库资源/ctf-overview.xlsx` — one row per challenge with the columns
     declared in spec §4.6.1.
   - `虚拟机资源/镜像模板.xlsx` — one row per docker-tar file.
-- New CLI subcommand: `challenge-factory pack [--out PATH] [--include-pwn-attachments] [--skip-docker]`.
+- New CLI subcommand: `challenge-factory pack [--out PATH] [--include-pwn-attachments] [--skip-docker] [--require-docker]`.
   Default `--out` is `work/资源包/` so the bundle ships under the
   existing gitignored `work/` tree.
 - New tests in `tests/test_packing.py` covering: per-category zip emission,
@@ -72,9 +73,9 @@ bundle. Those are follow-up changes.
 - Code: new `src/packing.py`, additions to `src/cli.py` (new subcommand)
   and `src/paths.py` (output root). No changes to `hermes.py`,
   `validation.py`, `state.py`, `webserver.py`, `dashboard.py`.
-- Dependencies: add `openpyxl` (xlsx) and a PDF renderer. Design doc picks
-  between WeasyPrint and a pandoc shell-out — both are heavy and bring
-  font concerns; the decision needs to be argued, not assumed.
+- Dependencies: add `openpyxl` (xlsx) and ReportLab (PDF). The design records
+  why ReportLab's built-in CJK CID font is preferred over renderers that need
+  system libraries or external executables.
 - Runtime: new step requires the docker daemon for containerized
   categories. The packer must degrade gracefully when docker is absent.
 - Tests: `tests/test_packing.py` adds roughly 8 cases. `pyproject.toml`

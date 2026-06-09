@@ -66,31 +66,23 @@ is reserved for one-off prep (see `scripts/prepare_hermes_home.py`). A
 script-only approach also makes testing harder and hides the new entry
 point from the dashboard.
 
-### D2. PDF renderer is WeasyPrint, with a bundled CJK font fallback
+### D2. PDF renderer is ReportLab with a built-in CJK CID font
 
-Three candidates considered:
+Four candidates considered:
 
 | Renderer | Pros | Cons |
 | --- | --- | --- |
-| **WeasyPrint** | Pure Python wheel, no LaTeX, mature CJK support via `@font-face`, runs on macOS/Linux/Windows | Brings `cairo`/`pango` system libs; ~30 MB wheel |
+| WeasyPrint | Strong HTML/CSS rendering | Requires Pango/GTK shared libraries on clean Windows and some CI images |
 | pandoc + xelatex | High-quality typesetting, theming | Heavy install (LaTeX), CJK fonts a per-platform nightmare, shells out |
 | markdown-pdf (chromium) | Pretty defaults | Needs a chromium binary; brittle in CI |
+| **ReportLab** | Pure Python wheel, built-in `STSong-Light` CJK CID font, no subprocess or system library | Simpler Markdown styling |
 
-We pick **WeasyPrint** for the same reason the rest of the project is
-Python-first: no subprocess shell-out, no large external installer, fonts
-declared declaratively in CSS.
-
-CJK fonts: WeasyPrint resolves fonts via fontconfig on Linux/macOS. To
-guarantee correctness on a fresh machine, the packer ships a tiny default
-CSS at `src/packing/styles.css` that lists, in order, `Noto Sans CJK SC`,
-`PingFang SC`, `Microsoft YaHei`, `WenQuanYi Zen Hei`, generic `sans-serif`.
-If none resolve, WeasyPrint falls back to glyph boxes; the packer prints a
-warning naming the missing font family but still emits the PDF (so a CI
-without fonts produces something inspectable, just ugly).
-
-**Trade-off accepted:** WeasyPrint's wheel is large; the project currently
-has tiny deps. Owners who want a leaner deployment can run `pack` from a
-sidecar venv and skip installing it system-wide.
+We pick **ReportLab** because an implementation smoke test on a clean Windows
+machine proved that the WeasyPrint wheel still needs `libgobject`/Pango.
+ReportLab renders headings, paragraphs, and fenced code directly from the
+Markdown source and uses its built-in `STSong-Light` CID font for Chinese.
+The accepted trade-off is deliberately modest Markdown styling in exchange
+for a renderer that works after `uv sync` on Windows, macOS, Linux, and CI.
 
 ### D3. The 'name' segment of zip filenames is the challenge ID
 
@@ -148,10 +140,10 @@ attachments` flag is the explicit opt-in for pwn (default skip).
 
 ## Risks / Trade-offs
 
-- **[Risk] WeasyPrint shared-library install on Apple Silicon.** →
-  Mitigation: document `brew install pango cairo libffi` once in
-  `openspec/project.md` after the change archives. The pure-Python wheel
-  declares the deps; pip resolves them; brew supplies the system libs.
+- **[Risk] ReportLab does not implement arbitrary Markdown extensions.** →
+  Mitigation: support the delivery writeup's common headings, paragraphs,
+  lists/tables as readable text, and fenced code. The source `wp.md` remains
+  the canonical richly formatted artifact in the tools zip.
 - **[Risk] An author hand-edited `wp.md` to English.** → Mitigation:
   the packer scans the rendered text for at least one CJK code-point and
   emits a P1 warning naming the file. It does not block the run — the
@@ -165,7 +157,7 @@ attachments` flag is the explicit opt-in for pwn (default skip).
 - **[Trade-off] Full re-pack each run.** Acceptable while batches are
   ≤100 challenges. If runtime becomes an issue, a `--changed-since`
   flag is the natural extension.
-- **[Trade-off] Big new dependency surface (WeasyPrint, openpyxl).**
+- **[Trade-off] New dependency surface (ReportLab, openpyxl).**
   The project deliberately stayed small until now. The spec v2 mandates
   PDF + xlsx; either we wear the deps or we tell operators to do it by
   hand. We pick the deps.

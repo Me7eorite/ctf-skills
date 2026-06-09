@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from hermes import HermesRunner
+from packing import Packer, PackerOptions
 from paths import ProjectPaths
 from reports import merge_reports
 from shards import ShardQueue, split_matrix
@@ -53,6 +54,12 @@ def parser() -> argparse.ArgumentParser:
     progress.add_argument("--message", default="")
 
     commands.add_parser("merge-reports", help="merge shard reports")
+
+    pack = commands.add_parser("pack", help="build the delivery format bundle")
+    pack.add_argument("--out", type=Path)
+    pack.add_argument("--include-pwn-attachments", action="store_true")
+    pack.add_argument("--skip-docker", action="store_true")
+    pack.add_argument("--require-docker", action="store_true")
 
     web = commands.add_parser("serve", help="start the dashboard")
     web.add_argument("--host", default="127.0.0.1")
@@ -122,6 +129,20 @@ def main() -> None:
 
     if args.command == "merge-reports":
         print(merge_reports(paths.reports))
+        return
+
+    if args.command == "pack":
+        result = Packer(
+            paths,
+            PackerOptions(
+                include_pwn_attachments=args.include_pwn_attachments,
+                skip_docker=args.skip_docker,
+                require_docker=args.require_docker,
+            ),
+        ).pack(args.out)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        if result["errors"]:
+            sys.exit(1)
         return
 
     if args.command == "serve":

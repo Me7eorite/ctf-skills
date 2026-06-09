@@ -55,6 +55,7 @@ uv run challenge-factory run \
   --validate
 
 uv run challenge-factory merge-reports
+uv run challenge-factory pack --skip-docker
 ```
 
 Dry-run prompt generation:
@@ -114,6 +115,19 @@ Validation checks:
 3. `metadata.json` records a successful build.
 4. `validate.sh` runs the real reference exploit or solver.
 5. The recovered flag matches `metadata.json`.
+
+## Delivery Bundle
+
+```bash
+uv run challenge-factory pack
+uv run challenge-factory pack --out work/资源包 --skip-docker
+uv run challenge-factory pack --include-pwn-attachments --require-docker
+```
+
+The packer selects challenges with `build_status: passed` and emits the v2
+handoff layout under `work/资源包/`: per-challenge tool, deployment,
+enclosure, and PDF files plus `ctf-overview.xlsx`, Docker image tars, and
+`镜像模板.xlsx`. Docker absence is a warning unless `--require-docker` is set.
 
 ## Parallel Workers
 
