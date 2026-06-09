@@ -91,6 +91,24 @@ Web rules:
 - Include a deterministic `/health` endpoint.
 - Package the service in one Docker image and one Compose service.
 
+Container rules for Web and Pwn:
+
+- `deploy/docker-compose.yml` must define exactly one service.
+- Inject the challenge flag through that service's `environment` as
+  `FLAG: ${FLAG}`. `validate.sh` must set/export the host-side `FLAG` before
+  Compose starts, and service code must read `FLAG` at runtime. Do not write
+  the plaintext flag into the Compose file, Dockerfile, image layer, source
+  tree, or player attachment.
+- Set both Compose `image` and `container_name` to the challenge name,
+  normalized to a stable lowercase Docker-safe identifier using only
+  `[a-z0-9][a-z0-9_.-]`. Use the same identifier for the built image tag,
+  validation commands, and `metadata.docker_image`.
+- If Debian/Ubuntu `apt` access is slow or unavailable in the target build
+  network, the Dockerfile may switch to an organizer-approved mirror before
+  `apt-get update`. Preserve the base distribution release/codename, combine
+  update/install/cleanup in one `RUN`, and keep the upstream source when it is
+  already reliable.
+
 Reverse rules:
 
 - Default to a Linux amd64 ELF when `target_platform` is absent. Valid
@@ -111,6 +129,8 @@ Pwn rules:
 
 - Run the real build command.
 - Web/Pwn: run `docker build` and record the image tag.
+- Web/Pwn: confirm Compose resolves `FLAG`, `image`, and `container_name` as
+  required, then build and run that exact Compose configuration.
 - Re: run the compiler, then inspect the produced artifact with `file`.
 - Record build commands, compiler/runtime versions, and artifact SHA-256 in
   `metadata.json`.

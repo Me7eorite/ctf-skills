@@ -44,6 +44,23 @@ deploy/
 
 `docker-compose.yml` must define exactly one service. Databases, caches, queues, and similar dependencies must be installed into the base image or started from `_files/start.sh` inside the same container.
 
+Container authoring conventions:
+
+- Define the flag in the single Compose service as `FLAG: ${FLAG}` under
+  `environment`. Validation or orchestration must set the host-side `FLAG`
+  before Compose starts, and the service must read it from its runtime
+  environment. Do not bake the plaintext flag into the Compose file,
+  Dockerfile, image layer, source code, or attachment.
+- Set both `image` and `container_name` to the challenge name normalized as a
+  stable lowercase Docker identifier (`[a-z0-9][a-z0-9_.-]`). Use that same
+  name for build tags, validation commands, `metadata.docker_image`, and
+  delivery inventory fields.
+- A Dockerfile may replace Debian/Ubuntu apt sources with an
+  organizer-approved mirror when the target build network needs it. Preserve
+  the base release/codename, switch the source before `apt-get update`, and
+  keep `apt-get update`, package installation, and `/var/lib/apt/lists`
+  cleanup in one `RUN` layer. Prefer the upstream source when it is reliable.
+
 ## Naming Rules
 
 | Content | Path | Format | Example |

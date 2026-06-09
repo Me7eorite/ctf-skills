@@ -128,6 +128,25 @@ For full specs, use the template in [references/spec-template.md].
 
 For deliverable-ready challenge packages, always apply [references/delivery-format.md](references/delivery-format.md). The external source of truth is `delivery-spec/交付格式规范.md` at the repo root (sample layout under `delivery-spec/资源包/`); this bundled reference summarizes it for the skill.
 
+For containerized challenges, include these implementation requirements in
+the author ticket or generated prompt:
+
+- Keep `docker-compose.yml` to exactly one service.
+- Inject the challenge flag through the service's `environment` as
+  `FLAG: ${FLAG}`; validation or orchestration sets the host-side `FLAG`
+  before Compose starts. Application code must read `FLAG` at runtime instead
+  of baking the plaintext flag into the Compose file, image, source tree, or
+  player attachments.
+- Set both Compose `image` and `container_name` from the challenge name. Convert
+  it to a stable Docker-safe lowercase identifier using only
+  `[a-z0-9][a-z0-9_.-]`; use the same identifier in build, validation, metadata,
+  and delivery commands.
+- When `apt` access is slow or unreliable in the target build environment,
+  the Dockerfile may switch to an organizer-approved Debian/Ubuntu mirror
+  before `apt-get update`. Keep the base distribution release unchanged,
+  combine update/install/cleanup in one layer, and do not hardcode a regional
+  mirror when the default upstream is reliable.
+
 For author tickets, group tasks by category and include implementation, deployment, solve, and validation work.
 
 For machine-readable output, use this JSON shape:

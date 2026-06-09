@@ -44,6 +44,13 @@ When the user asks for deliverable-ready output, package plans, handoff manifest
 - Docker tar: `虚拟机资源/docker-tar/<challenge_name>[<port>]-<YYYYMMDD>.tar` for containerized challenges (typically web/pwn), or `not required`
 - Deploy tree inside the docker config zip: `deploy/src/`, `deploy/_files/`, `deploy/Dockerfile`, `deploy/docker-compose.yml`
 - Compose rule: exactly one service; databases/dependencies must be installed in the same image/service
+- Compose identity: `image` and `container_name` use the same Docker-safe,
+  lowercase challenge name
+- Flag injection: Compose defines `environment.FLAG` as `${FLAG}`; validation
+  sets the host-side value, and the service does not bake plaintext into image
+  layers, the Compose file, or source
+- Apt source: retain upstream by default; when the target build network needs
+  a mirror, use an organizer-approved source for the same distro release
 - Overview row (`ctf-overview.xlsx`): `<题目ID>, <题目名称>, <题目描述>, <题型>, <难度>, <考点>, <分值>, <flag格式>, <状态>`
 - Image inventory row (`镜像模板.xlsx`, containerized only): `<题目名称>, <镜像文件>, <端口>, <基础镜像>, <启动命令>`
 
