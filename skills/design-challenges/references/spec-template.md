@@ -49,6 +49,11 @@ When the user asks for deliverable-ready output, package plans, handoff manifest
 - Flag injection: Compose defines `environment.FLAG` as `${FLAG}`; validation
   sets the host-side value, and the service does not bake plaintext into image
   layers, the Compose file, or source
+- Runtime identity: final image creates and uses unprivileged user `ctf`,
+  places the challenge under `/home/ctf`, and runs with `USER ctf`
+- Runtime permissions: list only required writable paths/capabilities; use
+  `none` when no exception to the least-privilege default is needed
+- Web port: bind an unprivileged container port and map the requested host port
 - Apt source: retain upstream by default; when the target build network needs
   a mirror, use an organizer-approved source for the same distro release
 - Overview row (`ctf-overview.xlsx`): `<题目ID>, <题目名称>, <题目描述>, <题型>, <难度>, <考点>, <分值>, <flag格式>, <状态>`

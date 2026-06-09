@@ -42,3 +42,9 @@ Use this reference for synthetic web CTF challenge ideas. It is distilled from t
 - Seed the same database state on every reset.
 - Document bot cookies and visit behavior for authors.
 - Pin framework and dependency versions when the bug depends on parser behavior.
+- Run the final container as unprivileged user `ctf` from `/home/ctf`.
+- Bind an unprivileged internal port such as `8080`; map host port `80` to it
+  when needed instead of running as root or adding bind capabilities.
+- Give `ctf` write access only to narrowly scoped runtime data directories.
+- Treat root, capabilities, privileged mode, and host mounts as exceptional;
+  document why the intended Web mechanism cannot work without them.

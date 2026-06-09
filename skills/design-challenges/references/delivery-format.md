@@ -55,6 +55,20 @@ Container authoring conventions:
   stable lowercase Docker identifier (`[a-z0-9][a-z0-9_.-]`). Use that same
   name for build tags, validation commands, `metadata.docker_image`, and
   delivery inventory fields.
+- Web and Pwn images must run with least privilege by default. The final image
+  creates an unprivileged `ctf` user/group, uses `/home/ctf` as the working
+  directory, assigns challenge files to `ctf`, and ends with `USER ctf`.
+  Prefer a fixed non-zero UID/GID so ownership is reproducible.
+- Keep application and challenge files read-only at runtime where practical.
+  Create narrowly scoped writable directories owned by `ctf` only for data
+  the service genuinely needs to modify.
+- Web services should bind an unprivileged container port such as `8080`.
+  When the delivery port is `80`, map host port `80` to that internal port
+  instead of granting bind capabilities or running as root.
+- Root execution, Linux capabilities, privileged mode, device mounts, host
+  networking, or writable system directories require a challenge-specific
+  technical reason. Use the smallest exception and document it in metadata,
+  validation notes, and the Chinese writeup.
 - A Dockerfile may replace Debian/Ubuntu apt sources with an
   organizer-approved mirror when the target build network needs it. Preserve
   the base release/codename, switch the source before `apt-get update`, and

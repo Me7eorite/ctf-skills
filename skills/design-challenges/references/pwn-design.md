@@ -43,3 +43,10 @@ Use this reference for synthetic binary exploitation challenge ideas. It is dist
 - Check exploit reliability across repeated runs.
 - Document mitigations and expected `checksec` output for authors.
 - Add service timeouts that are generous enough for intended exploitation.
+- Run the final container as unprivileged user `ctf` from `/home/ctf` by
+  default, with the challenge binary and runtime files owned intentionally.
+- Do not use root, privileged mode, broad capabilities, host devices, or host
+  networking for ordinary userland pwn services.
+- When a kernel, namespace, device, setuid, or capability-focused challenge
+  genuinely needs elevated behavior, grant only the exact requirement and
+  document the exception in metadata, validation notes, and the writeup.

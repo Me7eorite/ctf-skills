@@ -103,6 +103,20 @@ Container rules for Web and Pwn:
   normalized to a stable lowercase Docker-safe identifier using only
   `[a-z0-9][a-z0-9_.-]`. Use the same identifier for the built image tag,
   validation commands, and `metadata.docker_image`.
+- Apply least privilege by default. In the final Web/Pwn image create a fixed
+  non-zero `ctf` user/group, set `WORKDIR /home/ctf`, copy challenge files
+  with `ctf` ownership, and end the Dockerfile with `USER ctf`. The service
+  process must run as `ctf`, not root.
+- Keep challenge files read-only at runtime where practical. Create only the
+  narrow writable directories the service needs, owned by `ctf`.
+- Web services must listen on an unprivileged container port such as `8080`.
+  If the matrix requests host port `80`, map it to that internal port instead
+  of adding a bind capability or running as root.
+- Do not use root execution, `privileged: true`, broad Linux capabilities,
+  host devices/networking, or writable system mounts unless the intended
+  challenge mechanism strictly requires one. Minimize any exception and
+  document the technical reason in `metadata.json`, validation notes, and
+  `writeup/wp.md`.
 - If Debian/Ubuntu `apt` access is slow or unavailable in the target build
   network, the Dockerfile may switch to an organizer-approved mirror before
   `apt-get update`. Preserve the base distribution release/codename, combine
@@ -130,7 +144,8 @@ Pwn rules:
 - Run the real build command.
 - Web/Pwn: run `docker build` and record the image tag.
 - Web/Pwn: confirm Compose resolves `FLAG`, `image`, and `container_name` as
-  required, then build and run that exact Compose configuration.
+  required; verify the running process UID is the unprivileged `ctf` user;
+  then build and run that exact Compose configuration.
 - Re: run the compiler, then inspect the produced artifact with `file`.
 - Record build commands, compiler/runtime versions, and artifact SHA-256 in
   `metadata.json`.
