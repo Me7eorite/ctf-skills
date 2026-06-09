@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Challenge Factory</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: { ink: "#171A1F", paper: "#F6F7F4", line: "#D9DDD7" },
+          boxShadow: { panel: "0 1px 2px rgba(23,26,31,.06), 0 8px 24px rgba(23,26,31,.04)" }
+        }
+      }
+    };
+  </script>
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <style>
+    [data-view] { display: none; }
+    [data-view].active { display: block; }
+    * { letter-spacing: 0; }
+  </style>
+</head>
+<body class="min-h-screen bg-paper text-ink antialiased">
+  <div class="min-h-screen lg:grid lg:grid-cols-[224px_minmax(0,1fr)]">
+    <aside class="border-b border-line bg-white lg:min-h-screen lg:border-b-0 lg:border-r">
+      <div class="flex h-16 items-center justify-between px-5 lg:h-20">
+        <div class="flex items-center gap-3">
+          <div class="grid size-9 place-items-center bg-ink text-white"><i data-lucide="blocks" class="size-5"></i></div>
+          <div><div class="text-sm font-semibold">Challenge Factory</div><div class="text-xs text-neutral-500">CTF Agent 控制台</div></div>
+        </div>
+        <button id="mobileMenu" class="grid size-9 place-items-center border border-line lg:hidden" title="导航"><i data-lucide="menu" class="size-4"></i></button>
+      </div>
+      <nav id="sidebarNav" class="hidden gap-1 border-t border-line p-3 lg:flex lg:flex-col lg:border-t-0">
+        <button class="nav-item flex h-10 items-center gap-3 px-3 text-sm font-medium" data-target="overview"><i data-lucide="layout-dashboard" class="size-4"></i>概览</button>
+        <button class="nav-item flex h-10 items-center gap-3 px-3 text-sm font-medium text-neutral-500" data-target="progress"><i data-lucide="activity" class="size-4"></i>实时进度</button>
+        <button class="nav-item flex h-10 items-center gap-3 px-3 text-sm font-medium text-neutral-500" data-target="challenges"><i data-lucide="flag" class="size-4"></i>题目</button>
+        <button class="nav-item flex h-10 items-center gap-3 px-3 text-sm font-medium text-neutral-500" data-target="shards"><i data-lucide="layers-3" class="size-4"></i>任务分片</button>
+        <button class="nav-item flex h-10 items-center gap-3 px-3 text-sm font-medium text-neutral-500" data-target="logs"><i data-lucide="terminal" class="size-4"></i>运行日志</button>
+      </nav>
+      <div class="hidden px-5 pt-8 lg:block">
+        <div class="border-t border-line pt-5">
+          <div class="mb-2 flex items-center justify-between gap-3 text-xs text-neutral-500"><span>Worker</span><span id="workerLabel" class="max-w-32 truncate text-right" title="Worker 状态">空闲</span></div>
+          <div class="h-1.5 overflow-hidden bg-neutral-100"><div id="workerBar" class="h-full w-0 bg-emerald-600"></div></div>
+        </div>
+      </div>
+    </aside>
+
+    <main class="min-w-0">
+      <header class="flex h-16 items-center justify-between border-b border-line bg-white px-4 sm:px-6 lg:h-20 lg:px-8">
+        <div class="min-w-0 flex-1"><h1 id="pageTitle" class="text-lg font-semibold">生产概览</h1><p id="updatedAt" class="mt-0.5 text-xs text-neutral-500">正在同步状态</p></div>
+        <div class="ml-3 flex shrink-0 items-center gap-2">
+          <button id="refreshButton" class="grid size-9 place-items-center border border-line bg-white hover:bg-neutral-50" title="刷新"><i id="refreshIcon" data-lucide="refresh-cw" class="size-4"></i></button>
+          <button id="validateButton" class="hidden h-9 items-center gap-2 border border-line bg-white px-3 text-sm font-medium hover:bg-neutral-50 sm:flex"><i data-lucide="shield-check" class="size-4"></i><span>重新验证</span></button>
+          <button id="workerButton" class="hidden h-9 items-center gap-2 bg-ink px-3 text-sm font-medium text-white hover:bg-neutral-800 sm:flex"><i data-lucide="play" class="size-4"></i><span>启动 Worker</span></button>
+        </div>
+      </header>
+
+      <div class="p-4 pb-24 sm:p-6 lg:p-8">
+        <section data-view="overview" class="active">
+          <div id="metricGrid" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"></div>
+          <div class="mt-6 border border-line bg-white shadow-panel">
+            <div class="flex items-center justify-between border-b border-line px-5 py-4">
+              <div><h2 class="text-sm font-semibold">最近题目</h2><p class="mt-0.5 text-xs text-neutral-500">构建与利用验证状态</p></div>
+              <button class="text-sm font-medium text-emerald-700" data-jump="challenges">查看全部</button>
+            </div>
+            <div id="recentChallenges" class="divide-y divide-line"></div>
+          </div>
+        </section>
+
+        <section data-view="progress">
+          <div id="storageWarning" class="mb-4 hidden border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900"></div>
+          <div class="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(300px,.65fr)]">
+            <section class="border border-line bg-white shadow-panel">
+              <div class="border-b border-line px-5 py-4"><h2 class="text-sm font-semibold">逐题流水线</h2><p class="mt-0.5 text-xs text-neutral-500">设计、实现、Docker 构建、EXP 验证与文档阶段</p></div>
+              <div id="progressList"></div>
+            </section>
+            <section class="border border-line bg-white p-5 shadow-panel">
+              <div class="mb-5"><h2 class="text-sm font-semibold">事件时间线</h2><p class="mt-0.5 text-xs text-neutral-500">最近 60 条 Agent 与系统事件</p></div>
+              <div id="eventList" class="max-h-[680px] overflow-auto pl-2"></div>
+            </section>
+          </div>
+        </section>
+
+        <section data-view="challenges">
+          <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div class="flex gap-2">
+              <button class="filter-button h-9 bg-ink px-3 text-sm font-medium text-white" data-category="all">全部</button>
+              <button class="filter-button h-9 border border-line bg-white px-3 text-sm font-medium" data-category="web">Web</button>
+              <button class="filter-button h-9 border border-line bg-white px-3 text-sm font-medium" data-category="pwn">Pwn</button>
+              <button class="filter-button h-9 border border-line bg-white px-3 text-sm font-medium" data-category="re">Reverse</button>
+            </div>
+            <div class="relative"><i data-lucide="search" class="pointer-events-none absolute left-3 top-2.5 size-4 text-neutral-400"></i><input id="challengeSearch" class="h-9 w-full border border-line bg-white pl-9 pr-3 text-sm outline-none focus:border-neutral-500 sm:w-64" placeholder="搜索题目"></div>
+          </div>
+          <div class="overflow-hidden border border-line bg-white shadow-panel"><div class="overflow-x-auto">
+            <table class="w-full min-w-[760px] text-left">
+              <thead class="border-b border-line bg-neutral-50 text-xs font-medium text-neutral-500"><tr><th class="px-4 py-3">题目</th><th class="px-4 py-3">类别</th><th class="px-4 py-3">难度</th><th class="px-4 py-3">技术栈</th><th class="px-4 py-3">构建</th><th class="px-4 py-3">EXP</th><th class="px-4 py-3">更新</th></tr></thead>
+              <tbody id="challengeTable" class="divide-y divide-line text-sm"></tbody>
+            </table>
+          </div></div>
+        </section>
+
+        <section data-view="shards"><div id="shardColumns" class="grid gap-4 md:grid-cols-2 xl:grid-cols-4"></div></section>
+
+        <section data-view="logs">
+          <div class="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
+            <div class="border border-line bg-white shadow-panel"><div class="border-b border-line px-4 py-3 text-sm font-semibold">日志文件</div><div id="logList" class="divide-y divide-line"></div></div>
+            <div class="min-w-0 border border-line bg-[#1D2025] shadow-panel">
+              <div class="flex h-11 items-center justify-between border-b border-white/10 px-4 text-xs text-neutral-400"><span id="logTitle">选择日志</span><button id="copyLog" class="grid size-8 place-items-center hover:text-white" title="复制日志"><i data-lucide="copy" class="size-4"></i></button></div>
+              <pre id="logContent" class="h-[520px] overflow-auto whitespace-pre-wrap p-4 font-mono text-xs leading-5 text-neutral-200">暂无日志</pre>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div class="fixed inset-x-0 bottom-0 z-20 grid grid-cols-2 gap-2 border-t border-line bg-white p-3 sm:hidden">
+    <button id="mobileValidateButton" class="flex h-10 items-center justify-center gap-2 border border-line text-sm font-medium"><i data-lucide="shield-check" class="size-4"></i>重新验证</button>
+    <button id="mobileWorkerButton" class="flex h-10 items-center justify-center gap-2 bg-ink text-sm font-medium text-white"><i data-lucide="play" class="size-4"></i>启动 Worker</button>
+  </div>
+  <div id="toast" class="hidden"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

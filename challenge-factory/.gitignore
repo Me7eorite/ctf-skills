@@ -1,0 +1,11 @@
+# Local Hermes state and credentials
+.hermes/
+
+# Local environment
+venv/
+.venv/
+__pycache__/
+*.egg-info/
+
+# Generated queue, challenges, logs, and reports
+work/

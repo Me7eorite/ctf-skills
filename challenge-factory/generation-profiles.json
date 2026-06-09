@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "categories": {
+    "web": {
+      "required_artifact": "single-service Docker image",
+      "runtime_rotation": [
+        {"runtime": "python", "frameworks": ["Flask", "FastAPI", "Django"]},
+        {"runtime": "node", "frameworks": ["Express", "Fastify", "Koa"]},
+        {"runtime": "php", "frameworks": ["plain PHP", "Slim", "Laravel"]},
+        {"runtime": "java", "frameworks": ["Spring Boot", "Jakarta Servlet"]},
+        {"runtime": "go", "frameworks": ["net/http", "Gin", "Fiber"]}
+      ],
+      "policy": [
+        "A shard should use at least two runtimes when it contains three or more Web challenges.",
+        "Do not select Python when the matrix row names another runtime.",
+        "Pin dependencies and expose a deterministic health endpoint.",
+        "The exploit must reach the running service and obtain the flag; no offline fallback is allowed."
+      ]
+    },
+    "pwn": {
+      "required_artifact": "Linux ELF plus single-service Docker image",
+      "toolchains": ["gcc", "clang"],
+      "architectures": ["x86_64"],
+      "policy": [
+        "Record PIE, NX, RELRO, canary, and stripped status.",
+        "Compile the distributed ELF during generation.",
+        "The exploit must target the built ELF or running TCP service."
+      ]
+    },
+    "re": {
+      "required_artifact": "compiled player-facing binary in dist/",
+      "artifact_rotation": [
+        {"format": "elf", "languages": ["c", "cpp", "rust", "go"]},
+        {"format": "wasm", "languages": ["c", "rust"]},
+        {"format": "jar", "languages": ["java", "kotlin"]}
+      ],
+      "default_format": "elf",
+      "default_platform": "linux/amd64",
+      "policy": [
+        "Unless the matrix explicitly requests another format, compile a Linux amd64 ELF.",
+        "Source code alone or a README placeholder in dist/ is not a deliverable.",
+        "The solve script must derive the flag from the distributed artifact, not from source or metadata.",
+        "Record compiler, flags, SHA-256, file format, and architecture."
+      ]
+    }
+  }
+}
