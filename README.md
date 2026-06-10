@@ -12,16 +12,12 @@ Tailwind dashboard.
 ```text
 ctf-skills/
 ├── src/
-│   ├── cli.py          # command definitions only
-│   ├── paths.py        # project filesystem locations
-│   ├── jsonio.py       # JSON persistence helpers
-│   ├── shards.py       # matrix splitting and queue transitions
-│   ├── hermes.py       # prompt rendering and Hermes execution
-│   ├── validation.py   # artifact and EXP validation
-│   ├── reports.py      # report aggregation
-│   ├── dashboard.py    # dashboard queries and task actions
-│   ├── webserver.py    # HTTP transport
-│   └── static/         # Tailwind UI
+│   ├── cli.py              # command composition root
+│   ├── core/               # paths, JSON I/O, SQLite state, shard queue
+│   ├── domain/             # seeds, validation, report aggregation
+│   ├── hermes/             # prompt rendering and Hermes execution
+│   ├── packing/            # delivery bundle packing subsystem
+│   └── web/                # dashboard service, HTTP transport, static UI
 ├── skills/                 # reusable CTF authoring skills
 ├── delivery-format/        # delivery specification and sample resources
 ├── tests/
@@ -41,11 +37,11 @@ ctf-skills/
 └── pyproject.toml
 ```
 
-`src/` uses a flat application-module layout so reviewers can see every major
-component immediately without another package-directory level. `scripts/`
-contains application setup and repository maintenance tools. Generated
-challenges, logs, reports, and queue files remain under the gitignored `work/`
-directory; local Hermes state remains under the gitignored `.hermes/`.
+`src/` uses a layered package layout with `cli.py` as the composition root.
+Lower-level packages do not import higher-level adapters. `scripts/` contains
+application setup and repository maintenance tools. Generated challenges, logs,
+reports, and queue files remain under the gitignored `work/` directory; local
+Hermes state remains under the gitignored `.hermes/`.
 
 ## Quick Start
 

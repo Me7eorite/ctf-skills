@@ -3,8 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from paths import ProjectPaths
-from shards import ShardQueue, split_matrix
+from core.paths import ProjectPaths
+from core.queue import ShardQueue, split_matrix
 
 
 class ShardTests(unittest.TestCase):

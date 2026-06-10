@@ -8,14 +8,14 @@ import socket
 import sys
 from pathlib import Path
 
+from core.paths import ProjectPaths
+from core.queue import ShardQueue, split_matrix
+from core.state import STAGES, STATUSES, StateStore
+from domain.reports import merge_reports
+from domain.validation import ChallengeValidator
 from hermes import HermesRunner
 from packing import Packer, PackerOptions
-from paths import ProjectPaths
-from reports import merge_reports
-from shards import ShardQueue, split_matrix
-from state import STAGES, STATUSES, StateStore
-from validation import ChallengeValidator
-from webserver import serve
+from web.server import serve
 
 
 def parser() -> argparse.ArgumentParser:

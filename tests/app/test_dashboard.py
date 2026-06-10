@@ -2,9 +2,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from dashboard import DashboardService, TaskManager
-from jsonio import write_json
-from paths import ProjectPaths
+from core.jsonio import write_json
+from core.paths import ProjectPaths
+from web.dashboard import DashboardService, TaskManager
 
 
 class DashboardTests(unittest.TestCase):

@@ -2,8 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from paths import ProjectPaths
-from state import StateStore
+from core.paths import ProjectPaths
+from core.state import StateStore
 
 
 class StateStoreTests(unittest.TestCase):

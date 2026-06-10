@@ -3,8 +3,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from core.paths import ProjectPaths
 from hermes import HermesRunner
-from paths import ProjectPaths
 
 
 class HermesRunnerTests(unittest.TestCase):
@@ -38,9 +38,9 @@ class HermesRunnerTests(unittest.TestCase):
     def test_uses_uvx_fallback_when_hermes_is_not_on_path(self):
         with (
             patch.dict("os.environ", {}, clear=True),
-            patch("hermes.shutil.which", side_effect=[None, "C:/tools/uvx.exe"]),
-            patch("hermes.Path.home", return_value=Path("C:/Users/test")),
-            patch("hermes.Path.exists", return_value=True),
+            patch("hermes.runner.shutil.which", side_effect=[None, "C:/tools/uvx.exe"]),
+            patch("hermes.runner.Path.home", return_value=Path("C:/Users/test")),
+            patch("hermes.runner.Path.exists", return_value=True),
         ):
             arguments = HermesRunner._hermes_arguments()
 
@@ -51,9 +51,9 @@ class HermesRunnerTests(unittest.TestCase):
     def test_uses_uvx_fallback_without_windows_python(self):
         with (
             patch.dict("os.environ", {}, clear=True),
-            patch("hermes.shutil.which", side_effect=[None, "/opt/homebrew/bin/uvx"]),
-            patch("hermes.Path.home", return_value=Path("/Users/test")),
-            patch("hermes.Path.exists", return_value=False),
+            patch("hermes.runner.shutil.which", side_effect=[None, "/opt/homebrew/bin/uvx"]),
+            patch("hermes.runner.Path.home", return_value=Path("/Users/test")),
+            patch("hermes.runner.Path.exists", return_value=False),
         ):
             arguments = HermesRunner._hermes_arguments()
 
@@ -104,7 +104,7 @@ class HermesRunnerTests(unittest.TestCase):
             patch.dict("os.environ", {"HERMES_TIMEOUT": "1", "HERMES_CMD": "hermes"}),
             patch.object(runner, "_apply_legacy_custom_provider", return_value=False),
             patch(
-                "hermes.subprocess.run",
+                "hermes.runner.subprocess.run",
                 side_effect=__import__("subprocess").TimeoutExpired("hermes", 1),
             ),
         ):
@@ -114,14 +114,14 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertIn("timed out after 1s", log.read_text(encoding="utf-8"))
 
     def _write_shard(self, name: str, challenges: list[dict]) -> Path:
-        from jsonio import write_json
+        from core.jsonio import write_json
 
         path = self.paths.shards / "pending" / name
         write_json(path, {"challenges": challenges})
         return path
 
     def _write_metadata(self, challenge_id: str, category: str, build_status: str) -> Path:
-        from jsonio import write_json
+        from core.jsonio import write_json
 
         path = (
             self.paths.challenges

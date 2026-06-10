@@ -1,37 +1,45 @@
 # Architecture
 
-Challenge Factory uses a flat `src` application layout. The design keeps
-filesystem persistence, domain operations, process execution, and HTTP
-transport separate while avoiding an extra package-directory level.
+Challenge Factory uses a layered `src` layout. `cli.py` is the composition
+root, while package-level dependency direction keeps infrastructure, business
+rules, subprocess execution, packing, and HTTP transport from importing across
+sideways boundaries.
 
 ## Dependency Direction
 
 ```text
-CLI / HTTP
-    |
-    v
-Application services
-    |
-    v
-Filesystem helpers and project paths
+cli      -> {web, hermes, packing, domain, core}
+web      -> {domain, core}
+hermes   -> {domain, core}
+packing  -> {core}
+domain   -> {core}
+core     -> stdlib / third-party only
 ```
 
-Lower-level modules never import the CLI or HTTP server.
+`tests/app/test_dependency_direction.py` enforces this matrix by parsing
+`src/**/*.py` imports with `ast`.
 
-## Modules
+## Packages
 
-| Module | Responsibility |
+| Package | Responsibility |
 | --- | --- |
-| `src/paths.py` | Defines every project path through `ProjectPaths` |
-| `src/jsonio.py` | Reads and writes JSON/JSONL files |
-| `src/shards.py` | Splits matrices and transitions shard queue state |
-| `src/hermes.py` | Renders prompts and executes Hermes for claimed shards |
-| `src/validation.py` | Checks artifacts and runs `validate.sh` |
-| `src/reports.py` | Aggregates per-shard reports |
-| `src/state.py` | Stores progress events and latest snapshots in SQLite |
-| `src/dashboard.py` | Builds dashboard data and manages local tasks |
-| `src/webserver.py` | Converts HTTP requests into dashboard service calls |
-| `src/cli.py` | Parses commands and delegates to application services |
+| `src/cli.py` | Parses commands and composes package APIs |
+| `src/core/paths.py` | Defines every project path through `ProjectPaths` |
+| `src/core/jsonio.py` | Reads and writes JSON/JSONL files |
+| `src/core/queue.py` | Splits matrices and transitions shard queue state |
+| `src/core/state.py` | Stores progress events and latest snapshots in SQLite |
+| `src/domain/seeds.py` | Validates and persists generation seed inputs |
+| `src/domain/validation.py` | Checks artifacts and runs `validate.sh` |
+| `src/domain/reports.py` | Aggregates per-shard reports |
+| `src/hermes/` | Renders prompts, invokes Hermes, and records runner progress |
+| `src/packing/` | Builds delivery bundle v2 artifacts, PDFs, zips, Docker tars, and workbooks |
+| `src/web/` | Builds dashboard data, exposes FastAPI routes, and serves static assets |
+
+`packing` and `hermes` expose their public APIs through package re-exports, so
+callers use `from packing import Packer` and `from hermes import HermesRunner`.
+Core/domain internals use explicit package paths such as
+`from core.paths import ProjectPaths` and
+`from domain.validation import ChallengeValidator`.
 
 ## Generation Pipeline
 
@@ -68,14 +76,21 @@ modify one shared queue document. `work/state.sqlite3` is a query-oriented
 event store for frontend synchronization; losing it does not lose generated
 artifacts or queue ownership.
 
+## Future Growth
+
+Future worker pool and task-level persistence work should preserve these
+boundaries:
+
+- `core.queue` owns shard queue storage mechanics and file-format compatibility.
+- `domain.tasks` should own task models, legal state transitions, and business
+  validation when tasks become first-class.
+- `worker.*` should own concurrency, scheduling, leases, retries, and timeout
+  recovery when a worker pool is introduced.
+- `hermes.runner` should execute an already claimed shard/task and avoid direct
+  queue-directory manipulation.
+
 ## Testing
 
 Tests construct `ProjectPaths` with temporary directories. This avoids touching
 real generated challenges and makes queue, dashboard, and validation behavior
 deterministic.
-
-## Future Growth
-
-The current standard-library HTTP layer can be replaced without changing queue
-or generation services. Multi-host workers would require a transactional queue
-and authenticated API, but the module boundaries can remain the same.

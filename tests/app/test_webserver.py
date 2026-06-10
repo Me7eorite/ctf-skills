@@ -4,9 +4,9 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from dashboard import DashboardService, TaskManager
-from paths import ProjectPaths
-from webserver import create_app
+from core.paths import ProjectPaths
+from web.dashboard import DashboardService, TaskManager
+from web.server import create_app
 
 
 class _StubTaskManager(TaskManager):

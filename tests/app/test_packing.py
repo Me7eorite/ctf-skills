@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from openpyxl import load_workbook
 
+from core.paths import ProjectPaths
 from packing import (
     IMAGE_HEADERS,
     OVERVIEW_HEADERS,
@@ -15,7 +16,6 @@ from packing import (
     PackerOptions,
     PackingError,
 )
-from paths import ProjectPaths
 
 
 class PackingTests(unittest.TestCase):
@@ -202,7 +202,7 @@ class PackingTests(unittest.TestCase):
             PackerOptions(generated_on=date(2026, 6, 9)),
         )
 
-        with patch("packing.shutil.which", return_value=None):
+        with patch("packing.packer.shutil.which", return_value=None):
             summary = packer.pack(self.output)
 
         self.assertIn("docker CLI unavailable", summary["warnings"][0])
@@ -218,6 +218,6 @@ class PackingTests(unittest.TestCase):
             PackerOptions(require_docker=True, generated_on=date(2026, 6, 9)),
         )
 
-        with patch("packing.shutil.which", return_value=None):
+        with patch("packing.packer.shutil.which", return_value=None):
             with self.assertRaisesRegex(PackingError, "docker CLI unavailable"):
                 packer.pack(self.output)

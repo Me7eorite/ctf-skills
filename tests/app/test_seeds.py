@@ -2,9 +2,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from jsonio import read_json
-from paths import ProjectPaths
-from seeds import SeedStore
+from core.jsonio import read_json
+from core.paths import ProjectPaths
+from domain.seeds import SeedStore
 
 
 class SeedStoreTests(unittest.TestCase):

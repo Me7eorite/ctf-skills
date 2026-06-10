@@ -2,8 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from paths import ProjectPaths
-from validation import ChallengeValidator, elf_machine, is_elf
+from core.paths import ProjectPaths
+from domain.validation import ChallengeValidator, elf_machine, is_elf
 
 
 class ValidationTests(unittest.TestCase):
