@@ -1,6 +1,6 @@
 ## Context
 
-`delivery-spec/交付格式规范.md` v2 (in this repo's sibling `delivery-spec/`)
+`delivery-format/交付格式规范.md` v2 (in this repo's `delivery-format/`)
 is the contract for what gets handed to organizers. The contract is rich:
 six output slots (`工具/`, three under `题库资源/deploy/`, two under
 `虚拟机资源/`), specific naming with category prefixes (`js-{type}-{id}.zip`),

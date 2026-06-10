@@ -1,22 +1,58 @@
 [project]
-name = "ctf-skills"
+name = "challenge-factory"
 version = "0.1.0"
+description = "File-backed Hermes CTF challenge generation control plane"
 requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.110",
+  "openpyxl>=3.1",
+  "reportlab>=4.4",
+  "uvicorn[standard]>=0.27",
+]
+
+[dependency-groups]
+dev = [
+  "httpx>=0.27",
+  "pytest>=8",
+  "ruff>=0.11",
+]
+
+[project.scripts]
+challenge-factory = "cli:main"
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = [
+  "cli",
+  "dashboard",
+  "hermes",
+  "jsonio",
+  "packing",
+  "paths",
+  "reports",
+  "seeds",
+  "shards",
+  "state",
+  "validation",
+  "webserver",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
+pythonpath = ["src", "."]
 
 [tool.ruff]
 target-version = "py312"
 line-length = 120
 extend-exclude = [
+  ".hermes",
   ".uv-cache",
   ".venv",
-  "challenge-factory/.hermes",
-  "challenge-factory/.uv-cache",
-  "challenge-factory/.venv",
-  "challenge-factory/venv",
+  "venv",
 ]
 
 [tool.ruff.lint]

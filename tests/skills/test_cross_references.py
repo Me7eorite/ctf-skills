@@ -4,7 +4,7 @@ import re
 import unittest
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 SKILL_ROOT = REPO_ROOT / "skills"
 SKILL_DIRS = sorted(p.parent for p in SKILL_ROOT.glob("*/SKILL.md"))
 

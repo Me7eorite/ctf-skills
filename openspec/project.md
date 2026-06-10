@@ -21,7 +21,7 @@ Engineering CTF challenges. It:
 5. Exposes a FastAPI dashboard at `http://127.0.0.1:4173` showing queue state,
    per-challenge pipeline, logs, and shard requeue controls.
 
-The challenge artifacts produced must conform to `../delivery-spec/`
+The challenge artifacts produced must conform to `delivery-format/`
 (separate "delivery format" spec — that's product output, not dev process).
 
 ## Tech stack
@@ -56,9 +56,9 @@ Flat module layout under `src/`:
 | `webserver.py`  | FastAPI app |
 | `static/`       | dashboard UI |
 
-Tests in `tests/test_*.py`, one per module, `unittest`-style.
-`pyproject.toml` configures pytest to read tests from `tests/` with
-`pythonpath = ["src"]`. Run with `.venv/bin/python -m pytest tests/`.
+Application tests live under `tests/app/`; skill structure and security tests
+live under `tests/skills/`. `pyproject.toml` configures pytest with
+`pythonpath = ["src", "."]`. Run the suite with `uv run pytest`.
 
 ## Non-obvious conventions
 
@@ -79,7 +79,7 @@ Tests in `tests/test_*.py`, one per module, `unittest`-style.
 - **`progress` CLI subcommand is part of the hermes contract.** The shard
   prompt instructs the agent to call it before/after every stage. Don't
   rename it without updating `prompts/shard_prompt.md`.
-- **Two unrelated "spec" directories exist.** `../delivery-spec/` is product
+- **Two unrelated "spec" directories exist.** `delivery-format/` is product
   output format. `openspec/` (this directory) is dev-process change tracking.
   Don't conflate them.
 
@@ -89,15 +89,14 @@ Tests in `tests/test_*.py`, one per module, `unittest`-style.
   uv run challenge-factory split --matrix matrix.example.jsonl --size 3 &&
   uv run challenge-factory run --worker dry-01 --dry-run`.
 - Dashboard: `uv run challenge-factory serve` (FastAPI on 4173).
-- Tests: `.venv/bin/python -m pytest tests/` (31 tests at time of writing,
-  all passing).
+- Tests: `uv run pytest`.
 
 ## Areas with known churn (good change-proposal candidates)
 
 - Hermes pipeline reliability (timeouts, claim handoff, partial-success
   classification). Bug 1 fixed; more to come.
 - Dashboard surface (auth, multi-user, richer per-stage views).
-- Delivery format v3 — see `../delivery-spec/交付格式规范.md`.
+- Delivery format v3 — see `delivery-format/交付格式规范.md`.
 - New category support (IoT / Mobile / Blockchain / Crypto) beyond the
   current web/pwn/re trio.
 - Multi-agent orchestration if we split design vs. implementation vs.

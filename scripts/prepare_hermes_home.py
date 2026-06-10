@@ -7,7 +7,7 @@ inside the sandbox container instead of on the host, and our generated
 challenges never land in ``work/challenges/``.
 
 To avoid touching the user's global config, this script builds a
-project-local Hermes home at ``challenge-factory/.hermes/`` that:
+project-local Hermes home at ``.hermes/`` that:
 
   - copies ``config.yaml`` from ``~/.hermes/`` and patches
     ``terminal.backend`` to ``local``;

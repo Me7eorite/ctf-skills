@@ -13,7 +13,7 @@ class HermesRunnerTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         repository = Path(self.temp.name)
         self.paths = ProjectPaths(
-            root=repository / "challenge-factory",
+            root=repository,
             repository=repository,
         )
         self.paths.initialize()
@@ -52,6 +52,7 @@ class HermesRunnerTests(unittest.TestCase):
         with (
             patch.dict("os.environ", {}, clear=True),
             patch("hermes.shutil.which", side_effect=[None, "/opt/homebrew/bin/uvx"]),
+            patch("hermes.Path.home", return_value=Path("/Users/test")),
             patch("hermes.Path.exists", return_value=False),
         ):
             arguments = HermesRunner._hermes_arguments()

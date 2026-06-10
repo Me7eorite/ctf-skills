@@ -16,7 +16,7 @@ class ProjectPaths:
     @classmethod
     def discover(cls) -> "ProjectPaths":
         root = Path(__file__).resolve().parents[1]
-        return cls(root=root, repository=root.parent)
+        return cls(root=root, repository=root)
 
     @property
     def work(self) -> Path:

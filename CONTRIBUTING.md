@@ -6,8 +6,8 @@ Thanks for helping expand the CTF skills collection. This guide covers how to se
 
 ### Prerequisites
 
-- Python 3.12+
-- Node.js (for markdownlint)
+- Python 3.11+
+- [uv](https://docs.astral.sh/uv/)
 - [pre-commit](https://pre-commit.com/)
 
 ### Install pre-commit hooks
@@ -26,10 +26,10 @@ This installs hooks that run automatically on every commit:
 - **shellcheck** — static analysis for shell scripts
 - **markdownlint-cli2** — Markdown linter (all `.md` files)
 
-### Install test dependencies
+### Install dependencies
 
 ```bash
-pip install pytest
+uv sync --dev
 ```
 
 ## Adding Techniques to an Existing Skill
@@ -111,13 +111,13 @@ Frontmatter rules enforced by tests:
 
 ```bash
 # Run all tests
-python -m pytest tests/ -v
+uv run pytest -v
 
 # Run just the frontmatter validation
-python -m pytest tests/test_skill_frontmatter.py -v
+uv run pytest tests/skills/test_skill_frontmatter.py -v
 
 # Run the security auditor on a specific skill
-python3 scripts/skill_security_auditor.py skills/ctf-web --strict --json
+uv run python scripts/skill_security_auditor.py skills/ctf-web --strict --json
 ```
 
 ### Running pre-commit checks manually
@@ -129,16 +129,15 @@ pre-commit run --all-files
 ## Code Quality Standards
 
 - **Markdown** — Linted by markdownlint-cli2 (relaxed rules in `.markdownlint-cli2.yaml` for CTF content)
-- **Python/Shell** — `scripts/` checked by ruff and shellcheck
-- **Security** — Every PR triggers the Skill Security Audit workflow. Critical findings fail the build. Use `<!-- audit-ok -->` to suppress intentional attack documentation.
-- **Links** — The Link Checker (lychee) validates all URLs on every PR and weekly
+- **Python/Shell** — `src/`, `scripts/`, and `tests/` checked by ruff; shell scripts under `scripts/` checked by shellcheck
+- **Security** — Skill security tests flag dangerous patterns. Use `<!-- audit-ok -->` to suppress intentional attack documentation where supported.
 
 ## Pull Request Process
 
 ### Before submitting
 
 1. Run `pre-commit run --all-files` and fix any issues
-2. Run `python -m pytest tests/ -v` and ensure all tests pass
+2. Run `uv run pytest -v` and ensure all tests pass
 3. If you added a new skill, verify `name` in frontmatter matches the directory name
 
 ### What reviewers look for
@@ -149,14 +148,13 @@ pre-commit run --all-files
 - SKILL.md and README updated to reflect changes
 - Source CTF/competition attributed in technique headings when known
 
-### CI checks that must pass
+### Recommended checks
 
-| Workflow | What it does |
-|----------|--------------|
+| Check | What it does |
+|-------|--------------|
 | **Tests** | Runs `pytest` on `tests/` |
 | **Markdown Lint** | Runs markdownlint-cli2 on all `.md` files |
 | **Skill Security Audit** | Scans changed skills for dangerous patterns |
-| **Link Checker** | Validates all URLs in `.md` files |
 | **Lint Scripts** | Runs ruff and shellcheck on `scripts/` |
 
 ## Responsible Use

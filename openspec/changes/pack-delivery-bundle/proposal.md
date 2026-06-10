@@ -3,7 +3,7 @@
 The repo already has two halves of the delivery story but the bridge between
 them is missing:
 
-- `delivery-spec/交付格式规范.md` v2 defines a precise `资源包/` layout: per
+- `delivery-format/交付格式规范.md` v2 defines a precise `资源包/` layout: per
   challenge zip bundles under `工具/` and `题库资源/deploy/{,enclosure/,report/}`,
   PDF writeups, docker image tars under `虚拟机资源/docker-tar/`, and two xlsx
   inventories.
@@ -30,7 +30,7 @@ emits the `资源包/` tree per spec v2, and produces both xlsx inventories.
   - For each challenge, emits a `工具/js-{prefix}-{id}exp.zip` containing
     `wp.md` (from `writeup/`) and the contents of `solve/`.
   - Emits an `题库资源/deploy/enclosure/js-{prefix}-{id}.zip` according to the
-    delivery-spec category table (crypto/re/stego/forensics/misc/etc.:
+    delivery-format category table (crypto/re/stego/forensics/misc/etc.:
     required; web: skipped; pwn: optional via flag).
   - For containerized categories (web, pwn), zips the working `deploy/`
     tree into `题库资源/deploy/js-{prefix}-{id}.zip` AND emits a tar under
