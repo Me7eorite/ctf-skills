@@ -7,6 +7,7 @@ import json
 import os
 import re
 import socket
+import subprocess
 import sys
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from domain.metrics import duration_breakdown
 from domain.reports import merge_reports
 from domain.validation import ChallengeValidator
 from hermes import HermesRunner
+from hermes.fake import FakeHermesRunner
 from hermes.runner import DEFAULT_HERMES_TIMEOUT
 from packing import Packer, PackerOptions
 from web.server import serve
@@ -63,7 +65,7 @@ def parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Hermes subprocess wall-clock timeout in seconds. "
-            f"Precedence: --timeout > HERMES_TIMEOUT env var > default {DEFAULT_HERMES_TIMEOUT} = 25min."
+            f"Precedence: --timeout > HERMES_TIMEOUT env var > default {DEFAULT_HERMES_TIMEOUT}."
         ),
     )
 
@@ -82,6 +84,12 @@ def parser() -> argparse.ArgumentParser:
     progress.add_argument("--message", default="")
 
     commands.add_parser("merge-reports", help="merge shard reports")
+
+    commands.add_parser(
+        "build-ui",
+        help="build the Next.js dashboard static export",
+        description="build the Next.js dashboard static export",
+    )
 
     durations = commands.add_parser(
         "durations",
@@ -106,6 +114,7 @@ def parser() -> argparse.ArgumentParser:
     web = commands.add_parser("serve", help="start the dashboard")
     web.add_argument("--host", default="127.0.0.1")
     web.add_argument("--port", type=int, default=4173)
+    web.add_argument("--demo", action="store_true", help="run the self-contained dashboard demo replay")
     return root
 
 
@@ -201,6 +210,18 @@ def main() -> None:
         print(merge_reports(paths.reports))
         return
 
+    if args.command == "build-ui":
+        script = paths.root / "scripts" / "build_frontend.sh"
+        if not script.is_file():
+            print(f"error: frontend build script not found: {script}", file=sys.stderr)
+            sys.exit(1)
+        try:
+            result = subprocess.run([str(script)], cwd=paths.root, check=False)
+        except FileNotFoundError as exc:
+            print(f"error: failed to start frontend build: {exc}", file=sys.stderr)
+            sys.exit(127)
+        sys.exit(result.returncode)
+
     if args.command == "durations":
         if not SHARD_BASENAME_RE.match(args.shard):
             print(
@@ -229,7 +250,9 @@ def main() -> None:
         return
 
     if args.command == "serve":
-        serve(paths, args.host, args.port)
+        if args.demo:
+            FakeHermesRunner(paths).start()
+        serve(paths, args.host, args.port, demo=args.demo)
 
 
 if __name__ == "__main__":

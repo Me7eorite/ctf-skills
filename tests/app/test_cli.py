@@ -55,6 +55,13 @@ def _seed_pending_shard(tmp: Path) -> None:
 
 
 class CLIHelpAndParserTests(unittest.TestCase):
+    def test_build_ui_help_exists(self):
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            result = _run_cli(["build-ui", "--help"], cwd=tmp_path)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("build the Next.js dashboard", result.stdout)
+
     def test_run_help_has_timeout_and_no_validate(self):
         with TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -102,7 +109,7 @@ class CLITimeoutPrecedenceTests(unittest.TestCase):
                 Path(tmp),
                 args=[],
                 env={"HERMES_TIMEOUT": ""},  # cleared
-                expected="effective_timeout=1500 source=default",
+                expected="effective_timeout=2500 source=default",
             )
 
     def test_env_used_when_no_cli_flag(self):

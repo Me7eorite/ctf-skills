@@ -228,6 +228,38 @@ class StateStore:
             ).fetchone()
             return dict(row) if row else None
 
+    def trace_events_after(self, event_id: int, limit: int = 100) -> list[dict]:
+        """Return progress events after ``event_id`` for SSE trace tailing."""
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT id, shard, challenge_id, worker, stage, status,
+                       percent, message, created_at
+                FROM progress_events
+                WHERE id > ?
+                ORDER BY id ASC
+                LIMIT ?
+                """,
+                (event_id, limit),
+            )
+            return [dict(row) for row in rows]
+
+    def delete_events_for_shards(self, shards: list[str]) -> None:
+        """Delete progress read-model rows for known demo shard names."""
+        if not shards:
+            return
+        placeholders = ",".join("?" for _ in shards)
+        with closing(self._connect()) as connection:
+            with connection:
+                connection.execute(
+                    f"DELETE FROM progress_events WHERE shard IN ({placeholders})",
+                    shards,
+                )
+                connection.execute(
+                    f"DELETE FROM progress_snapshots WHERE shard IN ({placeholders})",
+                    shards,
+                )
+
     def reset_snapshots(self, shard: str) -> None:
         """Delete all snapshot rows for the given original shard name.
 

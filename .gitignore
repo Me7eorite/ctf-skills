@@ -21,6 +21,12 @@ venv/
 # Generated
 _site/
 work/
+src/web/static/dist/
+web/out/
+
+# Frontend
+web/node_modules/
+web/.next/
 
 # Local Hermes state and credentials
 .hermes/

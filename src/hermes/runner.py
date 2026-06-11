@@ -32,7 +32,7 @@ from hermes.progress import ensure_report, update_report
 from hermes.prompt import render_prompt
 
 DEFAULT_HERMES_COMMAND = "hermes chat -Q --yolo -q"
-DEFAULT_HERMES_TIMEOUT = 1500
+DEFAULT_HERMES_TIMEOUT = 2500
 HERMES_TIMEOUT_RETURNCODE = 124
 
 

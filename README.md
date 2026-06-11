@@ -57,11 +57,15 @@ uv run challenge-factory split \
 uv run challenge-factory run \
   --worker hermes-01 \
   --loop \
-  --validate
+  --timeout 2500
 
 uv run challenge-factory merge-reports
 uv run challenge-factory pack --skip-docker
 ```
+
+Validation is mandatory for non-dry-run `run`; the legacy `--validate` flag has
+been removed. Use `--timeout SECONDS` to override the default 2500-second
+Hermes subprocess timeout (precedence: CLI flag > `HERMES_TIMEOUT` env > 2500).
 
 Dry-run prompt generation:
 
@@ -72,14 +76,43 @@ uv run challenge-factory run --worker dry-01 --dry-run
 ## Dashboard
 
 ```bash
+uv run challenge-factory build-ui
 uv run challenge-factory serve
 ```
 
 Open [http://127.0.0.1:4173](http://127.0.0.1:4173).
 
-The dashboard provides queue, challenge, build, validation, log, and live
-per-challenge pipeline views. It can also start one local worker, re-run
-validation, and retry failed shards.
+The dashboard provides queue, challenge, build, validation, log, live
+per-challenge pipeline, and agent trace views. It can also start one local
+worker, re-run validation, and retry failed shards.
+
+The frontend is a static Next.js export. The generated files under
+`src/web/static/dist/` are not committed; run `uv run challenge-factory
+build-ui` before `serve` on a fresh clone. If the build artifact is missing,
+`serve` still starts and `GET /` shows the exact build command.
+
+Frontend development runs as two processes:
+
+```bash
+uv run challenge-factory serve
+
+cd web
+npm install
+npm run dev
+```
+
+Open [http://127.0.0.1:3000](http://127.0.0.1:3000). The Next dev server
+proxies `/api/*` to FastAPI on port 4173.
+
+Live demo mode:
+
+```bash
+uv run challenge-factory serve --demo
+```
+
+Demo mode replays a built-in matrix through the normal SQLite state plane and
+trace stream without requiring Hermes or Docker. Mutating dashboard endpoints
+return `409` with `{"ok": false, "message": "Demo mode is read-only"}`.
 
 The **种子配置** view manages the matrix-compatible inputs used for generation.
 Create or edit Web/Pwn/Reverse seeds, put category-specific values such as
@@ -146,8 +179,8 @@ Workers claim shards through atomic file moves, so separate shells can process
 different shards safely:
 
 ```bash
-uv run challenge-factory run --worker hermes-01 --loop --validate
-uv run challenge-factory run --worker hermes-02 --loop --validate
+uv run challenge-factory run --worker hermes-01 --loop
+uv run challenge-factory run --worker hermes-02 --loop
 ```
 
 Recommended shard sizes:
