@@ -101,14 +101,14 @@ class HermesRunnerTests(unittest.TestCase):
         runner = HermesRunner(self.paths)
         log = self.paths.logs / "timeout.log"
         with (
-            patch.dict("os.environ", {"HERMES_TIMEOUT": "1", "HERMES_CMD": "hermes"}),
+            patch.dict("os.environ", {"HERMES_CMD": "hermes"}),
             patch.object(runner, "_apply_legacy_custom_provider", return_value=False),
             patch(
                 "hermes.runner.subprocess.run",
                 side_effect=__import__("subprocess").TimeoutExpired("hermes", 1),
             ),
         ):
-            returncode = runner._invoke("prompt", log, dry_run=False)
+            returncode = runner._invoke("prompt", log, dry_run=False, timeout=1)
 
         self.assertEqual(returncode, 124)
         self.assertIn("timed out after 1s", log.read_text(encoding="utf-8"))
@@ -142,40 +142,25 @@ class HermesRunnerTests(unittest.TestCase):
         )
         return path
 
-    def test_process_one_recovers_when_timeout_after_artifacts_built(self):
-        self._write_shard(
-            "web-0001-0001.json",
-            [{"id": "web-0001", "category": "web"}],
-        )
-        self._write_metadata("web-0001", "web", "passed")
-
-        runner = HermesRunner(self.paths)
-        with (
-            patch.object(runner, "_invoke", return_value=124),
-            patch.object(runner, "render_prompt", return_value="prompt"),
-        ):
-            outcome = runner.process_one("worker-1", validate=False, dry_run=False)
-
-        self.assertEqual(outcome["status"], "done")
-        self.assertTrue(any(self.paths.shards.joinpath("done").iterdir()))
-
     def test_process_one_fails_when_timeout_without_artifacts(self):
+        """Timeout with no challenge directories cannot recover under the new contract."""
         self._write_shard(
             "web-0002-0002.json",
             [{"id": "web-0002", "category": "web"}],
         )
 
-        runner = HermesRunner(self.paths)
+        runner = HermesRunner(self.paths, image_exists=lambda _: True)
         with (
             patch.object(runner, "_invoke", return_value=124),
             patch.object(runner, "render_prompt", return_value="prompt"),
         ):
-            outcome = runner.process_one("worker-1", validate=False, dry_run=False)
+            outcome = runner.process_one("worker-1", dry_run=False)
 
         self.assertEqual(outcome["status"], "failed")
         self.assertEqual(outcome["returncode"], 124)
 
     def test_process_one_fails_when_timeout_with_partial_artifacts(self):
+        """Timeout with incomplete per-stage evidence still fails under the new contract."""
         self._write_shard(
             "web-0003-0003.json",
             [
@@ -183,15 +168,15 @@ class HermesRunnerTests(unittest.TestCase):
                 {"id": "web-0004", "category": "web"},
             ],
         )
-        # Only one of two has a passing build.
+        # Only the metadata file exists — no deploy/, writeup, etc.
         self._write_metadata("web-0003", "web", "passed")
         self._write_metadata("web-0004", "web", "failed")
 
-        runner = HermesRunner(self.paths)
+        runner = HermesRunner(self.paths, image_exists=lambda _: True)
         with (
             patch.object(runner, "_invoke", return_value=124),
             patch.object(runner, "render_prompt", return_value="prompt"),
         ):
-            outcome = runner.process_one("worker-1", validate=False, dry_run=False)
+            outcome = runner.process_one("worker-1", dry_run=False)
 
         self.assertEqual(outcome["status"], "failed")

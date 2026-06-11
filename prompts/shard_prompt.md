@@ -24,7 +24,8 @@ Read only the category references needed by the current shard:
 # Mandatory Progress Reporting
 
 The dashboard is backed by a SQLite event store. Report progress before and
-after every stage for every challenge. Use this exact command prefix:
+after **four** authoring stages for every challenge: `design`, `implement`,
+`build`, and `document`. Use this exact command prefix:
 
 ```text
 {progress_command}
@@ -33,7 +34,7 @@ after every stage for every challenge. Use this exact command prefix:
 Append these arguments:
 
 ```text
---challenge <id> --stage <design|implement|build|validate|document> \
+--challenge <id> --stage <design|implement|build|document> \
 --status <running|passed|failed> --message "<short concrete update>"
 ```
 
@@ -43,6 +44,11 @@ Example:
 {progress_command} --challenge web-0001 --stage build \
   --status running --message "Building the pinned Docker image"
 ```
+
+**Do not write `validate` stage progress events yourself.** The runner owns
+all `validate/*` events and writes them after invoking the host-side
+validator. Generate `validate.sh` and `solve/solve.py` as part of Stage 4 but
+do not execute them.
 
 Do not report `passed` until the corresponding work or command has actually
 succeeded. On failure, report `failed` with the failing command or reason
@@ -68,9 +74,25 @@ Write challenge directories under:
 {challenge_dir}/<category>/<id>-<slug>/
 ```
 
+# 0. Resume Check
+
+The host has pre-computed a resume plan for every challenge in this shard.
+Follow the plan literally. **Do not query SQLite or attempt to infer which
+stages are already complete on your own.** Stages listed under
+`skip_stages` for a challenge already passed evidence verification in the
+previous run and have been carry-forwarded by the runner; do not regenerate or
+modify the artifacts those stages own. Resume work for each challenge at the
+stage shown in `next_stage`; if `next_stage` is empty the runner has handled
+the challenge before invoking you and you do not need to process it.
+
+```text
+{resume_plan}
+```
+
 # Five-Stage Authoring Flow
 
-For each challenge, complete these stages in order.
+For each challenge, complete these stages in order, starting from the
+challenge's `next_stage` in the resume plan above.
 
 ## 1. Design
 
@@ -110,19 +132,25 @@ Container rules for Web and Pwn:
   conventional application directory when available, such as
   `www-data:/var/www/html` for Apache/PHP or the selected Tomcat image's
   `tomcat` account/application directory. Create `ctf` only if the base image
-  has no suitable service account. Never leave the service running as root.
+  has no suitable service account. Business worker processes must not run
+  permanently as root.
 - Keep challenge files read-only at runtime where practical. Create only the
   narrow writable directories the service needs, owned by its runtime user.
 - `deploy/docker-compose.yml` MUST NOT use `volumes` (neither bind mounts nor
   named volumes). Copy all source, configuration, startup assets, and required
   initial data into the image during `docker build`.
-- Web services must listen on an unprivileged container port such as `8080`.
-  If the matrix requests host port `80`, map it to that internal port instead
-  of adding a bind capability or running as root.
-- Do not use root execution, `privileged: true`, broad Linux capabilities,
-  host devices/networking, or writable system mounts unless the intended
-  challenge mechanism strictly requires one. Minimize any exception and
-  document the technical reason in `metadata.json`, validation notes, and
+- Web services may listen on the upstream service's conventional container
+  port (Apache or nginx on `80`, Tomcat on `8080`, common Node services on
+  `3000`). When the matrix names a specific port, use that port. The standard
+  Apache/nginx root master plus non-root worker pattern is allowed: the master
+  may start as root only to bind a low port and supervise workers, while
+  business workers and the actual request-handling processes run as
+  `www-data` (or the equivalent service account). Permanent root business
+  processes are still forbidden.
+- Do not use `privileged: true`, broad Linux capabilities, host
+  devices/networking, or unnecessary writable system mounts unless the
+  intended challenge mechanism strictly requires one. Minimize any exception
+  and document the technical reason in `metadata.json`, validation notes, and
   `writeup/wp.md`.
 - If Debian/Ubuntu `apt` access is slow or unavailable in the target build
   network, the Dockerfile may switch to an organizer-approved mirror before
@@ -172,19 +200,33 @@ Do not mark `build_status` as passed unless the command succeeded.
 
 ## 4. Exploit Validation
 
+Your responsibility in this stage is to **generate** validation artifacts.
+**Do not execute `validate.sh` yourself, and do not write `validate/*`
+progress events.** The host runner will execute `validate.sh` after you
+return, observe its exit code and recovered flag, and write the authoritative
+`validate/passed` or `validate/failed` event.
+
 - Write `solve/solve.py` as a real reference exploit/solver.
 - Write `validate.sh` as the single reproducible validation entrypoint.
 - Web/Pwn exploits must connect to the running service using `CHAL_HOST` and
   `CHAL_PORT`; no offline flag fallback is allowed.
 - Re solvers must derive the flag from files in `dist/`, never from `src/`,
   `metadata.json`, or `challenge.yml`.
-- Start the built service when required, run the exploit, verify the exact
-  flag, then stop the service.
 
-For Web/Pwn, `validate.sh` must build the image, start the service, wait for
+For Web/Pwn, `validate.sh` MUST reuse an already-built image rather than
+forcing a rebuild on every run. Place the following check before
+`docker compose up`:
+
+```bash
+docker image inspect "$IMAGE" >/dev/null 2>&1 || docker build -t "$IMAGE" .
+```
+
+After that gate, `validate.sh` must start the service, wait for
 health/readiness, run `solve/solve.py`, and always clean up with a shell trap.
-For Re, it must build the artifact when needed and run the solver against
-`dist/`. Its last non-empty stdout line must be the recovered flag.
+Forced rebuilds are an operator concern (`docker rmi` outside the script);
+`validate.sh` itself does not need a force flag. For Re, `validate.sh` must
+build the artifact when needed and run the solver against `dist/`. Its last
+non-empty stdout line must be the recovered flag.
 
 Do not print a hardcoded known flag merely to satisfy validation.
 

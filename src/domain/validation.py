@@ -78,6 +78,39 @@ class ChallengeValidator:
         write_json(self.paths.reports / "validation.json", summary)
         return summary
 
+    def validate_challenge(self, challenge_id: str) -> dict:
+        """Validate exactly one challenge by id.
+
+        Requires exactly one ``<challenge_id>-<slug>`` directory under
+        ``work/challenges/*/``. Returns ``missing_challenge`` when zero
+        directories match and ``ambiguous_challenge`` when multiple match;
+        neither error case starts ``validate.sh``.
+        """
+        matches: list[Path] = [
+            path
+            for path in self.paths.challenges.glob("*/*")
+            if path.is_dir()
+            and (path.name == challenge_id or path.name.startswith(f"{challenge_id}-"))
+        ]
+        if not matches:
+            return {
+                "challenge_id": challenge_id,
+                "status": "missing_challenge",
+                "error": f"no challenge directory matches {challenge_id}",
+            }
+        if len(matches) > 1:
+            return {
+                "challenge_id": challenge_id,
+                "status": "ambiguous_challenge",
+                "error": (
+                    f"{len(matches)} challenge directories match {challenge_id}: "
+                    + ", ".join(sorted(match.name for match in matches))
+                ),
+            }
+        result = self.validate_one(matches[0])
+        result.setdefault("challenge_id", challenge_id)
+        return result
+
     def validate_one(self, challenge_dir: Path) -> dict:
         metadata_path = challenge_dir / "metadata.json"
         metadata = read_json(metadata_path)

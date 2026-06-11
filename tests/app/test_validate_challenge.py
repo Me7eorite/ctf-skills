@@ -1,0 +1,175 @@
+"""Tests for ChallengeValidator.validate_challenge and report merging."""
+
+from __future__ import annotations
+
+import json
+import unittest
+from dataclasses import dataclass
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from domain.validation import ChallengeValidator
+from hermes.runner import merge_validation_into_report
+
+
+@dataclass(frozen=True)
+class _Paths:
+    root: Path
+
+    @property
+    def challenges(self) -> Path:
+        return self.root / "work" / "challenges"
+
+    @property
+    def reports(self) -> Path:
+        return self.root / "work" / "reports"
+
+
+def _seed_paths(tmp: Path) -> _Paths:
+    paths = _Paths(root=tmp)
+    paths.challenges.mkdir(parents=True, exist_ok=True)
+    paths.reports.mkdir(parents=True, exist_ok=True)
+    return paths
+
+
+def _make_challenge_dir(paths: _Paths, challenge_id: str, slug: str = "demo") -> Path:
+    directory = paths.challenges / "web" / f"{challenge_id}-{slug}"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+class ValidateChallengeLookupTests(unittest.TestCase):
+    def test_missing_challenge_id_returns_missing_status(self):
+        with TemporaryDirectory() as tmp:
+            paths = _seed_paths(Path(tmp))
+            validator = ChallengeValidator(paths)  # type: ignore[arg-type]
+
+            result = validator.validate_challenge("web-0001")
+            self.assertEqual(result["status"], "missing_challenge")
+            self.assertIn("error", result)
+            self.assertEqual(result["challenge_id"], "web-0001")
+
+    def test_ambiguous_directories_return_ambiguous_status(self):
+        with TemporaryDirectory() as tmp:
+            paths = _seed_paths(Path(tmp))
+            _make_challenge_dir(paths, "web-0001", slug="alpha")
+            _make_challenge_dir(paths, "web-0001", slug="beta")
+            validator = ChallengeValidator(paths)  # type: ignore[arg-type]
+
+            result = validator.validate_challenge("web-0001")
+            self.assertEqual(result["status"], "ambiguous_challenge")
+            self.assertEqual(result["challenge_id"], "web-0001")
+
+    def test_exact_match_validates_through_validate_one(self):
+        with TemporaryDirectory() as tmp:
+            paths = _seed_paths(Path(tmp))
+            directory = _make_challenge_dir(paths, "web-0001")
+            # No metadata.json -> contract failure path.
+            validator = ChallengeValidator(paths)  # type: ignore[arg-type]
+
+            result = validator.validate_challenge("web-0001")
+            self.assertEqual(result["challenge_id"], "web-0001")
+            # validate_one returns invalid_metadata when metadata.json missing.
+            self.assertIn(result["status"], {"invalid_metadata", "contract_failed"})
+            self.assertEqual(result.get("path"), str(directory))
+
+
+class MergeValidationIntoReportTests(unittest.TestCase):
+    def test_creates_report_when_missing(self):
+        with TemporaryDirectory() as tmp:
+            report = Path(tmp) / "report.json"
+            merge_validation_into_report(
+                report,
+                [
+                    {
+                        "challenge_id": "web-0001",
+                        "solve_status": "passed",
+                        "validation_status": "passed",
+                        "validation_elapsed": 1.2,
+                    }
+                ],
+                shard=Path("/x/web-0001-0001.json"),
+                worker="dry-01",
+                runner_status="passed",
+            )
+            raw = json.loads(report.read_text(encoding="utf-8"))
+            self.assertEqual(raw["runner_status"], "passed")
+            self.assertEqual(len(raw["challenges"]), 1)
+            self.assertEqual(raw["challenges"][0]["solve_status"], "passed")
+            self.assertEqual(raw["challenges"][0]["validation_status"], "passed")
+            self.assertEqual(raw["challenges"][0]["validation_elapsed"], 1.2)
+
+    def test_repairs_malformed_challenges_field(self):
+        with TemporaryDirectory() as tmp:
+            report = Path(tmp) / "report.json"
+            report.write_text(
+                json.dumps({"shard": "s", "challenges": "not-a-list"}),
+                encoding="utf-8",
+            )
+            merge_validation_into_report(
+                report,
+                [
+                    {
+                        "challenge_id": "web-0001",
+                        "solve_status": "failed",
+                        "validation_status": "flag_mismatch",
+                    }
+                ],
+                runner_status="failed",
+            )
+            raw = json.loads(report.read_text(encoding="utf-8"))
+            self.assertEqual(raw["runner_status"], "failed")
+            self.assertIsInstance(raw["challenges"], list)
+            self.assertEqual(raw["challenges"][0]["solve_status"], "failed")
+
+    def test_preserves_existing_challenge_entries(self):
+        with TemporaryDirectory() as tmp:
+            report = Path(tmp) / "report.json"
+            report.write_text(
+                json.dumps(
+                    {
+                        "challenges": [
+                            {
+                                "id": "web-0001",
+                                "title": "Existing",
+                                "category": "web",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            merge_validation_into_report(
+                report,
+                [
+                    {
+                        "challenge_id": "web-0001",
+                        "solve_status": "passed",
+                        "validation_status": "passed",
+                    }
+                ],
+                runner_status="passed",
+            )
+            raw = json.loads(report.read_text(encoding="utf-8"))
+            self.assertEqual(len(raw["challenges"]), 1)
+            entry = raw["challenges"][0]
+            self.assertEqual(entry["title"], "Existing")
+            self.assertEqual(entry["solve_status"], "passed")
+
+    def test_any_failure_flips_runner_status(self):
+        with TemporaryDirectory() as tmp:
+            report = Path(tmp) / "report.json"
+            merge_validation_into_report(
+                report,
+                [
+                    {"challenge_id": "web-0001", "solve_status": "passed"},
+                    {"challenge_id": "web-0002", "solve_status": "failed"},
+                ],
+                runner_status="passed",
+            )
+            raw = json.loads(report.read_text(encoding="utf-8"))
+            self.assertEqual(raw["runner_status"], "failed")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,207 @@
+"""Tests for the rendered shard prompt."""
+
+from __future__ import annotations
+
+import re
+import unittest
+from dataclasses import dataclass
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from domain.resume import ChallengeResumePlan, ShardResumePlan
+from hermes.prompt import render_prompt
+
+PROGRESS_SHARD_RE = re.compile(r'progress --shard "?([^"\s]+)"? --worker')
+
+
+@dataclass(frozen=True)
+class _Paths:
+    root: Path
+
+    @property
+    def prompt_template(self) -> Path:
+        return self.root / "prompts" / "shard_prompt.md"
+
+    @property
+    def challenges(self) -> Path:
+        return self.root / "work" / "challenges"
+
+    @property
+    def generation_profile(self) -> Path:
+        return self.root / "generation-profiles.json"
+
+    @property
+    def design_skill(self) -> Path:
+        return self.root / "skills" / "design-challenges" / "SKILL.md"
+
+    @property
+    def design_references(self) -> Path:
+        return self.root / "skills" / "design-challenges" / "references"
+
+
+def _copy_real_prompt_into(target_root: Path) -> Path:
+    """Copy the in-tree prompt template into the temp project."""
+    real_prompt = (
+        Path(__file__).resolve().parents[2] / "prompts" / "shard_prompt.md"
+    )
+    target_prompt = target_root / "prompts" / "shard_prompt.md"
+    target_prompt.parent.mkdir(parents=True, exist_ok=True)
+    target_prompt.write_text(real_prompt.read_text(encoding="utf-8"), encoding="utf-8")
+    return target_prompt
+
+
+def _seed_paths(tmp: Path) -> _Paths:
+    paths = _Paths(root=tmp)
+    _copy_real_prompt_into(tmp)
+    (paths.challenges).mkdir(parents=True, exist_ok=True)
+    paths.generation_profile.write_text("{}", encoding="utf-8")
+    paths.design_skill.parent.mkdir(parents=True, exist_ok=True)
+    paths.design_skill.write_text("# skill\n", encoding="utf-8")
+    paths.design_references.mkdir(parents=True, exist_ok=True)
+    return paths
+
+
+class RenderPromptTests(unittest.TestCase):
+    def test_progress_command_uses_original_shard_name(self):
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            paths = _seed_paths(tmp_path)
+            running_shard = tmp_path / "work" / "shards" / "running" / "web-0001-0005.worker-02.json"
+            running_shard.parent.mkdir(parents=True, exist_ok=True)
+            running_shard.write_text("{}", encoding="utf-8")
+            report = tmp_path / "report.json"
+
+            rendered = render_prompt(
+                paths,  # type: ignore[arg-type]
+                running_shard,
+                report,
+                worker="worker-02",
+                original_shard_name="web-0001-0005.json",
+            )
+
+            matches = PROGRESS_SHARD_RE.findall(rendered)
+            self.assertTrue(matches, "no progress command shard arg found")
+            for shard_name in matches:
+                self.assertNotIn(".worker-", shard_name)
+                self.assertRegex(shard_name, r"^[a-z0-9_-]+\.json$")
+                self.assertEqual(shard_name, "web-0001-0005.json")
+
+    def test_resume_plan_section_appears(self):
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            paths = _seed_paths(tmp_path)
+            running_shard = tmp_path / "running.json"
+            running_shard.write_text("{}", encoding="utf-8")
+            report = tmp_path / "r.json"
+
+            plan = ShardResumePlan(
+                shard="web-0001-0005.json",
+                previous_claim_event_id=42,
+                challenges=(
+                    ChallengeResumePlan(
+                        challenge_id="web-0001",
+                        directory=Path("/tmp/web-0001"),
+                        lookup_status="ok",
+                        skipped_stages=("design", "implement"),
+                        first_pending_stage="build",
+                        stage_sources={"design": 40, "implement": 41},
+                    ),
+                ),
+            )
+            rendered = render_prompt(
+                paths,  # type: ignore[arg-type]
+                running_shard,
+                report,
+                worker="dry-01",
+                original_shard_name="web-0001-0005.json",
+                resume_plan=plan,
+            )
+
+            self.assertIn("0. Resume Check", rendered)
+            self.assertIn("web-0001", rendered)
+            self.assertIn("skip_stages=design, implement", rendered)
+            self.assertIn("next_stage=build", rendered)
+
+    def test_first_run_resume_plan_renders_fallback(self):
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            paths = _seed_paths(tmp_path)
+            running_shard = tmp_path / "running.json"
+            running_shard.write_text("{}", encoding="utf-8")
+            report = tmp_path / "r.json"
+
+            rendered = render_prompt(
+                paths,  # type: ignore[arg-type]
+                running_shard,
+                report,
+                worker="dry-01",
+                original_shard_name="web-0001-0005.json",
+                resume_plan=None,
+            )
+            self.assertIn("first-time run", rendered)
+
+    def test_prompt_contains_image_inspect_pattern(self):
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            paths = _seed_paths(tmp_path)
+            running_shard = tmp_path / "running.json"
+            running_shard.write_text("{}", encoding="utf-8")
+            rendered = render_prompt(
+                paths,  # type: ignore[arg-type]
+                running_shard,
+                tmp_path / "r.json",
+                worker="dry-01",
+                original_shard_name="s.json",
+            )
+            self.assertIn(
+                'docker image inspect "$IMAGE" >/dev/null 2>&1 || docker build',
+                rendered,
+            )
+
+    def test_prompt_keeps_apache_root_master_exception(self):
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            paths = _seed_paths(tmp_path)
+            running_shard = tmp_path / "running.json"
+            running_shard.write_text("{}", encoding="utf-8")
+            rendered = render_prompt(
+                paths,  # type: ignore[arg-type]
+                running_shard,
+                tmp_path / "r.json",
+                worker="dry-01",
+                original_shard_name="s.json",
+            )
+            self.assertIn("Apache/nginx", rendered)
+            # Old hard prohibitions must be gone.
+            self.assertNotIn("Never leave the service running as root", rendered)
+            self.assertNotIn("Do not use root execution", rendered)
+
+    def test_prompt_drops_hermes_validate_execution_instructions(self):
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            paths = _seed_paths(tmp_path)
+            running_shard = tmp_path / "running.json"
+            running_shard.write_text("{}", encoding="utf-8")
+            rendered = render_prompt(
+                paths,  # type: ignore[arg-type]
+                running_shard,
+                tmp_path / "r.json",
+                worker="dry-01",
+                original_shard_name="s.json",
+            )
+            # Old execution instructions must be gone.
+            self.assertNotIn(
+                "Start the built service when required, run the exploit",
+                rendered,
+            )
+            # New ownership statement must be present.
+            self.assertIn("Do not execute `validate.sh` yourself", rendered)
+            # Progress reporting must list four stages only.
+            self.assertIn(
+                "--stage <design|implement|build|document>",
+                rendered,
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()

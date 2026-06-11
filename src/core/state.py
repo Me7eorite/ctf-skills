@@ -81,7 +81,7 @@ class StateStore:
         )
         with closing(self._connect()) as connection:
             with connection:
-                connection.execute(
+                event_cursor = connection.execute(
                     """
                     INSERT INTO progress_events (
                         shard, challenge_id, worker, stage, status,
@@ -90,6 +90,7 @@ class StateStore:
                     """,
                     values,
                 )
+                event_id = event_cursor.lastrowid
                 connection.execute(
                     """
                     INSERT INTO progress_snapshots (
@@ -100,13 +101,14 @@ class StateStore:
                         worker = excluded.worker,
                         stage = excluded.stage,
                         status = excluded.status,
-                        percent = excluded.percent,
+                        percent = MAX(progress_snapshots.percent, excluded.percent),
                         message = excluded.message,
                         updated_at = excluded.updated_at
                     """,
                     values,
                 )
         return {
+            "event_id": event_id,
             "shard": values[0],
             "challenge_id": challenge_id,
             "worker": worker,
@@ -116,6 +118,128 @@ class StateStore:
             "message": message,
             "updated_at": timestamp,
         }
+
+    def events_for_shard(
+        self,
+        shard: str,
+        *,
+        before_id: int | None = None,
+    ) -> list[dict]:
+        """Return all events for the given original shard name, ascending by id.
+
+        Includes both shard-level events (challenge_id == "") and challenge-level
+        events for any challenge under this shard. ``before_id`` is an exclusive
+        upper bound (id < before_id).
+        """
+        clauses = ["shard = ?"]
+        params: list[object] = [shard]
+        if before_id is not None:
+            clauses.append("id < ?")
+            params.append(before_id)
+        where = " AND ".join(clauses)
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                f"""
+                SELECT id, shard, challenge_id, worker, stage, status,
+                       percent, message, created_at
+                FROM progress_events
+                WHERE {where}
+                ORDER BY id ASC
+                """,
+                params,
+            )
+            return [dict(row) for row in rows]
+
+    def events_for_challenge(
+        self,
+        shard: str,
+        challenge_id: str,
+        *,
+        after_id: int | None = None,
+        before_id: int | None = None,
+    ) -> list[dict]:
+        """Return events matching exactly the given challenge_id under shard.
+
+        Only returns rows whose ``challenge_id`` equals the parameter; shard-level
+        events with empty challenge_id are excluded. ``after_id`` is an inclusive
+        lower bound (id >= after_id); ``before_id`` is an exclusive upper bound
+        (id < before_id).
+        """
+        if not challenge_id:
+            raise ValueError(
+                "challenge_id must be non-empty; use events_for_shard or "
+                "latest_claim_event for shard-level queries"
+            )
+        clauses = ["shard = ?", "challenge_id = ?"]
+        params: list[object] = [shard, challenge_id]
+        if after_id is not None:
+            clauses.append("id >= ?")
+            params.append(after_id)
+        if before_id is not None:
+            clauses.append("id < ?")
+            params.append(before_id)
+        where = " AND ".join(clauses)
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                f"""
+                SELECT id, shard, challenge_id, worker, stage, status,
+                       percent, message, created_at
+                FROM progress_events
+                WHERE {where}
+                ORDER BY id ASC
+                """,
+                params,
+            )
+            return [dict(row) for row in rows]
+
+    def latest_claim_event(
+        self,
+        shard: str,
+        *,
+        before_id: int | None = None,
+    ) -> dict | None:
+        """Return the latest shard-level queued/running claim event, if any.
+
+        Only inspects events with challenge_id == "", stage == "queued", and
+        status == "running". ``before_id`` is exclusive (id < before_id).
+        """
+        clauses = [
+            "shard = ?",
+            "challenge_id = ''",
+            "stage = 'queued'",
+            "status = 'running'",
+        ]
+        params: list[object] = [shard]
+        if before_id is not None:
+            clauses.append("id < ?")
+            params.append(before_id)
+        where = " AND ".join(clauses)
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                f"""
+                SELECT id, shard, challenge_id, worker, stage, status,
+                       percent, message, created_at
+                FROM progress_events
+                WHERE {where}
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                params,
+            ).fetchone()
+            return dict(row) if row else None
+
+    def reset_snapshots(self, shard: str) -> None:
+        """Delete all snapshot rows for the given original shard name.
+
+        Snapshots are a dashboard read model. Resetting them does not delete
+        any progress_events rows.
+        """
+        with closing(self._connect()) as connection:
+            with connection:
+                connection.execute(
+                    "DELETE FROM progress_snapshots WHERE shard = ?",
+                    (shard,),
+                )
 
     def dashboard(self, event_limit: int = 60) -> dict:
         with closing(self._connect()) as connection:
