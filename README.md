@@ -82,6 +82,23 @@ uv run challenge-factory serve
 
 Open [http://127.0.0.1:4173](http://127.0.0.1:4173).
 
+## Frontend development
+
+The console SPA lives in `frontend/` (Vue 3 + Vite + TypeScript + Tailwind). Node 20
+LTS is pinned via `.nvmrc`.
+
+```bash
+nvm use
+cd frontend && npm install
+npm run dev       # vite dev server, proxies /api/* to FastAPI on 4173
+npm run build     # emits hashed assets to src/web/static/dist/
+npm run test      # vitest unit tests
+```
+
+The built output under `src/web/static/dist/` is committed so operators who only
+run `uv sync` can serve the SPA without Node installed. `Makefile` exposes
+`ui-dev`, `ui-build`, `ui-test` shorthands at the repo root.
+
 The dashboard provides queue, challenge, build, validation, log, live
 per-challenge pipeline, and agent trace views. It can also start one local
 worker, re-run validation, and retry failed shards.

@@ -20,20 +20,20 @@
 
 ## 2. Frontend scaffolding (commit 2)
 
-- [ ] 2.1 Add `frontend/` workspace: `package.json`, `vite.config.ts`, `tsconfig.json`, `tailwind.config.ts`, `postcss.config.js`, `index.html`, `src/main.ts`, `src/App.vue`, `.eslintrc.cjs`, `.prettierrc`. Pin Node 20 LTS via `.nvmrc` at repo root.
-- [ ] 2.2 Install runtime deps: `vue@3`, `vue-router@4`, `pinia`, `@tanstack/vue-query`, `@vueuse/core`, `lucide-vue-next`, `tailwindcss`, `monaco-editor`, `@fontsource/inter`, `@fontsource/jetbrains-mono`.
-- [ ] 2.3 Install dev deps: `vite@5`, `typescript@5`, `@vitejs/plugin-vue`, `vue-tsc`, `eslint`, `eslint-plugin-vue`, `@typescript-eslint/*`, `prettier`, `vitest`, `@vue/test-utils`, `jsdom`.
-- [ ] 2.4 Define design tokens in `tailwind.config.ts`: six semantic color groups (success/warning/danger/info/neutral/accent), four font sizes, 8 px spacing scale, three radii.
-- [ ] 2.5 Add ESLint rule rejecting raw Tailwind palette names (`bg-blue-500`, etc.) in `frontend/src/**/*.{vue,ts}`.
-- [ ] 2.6 Copy shadcn-vue primitives into `frontend/src/components/ui/`: Button, Card, Badge, Skeleton, EmptyState, Toast, Dialog, Sheet, Tabs, Tooltip, DropdownMenu, Command, ProgressBar, Sparkline, GanttRow.
-- [ ] 2.7 Implement `useEventStream` composable with exponential-backoff reconnect (1 s / 2 s / 4 s) and `Last-Event-ID` resumption.
-- [ ] 2.8 Implement `useApi` composable using `@tanstack/vue-query`.
-- [ ] 2.9 Create Pinia stores: `useUIStore` (nav state, command palette open), `useRunsStore`, `useWorkersStore`, `useSettingsStore`.
-- [ ] 2.10 Define `vue-router` routes for all paths listed in the spec; lazy-load each page component.
-- [ ] 2.11 Implement `App.vue` shell: sidebar + top bar layout + `<RouterView />`; Cmd-K listener that opens Command dialog with at least 8 navigation entries.
-- [ ] 2.12 Wire build output to `src/web/static/dist/`; verify `npm run build` produces hashed assets and an `index.html`.
-- [ ] 2.13 Add Vitest config + 6 component/composable unit tests: `useEventStream` reconnect backoff, Command palette filtering, Capability tile rendering, LLM Settings form dirty detection, Skeleton fallback, EmptyState rendering.
-- [ ] 2.14 Add `Makefile` at repo root with `ui-dev`, `ui-build`, `ui-test` targets. Add `cd frontend && npm install` documentation to README.
+- [x] 2.1 Add `frontend/` workspace: `package.json`, `vite.config.ts`, `tsconfig.json`, `tailwind.config.ts`, `postcss.config.js`, `index.html`, `src/main.ts`, `src/App.vue`, `.eslintrc.cjs`, `.prettierrc`. Pin Node 20 LTS via `.nvmrc` at repo root.
+- [x] 2.2 Install runtime deps: `vue@3`, `vue-router@4`, `pinia`, `@tanstack/vue-query`, `@vueuse/core`, `lucide-vue-next`, `tailwindcss`, `monaco-editor`, `@fontsource/inter`, `@fontsource/jetbrains-mono`.
+- [x] 2.3 Install dev deps: `vite@5`, `typescript@5`, `@vitejs/plugin-vue`, `vue-tsc`, `eslint`, `eslint-plugin-vue`, `@typescript-eslint/*`, `prettier`, `vitest`, `@vue/test-utils`, `jsdom`.
+- [x] 2.4 Define design tokens in `tailwind.config.ts`: six semantic color groups (success/warning/danger/info/neutral/accent), four font sizes, 8 px spacing scale, three radii.
+- [x] 2.5 Add ESLint rule rejecting raw Tailwind palette names (`bg-blue-500`, etc.) in `frontend/src/**/*.{vue,ts}`.
+- [x] 2.6 Copy shadcn-vue primitives into `frontend/src/components/ui/`: Button, Card, Badge, Skeleton, EmptyState, Toast, Dialog, Sheet, Tabs, Tooltip, DropdownMenu, Command, ProgressBar, Sparkline, GanttRow.
+- [x] 2.7 Implement `useEventStream` composable with exponential-backoff reconnect (1 s / 2 s / 4 s) and `Last-Event-ID` resumption.
+- [x] 2.8 Implement `useApi` composable using `@tanstack/vue-query`.
+- [x] 2.9 Create Pinia stores: `useUIStore` (nav state, command palette open), `useRunsStore`, `useWorkersStore`, `useSettingsStore`.
+- [x] 2.10 Define `vue-router` routes for all paths listed in the spec; lazy-load each page component.
+- [x] 2.11 Implement `App.vue` shell: sidebar + top bar layout + `<RouterView />`; Cmd-K listener that opens Command dialog with at least 8 navigation entries.
+- [x] 2.12 Wire build output to `src/web/static/dist/`; verify `npm run build` produces hashed assets and an `index.html`.
+- [x] 2.13 Add Vitest config + 6 component/composable unit tests: `useEventStream` reconnect backoff, Command palette filtering, Capability tile rendering, LLM Settings form dirty detection, Skeleton fallback, EmptyState rendering.
+- [x] 2.14 Add `Makefile` at repo root with `ui-dev`, `ui-build`, `ui-test` targets. Add `cd frontend && npm install` documentation to README.
 
 ## 3. Pages and SPA serving (commit 3)
 
