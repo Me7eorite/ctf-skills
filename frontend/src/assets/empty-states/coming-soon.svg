@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 120" role="img" aria-label="Coming soon">
+  <circle cx="80" cy="60" r="40" fill="#f5f3ff" stroke="#c4b5fd" stroke-width="2" />
+  <path d="M80 38 V60 L94 70" stroke="#7c3aed" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round" />
+  <text x="80" y="100" font-family="Inter, sans-serif" font-size="10" text-anchor="middle" fill="#7c3aed" font-weight="600">COMING SOON</text>
+</svg>

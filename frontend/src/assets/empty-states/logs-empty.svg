@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 120" role="img" aria-label="No logs yet">
+  <rect x="24" y="28" width="112" height="72" rx="6" fill="#262626" />
+  <line x1="36" y1="44" x2="100" y2="44" stroke="#525252" stroke-width="2" stroke-linecap="round" />
+  <line x1="36" y1="56" x2="116" y2="56" stroke="#525252" stroke-width="2" stroke-linecap="round" />
+  <line x1="36" y1="68" x2="84" y2="68" stroke="#525252" stroke-width="2" stroke-linecap="round" />
+  <line x1="36" y1="80" x2="108" y2="80" stroke="#525252" stroke-width="2" stroke-linecap="round" />
+  <rect x="36" y="40" width="2" height="44" fill="#10b981">
+    <animate attributeName="opacity" values="1;0.3;1" dur="1.4s" repeatCount="indefinite" />
+  </rect>
+</svg>

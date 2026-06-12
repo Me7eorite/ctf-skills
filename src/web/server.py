@@ -151,32 +151,46 @@ def create_app(service: DashboardService, *, demo: bool = False) -> FastAPI:
             {"ok": True, "message": f"{destination.name} 已重新入队"}
         )
 
-    # Static catch-all stays last so API routes win.
+    # Hashed asset route: long-cache, content-addressable. Registered before
+    # the SPA catch-all so /static/dist/* always wins over the index fallback.
+    @app.get("/static/dist/{asset_path:path}")
+    def get_dist_asset(asset_path: str) -> Response:
+        static_root = (service.paths.static / "dist").resolve()
+        try:
+            target = (static_root / asset_path).resolve()
+            target.relative_to(static_root)
+        except (ValueError, OSError) as exc:
+            raise HTTPException(status_code=HTTPStatus.BAD_REQUEST) from exc
+        if not target.is_file():
+            raise HTTPException(status_code=HTTPStatus.NOT_FOUND)
+        media_type = (
+            mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        )
+        headers = {}
+        if asset_path.startswith("assets/"):
+            headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        else:
+            headers["Cache-Control"] = "no-store"
+        return Response(content=target.read_bytes(), media_type=media_type, headers=headers)
+
+    # SPA fallback: anything not matched by an API or asset route returns the
+    # SPA shell. Vue Router takes over client-side. ``no-store`` keeps the
+    # shell fresh so updated asset hashes are always picked up after a deploy.
     @app.get("/{request_path:path}")
-    def get_static(request_path: str) -> Response:
-        relative = "index.html" if request_path in {"", "/"} else request_path
+    def spa_fallback(request_path: str) -> Response:
         static_root = service.paths.static / "dist"
-        if not static_root.exists():
+        index_html = static_root / "index.html"
+        if not index_html.is_file():
             return Response(
-                "Frontend build is missing. Run: uv run challenge-factory build-ui\n",
+                "Frontend build is missing. Run: cd frontend && npm run build\n",
                 media_type="text/plain",
                 status_code=HTTPStatus.OK,
             )
-        path = static_root / relative
-        try:
-            path.resolve().relative_to(static_root.resolve())
-            body = path.read_bytes()
-        except ValueError as exc:
-            raise HTTPException(status_code=HTTPStatus.FORBIDDEN) from exc
-        except OSError as exc:
-            if request_path and "." not in Path(request_path).name:
-                body = (static_root / "index.html").read_bytes()
-                return Response(content=body, media_type="text/html")
-            raise HTTPException(status_code=HTTPStatus.NOT_FOUND) from exc
-        media_type = (
-            mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        return Response(
+            content=index_html.read_bytes(),
+            media_type="text/html",
+            headers={"Cache-Control": "no-store"},
         )
-        return Response(content=body, media_type=media_type)
 
     return app
 

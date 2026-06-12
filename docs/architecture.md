@@ -89,6 +89,60 @@ boundaries:
 - `hermes.runner` should execute an already claimed shard/task and avoid direct
   queue-directory manipulation.
 
+## Frontend stack
+
+The console SPA lives in `frontend/` at the repo root — explicitly outside
+`src/` so the `module-architecture` dependency-direction guard does not apply
+to it.
+
+```text
+frontend/                    # Vue 3 + Vite + TypeScript + Tailwind workspace
+├── package.json             # vue, vue-router, pinia, @tanstack/vue-query, monaco-editor, …
+├── vite.config.ts           # base: '/static/dist/'; outDir: ../src/web/static/dist
+├── tailwind.config.ts       # 6 semantic color groups, 4 font sizes, 8 px spacing, 3 radii
+├── .eslintrc.cjs            # blocks raw Tailwind palette names (bg-blue-500 …)
+└── src/
+    ├── pages/               # one per top-level route, lazy-loaded by the router
+    ├── components/          # AppShell, CommandPalette, ToastStack, CapabilityTile, MonacoViewer
+    ├── components/ui/       # shadcn-style primitives (Button, Card, Skeleton, EmptyState, …)
+    ├── composables/         # useApi, useEventStream, useDirty, useTransition, …
+    ├── stores/              # pinia: ui, runs, workers, settings, notifications
+    ├── router/              # vue-router routes
+    └── assets/empty-states/ # SVG illustrations for EmptyState + PlaceholderPage
+```
+
+The frontend cannot import Python modules and the backend cannot import
+TypeScript modules. The two communicate exclusively through the documented
+HTTP API. The production build emits hashed assets to `src/web/static/dist/`,
+which is committed to git so operators who only run `uv sync` can serve the
+SPA without Node.
+
+## SPA fallback contract
+
+`src/web/server.py` registers routes in this order:
+
+1. All `/api/*` JSON routes (state, runs, capabilities, kpis, llm, presets,
+   sse, …).
+2. `GET /static/dist/{path:path}` — hashed asset route. Files under
+   `assets/` receive `Cache-Control: public, max-age=31536000, immutable`;
+   other paths receive `no-store`. Path traversal is rejected with HTTP 400.
+3. `GET /{path:path}` — SPA catch-all. Returns `dist/index.html` with
+   `Cache-Control: no-store` so the shell always picks up the latest asset
+   hashes after a deploy.
+
+`tests/app/test_spa_fallback.py` enforces the contract: `/api/state` returns
+JSON, arbitrary client routes return the SPA HTML shell with `<div id="app">`,
+hashed assets advertise the immutable cache, and traversal returns 400.
+
+## Real-time event stream
+
+`GET /api/events/stream` exposes a `text/event-stream` channel. The route
+tails the `progress_events` SQLite table with 1 s polling, emits a
+`:heartbeat` line every 15 s, and replays events with `id > Last-Event-ID`
+when a client reconnects. The response sets `X-Accel-Buffering: no` so
+nginx (`proxy_buffering off`) does not buffer the stream. The browser
+composable `useEventStream` reconnects with 1 s → 2 s → 4 s backoff.
+
 ## Testing
 
 Tests construct `ProjectPaths` with temporary directories. This avoids touching

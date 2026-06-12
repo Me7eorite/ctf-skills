@@ -21,12 +21,15 @@ venv/
 # Generated
 _site/
 work/
-src/web/static/dist/
 web/out/
 
 # Frontend
+frontend/node_modules/
+frontend/dist/
 web/node_modules/
 web/.next/
+# Built SPA assets are committed so `uv sync` consumers can serve without Node.
+!src/web/static/dist/
 
 # Local Hermes state and credentials
 .hermes/
