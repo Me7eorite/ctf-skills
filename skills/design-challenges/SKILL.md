@@ -126,7 +126,7 @@ For a brief, return the event assumptions, matrix, and quality notes.
 
 For full specs, use the template in [references/spec-template.md].
 
-For deliverable-ready challenge packages, always apply [references/delivery-format.md](references/delivery-format.md). The external source of truth is `delivery-format/交付格式规范.md` at the repo root (sample layout under `delivery-format/资源包/`); this bundled reference summarizes it for the skill.
+For deliverable-ready challenge packages, always apply [references/delivery-format.md](references/delivery-format.md). The external source of truth is `docs/delivery-formats/ctf-v2/交付格式规范.md` at the repo root (sample layout under `docs/delivery-formats/ctf-v2/资源包/`); this bundled reference summarizes it for the skill.
 
 For containerized challenges, include these implementation requirements in
 the author ticket or generated prompt:

@@ -19,16 +19,16 @@ ctf-skills/
 │   ├── packing/            # delivery bundle packing subsystem
 │   └── web/                # dashboard service, HTTP transport, static UI
 ├── skills/                 # reusable CTF authoring skills
-├── delivery-format/        # delivery specification and sample resources
+├── docs/
+│   ├── architecture.md
+│   └── delivery-formats/   # versioned delivery specifications and samples
+│       └── ctf-v2/
 ├── tests/
 │   ├── app/                # application unit tests
 │   └── skills/             # skill structure and security tests
-├── docs/                   # architecture documentation
-├── scripts/
-│   ├── prepare_hermes_home.py
-│   └── skill_security_auditor.py
 ├── prompts/                # Hermes authoring contracts
-├── tools/                  # bundled build tools
+├── tools/                  # bundled build tools and maintenance scripts
+│   └── scripts/
 ├── openspec/               # project specifications and changes
 ├── work/                   # generated runtime state
 ├── .hermes/                # local Hermes state and credentials
@@ -38,8 +38,8 @@ ctf-skills/
 ```
 
 `src/` uses a layered package layout with `cli.py` as the composition root.
-Lower-level packages do not import higher-level adapters. `scripts/` contains
-application setup and repository maintenance tools. Generated challenges, logs,
+Lower-level packages do not import higher-level adapters. `tools/scripts/`
+contains application setup and repository maintenance tools. Generated challenges, logs,
 reports, and queue files remain under the gitignored `work/` directory; local
 Hermes state remains under the gitignored `.hermes/`.
 
@@ -48,7 +48,7 @@ Hermes state remains under the gitignored `.hermes/`.
 ```bash
 uv sync
 uv run challenge-factory init
-uv run python scripts/prepare_hermes_home.py
+uv run python tools/scripts/prepare_hermes_home.py
 
 uv run challenge-factory split \
   --matrix matrix.example.jsonl \

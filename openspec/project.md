@@ -21,7 +21,7 @@ Engineering CTF challenges. It:
 5. Exposes a FastAPI dashboard at `http://127.0.0.1:4173` showing queue state,
    per-challenge pipeline, logs, and shard requeue controls.
 
-The challenge artifacts produced must conform to `delivery-format/`
+The challenge artifacts produced must conform to `docs/delivery-formats/ctf-v2/`
 (separate "delivery format" spec — that's product output, not dev process).
 
 ## Tech stack
@@ -79,7 +79,7 @@ live under `tests/skills/`. `pyproject.toml` configures pytest with
 - **`progress` CLI subcommand is part of the hermes contract.** The shard
   prompt instructs the agent to call it before/after every stage. Don't
   rename it without updating `prompts/shard_prompt.md`.
-- **Two unrelated "spec" directories exist.** `delivery-format/` is product
+- **Two unrelated "spec" directories exist.** `docs/delivery-formats/ctf-v2/` is product
   output format. `openspec/` (this directory) is dev-process change tracking.
   Don't conflate them.
 
@@ -96,7 +96,7 @@ live under `tests/skills/`. `pyproject.toml` configures pytest with
 - Hermes pipeline reliability (timeouts, claim handoff, partial-success
   classification). Bug 1 fixed; more to come.
 - Dashboard surface (auth, multi-user, richer per-stage views).
-- Delivery format v3 — see `delivery-format/交付格式规范.md`.
+- Future delivery format versions — add them under `docs/delivery-formats/`.
 - New category support (IoT / Mobile / Blockchain / Crypto) beyond the
   current web/pwn/re trio.
 - Multi-agent orchestration if we split design vs. implementation vs.
@@ -104,7 +104,7 @@ live under `tests/skills/`. `pyproject.toml` configures pytest with
 
 ## When writing a change proposal
 
-- Touch only `src/`, `tests/`, `prompts/`, `static/`, `docs/`, `scripts/`
+- Touch only `src/`, `tests/`, `prompts/`, `static/`, `docs/`, `tools/scripts/`
   unless the change explicitly targets `openspec/` itself.
 - New features must come with a test in `tests/`.
 - Don't add helper abstractions or backwards-compat shims that aren't earning

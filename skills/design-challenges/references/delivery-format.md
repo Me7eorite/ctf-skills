@@ -2,7 +2,7 @@
 
 Use this reference whenever generated challenges must be delivered as files, packages, reports, EXP scripts, Docker images, or Excel inventories.
 
-Source of truth: `delivery-format/交付格式规范.md` (`CTF题目交付格式规范 v2.0`, 2026-06-09). Reference layout sample: `delivery-format/资源包/`. If this summary conflicts with that file, follow the source of truth.
+Source of truth: `docs/delivery-formats/ctf-v2/交付格式规范.md` (`CTF题目交付格式规范 v2.0`, 2026-06-09). Reference layout sample: `docs/delivery-formats/ctf-v2/资源包/`. If this summary conflicts with that file, follow the source of truth.
 
 ## Package Layout
 

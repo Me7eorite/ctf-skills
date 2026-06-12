@@ -21,8 +21,8 @@
 
 - [x] 3.1 Rewrite `src/cli.py` imports to use new paths: `from core.queue import ShardQueue, split_matrix`; `from core.state import STAGES, STATUSES, StateStore`; `from core.paths import ProjectPaths`; `from domain.validation import ChallengeValidator`; `from domain.reports import merge_reports`; `from packing import Packer, PackerOptions`; `from hermes import HermesRunner`; `from web.server import serve`.
 - [x] 3.2 Rewrite intra-`src/` imports in every moved file: `from jsonio import ...` → `from core.jsonio import ...`; `from paths import ...` → `from core.paths import ...`; `from state import ...` → `from core.state import ...`; `from shards import ...` → `from core.queue import ...`; business modules (`seeds`, `validation`, `reports`) referenced from within `domain/` use sibling imports; `dashboard.py` references go to `web.dashboard`.
-- [x] 3.3 Audit `scripts/prepare_hermes_home.py` for legacy top-level imports and rewrite to the new package paths.
-- [x] 3.4 `grep -rn 'from jsonio\|from paths\|from state\|from shards\|from seeds\|from validation\|from reports\|from dashboard\|from webserver' src/ scripts/ tests/` returns no results.
+- [x] 3.3 Audit `tools/scripts/prepare_hermes_home.py` for legacy top-level imports and rewrite to the new package paths.
+- [x] 3.4 `grep -rn 'from jsonio\|from paths\|from state\|from shards\|from seeds\|from validation\|from reports\|from dashboard\|from webserver' src/ tools/scripts/ tests/` returns no results.
 - [x] 3.5 Confirm `python -c "import cli, core, domain, packing, hermes, web"` from project root succeeds (after `uv sync`).
 
 ## 4. Packaging configuration
@@ -46,7 +46,7 @@
 - [x] 6.3 `uv run challenge-factory run --worker dry-01 --dry-run` succeeds and renders a prompt without invoking Hermes.
 - [x] 6.4 `uv run challenge-factory pack --skip-docker` succeeds against an empty/passing challenge set (or documents that no challenges qualify) and the command exits 0.
 - [x] 6.5 `uv run challenge-factory serve` starts and `curl http://127.0.0.1:4173/` returns 200; `curl http://127.0.0.1:4173/static/<known-asset>` returns 200 (use a real asset filename observed in `src/web/static/`).
-- [x] 6.6 `uv run python -c "import scripts.prepare_hermes_home"` exits 0.
+- [x] 6.6 `uv run python -c "import tools.scripts.prepare_hermes_home"` exits 0.
 - [x] 6.7 Run both import smoke commands from design D6 / Acceptance: `python -c "from cli import main; from packing import Packer; from hermes import HermesRunner; from web.server import serve"` and `python -c "from core.paths import ProjectPaths; from core.queue import ShardQueue; from domain.validation import ChallengeValidator"`; both exit 0.
 
 ## 7. Cleanup and documentation

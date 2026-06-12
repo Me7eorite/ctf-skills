@@ -22,7 +22,7 @@ This installs hooks that run automatically on every commit:
 - **trailing-whitespace** and **end-of-file-fixer** — basic formatting
 - **check-yaml** — validates YAML files
 - **check-added-large-files** — prevents accidental binary commits
-- **ruff** — Python linter and formatter (for files in `scripts/`)
+- **ruff** — Python linter and formatter (for files in `tools/scripts/`)
 - **shellcheck** — static analysis for shell scripts
 - **markdownlint-cli2** — Markdown linter (all `.md` files)
 
@@ -117,7 +117,7 @@ uv run pytest -v
 uv run pytest tests/skills/test_skill_frontmatter.py -v
 
 # Run the security auditor on a specific skill
-uv run python scripts/skill_security_auditor.py skills/ctf-web --strict --json
+uv run python tools/scripts/skill_security_auditor.py skills/ctf-web --strict --json
 ```
 
 ### Running pre-commit checks manually
@@ -129,7 +129,7 @@ pre-commit run --all-files
 ## Code Quality Standards
 
 - **Markdown** — Linted by markdownlint-cli2 (relaxed rules in `.markdownlint-cli2.yaml` for CTF content)
-- **Python/Shell** — `src/`, `scripts/`, and `tests/` checked by ruff; shell scripts under `scripts/` checked by shellcheck
+- **Python/Shell** — `src/`, `tools/scripts/`, and `tests/` checked by ruff; shell scripts under `tools/scripts/` checked by shellcheck
 - **Security** — Skill security tests flag dangerous patterns. Use `<!-- audit-ok -->` to suppress intentional attack documentation where supported.
 
 ## Pull Request Process
@@ -155,7 +155,7 @@ pre-commit run --all-files
 | **Tests** | Runs `pytest` on `tests/` |
 | **Markdown Lint** | Runs markdownlint-cli2 on all `.md` files |
 | **Skill Security Audit** | Scans changed skills for dangerous patterns |
-| **Lint Scripts** | Runs ruff and shellcheck on `scripts/` |
+| **Lint Scripts** | Runs ruff and shellcheck on `tools/scripts/` |
 
 ## Responsible Use
 

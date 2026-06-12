@@ -20,7 +20,7 @@
 - 修复两处路径锚点 bug：
   - `core/paths.py` 中 `root` 从 `Path(__file__).resolve().parents[1]` 改为 `parents[2]`。
   - `core/paths.py` 中 `static` property 改用 `Path(str(importlib.resources.files("web") / "static"))`。
-- 审查并修正 `scripts/prepare_hermes_home.py` 对旧顶层模块的 import。
+- 审查并修正 `tools/scripts/prepare_hermes_home.py` 对旧顶层模块的 import。
 - 新增 `tests/app/test_dependency_direction.py`，用 `ast` 解析所有 `src/` 模块的 import，强制依赖方向矩阵。
 - 更新 `pyproject.toml`：`py-modules = ["cli"]` + `[tool.setuptools.packages.find] where = ["src"]` + `[tool.setuptools.package-data] web = ["static/*"]`。
 
@@ -36,7 +36,7 @@
 
 ## Impact
 
-- **代码**：`src/` 全量重组；11 个旧顶层模块文件删除；`packing.py` 拆为 7 个子文件；`hermes.py` 拆为 3 个子文件；`cli.py` 与 `scripts/prepare_hermes_home.py` 的 import 语句更新；`core/paths.py` 中 `root` 与 `static` 属性的锚点修正。
+- **代码**：`src/` 全量重组；11 个旧顶层模块文件删除；`packing.py` 拆为 7 个子文件；`hermes.py` 拆为 3 个子文件；`cli.py` 与 `tools/scripts/prepare_hermes_home.py` 的 import 语句更新；`core/paths.py` 中 `root` 与 `static` 属性的锚点修正。
 - **测试**：`tests/app/` 中所有 `patch("...")` dotted path 需要随子模块结构更新（例如 `patch("hermes.shutil.which")` → `patch("hermes.runner.shutil.which")`、`patch("packing.subprocess.run")` → `patch("packing.docker.subprocess.run")`）；新增 `tests/app/test_dependency_direction.py` 物理护栏。
 - **打包**：`pyproject.toml` 从 `py-modules` 平铺切换到 `packages.find` + `package-data`；console script `challenge-factory = "cli:main"` 不变；editable install 与 wheel install 路径解析需在切换前后各验证一次。
 - **依赖**：无新增第三方依赖；`importlib.resources` 来自标准库。

@@ -1,6 +1,6 @@
 ## Context
 
-`delivery-format/交付格式规范.md` v2 (in this repo's `delivery-format/`)
+`docs/delivery-formats/ctf-v2/交付格式规范.md` v2 (in this repo's `docs/delivery-formats/ctf-v2/`)
 is the contract for what gets handed to organizers. The contract is rich:
 six output slots (`工具/`, three under `题库资源/deploy/`, two under
 `虚拟机资源/`), specific naming with category prefixes (`js-{type}-{id}.zip`),
@@ -60,9 +60,9 @@ Matches the existing layout. The module exposes one `Packer` class that
 takes a `ProjectPaths` and a `PackerOptions` and runs to completion. The
 CLI subcommand wires argparse → `Packer.pack(out_dir)`.
 
-**Alternative considered:** a `scripts/pack_delivery.py` standalone. Rejected
-because the project's convention puts production code under `src/`; `scripts/`
-is reserved for one-off prep (see `scripts/prepare_hermes_home.py`). A
+**Alternative considered:** a `tools/scripts/pack_delivery.py` standalone. Rejected
+because the project's convention puts production code under `src/`; `tools/scripts/`
+is reserved for one-off prep (see `tools/scripts/prepare_hermes_home.py`). A
 script-only approach also makes testing harder and hides the new entry
 point from the dashboard.
 

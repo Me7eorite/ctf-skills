@@ -124,7 +124,7 @@ core     -> stdlib / third-party only
 
 - *保留 `paths.py` 等 11 个文件作为 `from core.paths import *` 兼容层*：会让两套 import 路径共存、`mypy` / IDE 无法判断标准位置、依赖方向测试需要排除 shim 文件、CLAUDE.md 明确反对此类兼容 hack。拒绝。
 
-风险点：`cli.py`、所有 `tests/`、`scripts/prepare_hermes_home.py` 中的 import 都必须改对，少改一处就报 `ModuleNotFoundError`——这正是迁移期间 grep+pytest 双保险要覆盖的范围。
+风险点：`cli.py`、所有 `tests/`、`tools/scripts/prepare_hermes_home.py` 中的 import 都必须改对，少改一处就报 `ModuleNotFoundError`——这正是迁移期间 grep+pytest 双保险要覆盖的范围。
 
 ### D6 path 锚点修复策略
 
@@ -191,7 +191,7 @@ web = ["static/*"]
 - **`ProjectPaths.root` 与 `static` 锚点错改** → 迁移 `paths.py` 后立刻跑 `uv run challenge-factory init` 验证 work 目录创建到仓库根（不是 `src/`），并 `serve` + `curl /static/<asset>` 验证 static 解析。
 - **未来 `core.queue` 被吸收业务逻辑** → 三层约束（命名为 `queue` 不为 `tasks`、依赖方向测试在 CI 强制、design D8 边界契约）共同压制。
 - **git blame 在 GitHub UI 断点** → 接受。`git log --follow` 与 GitHub "View blame prior to..." 按钮可补救。
-- **scripts/prepare_hermes_home.py 旧 import** → 在 import 重写 task 中显式列入审查清单，并在 acceptance 加 `python -c "import scripts.prepare_hermes_home"` 烟囱。
+- **tools/scripts/prepare_hermes_home.py 旧 import** → 在 import 重写 task 中显式列入审查清单，并在 acceptance 加 `python -c "import tools.scripts.prepare_hermes_home"` 烟囱。
 
 ## Migration Plan
 

@@ -3,7 +3,7 @@ import textwrap
 import unittest
 from pathlib import Path
 
-from scripts.skill_security_auditor import SCRIPT_EXTENSIONS, scan_skill
+from tools.scripts.skill_security_auditor import SCRIPT_EXTENSIONS, scan_skill
 
 
 class SkillSecurityAuditorTests(unittest.TestCase):

@@ -3,7 +3,7 @@
 The repo already has two halves of the delivery story but the bridge between
 them is missing:
 
-- `delivery-format/交付格式规范.md` v2 defines a precise `资源包/` layout: per
+- `docs/delivery-formats/ctf-v2/交付格式规范.md` v2 defines a precise `资源包/` layout: per
   challenge zip bundles under `工具/` and `题库资源/deploy/{,enclosure/,report/}`,
   PDF writeups, docker image tars under `虚拟机资源/docker-tar/`, and two xlsx
   inventories.
@@ -13,7 +13,7 @@ them is missing:
   for web/pwn.
 
 There is no code today that converts the second into the first. A grep over
-`src/` and `scripts/` for `ctf-overview`, `镜像模板`, `docker-tar`,
+`src/` and `tools/scripts/` for `ctf-overview`, `镜像模板`, `docker-tar`,
 `enclosure`, `资源包` returns nothing. Operators are expected to zip and
 render PDFs by hand, which is tedious for a single shard and unworkable for
 the 50-100 challenge batches the project is designed for. The end-to-end
