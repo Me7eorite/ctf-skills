@@ -1,9 +1,9 @@
 ## 1. Dependencies and tooling
 
-- [ ] 1.1 Add `sqlalchemy>=2.0`, `psycopg[binary]>=3`, `alembic>=1.13` to `[project] dependencies` in `pyproject.toml`.
-- [ ] 1.2 Add `pytest-postgresql` to the `dev` dependency group (per design.md DEC-3) and run `uv lock`.
-- [ ] 1.3 Add `tools/scripts/db.sh` wrapping `alembic upgrade head`, `alembic downgrade -1`, and `alembic revision --autogenerate -m`; make executable.
-- [ ] 1.4 Add `docs/persistence.md` covering: the required `DATABASE_URL` shape (`postgresql+psycopg://<user>:<password>@<host>:<port>/<db>`), the shared dev PostgreSQL host contributors point at, the default database name (`challenge_factory`), and the `alembic upgrade head` bootstrap. Credentials MUST NOT be committed — the doc shows only URL shape and host, with a note that the password is distributed out-of-band.
+- [x] 1.1 Add `sqlalchemy>=2.0`, `psycopg[binary]>=3`, `alembic>=1.13` to `[project] dependencies` in `pyproject.toml`.
+- [x] 1.2 Add `pytest-postgresql` to the `dev` dependency group (per design.md DEC-3) and run `uv lock`.
+- [x] 1.3 Add `tools/scripts/db.sh` wrapping `alembic upgrade head`, `alembic downgrade -1`, and `alembic revision --autogenerate -m`; make executable.
+- [x] 1.4 Add `docs/persistence.md` covering: the required `DATABASE_URL` shape (`postgresql+psycopg://<user>:<password>@<host>:<port>/<db>`), the shared dev PostgreSQL host contributors point at, the default database name (`challenge_factory`), and the `alembic upgrade head` bootstrap. Credentials MUST NOT be committed — the doc shows only URL shape and host, with a note that the password is distributed out-of-band.
 
 ## 2. Persistence package
 
