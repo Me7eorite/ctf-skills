@@ -41,6 +41,9 @@ web = ["static/*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src", "."]
+markers = [
+  "postgres: requires a PostgreSQL database reachable via TEST_DATABASE_URL",
+]
 
 [tool.ruff]
 target-version = "py312"
