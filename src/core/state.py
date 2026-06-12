@@ -244,6 +244,12 @@ class StateStore:
             )
             return [dict(row) for row in rows]
 
+    def latest_progress_event_id(self) -> int:
+        """Return the newest progress event id, or zero when no events exist."""
+        with closing(self._connect()) as connection:
+            row = connection.execute("SELECT MAX(id) AS latest FROM progress_events").fetchone()
+            return int(row["latest"] or 0)
+
     def delete_events_for_shards(self, shards: list[str]) -> None:
         """Delete progress read-model rows for known demo shard names."""
         if not shards:

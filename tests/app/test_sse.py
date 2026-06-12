@@ -35,6 +35,7 @@ async def _drain(
     store: StateStore,
     *,
     last_event_id: int = 0,
+    replay: bool = True,
     heartbeat: float = 0.02,
     poll: float = 0.005,
 ) -> list[str]:
@@ -43,6 +44,7 @@ async def _drain(
         request,
         store,
         last_event_id,
+        replay=replay,
         heartbeat_interval=heartbeat,
         poll_interval=poll,
     ):
@@ -123,6 +125,22 @@ class SseGeneratorTests(unittest.TestCase):
         self.assertIn("id: 2", joined)
         self.assertIn("id: 3", joined)
         self.assertNotIn("id: 1\ndata:", joined)
+
+    def test_replay_can_be_disabled_for_live_only_clients(self) -> None:
+        self.store.record(
+            shard="old-shard",
+            stage="complete",
+            status="failed",
+            worker="worker",
+            message="old failure",
+        )
+        request = _FakeRequest(disconnect_after=2)
+        chunks = asyncio.run(
+            _drain(request, self.store, replay=False, heartbeat=0.005, poll=0.005)
+        )
+        joined = "".join(chunks)
+        self.assertIn(":heartbeat", joined)
+        self.assertNotIn("old-shard", joined)
 
     def test_new_events_tailed_after_replay(self) -> None:
         request = _FakeRequest(disconnect_after=3)

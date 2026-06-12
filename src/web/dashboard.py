@@ -10,7 +10,7 @@ from pathlib import Path
 
 from core.jsonio import read_json
 from core.paths import ProjectPaths
-from core.queue import ShardQueue
+from core.queue import ShardQueue, split_challenges
 from core.state import StateStore
 from domain.seeds import SeedStore
 
@@ -37,17 +37,29 @@ class TaskManager:
         self._started_at: str | None = None
         self._log: str | None = None
 
-    def start(self, kind: str) -> tuple[bool, str]:
+    def start(
+        self,
+        kind: str,
+        *,
+        dry_run: bool = False,
+        timeout: int | None = None,
+    ) -> tuple[bool, str]:
         cli_script = Path(__file__).resolve().parents[1] / "cli.py"
+        worker_command = [
+            sys.executable,
+            str(cli_script),
+            "run",
+            "--worker",
+            "dashboard-01",
+        ]
+        if dry_run:
+            worker_command.append("--dry-run")
+        else:
+            worker_command.append("--loop")
+        if timeout is not None:
+            worker_command.extend(["--timeout", str(timeout)])
         commands = {
-            "worker": [
-                sys.executable,
-                str(cli_script),
-                "run",
-                "--worker",
-                "dashboard-01",
-                "--loop",
-            ],
+            "worker": worker_command,
             "validate": [
                 sys.executable,
                 str(cli_script),
@@ -94,6 +106,11 @@ class TaskManager:
         returncode = process.poll()
         if returncode is not None:
             detail = self._log_tail()
+            if returncode == 0:
+                message = f"{kind} 已完成"
+                if detail:
+                    message = f"{message}: {detail}"
+                return True, message
             message = f"{kind} 启动后立即退出，退出码 {returncode}"
             if detail:
                 message = f"{message}: {detail}"
@@ -197,6 +214,63 @@ class DashboardService:
 
     def enqueue_seeds(self, size: int) -> list[Path]:
         return self.seeds.enqueue(size)
+
+    def create_run(self, payload: object) -> dict:
+        if not isinstance(payload, dict):
+            raise ValueError("请求体必须是 JSON 对象")
+
+        raw_seeds = payload.get("seeds")
+        if not isinstance(raw_seeds, list) or not raw_seeds:
+            raise ValueError("请至少提供一个题目种子")
+
+        try:
+            shard_size = int(payload.get("shard_size", payload.get("size", 5)))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("shard_size 必须是正整数") from exc
+        if shard_size < 1:
+            raise ValueError("shard_size 必须是正整数")
+
+        saved = [self.seeds.save(seed) for seed in raw_seeds]
+        created = split_challenges(
+            saved,
+            self.paths.shards / "pending",
+            shard_size,
+            overwrite=False,
+        )
+
+        start_worker = bool(payload.get("start_worker", False))
+        dry_run = bool(payload.get("dry_run", True))
+        timeout_raw = payload.get("timeout")
+        timeout = None
+        if timeout_raw not in (None, ""):
+            try:
+                timeout = int(timeout_raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("timeout 必须是正整数") from exc
+            if timeout <= 0:
+                raise ValueError("timeout 必须是正整数")
+        worker = {
+            "requested": start_worker,
+            "started": False,
+            "message": "未请求启动 worker",
+            "dry_run": dry_run,
+        }
+        if start_worker:
+            ok, message = self.tasks.start("worker", dry_run=dry_run, timeout=timeout)
+            worker = {
+                "requested": True,
+                "started": ok,
+                "message": message,
+                "dry_run": dry_run,
+            }
+
+        return {
+            "ok": True,
+            "message": f"已创建 {len(created)} 个待处理分片",
+            "seeds": [seed["id"] for seed in saved],
+            "shards": [path.name for path in created],
+            "worker": worker,
+        }
 
     def _shards(self) -> tuple[dict[str, int], list[dict]]:
         counts = {}

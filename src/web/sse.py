@@ -34,15 +34,19 @@ async def _event_generator(
     store: StateStore,
     last_event_id: int,
     *,
+    replay: bool,
     heartbeat_interval: float,
     poll_interval: float,
 ) -> AsyncIterator[str]:
     cursor = last_event_id
-    # Replay any events the client missed before tailing new ones.
-    backlog = store.trace_events_after(cursor, limit=500)
-    for event in backlog:
-        yield _format_event(event)
-        cursor = max(cursor, int(event.get("id", cursor)))
+    if replay:
+        # Replay any events the client missed before tailing new ones.
+        backlog = store.trace_events_after(cursor, limit=500)
+        for event in backlog:
+            yield _format_event(event)
+            cursor = max(cursor, int(event.get("id", cursor)))
+    else:
+        cursor = max(cursor, store.latest_progress_event_id())
 
     next_heartbeat = asyncio.get_event_loop().time() + heartbeat_interval
     while True:
@@ -68,12 +72,13 @@ def create_sse_router(
     router = APIRouter()
 
     @router.get("/api/events/stream")
-    async def stream(request: Request) -> StreamingResponse:
+    async def stream(request: Request, replay: bool = True) -> StreamingResponse:
         last_event_id = _parse_last_event_id(request.headers.get("Last-Event-ID"))
         generator = _event_generator(
             request,
             store,
             last_event_id,
+            replay=replay,
             heartbeat_interval=heartbeat_interval,
             poll_interval=poll_interval,
         )

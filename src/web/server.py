@@ -82,6 +82,22 @@ def create_app(service: DashboardService, *, demo: bool = False) -> FastAPI:
     def post_validate_action() -> JSONResponse:
         return _action_response(*service.tasks.start("validate"))
 
+    @app.post("/api/runs", dependencies=[Depends(require_writable)])
+    async def post_run(request: Request) -> JSONResponse:
+        try:
+            result = service.create_run(await request.json())
+        except (TypeError, ValueError) as exc:
+            return JSONResponse(
+                {"ok": False, "message": str(exc)},
+                status_code=HTTPStatus.BAD_REQUEST,
+            )
+        except FileExistsError as exc:
+            return JSONResponse(
+                {"ok": False, "message": str(exc)},
+                status_code=HTTPStatus.CONFLICT,
+            )
+        return JSONResponse(result, status_code=HTTPStatus.CREATED)
+
     @app.post("/api/seeds", dependencies=[Depends(require_writable)])
     async def post_seed(request: Request) -> JSONResponse:
         try:

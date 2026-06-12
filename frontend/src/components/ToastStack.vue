@@ -39,7 +39,7 @@ const stream = useEventStream((event) => {
 })
 
 onMounted(() => {
-  stream.open('/api/events/stream')
+  stream.open('/api/events/stream?replay=false')
 })
 </script>
 

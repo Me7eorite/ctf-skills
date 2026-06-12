@@ -35,6 +35,7 @@ class DemoModeWebTests(unittest.TestCase):
         endpoints = [
             ("post", "/api/actions/worker", None),
             ("post", "/api/actions/validate", None),
+            ("post", "/api/runs", {"seeds": []}),
             ("post", "/api/seeds", {}),
             ("delete", "/api/seeds/web-0001", None),
             ("post", "/api/seeds/enqueue", {"size": 1}),

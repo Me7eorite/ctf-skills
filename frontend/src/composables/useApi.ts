@@ -11,7 +11,13 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
     },
   })
   if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`)
+    const contentType = response.headers.get('content-type') ?? ''
+    if (contentType.includes('application/json')) {
+      const payload = (await response.json()) as { message?: string; detail?: string }
+      throw new Error(payload.message ?? payload.detail ?? `${response.status} ${response.statusText}`)
+    }
+    const text = await response.text()
+    throw new Error(text || `${response.status} ${response.statusText}`)
   }
   const contentType = response.headers.get('content-type') ?? ''
   if (contentType.includes('application/json')) {
