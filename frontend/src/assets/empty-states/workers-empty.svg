@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 120" role="img" aria-label="No workers running">
+  <rect x="32" y="40" width="40" height="56" rx="6" fill="#f5f5f5" stroke="#d4d4d4" stroke-width="1.5" />
+  <rect x="88" y="40" width="40" height="56" rx="6" fill="#f5f5f5" stroke="#d4d4d4" stroke-width="1.5" />
+  <circle cx="52" cy="56" r="6" fill="#a3a3a3" />
+  <circle cx="108" cy="56" r="6" fill="#a3a3a3" />
+  <line x1="40" y1="72" x2="64" y2="72" stroke="#a3a3a3" stroke-width="2" stroke-linecap="round" />
+  <line x1="40" y1="82" x2="58" y2="82" stroke="#a3a3a3" stroke-width="2" stroke-linecap="round" />
+  <line x1="96" y1="72" x2="120" y2="72" stroke="#a3a3a3" stroke-width="2" stroke-linecap="round" />
+  <line x1="96" y1="82" x2="114" y2="82" stroke="#a3a3a3" stroke-width="2" stroke-linecap="round" />
+</svg>

@@ -37,43 +37,43 @@
 
 ## 3. Pages and SPA serving (commit 3)
 
-- [ ] 3.1 Implement `OverviewPage.vue`: 4 KPI cards backed by `/api/kpis`, recent runs list, workers panel, 4 capability tiles backed by `/api/capabilities`.
-- [ ] 3.2 Implement `NewRunPage.vue`: three-pane layout (saved presets / category cards / live preview). Submit posts to existing `/api/seeds/enqueue` or new run endpoint and transitions to run detail.
-- [ ] 3.3 Implement `RunsListPage.vue`: paginated list with EmptyState CTA.
-- [ ] 3.4 Implement `RunDetailPage.vue` with six tabs (Overview / Challenges / Artifacts / Validation / Logs / Settings). Tab state synced to `?tab=` query string. Overview tab includes Gantt timeline component.
-- [ ] 3.5 Implement `ChallengeDetailPage.vue` with six tabs (Brief / Source / Solve / Verify / Quality / Telemetry). Source and Solve embed Monaco lazily in read-only mode.
-- [ ] 3.6 Implement `OperateQueuePage.vue` (kanban 4 columns).
-- [ ] 3.7 Implement `OperateWorkersPage.vue` (start/stop controls reusing `DashboardService`).
-- [ ] 3.8 Implement `OperateLogsPage.vue` (filtered + searchable log explorer).
-- [ ] 3.9 Implement `SettingsLLMPage.vue`: form with provider dropdown, base_url, api_key (`type=password` + show/hide toggle), model, Save (disabled when not dirty), Test connection button.
-- [ ] 3.10 Implement `SettingsProfilePage.vue`: Monaco JSON editor for `generation-profiles.json` with JSON Schema validation on save.
-- [ ] 3.11 Add SPA fallback to `src/web/server.py`: register all `/api/*` first, then catch-all returning `dist/index.html`; set `Cache-Control: public, max-age=31536000, immutable` on `/static/dist/assets/*`, `Cache-Control: no-store` on the served `index.html`.
-- [ ] 3.12 Update `pyproject.toml` `[tool.setuptools.package-data]` to include `web/static/dist/**`.
-- [ ] 3.13 Delete `src/web/static/index.html` and `src/web/static/app.js`.
-- [ ] 3.14 Add `tests/app/test_spa_fallback.py` asserting `/api/state` returns JSON and `/anything/else` returns SPA HTML with `<div id="app">`.
-- [ ] 3.15 Smoke verify: `cd frontend && npm install && npm run build && cd .. && uv run challenge-factory serve`; open `http://127.0.0.1:4173/` and confirm Overview renders.
+- [x] 3.1 Implement `OverviewPage.vue`: 4 KPI cards backed by `/api/kpis`, recent runs list, workers panel, 4 capability tiles backed by `/api/capabilities`.
+- [x] 3.2 Implement `NewRunPage.vue`: three-pane layout (saved presets / category cards / live preview). Submit posts to existing `/api/seeds/enqueue` or new run endpoint and transitions to run detail.
+- [x] 3.3 Implement `RunsListPage.vue`: paginated list with EmptyState CTA.
+- [x] 3.4 Implement `RunDetailPage.vue` with six tabs (Overview / Challenges / Artifacts / Validation / Logs / Settings). Tab state synced to `?tab=` query string. Overview tab includes Gantt timeline component.
+- [x] 3.5 Implement `ChallengeDetailPage.vue` with six tabs (Brief / Source / Solve / Verify / Quality / Telemetry). Source and Solve embed Monaco lazily in read-only mode.
+- [x] 3.6 Implement `OperateQueuePage.vue` (kanban 4 columns).
+- [x] 3.7 Implement `OperateWorkersPage.vue` (start/stop controls reusing `DashboardService`).
+- [x] 3.8 Implement `OperateLogsPage.vue` (filtered + searchable log explorer).
+- [x] 3.9 Implement `SettingsLLMPage.vue`: form with provider dropdown, base_url, api_key (`type=password` + show/hide toggle), model, Save (disabled when not dirty), Test connection button.
+- [x] 3.10 Implement `SettingsProfilePage.vue`: Monaco JSON editor for `generation-profiles.json` with JSON Schema validation on save.
+- [x] 3.11 Add SPA fallback to `src/web/server.py`: register all `/api/*` first, then catch-all returning `dist/index.html`; set `Cache-Control: public, max-age=31536000, immutable` on `/static/dist/assets/*`, `Cache-Control: no-store` on the served `index.html`.
+- [x] 3.12 Update `pyproject.toml` `[tool.setuptools.package-data]` to include `web/static/dist/**`.
+- [x] 3.13 Delete `src/web/static/index.html` and `src/web/static/app.js`.
+- [x] 3.14 Add `tests/app/test_spa_fallback.py` asserting `/api/state` returns JSON and `/anything/else` returns SPA HTML with `<div id="app">`.
+- [x] 3.15 Smoke verify: `cd frontend && npm install && npm run build && cd .. && uv run challenge-factory serve`; open `http://127.0.0.1:4173/` and confirm Overview renders.
 
 ## 4. Placeholders, polish, docs (commit 4)
 
-- [ ] 4.1 Create 4 SVG illustrations in `frontend/src/assets/empty-states/`: runs-empty, workers-empty, logs-empty, coming-soon.
-- [ ] 4.2 Implement `PlaceholderPage.vue` used by `/scenario`, `/learning/materials`, `/learning/paths`, `/quality/lint`, `/quality/diversity` with capability-specific illustration + roadmap copy.
-- [ ] 4.3 Ensure every list/page renders Skeleton during initial load and EmptyState when data is empty; audit each route.
-- [ ] 4.4 Wire 100 ms opacity fade-in and 200 ms slide-in transitions through a shared `useTransition` composable; apply to route changes and Sheet open.
-- [ ] 4.5 Wire SSE-driven toasts: dashboard events with status `failed` trigger danger toasts; events with status `passed` for `complete` stage trigger success toasts.
-- [ ] 4.6 Update `README.md`: add a "Frontend development" section with `nvm use`, `cd frontend && npm install`, `npm run dev`, `npm run build` instructions; note that `dist/` is committed.
-- [ ] 4.7 Update `docs/architecture.md`: add a "Frontend stack" diagram and a short note on the SPA fallback contract.
-- [ ] 4.8 Add bundle-size measurement step to CI (or as a Make target): log gzipped initial JS bundle size; warn above 800 KB.
-- [ ] 4.9 Commit the built `src/web/static/dist/` contents so `uv sync` consumers can serve without Node.
-- [ ] 4.10 Update `.gitignore` if needed: keep `frontend/node_modules/` ignored; ensure `src/web/static/dist/` is NOT ignored.
+- [x] 4.1 Create 4 SVG illustrations in `frontend/src/assets/empty-states/`: runs-empty, workers-empty, logs-empty, coming-soon.
+- [x] 4.2 Implement `PlaceholderPage.vue` used by `/scenario`, `/learning/materials`, `/learning/paths`, `/quality/lint`, `/quality/diversity` with capability-specific illustration + roadmap copy.
+- [x] 4.3 Ensure every list/page renders Skeleton during initial load and EmptyState when data is empty; audit each route.
+- [x] 4.4 Wire 100 ms opacity fade-in and 200 ms slide-in transitions through a shared `useTransition` composable; apply to route changes and Sheet open.
+- [x] 4.5 Wire SSE-driven toasts: dashboard events with status `failed` trigger danger toasts; events with status `passed` for `complete` stage trigger success toasts.
+- [x] 4.6 Update `README.md`: add a "Frontend development" section with `nvm use`, `cd frontend && npm install`, `npm run dev`, `npm run build` instructions; note that `dist/` is committed.
+- [x] 4.7 Update `docs/architecture.md`: add a "Frontend stack" diagram and a short note on the SPA fallback contract.
+- [x] 4.8 Add bundle-size measurement step to CI (or as a Make target): log gzipped initial JS bundle size; warn above 800 KB.
+- [x] 4.9 Commit the built `src/web/static/dist/` contents so `uv sync` consumers can serve without Node.
+- [x] 4.10 Update `.gitignore` if needed: keep `frontend/node_modules/` ignored; ensure `src/web/static/dist/` is NOT ignored.
 
 ## 5. Verification
 
-- [ ] 5.1 `uv run ruff check` clean.
-- [ ] 5.2 `uv run pytest tests/` green including all new backend tests.
-- [ ] 5.3 `cd frontend && npm run typecheck` clean.
-- [ ] 5.4 `cd frontend && npm run lint` clean (including the no-raw-palette rule).
-- [ ] 5.5 `cd frontend && npm run test` green (≥ 6 unit tests).
-- [ ] 5.6 `cd frontend && npm run build` succeeds; initial JS bundle gzipped logged.
-- [ ] 5.7 `uv run challenge-factory serve` then browse `http://127.0.0.1:4173/` and verify: Overview renders all sections; `/scenario`, `/learning/materials`, `/learning/paths`, `/quality/lint`, `/quality/diversity` render PlaceholderPage (not 404); Cmd-K opens with at least 8 entries; `/settings/llm` loads masked config and saves a change; `POST /api/settings/llm/test` returns a structured result.
-- [ ] 5.8 `curl -N http://127.0.0.1:4173/api/events/stream` shows `Content-Type: text/event-stream` and a `:heartbeat` line within 16 seconds.
-- [ ] 5.9 `openspec validate modernize-web-console --strict` passes.
+- [x] 5.1 `uv run ruff check` clean.
+- [x] 5.2 `uv run pytest tests/` green including all new backend tests.
+- [x] 5.3 `cd frontend && npm run typecheck` clean.
+- [x] 5.4 `cd frontend && npm run lint` clean (including the no-raw-palette rule).
+- [x] 5.5 `cd frontend && npm run test` green (≥ 6 unit tests).
+- [x] 5.6 `cd frontend && npm run build` succeeds; initial JS bundle gzipped logged.
+- [x] 5.7 `uv run challenge-factory serve` then browse `http://127.0.0.1:4173/` and verify: Overview renders all sections; `/scenario`, `/learning/materials`, `/learning/paths`, `/quality/lint`, `/quality/diversity` render PlaceholderPage (not 404); Cmd-K opens with at least 8 entries; `/settings/llm` loads masked config and saves a change; `POST /api/settings/llm/test` returns a structured result.
+- [x] 5.8 `curl -N http://127.0.0.1:4173/api/events/stream` shows `Content-Type: text/event-stream` and a `:heartbeat` line within 16 seconds.
+- [x] 5.9 `openspec validate modernize-web-console --strict` passes.

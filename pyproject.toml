@@ -33,7 +33,7 @@ py-modules = ["cli"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-web = ["static/*", "static/dist/*", "static/dist/**/*"]
+web = ["static/dist/*", "static/dist/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
