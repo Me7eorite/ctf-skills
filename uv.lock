@@ -53,6 +53,7 @@ source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "openpyxl" },
+    { name = "pyyaml" },
     { name = "reportlab" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -68,6 +69,7 @@ dev = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.110" },
     { name = "openpyxl", specifier = ">=3.1" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "reportlab", specifier = ">=4.4" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.27" },
 ]

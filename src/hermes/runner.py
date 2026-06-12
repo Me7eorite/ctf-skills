@@ -16,6 +16,7 @@ from core.jsonio import read_json, write_json
 from core.paths import ProjectPaths
 from core.queue import ShardQueue
 from core.state import StateStore
+from domain.llm_settings import load_secret_settings
 from domain.resume import (
     ChallengeResumePlan,
     ShardResumePlan,
@@ -620,30 +621,16 @@ class HermesRunner:
         return process.returncode
 
     def _apply_legacy_custom_provider(self, environment: dict[str, str]) -> bool:
-        config = self.paths.hermes_home / "config.yaml"
-        try:
-            lines = config.read_text(encoding="utf-8").splitlines()
-        except OSError:
+        settings = load_secret_settings(self.paths)
+        if settings.get("provider") != "custom":
             return False
-
-        model: dict[str, str] = {}
-        in_model = False
-        for line in lines:
-            if line and not line[0].isspace():
-                in_model = line.rstrip() == "model:"
-                continue
-            if not in_model or ":" not in line:
-                continue
-            key, value = line.strip().split(":", 1)
-            model[key] = value.strip().strip("'\"")
-
-        if model.get("provider") != "custom":
-            return False
-        if model.get("base_url"):
-            environment.setdefault("CUSTOM_BASE_URL", model["base_url"])
-        if model.get("api_key"):
-            environment.setdefault("CUSTOM_API_KEY", model["api_key"])
-        return bool(model.get("base_url"))
+        base_url = settings.get("base_url") or ""
+        api_key = settings.get("api_key") or ""
+        if base_url:
+            environment.setdefault("CUSTOM_BASE_URL", base_url)
+        if api_key:
+            environment.setdefault("CUSTOM_API_KEY", api_key)
+        return bool(base_url)
 
     def _remove_conflicting_custom_pool(self) -> bool:
         auth_path = self.paths.hermes_home / "auth.json"

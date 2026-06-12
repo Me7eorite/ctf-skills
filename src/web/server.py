@@ -10,7 +10,15 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
 from core.paths import ProjectPaths
+from web.api import (
+    create_capabilities_router,
+    create_kpis_router,
+    create_llm_router,
+    create_presets_router,
+    create_runs_router,
+)
 from web.dashboard import DashboardService
+from web.sse import create_sse_router
 from web.trace import create_trace_router
 
 
@@ -27,6 +35,12 @@ def create_app(service: DashboardService, *, demo: bool = False) -> FastAPI:
         openapi_url=None,
     )
     app.include_router(create_trace_router(service.store))
+    app.include_router(create_capabilities_router())
+    app.include_router(create_kpis_router(service))
+    app.include_router(create_llm_router(service.paths))
+    app.include_router(create_presets_router(service.paths))
+    app.include_router(create_runs_router(service.paths))
+    app.include_router(create_sse_router(service.store))
 
     def require_writable() -> None:
         if demo:
