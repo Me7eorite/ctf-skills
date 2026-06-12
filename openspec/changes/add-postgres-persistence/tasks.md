@@ -7,11 +7,11 @@
 
 ## 2. Persistence package
 
-- [ ] 2.1 Create `src/persistence/__init__.py` re-exporting `create_engine_from_env`, `SessionFactory`, `transaction`, `PersistenceConfigurationError`, `PersistenceConnectionError`.
-- [ ] 2.2 Implement `src/persistence/errors.py` with `PersistenceConfigurationError` and `PersistenceConnectionError` (both extend `Exception`).
-- [ ] 2.3 Implement `src/persistence/engine.py::create_engine_from_env()` reading `DATABASE_URL`, rejecting missing values and non-`postgresql+psycopg://` schemes with `PersistenceConfigurationError`, and constructing a SQLAlchemy 2 `Engine` with `pool_pre_ping=True`.
-- [ ] 2.4 Implement `src/persistence/session.py` with `SessionFactory` built from an `Engine`, and a `transaction()` context manager that yields a `Session`, commits on success, rolls back on exception, closes the session in `finally`, and re-raises the original exception unchanged.
-- [ ] 2.5 Confirm `persistence` imports only stdlib, third-party, `core`, and `domain` (no `web`, `hermes`, `packing`, `cli`).
+- [x] 2.1 Create `src/persistence/__init__.py` re-exporting `create_engine_from_env`, `SessionFactory`, `transaction`, `PersistenceConfigurationError`, `PersistenceConnectionError`.
+- [x] 2.2 Implement `src/persistence/errors.py` with `PersistenceConfigurationError` and `PersistenceConnectionError` (both extend `Exception`).
+- [x] 2.3 Implement `src/persistence/engine.py::create_engine_from_env()` reading `DATABASE_URL`, rejecting missing values and non-`postgresql+psycopg://` schemes with `PersistenceConfigurationError`, and constructing a SQLAlchemy 2 `Engine` with `pool_pre_ping=True`.
+- [x] 2.4 Implement `src/persistence/session.py` with `SessionFactory` built from an `Engine`, and a `transaction()` context manager that yields a `Session`, commits on success, rolls back on exception, closes the session in `finally`, and re-raises the original exception unchanged.
+- [x] 2.5 Confirm `persistence` imports only stdlib, third-party, `core`, and `domain` (no `web`, `hermes`, `packing`, `cli`).
 
 ## 3. Alembic framework
 
