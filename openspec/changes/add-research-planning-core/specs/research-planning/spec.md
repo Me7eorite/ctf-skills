@@ -1,12 +1,38 @@
 ## ADDED Requirements
 
+### Requirement: Generation requests are scoped to a single challenge category
+
+The system SHALL persist a required `category` column on every `generation_requests` row. Allowed values SHALL be exactly `core.queue.SUPPORTED_CATEGORIES` (`web`, `pwn`, `re`). The column SHALL be backed by a PostgreSQL enum type `challenge_category`. A request whose `category` is missing, null, or not in the allowed set SHALL be rejected by the repository before any row is written.
+
+#### Scenario: Valid category is persisted
+
+- **WHEN** an operator submits `category="web"`, `topic="SQL injection"`
+- **THEN** the persisted `generation_requests` row has `category="web"`
+
+#### Scenario: Unknown category is rejected before persistence
+
+- **WHEN** an operator submits `category="crypto"`
+- **THEN** the repository raises a validation error naming the unknown category and the allowed set
+- **AND** no row is written to `generation_requests`
+
+#### Scenario: Missing category is rejected before persistence
+
+- **WHEN** an operator submits a request payload that omits `category`
+- **THEN** the repository raises a validation error naming the missing field
+- **AND** no row is written to `generation_requests`
+
+#### Scenario: Listing requests can filter by category
+
+- **WHEN** `ResearchRepository.list_generation_requests(category="re")` is called against a store containing web, pwn, and re requests
+- **THEN** only the re-category requests are returned
+
 ### Requirement: Generation requests capture operator intent with validated distribution
 
-The system SHALL persist generation requests as rows in `generation_requests` with `topic` (text), `target_count` (positive integer), `difficulty_distribution` (jsonb mapping difficulty label → count), `runtime_constraints` (jsonb), `status` (enum `draft|researching|researched|failed`), and `created_at` / `updated_at` timestamps. Difficulty labels SHALL be one of `easy|medium|hard|expert`. The sum of values in `difficulty_distribution` SHALL equal `target_count`. A request whose distribution does not sum to `target_count`, or whose distribution contains an unknown label, SHALL be rejected by the repository before any row is written.
+The system SHALL persist generation requests as rows in `generation_requests` with `category` (enum `web|pwn|re`), `topic` (text), `target_count` (positive integer), `difficulty_distribution` (jsonb mapping difficulty label → count), `runtime_constraints` (jsonb), `status` (enum `draft|researching|researched|failed`), and `created_at` / `updated_at` timestamps. Difficulty labels SHALL be one of `easy|medium|hard|expert`. The sum of values in `difficulty_distribution` SHALL equal `target_count`. A request whose distribution does not sum to `target_count`, or whose distribution contains an unknown label, SHALL be rejected by the repository before any row is written.
 
 #### Scenario: Valid request is persisted
 
-- **WHEN** an operator submits `topic="SQL injection"`, `target_count=20`, `difficulty_distribution={"easy":5,"medium":10,"hard":5}`
+- **WHEN** an operator submits `category="web"`, `topic="SQL injection"`, `target_count=20`, `difficulty_distribution={"easy":5,"medium":10,"hard":5}`
 - **THEN** a row appears in `generation_requests` with `status="draft"` and the validated fields
 - **AND** the operation returns the new request id
 
@@ -72,7 +98,7 @@ The system SHALL NOT, during the research stage, write any file to `work/shards/
 
 ### Requirement: Hermes Research Agent prompt contract
 
-The system SHALL render Hermes Research Agent prompts from `prompts/research_prompt.md` containing: the topic, the target count, the difficulty distribution, the operator-supplied seed URLs (possibly empty), and an explicit output contract requiring a single JSON object on stdout with `sources[]` and `findings[]` arrays. Every entry in `findings[]` SHALL declare `source_indices: int[]` of length ≥ 1, each value a valid 0-based index into `sources[]`. The prompt SHALL show at least one sample matching this contract.
+The system SHALL render Hermes Research Agent prompts from `prompts/research_prompt.md` containing: the challenge category (`web | pwn | re`), the topic, the target count, the difficulty distribution, the operator-supplied seed URLs (possibly empty), and an explicit output contract requiring a single JSON object on stdout with `sources[]` and `findings[]` arrays. The prompt SHALL instruct the Agent to keep all findings within the declared category and to refuse cross-category material rather than silently mixing it in. Every entry in `findings[]` SHALL declare `source_indices: int[]` of length ≥ 1, each value a valid 0-based index into `sources[]`. The prompt SHALL show at least one sample matching this contract.
 
 #### Scenario: Rendered prompt includes the output contract
 

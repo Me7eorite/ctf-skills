@@ -91,6 +91,18 @@ Asynchronous queueing would need a worker pool, lease handling, and visibility i
 
 `work/` is already where shard state lives; reusing it keeps a single mental model for "transient operational state." Nothing in `work/research/` is required for PostgreSQL queries.
 
+### DEC-9: One generation request, one challenge category
+
+Every `generation_requests` row carries a required `category` column whose values are exactly `core.queue.SUPPORTED_CATEGORIES` (`web | pwn | re`). Implemented as a PostgreSQL enum type `challenge_category` so the schema is self-explanatory and symmetric with the other enums (`generation_request_status`, `research_run_status`, `research_finding_kind`).
+
+**Why required, not nullable:** without category, a downstream consumer would have to infer category from the topic string ("SQL injection" → web?), which is exactly the kind of guessing this change exists to eliminate. The matrix system, `ShardQueue.split_*`, and the seed editor already segregate by category; the research stage must do the same so its output can be promoted to a category-specific shard.
+
+**Why one category per request, not many-to-many:** the operator's intent is "give me N web challenges on SQL injection" or "give me N re challenges on anti-debug," not "give me a mix." Mixed-category research runs would also break the dedup story: a finding labeled "anti-debug" only makes sense in re. If an operator wants both, they submit two requests.
+
+**Why reuse the existing set rather than a lookup table:** the set is fixed and small; a lookup table buys nothing today. If categories later grow attributes (display names, prerequisites, default runtime caps), we promote the enum to a `challenge_categories` table in a follow-up change.
+
+**Validation point:** repository-level (`ResearchRepository.create_generation_request` rejects an unknown category before any insert) plus the DB enum (defense in depth). The CLI `--category` flag is required; the HTTP API rejects missing/unknown category with 400.
+
 ### DEC-8: CLI subcommand group, not a flat command
 
 `challenge-factory` already has many top-level subcommands (`init`, `split`, `run`, `serve`, `validate`, `durations`). Adding three more (`research-submit`, `research-show`, `research-list`) bloats `--help`. Group them under `challenge-factory research <verb>` instead. Existing subcommands are not renamed.

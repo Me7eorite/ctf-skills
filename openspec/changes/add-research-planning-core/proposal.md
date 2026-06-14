@@ -4,8 +4,8 @@
 
 ## What Changes
 
-- New Alembic revision `0002_research_tables` introduces five tables and two enums:
-  - `generation_requests` (topic, target_count, difficulty_distribution jsonb, runtime_constraints jsonb, status enum, timestamps).
+- New Alembic revision `0002_research_tables` introduces five tables and three enums:
+  - `generation_requests` (category enum `web|pwn|re`, topic, target_count, difficulty_distribution jsonb, runtime_constraints jsonb, status enum, timestamps). Category is required and reuses `core.queue.SUPPORTED_CATEGORIES` so research output cannot mix re and web challenges by accident.
   - `research_runs` (fk → generation_requests, status enum, started_at, finished_at, error, hermes_log_path).
   - `research_sources` (fk → research_runs, url, title, summary, content_hash indexed, fetched_at, raw_text_path).
   - `research_findings` (fk → research_runs, kind enum, label, summary).
@@ -26,7 +26,7 @@
 ## Capabilities
 
 ### New Capabilities
-- `research-planning`: generation request lifecycle, research run lifecycle, source + finding model with the "every finding references ≥ 1 source" invariant, the no-direct-shard-promotion rule, and the Hermes Research Agent prompt contract.
+- `research-planning`: generation request lifecycle (scoped to one challenge category), research run lifecycle, source + finding model with the "every finding references ≥ 1 source" invariant, the no-direct-shard-promotion rule, and the Hermes Research Agent prompt contract.
 
 ### Modified Capabilities
 - `module-architecture`: add `services` to the recognized packages list and the dependency direction matrix. New allowed edges `cli → services`, `web → services`, `services → persistence`, `services → hermes`, `services → domain`, `services → core`. Forbidden edges `hermes → services`, `domain → services`, `services → web` remain forbidden and are tested.
