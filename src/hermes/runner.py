@@ -121,7 +121,7 @@ class HermesRunner:
         dry_run: bool,
         timeout: int | None = None,
     ) -> dict:
-        shard = self.queue.claim(worker) 
+        shard = self.queue.claim(worker)
         if shard is None:
             return {"status": "empty"}
 

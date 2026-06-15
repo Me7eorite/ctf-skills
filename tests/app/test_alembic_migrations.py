@@ -52,7 +52,10 @@ def test_baseline_upgrade_and_downgrade_cycle(alembic_env):
     url = alembic_env["DATABASE_URL"]
     _drop_alembic_version(url)
     try:
-        _run_alembic("upgrade", "head", env=alembic_env)
+        # Explicitly target the baseline revision rather than "head" so this
+        # test stays focused on the empty no-op migration even as later
+        # revisions add tables.
+        _run_alembic("upgrade", BASELINE_REVISION, env=alembic_env)
         current = _run_alembic("current", env=alembic_env)
         assert BASELINE_REVISION in current.stdout
 

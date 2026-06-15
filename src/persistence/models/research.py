@@ -161,7 +161,7 @@ class ResearchRun(Base):
     created_at: Mapped[CreatedAt]
 
     generation_request: Mapped[GenerationRequest] = relationship()
-    parent_run: Mapped[ResearchRun | None] = relationship(remote_side=[id])
+    parent_run: Mapped[ResearchRun | None] = relationship(remote_side="ResearchRun.id")
 
 
 class ResearchSource(Base):

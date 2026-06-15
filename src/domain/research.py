@@ -98,6 +98,7 @@ class ResearchRun:
     hermes_log_path: str | None
     profile_name_used: str | None
     created_at: datetime
+    was_retried: bool | None = None
 
 
 @dataclass(frozen=True)
