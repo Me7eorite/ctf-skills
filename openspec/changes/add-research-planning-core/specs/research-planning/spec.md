@@ -150,7 +150,7 @@ Terminal transitions SHALL require `status='running'` plus the current `claimed_
 #### Scenario: Hermes failure is recorded as failed
 
 - **WHEN** the Hermes Research Agent exits non-zero or returns invalid JSON
-- **THEN** the worker calls `mark_run_failed(run_id, agent_id, claim_token, last_error, retry=...)`
+- **THEN** the worker calls `mark_run_failed(run_id, agent_id, claim_token, last_error)`; the service decides retry vs terminal from `attempt` vs `max_attempts`
 - **AND** the row status is `failed`
 - **AND** `last_error` contains a non-empty diagnostic
 - **AND** no `research_sources` or `research_findings` rows for this run exist
@@ -214,6 +214,8 @@ The system SHALL maintain `generation_requests.status` as a denormalized view of
 
 Synchronization SHALL happen inside `ResearchJobService` terminal transitions. No background reconciliation is permitted. Each terminal-transition service method that updates a `research_runs` row SHALL also update its parent `generation_requests.status` in the same transaction.
 
+There are FOUR code paths that produce a terminal `research_runs.status` and therefore must update the parent: `mark_run_completed`, `complete_run_with_results`, `mark_run_failed`, and the lease-recovery branch inside `claim_next_run`. The last one is structurally similar to `mark_run_failed`: when `claim_next_run` marks an expired `running` row as `failed`, it computes `current.attempt < max_attempts` exactly like `mark_run_failed` does and either inserts a retry row (parent stays `researching`) or sets the parent to `failed`. The implementation SHALL reuse the same private helper between `claim_next_run` and `mark_run_failed` so the rule for "request `failed` when attempts are exhausted" is single-sourced.
+
 #### Scenario: Submit creates request and queued run atomically
 
 - **WHEN** `research submit ...` is called
@@ -227,12 +229,12 @@ Synchronization SHALL happen inside `ResearchJobService` terminal transitions. N
 
 #### Scenario: Failed run with retry stays researching
 
-- **WHEN** a worker calls `mark_run_failed(run_id, agent_id, claim_token, last_error, retry=True)` for a run with `attempt < max_attempts`
+- **WHEN** a worker calls `mark_run_failed(run_id, agent_id, claim_token, last_error)` for a run with `attempt < max_attempts`
 - **THEN** in the same transaction: the failed row is marked, a new queued row is inserted, and the parent request stays `researching`
 
 #### Scenario: Final failure flips the parent request to failed
 
-- **WHEN** a worker calls `mark_run_failed(run_id, agent_id, claim_token, last_error, retry=False)` for a run with `attempt = max_attempts`
+- **WHEN** a worker calls `mark_run_failed(run_id, agent_id, claim_token, last_error)` for a run with `attempt = max_attempts`
 - **THEN** in the same transaction the parent `generation_requests.status` is set to `failed`
 
 ### Requirement: Every research finding references at least one source
