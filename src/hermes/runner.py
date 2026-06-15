@@ -2,17 +2,11 @@
 
 from __future__ import annotations
 
-import json
-import os
-import shlex
-import shutil
-import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from core.docker import image_exists as default_image_exists
-from core.jsonio import read_json, write_json
 from core.paths import ProjectPaths
 from core.queue import ShardQueue
 from core.state import StateStore
@@ -25,15 +19,33 @@ from domain.resume import (
     design_evidence,
     document_evidence,
     implement_evidence,
-    validator_message,
 )
 from domain.validation import ChallengeValidator
+from hermes.invocation import (
+    DEFAULT_HERMES_COMMAND,
+    DEFAULT_HERMES_TIMEOUT,
+    HERMES_TIMEOUT_RETURNCODE,
+    apply_legacy_custom_provider_config,
+    default_hermes_arguments,
+    invoke_hermes,
+    remove_conflicting_custom_pool_config,
+)
 from hermes.progress import ensure_report, update_report
 from hermes.prompt import render_prompt
+from hermes.report import merge_validation_into_report
+from hermes.validation import (
+    record_per_challenge_complete,
+    run_validation,
+    validate_gate,
+)
 
-DEFAULT_HERMES_COMMAND = "hermes chat -Q --yolo -q"
-DEFAULT_HERMES_TIMEOUT = 1500
-HERMES_TIMEOUT_RETURNCODE = 124
+__all__ = [
+    "DEFAULT_HERMES_COMMAND",
+    "DEFAULT_HERMES_TIMEOUT",
+    "HERMES_TIMEOUT_RETURNCODE",
+    "HermesRunner",
+    "merge_validation_into_report",
+]
 
 
 def _carry_forward_pending_message(stage: str) -> str:
@@ -109,7 +121,7 @@ class HermesRunner:
         dry_run: bool,
         timeout: int | None = None,
     ) -> dict:
-        shard = self.queue.claim(worker)
+        shard = self.queue.claim(worker) 
         if shard is None:
             return {"status": "empty"}
 
@@ -404,115 +416,21 @@ class HermesRunner:
         challenge_ids: list[str],
         plan_by_id: dict[str, ChallengeResumePlan],
     ) -> list[dict[str, Any]]:
-        results: list[dict[str, Any]] = []
-        for challenge_id in challenge_ids:
-            plan = plan_by_id.get(challenge_id)
-            if plan is not None and "validate" in plan.skipped_stages:
-                results.append(
-                    {
-                        "challenge_id": challenge_id,
-                        "solve_status": "passed",
-                        "validation_status": "skipped_resume",
-                    }
-                )
-                continue
-
-            gate_error = self._validate_gate(challenge_id, plan)
-            if gate_error is not None:
-                self.state.record(
-                    shard=original_shard_name,
-                    challenge_id=challenge_id,
-                    worker=worker,
-                    stage="validate",
-                    status="failed",
-                    message=validator_message(
-                        status="contract_failed", error=gate_error
-                    ),
-                )
-                results.append(
-                    {
-                        "challenge_id": challenge_id,
-                        "solve_status": "failed",
-                        "validation_status": "contract_failed",
-                        "validation_error": gate_error,
-                    }
-                )
-                continue
-
-            self.state.record(
-                shard=original_shard_name,
-                challenge_id=challenge_id,
-                worker=worker,
-                stage="validate",
-                status="running",
-                message=validator_message(status="running"),
-            )
-            outcome = self.validator.validate_challenge(challenge_id)
-            elapsed = outcome.get("elapsed")
-            if outcome.get("status") == "passed":
-                self.state.record(
-                    shard=original_shard_name,
-                    challenge_id=challenge_id,
-                    worker=worker,
-                    stage="validate",
-                    status="passed",
-                    message=validator_message(
-                        status="passed", elapsed=elapsed, flag_matched=True
-                    ),
-                )
-                results.append(
-                    {
-                        "challenge_id": challenge_id,
-                        "solve_status": "passed",
-                        "validation_status": "passed",
-                        "validation_elapsed": elapsed,
-                    }
-                )
-            else:
-                status = str(outcome.get("status", "failed"))
-                error = outcome.get("error")
-                self.state.record(
-                    shard=original_shard_name,
-                    challenge_id=challenge_id,
-                    worker=worker,
-                    stage="validate",
-                    status="failed",
-                    message=validator_message(
-                        status=status, elapsed=elapsed, error=error
-                    ),
-                )
-                results.append(
-                    {
-                        "challenge_id": challenge_id,
-                        "solve_status": "failed",
-                        "validation_status": status,
-                        "validation_elapsed": elapsed,
-                        "validation_error": error,
-                    }
-                )
-        return results
+        return run_validation(
+            state=self.state,
+            validator=self.validator,
+            paths=self.paths,
+            image_exists=self._image_exists,
+            original_shard_name=original_shard_name,
+            worker=worker,
+            challenge_ids=challenge_ids,
+            plan_by_id=plan_by_id,
+        )
 
     def _validate_gate(
         self, challenge_id: str, plan: ChallengeResumePlan | None
     ) -> str | None:
-        if plan is None:
-            return "no resume plan entry"
-        if plan.directory is None:
-            return plan.lookup_status
-        category = _category_of(plan.directory, self.paths)
-        if not design_evidence(plan.directory, challenge_id):
-            return "design evidence incomplete"
-        if not implement_evidence(plan.directory, category):
-            return "implement evidence incomplete"
-        if not build_evidence(plan.directory, category, self._image_exists):
-            return "build evidence incomplete"
-        if not document_evidence(plan.directory):
-            return "document evidence incomplete"
-        if not (plan.directory / "validate.sh").is_file():
-            return "validate.sh missing"
-        if not (plan.directory / "solve" / "solve.py").is_file():
-            return "solve/solve.py missing"
-        return None
+        return validate_gate(challenge_id, plan, self.paths, self._image_exists)
 
     # ------------------------------------------------------------------
     # State helpers
@@ -524,18 +442,12 @@ class HermesRunner:
         worker: str,
         per_results: list[dict[str, Any]],
     ) -> None:
-        for result in per_results:
-            status = (
-                "passed" if result.get("solve_status") == "passed" else "failed"
-            )
-            self.state.record(
-                shard=original_shard_name,
-                challenge_id=result["challenge_id"],
-                worker=worker,
-                stage="complete",
-                status=status,
-                message=str(result.get("validation_status", "")),
-            )
+        record_per_challenge_complete(
+            self.state,
+            original_shard_name,
+            worker,
+            per_results,
+        )
 
     def _mark_shard_failed(
         self,
@@ -578,125 +490,26 @@ class HermesRunner:
         *,
         timeout: int | None = None,
     ) -> int:
-        log.parent.mkdir(parents=True, exist_ok=True)
-        if dry_run:
-            log.write_text(prompt + "\n", encoding="utf-8")
-            return 0
-
-        arguments = self._hermes_arguments()
-        environment = os.environ.copy()
-        if self.paths.hermes_home.exists() and not environment.get("HERMES_HOME"):
-            environment["HERMES_HOME"] = str(self.paths.hermes_home)
-        if self._apply_legacy_custom_provider(environment):
-            self._remove_conflicting_custom_pool()
-            query_index = arguments.index("-q") if "-q" in arguments else len(arguments)
-            arguments[query_index:query_index] = ["--provider", "custom"]
-        arguments.append(prompt)
-        effective_timeout = timeout if timeout is not None else DEFAULT_HERMES_TIMEOUT
-
-        with log.open("w", encoding="utf-8") as output:
-            output.write(
-                f"$ {' '.join(shlex.quote(arg) for arg in arguments[:-1])} <prompt>\n\n"
-            )
-            try:
-                process = subprocess.run(
-                    arguments,
-                    cwd=self.paths.root,
-                    env=environment,
-                    text=True,
-                    stdout=output,
-                    stderr=subprocess.STDOUT,
-                    timeout=effective_timeout,
-                    check=False,
-                )
-            except FileNotFoundError:
-                output.write("Hermes command not found. Set HERMES_CMD or install Hermes.\n")
-                return 127
-            except subprocess.TimeoutExpired:
-                output.write(
-                    f"\nHermes command timed out after {effective_timeout}s.\n"
-                )
-                return HERMES_TIMEOUT_RETURNCODE
-        return process.returncode
+        return invoke_hermes(
+            self.paths,
+            prompt,
+            log,
+            dry_run,
+            timeout=timeout,
+            hermes_arguments=self._hermes_arguments,
+            apply_legacy_custom_provider=self._apply_legacy_custom_provider,
+            remove_conflicting_custom_pool=self._remove_conflicting_custom_pool,
+        )
 
     def _apply_legacy_custom_provider(self, environment: dict[str, str]) -> bool:
-        config = self.paths.hermes_home / "config.yaml"
-        try:
-            lines = config.read_text(encoding="utf-8").splitlines()
-        except OSError:
-            return False
-
-        model: dict[str, str] = {}
-        in_model = False
-        for line in lines:
-            if line and not line[0].isspace():
-                in_model = line.rstrip() == "model:"
-                continue
-            if not in_model or ":" not in line:
-                continue
-            key, value = line.strip().split(":", 1)
-            model[key] = value.strip().strip("'\"")
-
-        if model.get("provider") != "custom":
-            return False
-        if model.get("base_url"):
-            environment.setdefault("CUSTOM_BASE_URL", model["base_url"])
-        if model.get("api_key"):
-            environment.setdefault("CUSTOM_API_KEY", model["api_key"])
-        return bool(model.get("base_url"))
+        return apply_legacy_custom_provider_config(self.paths.hermes_home, environment)
 
     def _remove_conflicting_custom_pool(self) -> bool:
-        auth_path = self.paths.hermes_home / "auth.json"
-        try:
-            payload = json.loads(auth_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return False
-        pool = payload.get("credential_pool")
-        if not isinstance(pool, dict):
-            return False
-        filtered = {
-            key: value
-            for key, value in pool.items()
-            if not str(key).startswith("custom:")
-        }
-        if len(filtered) == len(pool):
-            return False
-        payload["credential_pool"] = filtered
-        auth_path.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-        return True
+        return remove_conflicting_custom_pool_config(self.paths.hermes_home)
 
     @staticmethod
     def _hermes_arguments() -> list[str]:
-        command = os.environ.get("HERMES_CMD")
-        if command:
-            return shlex.split(command)
-
-        hermes = shutil.which("hermes")
-        if hermes:
-            return [hermes, "chat", "-Q", "--yolo", "-q"]
-
-        uvx = shutil.which("uvx")
-        python311 = Path.home() / ".local" / "bin" / "python3.11.exe"
-        if uvx:
-            arguments = [uvx]
-            if python311.exists():
-                arguments.extend(["--python", str(python311)])
-            arguments.extend(
-                [
-                    "--from",
-                    "hermes-agent",
-                    "hermes",
-                    "chat",
-                    "-Q",
-                    "--yolo",
-                    "-q",
-                ]
-            )
-            return arguments
-        return shlex.split(DEFAULT_HERMES_COMMAND)
+        return default_hermes_arguments()
 
 
 def _category_of(challenge_dir: Path, paths: ProjectPaths) -> str:
@@ -705,63 +518,3 @@ def _category_of(challenge_dir: Path, paths: ProjectPaths) -> str:
     except ValueError:
         return ""
     return relative.parts[0] if relative.parts else ""
-
-
-def merge_validation_into_report(
-    report: Path,
-    per_results: list[dict[str, Any]],
-    *,
-    shard: Path | None = None,
-    worker: str | None = None,
-    runner_status: str | None = None,
-) -> None:
-    """Merge per-challenge validation results into the shard report.
-
-    Repairs malformed Hermes-written report structures rather than dropping
-    validation outcomes. ``shard`` / ``worker`` / ``runner_status`` are only
-    used when a report file does not yet exist (for example in the all-skipped
-    short-circuit path).
-    """
-    raw = read_json(report, {})
-    if not isinstance(raw, dict):
-        raw = {}
-    if not isinstance(raw.get("challenges"), list):
-        raw["challenges"] = []
-    challenges_list = raw["challenges"]
-
-    by_id: dict[str, dict[str, Any]] = {}
-    for entry in challenges_list:
-        if isinstance(entry, dict):
-            challenge_id = entry.get("id") or entry.get("challenge_id")
-            if isinstance(challenge_id, str):
-                by_id[challenge_id] = entry
-
-    repaired: list[dict[str, Any]] = []
-    any_failed = False
-    for result in per_results:
-        challenge_id = result["challenge_id"]
-        target = by_id.get(challenge_id)
-        if target is None:
-            target = {"id": challenge_id}
-            challenges_list.append(target)
-        target.setdefault("id", challenge_id)
-        target["solve_status"] = result.get("solve_status", "failed")
-        target["validation_status"] = result.get(
-            "validation_status", target.get("validation_status", "")
-        )
-        if "validation_elapsed" in result:
-            target["validation_elapsed"] = result["validation_elapsed"]
-        if "validation_error" in result:
-            target["validation_error"] = result["validation_error"]
-        repaired.append(target)
-        if target["solve_status"] == "failed":
-            any_failed = True
-
-    if shard is not None:
-        raw.setdefault("shard", str(shard))
-    if worker is not None:
-        raw.setdefault("worker", worker)
-    if runner_status is not None:
-        raw["runner_status"] = "failed" if any_failed else runner_status
-
-    write_json(report, raw)

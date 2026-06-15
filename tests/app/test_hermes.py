@@ -38,9 +38,9 @@ class HermesRunnerTests(unittest.TestCase):
     def test_uses_uvx_fallback_when_hermes_is_not_on_path(self):
         with (
             patch.dict("os.environ", {}, clear=True),
-            patch("hermes.runner.shutil.which", side_effect=[None, "C:/tools/uvx.exe"]),
-            patch("hermes.runner.Path.home", return_value=Path("C:/Users/test")),
-            patch("hermes.runner.Path.exists", return_value=True),
+            patch("hermes.invocation.shutil.which", side_effect=[None, "C:/tools/uvx.exe"]),
+            patch("hermes.invocation.Path.home", return_value=Path("C:/Users/test")),
+            patch("hermes.invocation.Path.exists", return_value=True),
         ):
             arguments = HermesRunner._hermes_arguments()
 
@@ -51,9 +51,9 @@ class HermesRunnerTests(unittest.TestCase):
     def test_uses_uvx_fallback_without_windows_python(self):
         with (
             patch.dict("os.environ", {}, clear=True),
-            patch("hermes.runner.shutil.which", side_effect=[None, "/opt/homebrew/bin/uvx"]),
-            patch("hermes.runner.Path.home", return_value=Path("/Users/test")),
-            patch("hermes.runner.Path.exists", return_value=False),
+            patch("hermes.invocation.shutil.which", side_effect=[None, "/opt/homebrew/bin/uvx"]),
+            patch("hermes.invocation.Path.home", return_value=Path("/Users/test")),
+            patch("hermes.invocation.Path.exists", return_value=False),
         ):
             arguments = HermesRunner._hermes_arguments()
 
@@ -104,7 +104,7 @@ class HermesRunnerTests(unittest.TestCase):
             patch.dict("os.environ", {"HERMES_CMD": "hermes"}),
             patch.object(runner, "_apply_legacy_custom_provider", return_value=False),
             patch(
-                "hermes.runner.subprocess.run",
+                "hermes.invocation.subprocess.run",
                 side_effect=__import__("subprocess").TimeoutExpired("hermes", 1),
             ),
         ):
