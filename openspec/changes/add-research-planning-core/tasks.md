@@ -22,9 +22,9 @@
 
 ## 3. Persistence models
 
-- [ ] 3.1 Create `src/persistence/models/__init__.py` re-exporting the public model classes. Add a shared declarative `Base` (subclass of `sqlalchemy.orm.DeclarativeBase`) in `persistence/models/base.py` so future revisions can register tables here without circular imports.
-- [ ] 3.2 Create `src/persistence/models/research.py` with SQLAlchemy 2 mapped classes: `ChallengeCategory` (table=challenge_categories), `AgentRole` (table=agent_roles), `HermesProfileBinding` (table=hermes_profile_bindings), `GenerationRequest` (with `seed_urls` JSONB), `ResearchRun` (with `claim_token` and `profile_name_used` Mapped columns), `ResearchSource`, `ResearchFinding`, `ResearchFindingSource` matching the table definitions from task 1. Use `Mapped[...]` annotations and PEP 695 / `Annotated` typed columns. `GenerationRequest.category_ref: Mapped[ChallengeCategory]` is the relationship for join queries; `HermesProfileBinding.role_ref: Mapped[AgentRole]` likewise.
-- [ ] 3.3 Wire `target_metadata = Base.metadata` in `alembic/env.py` so future autogenerate revisions detect drift.
+- [x] 3.1 Create `src/persistence/models/__init__.py` re-exporting the public model classes. Add a shared declarative `Base` (subclass of `sqlalchemy.orm.DeclarativeBase`) in `persistence/models/base.py` so future revisions can register tables here without circular imports.
+- [x] 3.2 Create `src/persistence/models/research.py` with SQLAlchemy 2 mapped classes: `ChallengeCategory` (table=challenge_categories), `AgentRole` (table=agent_roles), `HermesProfileBinding` (table=hermes_profile_bindings), `GenerationRequest` (with `seed_urls` JSONB), `ResearchRun` (with `claim_token` and `profile_name_used` Mapped columns), `ResearchSource`, `ResearchFinding`, `ResearchFindingSource` matching the table definitions from task 1. Use `Mapped[...]` annotations and PEP 695 / `Annotated` typed columns. `GenerationRequest.category_ref: Mapped[ChallengeCategory]` is the relationship for join queries; `HermesProfileBinding.role_ref: Mapped[AgentRole]` likewise.
+- [x] 3.3 Wire `target_metadata = Base.metadata` in `alembic/env.py` so future autogenerate revisions detect drift.
 
 ## 4. Persistence repositories
 

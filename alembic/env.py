@@ -6,12 +6,13 @@ from logging.config import fileConfig
 
 from alembic import context
 from persistence.engine import create_engine_from_env
+from persistence.models import Base
 
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = None
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
