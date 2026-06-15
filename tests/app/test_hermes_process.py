@@ -1,0 +1,136 @@
+"""Tests for the reusable Hermes subprocess primitives in `hermes/process.py`.
+
+`invoke_capture` is the new code path introduced by add-research-planning-core
+Section 6 — it captures stdout into memory, mirrors it into the log file, and
+supports cooperative cancellation via `threading.Event`. These tests exercise
+real subprocesses (using the current Python interpreter as a stand-in for
+Hermes) so the threading and termination paths are end-to-end covered.
+"""
+
+from __future__ import annotations
+
+import sys
+import tempfile
+import threading
+import time
+import unittest
+from pathlib import Path
+
+from hermes.process import (
+    HERMES_TIMEOUT_RETURNCODE,
+    HermesProcessResult,
+    invoke_capture,
+)
+
+
+def _python(*statements: str) -> list[str]:
+    """Build argv that runs the joined statements in the current interpreter."""
+    return [sys.executable, "-c", "\n".join(statements)]
+
+
+class InvokeCaptureTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.workdir = Path(self.temp.name)
+        self.log = self.workdir / "research.log"
+
+    def test_captures_stdout_into_memory_and_log(self):
+        arguments = _python(
+            "import sys",
+            "sys.stdout.write('{\"ok\": true}\\n')",
+            "sys.stderr.write('debug line\\n')",
+            "sys.exit(0)",
+        )
+        result = invoke_capture(
+            "noop-prompt",
+            arguments=arguments,
+            log_path=self.log,
+            cwd=self.workdir,
+            environment={},
+            timeout=10,
+        )
+
+        self.assertIsInstance(result, HermesProcessResult)
+        self.assertEqual(result.returncode, 0)
+        self.assertFalse(result.cancelled)
+        self.assertIn('{"ok": true}', result.stdout)
+
+        log_text = self.log.read_text(encoding="utf-8")
+        self.assertIn("--- stdout ---", log_text)
+        self.assertIn('{"ok": true}', log_text)
+        self.assertIn("--- end stdout ---", log_text)
+        self.assertIn("--- stderr ---", log_text)
+        self.assertIn("debug line", log_text)
+
+    def test_cancel_event_terminates_subprocess(self):
+        arguments = _python(
+            "import sys, time",
+            "sys.stdout.write('started\\n')",
+            "sys.stdout.flush()",
+            "time.sleep(30)",
+        )
+        cancel_event = threading.Event()
+
+        def trigger_cancel():
+            time.sleep(0.5)
+            cancel_event.set()
+
+        threading.Thread(target=trigger_cancel, daemon=True).start()
+
+        start = time.monotonic()
+        result = invoke_capture(
+            "noop",
+            arguments=arguments,
+            log_path=self.log,
+            cwd=self.workdir,
+            environment={},
+            timeout=10,
+            cancel_event=cancel_event,
+        )
+        elapsed = time.monotonic() - start
+
+        self.assertTrue(result.cancelled)
+        self.assertLess(elapsed, 5, "cancel did not terminate subprocess quickly")
+        self.assertIn("started", result.stdout)
+        log_text = self.log.read_text(encoding="utf-8")
+        self.assertIn("cancelled at", log_text)
+
+    def test_timeout_returns_124(self):
+        arguments = _python(
+            "import time",
+            "time.sleep(30)",
+        )
+        result = invoke_capture(
+            "noop",
+            arguments=arguments,
+            log_path=self.log,
+            cwd=self.workdir,
+            environment={},
+            timeout=1,
+        )
+
+        self.assertEqual(result.returncode, HERMES_TIMEOUT_RETURNCODE)
+        self.assertFalse(result.cancelled)
+        log_text = self.log.read_text(encoding="utf-8")
+        self.assertIn("timed out after 1s", log_text)
+
+    def test_missing_executable_returns_127(self):
+        result = invoke_capture(
+            "noop",
+            arguments=["/nonexistent/binary-that-does-not-exist"],
+            log_path=self.log,
+            cwd=self.workdir,
+            environment={},
+            timeout=5,
+        )
+
+        self.assertEqual(result.returncode, 127)
+        self.assertFalse(result.cancelled)
+        self.assertEqual(result.stdout, "")
+        log_text = self.log.read_text(encoding="utf-8")
+        self.assertIn("Hermes command not found", log_text)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    unittest.main()

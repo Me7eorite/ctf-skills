@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -21,14 +22,11 @@ from domain.resume import (
     implement_evidence,
 )
 from domain.validation import ChallengeValidator
-from hermes.invocation import (
+from hermes import process as hermes_process
+from hermes.process import (
     DEFAULT_HERMES_COMMAND,
     DEFAULT_HERMES_TIMEOUT,
     HERMES_TIMEOUT_RETURNCODE,
-    apply_legacy_custom_provider_config,
-    default_hermes_arguments,
-    invoke_hermes,
-    remove_conflicting_custom_pool_config,
 )
 from hermes.progress import ensure_report, update_report
 from hermes.prompt import render_prompt
@@ -490,26 +488,43 @@ class HermesRunner:
         *,
         timeout: int | None = None,
     ) -> int:
-        return invoke_hermes(
-            self.paths,
+        if dry_run:
+            log.parent.mkdir(parents=True, exist_ok=True)
+            log.write_text(prompt + "\n", encoding="utf-8")
+            return 0
+
+        arguments = self._hermes_arguments()
+        environment = os.environ.copy()
+        if self.paths.hermes_home.exists() and not environment.get("HERMES_HOME"):
+            environment["HERMES_HOME"] = str(self.paths.hermes_home)
+        if self._apply_legacy_custom_provider(environment):
+            self._remove_conflicting_custom_pool()
+            query_index = (
+                arguments.index("-q") if "-q" in arguments else len(arguments)
+            )
+            arguments[query_index:query_index] = ["--provider", "custom"]
+
+        effective_timeout = timeout if timeout is not None else DEFAULT_HERMES_TIMEOUT
+        return hermes_process.invoke(
             prompt,
-            log,
-            dry_run,
-            timeout=timeout,
-            hermes_arguments=self._hermes_arguments,
-            apply_legacy_custom_provider=self._apply_legacy_custom_provider,
-            remove_conflicting_custom_pool=self._remove_conflicting_custom_pool,
+            arguments=arguments,
+            log_path=log,
+            cwd=self.paths.root,
+            environment=environment,
+            timeout=effective_timeout,
         )
 
     def _apply_legacy_custom_provider(self, environment: dict[str, str]) -> bool:
-        return apply_legacy_custom_provider_config(self.paths.hermes_home, environment)
+        return hermes_process.apply_legacy_custom_provider(
+            self.paths.hermes_home, environment
+        )
 
     def _remove_conflicting_custom_pool(self) -> bool:
-        return remove_conflicting_custom_pool_config(self.paths.hermes_home)
+        return hermes_process.remove_conflicting_custom_pool(self.paths.hermes_home)
 
     @staticmethod
     def _hermes_arguments() -> list[str]:
-        return default_hermes_arguments()
+        return hermes_process.hermes_arguments()
 
 
 def _category_of(challenge_dir: Path, paths: ProjectPaths) -> str:
