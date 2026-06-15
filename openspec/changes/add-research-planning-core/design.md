@@ -82,7 +82,7 @@ If Hermes exits non-zero or writes invalid JSON, the run is persisted as `failed
 
 ### DEC-6: `research submit` is async; execution lives in a PG-backed job queue
 
-`research submit` creates the `generation_requests` row and one `research_runs` row in status `queued`, then exits immediately printing the request id and run id. It does **not** invoke Hermes. Hermes is invoked by a separate long-running process: `challenge-factory research worker --agent-id <W> --loop [--max-jobs N]`. Multiple workers may run concurrently on the same or different machines; they share state through `research_runs` and coordinate via PostgreSQL row locks.
+`research submit` creates the `generation_requests` row and one `research_runs` row in status `queued`, then exits immediately printing the request id and run id. It does **not** invoke Hermes. Hermes is invoked by a separate long-running process: `challenge-factory research worker --agent-id <W> --loop [--max-jobs N] [--poll-interval-seconds S] [--lease-seconds T] [--hermes-timeout-seconds H]`. The worker enforces `H < T` at startup so Hermes cannot outlive the lease window — see DEC-11 for why that invariant is load-bearing. Multiple workers may run concurrently on the same or different machines; they share state through `research_runs` and coordinate via PostgreSQL row locks.
 
 **Why not synchronous:** a synchronous `submit` ties the operator's terminal to a 5-25 minute Hermes run, holds a database connection across the entire span, makes operator-visible failure modes much worse (lid closed → run lost without trace), and forecloses every multi-agent / multi-machine / retry pattern downstream. Cost of doing async correctly at this stage of the project: one well-known pattern (SKIP LOCKED), a handful of new columns, and one worker subcommand. Cost of bolting async on later: rewriting the runner, migrating the schema, retrofitting the CLI, and re-doing every test.
 
@@ -121,7 +121,10 @@ A worker that has claimed a run starts a Python `threading.Thread(daemon=True)` 
 UPDATE research_runs
 SET heartbeat_at=now(),
     lease_expires_at=now() + (:lease_seconds || ' seconds')::interval
-WHERE id=:run_id AND claimed_by=:agent_id AND claim_token=:claim_token;
+WHERE id=:run_id
+  AND status='running'
+  AND claimed_by=:agent_id
+  AND claim_token=:claim_token;
 ```
 
 The `AND claimed_by=:agent_id AND claim_token=:claim_token` defensive clause means: if for any reason this worker no longer owns the claim token (its lease expired earlier and `claim_next_run`'s recovery path already marked this row `failed` and possibly created a fresh retry row owned by another worker, our heartbeat thread was paused too long, a duplicate agent id is in play, etc.), our heartbeat updates **nothing** instead of corrupting state. The thread exits when the main worker thread sets a `stop_event`.

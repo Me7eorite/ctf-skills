@@ -175,8 +175,8 @@ Terminal transitions SHALL require `status='running'` plus the current `claimed_
 
 #### Scenario: Executor swallows StaleClaimError without raising
 
-- **GIVEN** a run whose lease was reclaimed by another worker during Hermes execution
-- **WHEN** the original executor finishes Hermes and calls `complete_run_with_results(...)`
+- **GIVEN** a run whose lease expired during Hermes execution, was marked `failed` by another worker's `claim_next_run` recovery path, and now has a sibling retry row owned by that other worker
+- **WHEN** the original executor finishes Hermes and calls `complete_run_with_results(...)` against the original (now `failed`) run id
 - **THEN** the service raises `StaleClaimError`
 - **AND** the executor catches it, logs a WARNING naming the run id and the lost claim_token, and returns without calling `mark_run_failed`
 - **AND** the original executor process exits its current iteration without writing any further DB state for the lost run
