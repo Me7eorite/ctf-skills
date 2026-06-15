@@ -78,7 +78,7 @@ The shard prompt instructs Hermes to write progress events via a CLI subcommand 
 
 Every entry in `findings[]` must declare `source_indices: int[]` referencing positions in `sources[]`. The repository rejects findings whose index array is empty. The prompt sample shows both arrays with at least one mutual reference.
 
-If Hermes exits non-zero or writes invalid JSON, the run is persisted as `failed` with the error string; nothing partial lands in the DB. The Hermes subprocess is never inside a database transaction.
+If Hermes exits non-zero or writes invalid JSON, the run is persisted as `failed` with the error string — unless the worker has lost the lease / claim token in the interim. A worker that observes a stale claim during the failure write swallows `StaleClaimError` and exits the iteration without further writes; the new owner (created by `claim_next_run`'s lease-recovery path) is responsible for the next attempt. The Hermes subprocess is never inside a database transaction.
 
 ### DEC-6: `research submit` is async; execution lives in a PG-backed job queue
 
@@ -124,7 +124,7 @@ SET heartbeat_at=now(),
 WHERE id=:run_id AND claimed_by=:agent_id AND claim_token=:claim_token;
 ```
 
-The `AND claimed_by=:agent_id AND claim_token=:claim_token` defensive clause means: if for any reason the run was re-claimed by another worker (lease expired earlier, our heartbeat thread was paused, duplicate agent id, etc.), our heartbeat updates **nothing** instead of corrupting state. The thread exits when the main worker thread sets a `stop_event`.
+The `AND claimed_by=:agent_id AND claim_token=:claim_token` defensive clause means: if for any reason this worker no longer owns the claim token (its lease expired earlier and `claim_next_run`'s recovery path already marked this row `failed` and possibly created a fresh retry row owned by another worker, our heartbeat thread was paused too long, a duplicate agent id is in play, etc.), our heartbeat updates **nothing** instead of corrupting state. The thread exits when the main worker thread sets a `stop_event`.
 
 If the heartbeat loop observes a lost lease (`heartbeat(...) == False`), it sets a shared `lost_lease` event. The executor must then terminate the Hermes subprocess when possible; if termination is not possible, it must discard the result and skip terminal persistence. `mark_run_completed` and `mark_run_failed` also require the same `claim_token`, so a stale worker cannot complete or fail a run it no longer owns.
 
@@ -158,7 +158,7 @@ Each Hermes attempt is a new `research_runs` row, never a re-used one. On failur
 | latest run `failed`, attempt < max_attempts  | `researching` (a retry row was just created) |
 | latest run `failed`, attempt = max_attempts  | `failed`       |
 
-Synchronization is done by the job service inside each terminal transition: when `mark_run_completed(...)` or `mark_run_failed(..., retry=...)` runs with the current `claim_token`, it updates the parent request's status atomically. No triggers, no background sync. The Requirement spec encodes this so the rule is testable.
+Synchronization is done by the job service inside each terminal transition: when `mark_run_completed(...)`, `mark_run_failed(..., retry=...)`, or `complete_run_with_results(...)` runs with the current `claim_token`, it updates the parent request's status atomically inside the same short transaction that writes the terminal state on the `research_runs` row (and, for `complete_run_with_results`, the sources/findings as well). No triggers, no background sync. The Requirement spec encodes this so the rule is testable.
 
 **A request status of `researched` is not immutable.** An operator MAY (in a future change, not this one) re-submit a fresh attempt that lands as a new queued run — at which point the request flips back to `researching`. We don't implement re-submit now, but the schema and state machine permit it.
 
