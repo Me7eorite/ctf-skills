@@ -46,8 +46,8 @@
 
 ## 5. Filesystem layout for raw text and logs
 
-- [ ] 5.1 Add `core/paths.py::ProjectPaths.research_sources` and `ProjectPaths.research_logs` pointing at `work/research/sources/` and `work/research/logs/`.
-- [ ] 5.2 `ProjectPaths.initialize()` SHALL `mkdir(parents=True, exist_ok=True)` for both new directories so the first `research submit` does not race directory creation.
+- [x] 5.1 Add `core/paths.py::ProjectPaths.research_sources` and `ProjectPaths.research_logs` pointing at `work/research/sources/` and `work/research/logs/`.
+- [x] 5.2 `ProjectPaths.initialize()` SHALL `mkdir(parents=True, exist_ok=True)` for both new directories so the first `research submit` does not race directory creation.
 
 ## 6. Hermes subprocess plumbing extraction (behavior-preserving)
 

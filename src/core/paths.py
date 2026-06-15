@@ -48,6 +48,14 @@ class ProjectPaths:
         return self.work / "logs"
 
     @property
+    def research_sources(self) -> Path:
+        return self.work / "research" / "sources"
+
+    @property
+    def research_logs(self) -> Path:
+        return self.work / "research" / "logs"
+
+    @property
     def state_database(self) -> Path:
         return self.work / "state.sqlite3"
 
@@ -84,6 +92,8 @@ class ProjectPaths:
             *(self.challenges / category for category in ("web", "pwn", "re")),
             self.reports,
             self.logs,
+            self.research_sources,
+            self.research_logs,
         ]
         for directory in directories:
             directory.mkdir(parents=True, exist_ok=True)
