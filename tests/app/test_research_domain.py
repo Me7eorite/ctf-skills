@@ -18,6 +18,8 @@ from domain.research import (
     ResearchFinding,
     ResearchFindingKind,
     ResearchRunStatus,
+)
+from domain.research_validators import (
     ResearchValidationError,
     validate_category,
     validate_distribution,

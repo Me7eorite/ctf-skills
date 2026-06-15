@@ -1,4 +1,4 @@
-"""Domain DTOs and validators for the research-planning workflow.
+"""Domain DTOs and value sets for the research-planning workflow.
 
 Mirrors the eight tables introduced by Alembic revision
 ``0002_research_tables``. DTOs are frozen dataclasses; the allowed value
@@ -6,40 +6,28 @@ sets for the three PG enum columns plus the binding-status CHECK are
 exposed as tuple constants. The category and role sets are NOT hardcoded
 here — those are lookup tables and the repository queries them at
 runtime.
+
+Validation logic lives in :mod:`domain.research_validators`; this file
+is purely data shape.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 from uuid import UUID
 
 # ---------------------------------------------------------------------------
-# Allowed-value sets for the three PG enum types and the binding status
-# CHECK. Mirror the migration; keep as tuples so they have a stable order
-# usable in error messages.
+# Allowed-value sets for the three PG enum types, the binding status CHECK,
+# and the difficulty whitelist. Mirror the migration; keep as tuples so they
+# have a stable order usable in error messages.
 # ---------------------------------------------------------------------------
 
-GenerationRequestStatus: tuple[str, ...] = (
-    "draft",
-    "researching",
-    "researched",
-    "failed",
-)
-ResearchRunStatus: tuple[str, ...] = (
-    "queued",
-    "running",
-    "completed",
-    "failed",
-)
-ResearchFindingKind: tuple[str, ...] = (
-    "technique",
-    "variant",
-    "scenario",
-    "prerequisite",
-)
+GenerationRequestStatus: tuple[str, ...] = ("draft", "researching", "researched", "failed")
+ResearchRunStatus: tuple[str, ...] = ("queued", "running", "completed", "failed")
+ResearchFindingKind: tuple[str, ...] = ("technique", "variant", "scenario", "prerequisite")
 BindingStatus: tuple[str, ...] = ("enabled", "disabled")
 DIFFICULTY_LABELS: tuple[str, ...] = ("easy", "medium", "hard", "expert")
 
@@ -137,99 +125,3 @@ class ResearchFinding:
 class ResearchFindingSource:
     finding_id: UUID
     source_id: UUID
-
-
-# ---------------------------------------------------------------------------
-# Validators
-# ---------------------------------------------------------------------------
-
-
-class ResearchValidationError(ValueError):
-    """Raised when a domain validator rejects input.
-
-    Use this for any validation that is enforceable without a database round
-    trip: distribution sums, label whitelists, finding-source cardinality.
-    Cross-row checks (e.g. "this source_id belongs to this run") are the
-    repository's responsibility and surface as the same error type.
-    """
-
-
-def validate_distribution(
-    target_count: int, distribution: Mapping[str, int]
-) -> None:
-    """Reject an invalid difficulty distribution.
-
-    Rules: every label must be in ``DIFFICULTY_LABELS``; counts must be
-    non-negative integers; the sum must equal ``target_count``.
-    """
-    if target_count <= 0:
-        raise ResearchValidationError(
-            f"target_count must be positive, got {target_count}"
-        )
-    if not distribution:
-        raise ResearchValidationError(
-            "difficulty_distribution is empty; "
-            f"expected sum to equal target_count={target_count}"
-        )
-    unknown = sorted(label for label in distribution if label not in DIFFICULTY_LABELS)
-    if unknown:
-        raise ResearchValidationError(
-            f"unknown difficulty label(s) {unknown}; "
-            f"allowed: {list(DIFFICULTY_LABELS)}"
-        )
-    negatives = sorted(label for label, count in distribution.items() if count < 0)
-    if negatives:
-        raise ResearchValidationError(
-            f"difficulty counts must be non-negative; negative for: {negatives}"
-        )
-    total = sum(distribution.values())
-    if total != target_count:
-        raise ResearchValidationError(
-            f"difficulty_distribution sums to {total} but target_count is {target_count}"
-        )
-
-
-def validate_category(category: str | None, allowed_codes: Iterable[str]) -> None:
-    """Reject a missing or unknown challenge category.
-
-    ``allowed_codes`` is supplied by the caller (typically the repository
-    after a ``SELECT code FROM challenge_categories``), because the source
-    of truth is the lookup table — not a Python constant.
-    """
-    if not category:
-        raise ResearchValidationError("category is required; got missing/empty value")
-    allowed = set(allowed_codes)
-    if category not in allowed:
-        raise ResearchValidationError(
-            f"category {category!r} is not allowed; "
-            f"allowed: {sorted(allowed)}"
-        )
-
-
-def validate_finding(kind: str, source_ids: Sequence[UUID]) -> None:
-    """Reject a finding without sources or with duplicate sources.
-
-    Cross-run checks (each ``source_id`` must belong to the same
-    ``research_run_id`` as the finding) live in the repository because they
-    require a database query; the spec covers them under the repository's
-    ``create_finding`` invariant.
-    """
-    if kind not in ResearchFindingKind:
-        raise ResearchValidationError(
-            f"finding kind {kind!r} is not allowed; "
-            f"allowed: {list(ResearchFindingKind)}"
-        )
-    if not source_ids:
-        raise ResearchValidationError(
-            "finding must reference at least one source (source_ids is empty)"
-        )
-    seen: set[UUID] = set()
-    duplicates: list[UUID] = []
-    for sid in source_ids:
-        if sid in seen and sid not in duplicates:
-            duplicates.append(sid)
-        seen.add(sid)
-    if duplicates:
-        raise ResearchValidationError(
-            f"finding source_ids contain duplicate(s): {duplicates}"
-        )
