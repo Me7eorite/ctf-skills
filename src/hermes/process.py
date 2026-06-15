@@ -277,6 +277,32 @@ def invoke_capture(
     return HermesProcessResult(returncode=returncode, stdout=stdout, cancelled=cancelled)
 
 
+def profile_exists(profile_name: str) -> bool:
+    """Return True iff `hermes profile show <profile_name>` exits cleanly.
+
+    Used by the `challenge-factory profile bind` subcommand to validate the
+    profile before persisting a binding. Treats any startup failure (binary
+    missing, timeout) as "does not exist" so callers see a single bool.
+    """
+    base = hermes_arguments()
+    try:
+        index = base.index("chat")
+    except ValueError:
+        index = 1 if base else 0
+    arguments = [*base[:index], "profile", "show", profile_name]
+    try:
+        process = subprocess.run(
+            arguments,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+    return process.returncode == 0
+
+
 def _terminate(process: "subprocess.Popen[str]") -> None:
     """Best-effort terminate: SIGTERM, wait 5s, then SIGKILL."""
     try:
