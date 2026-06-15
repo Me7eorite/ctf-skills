@@ -85,7 +85,7 @@ The system SHALL persist generation requests as rows in `generation_requests` wi
 
 `research_runs` SHALL carry the columns `claimed_by text`, `claim_token uuid`, `claimed_at timestamptz`, `heartbeat_at timestamptz`, `lease_expires_at timestamptz`, `attempt int not null default 1`, `parent_run_id uuid` (nullable, FK back to `research_runs.id`), and `last_error text`. While `status='queued'`, `claimed_by`, `claim_token`, `claimed_at`, `heartbeat_at`, and `lease_expires_at` are NULL.
 
-The system SHALL expose `ResearchJobService.claim_next_run(agent_id, lease_seconds) -> ResearchRun | None`. Before claiming, the service SHALL lazily recover expired `running` rows by marking each locked expired run `failed` with non-empty `last_error`; when attempts remain, it SHALL insert a new `queued` retry row with `parent_run_id` pointing at the expired run. The claim implementation SHALL then use `SELECT ... FOR UPDATE SKIP LOCKED LIMIT 1` to atomically pick the oldest row whose `status='queued'`, and `UPDATE` it to `status='running'`, setting `claimed_by`, a fresh `claim_token`, `claimed_at`, `heartbeat_at`, and `lease_expires_at = now() + interval lease_seconds`. The statement SHALL NOT block on any locked row.
+The system SHALL expose `ResearchJobService.claim_next_run(agent_id, lease_seconds) -> ResearchRun | None`. Before claiming, the service SHALL lazily recover expired `running` rows by marking each locked expired run `failed` with non-empty `last_error`; when attempts remain, it SHALL insert a new `queued` retry row with `parent_run_id` pointing at the expired run. The expired row's `claim_token`, `claimed_by`, `claimed_at`, `heartbeat_at`, and `lease_expires_at` columns SHALL be preserved (not cleared) — they remain as forensic evidence of which worker held the timed-out attempt. The claim implementation SHALL then use `SELECT ... FOR UPDATE SKIP LOCKED LIMIT 1` to atomically pick the oldest row whose `status='queued'`, and `UPDATE` it to `status='running'`, setting `claimed_by`, a fresh `claim_token`, `claimed_at`, `heartbeat_at`, and `lease_expires_at = now() + interval lease_seconds`. The statement SHALL NOT block on any locked row.
 
 #### Scenario: Two workers claim distinct runs in the same instant
 
@@ -113,7 +113,7 @@ The system SHALL expose `ResearchJobService.claim_next_run(agent_id, lease_secon
 
 ### Requirement: Heartbeats extend the lease while a worker is alive
 
-The system SHALL expose `ResearchJobService.heartbeat(run_id, agent_id, claim_token, lease_seconds)` that updates `heartbeat_at = now()` and `lease_expires_at = now() + interval lease_seconds` only when `status='running'`, `claimed_by = agent_id`, and `claim_token` matches. The worker SHALL invoke this method every 30 seconds while the Hermes subprocess is running. The system SHALL NOT block on any database lock for longer than the heartbeat update.
+The system SHALL expose `ResearchJobService.heartbeat(run_id, agent_id, claim_token, lease_seconds) -> bool` that updates `heartbeat_at = now()` and `lease_expires_at = now() + interval lease_seconds` only when `status='running'`, `claimed_by = agent_id`, and `claim_token` matches. The method SHALL return `True` when a row was updated and `False` when no row matched (lost lease, stale token, or row already terminal). The worker SHALL invoke this method every 30 seconds while the Hermes subprocess is running. The system SHALL NOT block on any database lock for longer than the heartbeat update.
 
 #### Scenario: Heartbeat updates extend the lease
 
@@ -126,20 +126,20 @@ The system SHALL expose `ResearchJobService.heartbeat(run_id, agent_id, claim_to
 - **GIVEN** a run currently `claimed_by = W-2`
 - **WHEN** worker `W-1` (which used to own the row but lost it) calls `heartbeat(run_id, 'W-1', stale_claim_token, 900)`
 - **THEN** no columns are updated on that row
-- **AND** the method returns without error
+- **AND** the method returns `False`
 
 #### Scenario: Matching agent id with stale claim token cannot extend a lease
 
 - **GIVEN** a run currently `claimed_by = W-1` with `claim_token = token-new`
 - **WHEN** a stale worker with the same agent id calls `heartbeat(run_id, 'W-1', token-old, 900)`
 - **THEN** no columns are updated on that row
-- **AND** the method returns without error
+- **AND** the method returns `False`
 
 ### Requirement: Research runs follow a strict state machine
 
 The system SHALL model research run lifecycle with statuses `queued`, `running`, `completed`, `failed`. Transitions: `queued → running → (completed | failed)`. The `running` state SHALL NOT be skipped. A run that enters `failed` SHALL carry a non-empty `last_error`. A run that enters `completed` SHALL have `finished_at` set and `last_error` null. Once a run reaches `completed` or `failed`, no column except `heartbeat_at` (briefly, by a stale worker) may change.
 
-Terminal transitions SHALL require `status='running'` plus the current `claimed_by` and `claim_token`. A worker whose lease was reclaimed SHALL NOT be able to mark the old run completed or failed, even if it later receives a valid Hermes result.
+Terminal transitions SHALL require `status='running'` plus the current `claimed_by` and `claim_token`. A worker whose lease was reclaimed SHALL NOT be able to mark the old run completed or failed, even if it later receives a valid Hermes result. The token-fenced service methods (`mark_run_completed`, `mark_run_failed`, `complete_run_with_results`) SHALL raise `StaleClaimError` when the WHERE clause matches zero rows, so the executor can branch on a typed exception rather than inspecting return values.
 
 #### Scenario: Successful run reaches completed
 
@@ -168,9 +168,18 @@ Terminal transitions SHALL require `status='running'` plus the current `claimed_
 - **AND** the run's lease expired and worker `W-2` recovered it as `failed`
 - **AND** worker `W-2` claimed a new retry row with `claim_token = token-new`
 - **WHEN** worker `W-1` later calls `mark_run_completed(run_id, 'W-1', token-old)`
-- **THEN** no terminal transition is written
+- **THEN** the call raises `StaleClaimError`
+- **AND** no terminal transition is written
 - **AND** the expired row remains `failed`
 - **AND** the retry row remains owned by `W-2`
+
+#### Scenario: Executor swallows StaleClaimError without raising
+
+- **GIVEN** a run whose lease was reclaimed by another worker during Hermes execution
+- **WHEN** the original executor finishes Hermes and calls `complete_run_with_results(...)`
+- **THEN** the service raises `StaleClaimError`
+- **AND** the executor catches it, logs a WARNING naming the run id and the lost claim_token, and returns without calling `mark_run_failed`
+- **AND** the original executor process exits its current iteration without writing any further DB state for the lost run
 
 ### Requirement: Failed runs may be retried up to max_attempts via chained rows
 
@@ -312,7 +321,7 @@ The system SHALL NOT mirror Hermes profile contents (`SOUL.md`, `config.yaml`, s
 
 ### Requirement: Research runs record the profile used at execution time
 
-Every `research_runs` row SHALL carry a `profile_name_used` text column. The column SHALL be written once when the runner resolves the binding and invokes Hermes, and SHALL NOT be updated thereafter. A subsequent change to `hermes_profile_bindings` SHALL NOT modify any historical `research_runs.profile_name_used`.
+Every `research_runs` row SHALL carry a `profile_name_used` text column. The column SHALL be written once when the runner resolves the binding for an execution attempt, and SHALL NOT be updated thereafter. The write happens before the Hermes subprocess starts and is preserved even when the attempt subsequently loses its lease — the value records "the profile this row's executor selected", not "the profile Hermes actually ran with". A subsequent change to `hermes_profile_bindings` SHALL NOT modify any historical `research_runs.profile_name_used`. Takeover (handled via expired-lease recovery + a new retry row) never overwrites this column because each retry row is a fresh `research_runs` insert.
 
 #### Scenario: Profile used is captured per run
 
