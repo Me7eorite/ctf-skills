@@ -14,11 +14,11 @@
 
 ## 2. Domain DTOs and validators
 
-- [ ] 2.1 Create `src/domain/research.py` with `@dataclass(frozen=True)` DTOs: `ChallengeCategory(code, display_name, description)`, `AgentRole(code, display_name, description)`, `HermesProfileBinding(role, profile_name, description, status, last_used_at, last_used_run_id)`, `GenerationRequest` (with `category: str`, `seed_urls: tuple[str, ...]`), `ResearchRun` (with `claim_token: UUID | None`, `profile_name_used: str | None`), `ResearchSource`, `ResearchFinding`, plus enums `GenerationRequestStatus`, `ResearchRunStatus`, `ResearchFindingKind`, `BindingStatus = ("enabled", "disabled")`, and the allowed `DIFFICULTY_LABELS = ("easy","medium","hard","expert")`. Do NOT hardcode the category or role sets — the lookup tables are the source of truth, queried at runtime.
-- [ ] 2.2 Add `validate_distribution(target_count, distribution)` raising a typed `ResearchValidationError` when sum mismatches or labels are unknown; message names the mismatch.
-- [ ] 2.3 Add `validate_category(category, allowed_codes)` raising `ResearchValidationError` when `category` is empty/None or not in `allowed_codes`; message lists the allowed set. `allowed_codes` is passed in by the caller (repository), which has just queried `challenge_categories`.
-- [ ] 2.4 Add `validate_finding(kind, source_ids)` raising `ResearchValidationError` when `source_ids` is empty or contains duplicates; message names the rule violated.
-- [ ] 2.5 Add `tests/app/test_research_domain.py` covering valid distribution, mismatch sum, unknown difficulty label, valid category, unknown category, empty category, finding-without-source, finding-with-duplicate-sources.
+- [x] 2.1 Create `src/domain/research.py` with `@dataclass(frozen=True)` DTOs: `ChallengeCategory(code, display_name, description)`, `AgentRole(code, display_name, description)`, `HermesProfileBinding(role, profile_name, description, status, last_used_at, last_used_run_id)`, `GenerationRequest` (with `category: str`, `seed_urls: tuple[str, ...]`), `ResearchRun` (with `claim_token: UUID | None`, `profile_name_used: str | None`), `ResearchSource`, `ResearchFinding`, plus enums `GenerationRequestStatus`, `ResearchRunStatus`, `ResearchFindingKind`, `BindingStatus = ("enabled", "disabled")`, and the allowed `DIFFICULTY_LABELS = ("easy","medium","hard","expert")`. Do NOT hardcode the category or role sets — the lookup tables are the source of truth, queried at runtime.
+- [x] 2.2 Add `validate_distribution(target_count, distribution)` raising a typed `ResearchValidationError` when sum mismatches or labels are unknown; message names the mismatch.
+- [x] 2.3 Add `validate_category(category, allowed_codes)` raising `ResearchValidationError` when `category` is empty/None or not in `allowed_codes`; message lists the allowed set. `allowed_codes` is passed in by the caller (repository), which has just queried `challenge_categories`.
+- [x] 2.4 Add `validate_finding(kind, source_ids)` raising `ResearchValidationError` when `source_ids` is empty or contains duplicates; message names the rule violated.
+- [x] 2.5 Add `tests/app/test_research_domain.py` covering valid distribution, mismatch sum, unknown difficulty label, valid category, unknown category, empty category, finding-without-source, finding-with-duplicate-sources.
 
 ## 3. Persistence models
 
