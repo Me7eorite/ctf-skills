@@ -1,9 +1,8 @@
-"""Hermes Research Agent invocation.
+"""Hermes Research Agent 调用封装。
 
-Thin wrapper over `hermes.process.invoke_capture` that resolves the Hermes
-binary, injects `-p <profile_name>` into the argv before `chat`, applies the
-legacy custom-provider compatibility shim, and forwards a `cancel_event` so
-the upstream executor can terminate Hermes when its claim lease is lost.
+这是 `hermes.process.invoke_capture` 的轻量封装：负责解析 Hermes 命令、
+在 `chat` 前注入 `-p <profile_name>`、应用旧版 custom provider 兼容逻辑，
+并透传 `cancel_event`，让上层执行器在租约丢失时终止 Hermes。
 """
 
 from __future__ import annotations
@@ -26,38 +25,41 @@ def invoke_research_agent(
     paths: ProjectPaths,
     cancel_event: threading.Event | None = None,
 ) -> HermesProcessResult:
-    """Run the Hermes Research Agent under `profile_name`, capturing stdout."""
-    arguments = _build_arguments(profile_name)
-    environment = os.environ.copy()
-    if paths.hermes_home.exists() and not environment.get("HERMES_HOME"):
-        environment["HERMES_HOME"] = str(paths.hermes_home)
-    if hermes_process.apply_legacy_custom_provider(paths.hermes_home, environment):
+    """使用指定 profile 运行 Hermes Research Agent，并捕获 stdout。"""
+    # 中文注释：组装 Hermes Research Agent 的命令和环境，再委托通用捕获执行器运行。
+    hermes_arguments = _build_arguments(profile_name)
+    environment_map = os.environ.copy()
+    if paths.hermes_home.exists() and not environment_map.get("HERMES_HOME"):
+        environment_map["HERMES_HOME"] = str(paths.hermes_home)
+    if hermes_process.apply_legacy_custom_provider(paths.hermes_home, environment_map):
         hermes_process.remove_conflicting_custom_pool(paths.hermes_home)
-        query_index = arguments.index("-q") if "-q" in arguments else len(arguments)
-        arguments[query_index:query_index] = ["--provider", "custom"]
+        query_flag_index = (
+            hermes_arguments.index("-q") if "-q" in hermes_arguments else len(hermes_arguments)
+        )
+        hermes_arguments[query_flag_index:query_flag_index] = ["--provider", "custom"]
 
     return invoke_capture(
         prompt,
-        arguments=arguments,
+        arguments=hermes_arguments,
         log_path=log_path,
         cwd=paths.root,
-        environment=environment,
+        environment=environment_map,
         timeout=timeout,
         cancel_event=cancel_event,
     )
 
 
 def _build_arguments(profile_name: str) -> list[str]:
-    """Inject `-p <profile_name>` immediately before `chat` in the base argv.
+    """把 `-p <profile_name>` 注入到基础命令里的 `chat` 子命令之前。
 
-    Works for `hermes chat ...`, `uvx --from hermes-agent hermes chat ...`,
-    and `HERMES_CMD`-overridden variants — all of which contain `chat` as a
-    subcommand. If no `chat` token is present, fall back to inserting after
-    the binary so Hermes still sees `-p` as an early option.
+    兼容 `hermes chat ...`、`uvx --from hermes-agent hermes chat ...`，
+    以及通过 `HERMES_CMD` 覆盖的命令。若命令里没有 `chat`，则退回到
+    二进制名之后插入，尽量让 Hermes 尽早看到 profile 参数。
     """
-    base = hermes_process.hermes_arguments()
+    # 中文注释：在 Hermes 子命令 `chat` 前插入 profile 参数，兼容 uvx 包装命令。
+    base_arguments = hermes_process.hermes_arguments()
     try:
-        index = base.index("chat")
+        chat_index = base_arguments.index("chat")
     except ValueError:
-        index = 1 if base else 0
-    return [*base[:index], "-p", profile_name, *base[index:]]
+        chat_index = 1 if base_arguments else 0
+    return [*base_arguments[:chat_index], "-p", profile_name, *base_arguments[chat_index:]]

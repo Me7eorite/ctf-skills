@@ -1,9 +1,8 @@
-"""Reusable Hermes subprocess primitives.
+"""可复用的 Hermes 子进程基础能力。
 
-Shared between the shard-execution path (`hermes.runner.HermesRunner`) and
-the research path (`hermes.research` added in Section 7). Decoupled from
-`ProjectPaths` — callers prepare their own `arguments`, `cwd`, `environment`,
-and `log_path` and pass them in.
+分片执行路径（`hermes.runner.HermesRunner`）和 research 路径（第 7 节新增的
+`hermes.research`）共用这里的子进程逻辑。这里不依赖 `ProjectPaths`，
+调用方负责准备 `arguments`、`cwd`、`environment` 和 `log_path`。
 """
 
 from __future__ import annotations
@@ -26,7 +25,7 @@ HERMES_TIMEOUT_RETURNCODE = 124
 
 @dataclass(frozen=True)
 class HermesProcessResult:
-    """Outcome of `invoke_capture` — return code, captured stdout, cancel flag."""
+    """`invoke_capture` 的执行结果：返回码、捕获的 stdout、是否被取消。"""
 
     returncode: int
     stdout: str
@@ -34,7 +33,7 @@ class HermesProcessResult:
 
 
 def hermes_arguments() -> list[str]:
-    """Locate the Hermes binary and build the base argv (without prompt)."""
+    """定位 Hermes 可执行文件，并构造不含 prompt 的基础 argv。"""
     command = os.environ.get("HERMES_CMD")
     if command:
         return shlex.split(command)
@@ -59,10 +58,10 @@ def hermes_arguments() -> list[str]:
 def apply_legacy_custom_provider(
     hermes_home: Path, environment: dict[str, str]
 ) -> bool:
-    """Translate a legacy `model.provider=custom` config into env vars.
+    """把旧版 `model.provider=custom` 配置转换成环境变量。
 
-    Mutates `environment` in place. Returns True when the legacy config was
-    applied so the caller can also inject `--provider custom` into argv.
+    会原地修改 `environment`。当旧版配置被应用时返回 True，调用方据此把
+    `--provider custom` 注入 argv。
     """
     config = hermes_home / "config.yaml"
     try:
@@ -91,7 +90,7 @@ def apply_legacy_custom_provider(
 
 
 def remove_conflicting_custom_pool(hermes_home: Path) -> bool:
-    """Strip `custom:*` entries from `auth.json`'s credential pool."""
+    """从 `auth.json` 的 credential pool 中移除 `custom:*` 条目。"""
     auth_path = hermes_home / "auth.json"
     try:
         payload = json.loads(auth_path.read_text(encoding="utf-8"))
@@ -124,11 +123,10 @@ def invoke(
     environment: dict[str, str],
     timeout: int,
 ) -> int:
-    """Run Hermes with `prompt` appended as the last argv, log everything.
+    """把 `prompt` 作为最后一个 argv 运行 Hermes，并记录完整日志。
 
-    Behavior-preserving counterpart of the old `invoke_hermes`. Returns the
-    subprocess return code; stdout/stderr go straight to `log_path`. Used by
-    the shard-execution pipeline.
+    这是旧版 `invoke_hermes` 的等价抽取版本。函数返回子进程返回码；
+    stdout/stderr 会直接写入 `log_path`。分片执行流水线会调用它。
     """
     log_path.parent.mkdir(parents=True, exist_ok=True)
     full_arguments = [*arguments, prompt]
@@ -158,8 +156,7 @@ def invoke(
     return process.returncode
 
 
-# Only these env vars are mirrored into the capture log header — secrets like
-# `CUSTOM_API_KEY` are deliberately omitted.
+# 中文注释：只有这些环境变量会写入捕获日志头，`CUSTOM_API_KEY` 等密钥会被刻意省略。
 _LOGGED_ENV_KEYS = ("HERMES_HOME", "HERMES_CMD", "HERMES_PROFILE", "CUSTOM_BASE_URL")
 
 
@@ -173,14 +170,12 @@ def invoke_capture(
     timeout: int,
     cancel_event: threading.Event | None = None,
 ) -> HermesProcessResult:
-    """Run Hermes capturing stdout into memory AND mirroring it to `log_path`.
+    """运行 Hermes，同时把 stdout 捕获到内存并镜像写入 `log_path`。
 
-    Used by the Research Agent: it parses Hermes' JSON output and must be
-    able to terminate the subprocess when its claim lease is lost (signalled
-    via `cancel_event`). The log file contains the full command, an env
-    summary, the stderr stream, and the captured stdout wrapped in
-    `--- stdout ---` ... `--- end stdout ---` fences so a failure can be
-    diagnosed without re-running Hermes.
+    Research Agent 会解析 Hermes 的 JSON 输出，并且在租约丢失时需要通过
+    `cancel_event` 终止子进程。日志文件包含完整命令、环境摘要、stderr，
+    以及用 `--- stdout ---` 到 `--- end stdout ---` 包裹的 stdout，
+    方便无需重跑 Hermes 就能诊断失败。
     """
     log_path.parent.mkdir(parents=True, exist_ok=True)
     full_arguments = [*arguments, prompt]
@@ -278,21 +273,21 @@ def invoke_capture(
 
 
 def profile_exists(profile_name: str) -> bool:
-    """Return True iff `hermes profile show <profile_name>` exits cleanly.
+    """当 `hermes profile show <profile_name>` 成功退出时返回 True。
 
-    Used by the `challenge-factory profile bind` subcommand to validate the
-    profile before persisting a binding. Treats any startup failure (binary
-    missing, timeout) as "does not exist" so callers see a single bool.
+    供 `challenge-factory profile bind` 在持久化绑定前校验 profile。
+    启动失败、二进制缺失、超时都统一视为不存在，让调用方只处理布尔结果。
     """
-    base = hermes_arguments()
+    # 中文注释：复用 Hermes 基础命令，改写为 profile show，用布尔值统一表达检查结果。
+    base_arguments = hermes_arguments()
     try:
-        index = base.index("chat")
+        chat_index = base_arguments.index("chat")
     except ValueError:
-        index = 1 if base else 0
-    arguments = [*base[:index], "profile", "show", profile_name]
+        chat_index = 1 if base_arguments else 0
+    profile_arguments = [*base_arguments[:chat_index], "profile", "show", profile_name]
     try:
-        process = subprocess.run(
-            arguments,
+        profile_process = subprocess.run(
+            profile_arguments,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=10,
@@ -300,11 +295,11 @@ def profile_exists(profile_name: str) -> bool:
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
-    return process.returncode == 0
+    return profile_process.returncode == 0
 
 
 def _terminate(process: "subprocess.Popen[str]") -> None:
-    """Best-effort terminate: SIGTERM, wait 5s, then SIGKILL."""
+    """尽力终止子进程：先 SIGTERM，等待 5 秒后再 SIGKILL。"""
     try:
         process.terminate()
     except ProcessLookupError:

@@ -128,6 +128,36 @@ class ResearchJobService:
             )
             return result.rowcount == 1
 
+    def set_profile_name_used(
+        self,
+        run_id: UUID,
+        agent_id: str,
+        claim_token: UUID,
+        profile_name: str,
+    ) -> dto.ResearchRun:
+        """记录本次运行实际使用的 Hermes profile。"""
+        if not profile_name:
+            raise ResearchValidationError("profile_name is required")
+        with transaction(factory=self.repository_factory) as session:
+            run = self._get_owned_running_run(session, run_id, agent_id, claim_token)
+            run.profile_name_used = profile_name
+            session.flush()
+            return _run_dto(run)
+
+    def mark_run_started(
+        self,
+        run_id: UUID,
+        agent_id: str,
+        claim_token: UUID,
+    ) -> dto.ResearchRun:
+        """记录 Hermes 子进程开始执行的时间。"""
+        with transaction(factory=self.repository_factory) as session:
+            run = self._get_owned_running_run(session, run_id, agent_id, claim_token)
+            if run.started_at is None:
+                run.started_at = _utcnow()
+            session.flush()
+            return _run_dto(run)
+
     def mark_run_completed(
         self,
         run_id: UUID,
@@ -331,8 +361,7 @@ def _finding_source_ids(finding: Mapping[str, Any], source_ids: Sequence[UUID]) 
     if not has_indices:
         raise ResearchValidationError("finding must include source_indices or source_ids")
     indices = finding["source_indices"]
-    # Use list/tuple explicitly: `str` satisfies Sequence and would otherwise
-    # iterate as single characters, producing a confusing error downstream.
+    # 中文注释：显式要求 list/tuple，避免字符串按字符迭代导致错误信息难以理解。
     if not isinstance(indices, (list, tuple)):
         raise ResearchValidationError(
             f"source_indices must be a list or tuple, got {type(indices).__name__}"

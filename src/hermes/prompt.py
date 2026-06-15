@@ -1,4 +1,4 @@
-"""Hermes prompt rendering."""
+"""Hermes 提示词渲染。"""
 
 from __future__ import annotations
 
@@ -15,37 +15,38 @@ RESEARCH_PROMPT_TEMPLATE_PATH = (
 )
 
 
-def _render_resume_plan_section(plan: ShardResumePlan | None) -> str:
-    if plan is None or not plan.challenges:
+def _render_resume_plan_section(resume_plan: ShardResumePlan | None) -> str:
+    # 中文注释：把断点续跑计划整理成提示词片段，帮助 Agent 判断每道题的下一步。
+    if resume_plan is None or not resume_plan.challenges:
         return (
             "No prior progress events for this shard; treat every challenge as a "
             "first-time run and start each one at stage `design`."
         )
-    lines: list[str] = []
-    for challenge in plan.challenges:
+    section_lines: list[str] = []
+    for challenge in resume_plan.challenges:
         if challenge.lookup_status == "missing_challenge":
-            lines.append(
+            section_lines.append(
                 f"- {challenge.challenge_id}: directory not found; "
                 "start at `design` and create the challenge."
             )
             continue
         if challenge.lookup_status == "ambiguous_challenge":
-            lines.append(
+            section_lines.append(
                 f"- {challenge.challenge_id}: multiple matching directories; "
                 "the runner will report validate/failed. Skip authoring."
             )
             continue
-        skip_repr = (
+        skipped_stage_text = (
             ", ".join(challenge.skipped_stages)
             if challenge.skipped_stages
             else "(none)"
         )
-        next_stage = challenge.first_pending_stage or "(all stages already complete)"
-        lines.append(
-            f"- {challenge.challenge_id}: skip_stages={skip_repr}; "
-            f"next_stage={next_stage}"
+        next_stage_name = challenge.first_pending_stage or "(all stages already complete)"
+        section_lines.append(
+            f"- {challenge.challenge_id}: skip_stages={skipped_stage_text}; "
+            f"next_stage={next_stage_name}"
         )
-    return "\n".join(lines)
+    return "\n".join(section_lines)
 
 
 def render_prompt(
@@ -57,10 +58,11 @@ def render_prompt(
     original_shard_name: str | None = None,
     resume_plan: ShardResumePlan | None = None,
 ) -> str:
-    prompt = paths.prompt_template.read_text(encoding="utf-8")
-    cli_script = Path(__file__).resolve().parents[1] / "cli.py"
-    progress_shard = original_shard_name or shard.name
-    replacements = {
+    # 中文注释：读取分片执行模板，并替换路径、worker、进度命令等运行上下文。
+    prompt_text = paths.prompt_template.read_text(encoding="utf-8")
+    cli_script_path = Path(__file__).resolve().parents[1] / "cli.py"
+    progress_shard_name = original_shard_name or shard.name
+    replacement_map = {
         "{shard_path}": str(shard.resolve()),
         "{challenge_dir}": str(paths.challenges.resolve()),
         "{report_path}": str(report.resolve()),
@@ -68,38 +70,42 @@ def render_prompt(
         "{design_skill}": str(paths.design_skill.resolve()),
         "{design_references}": str(paths.design_references.resolve()),
         "{worker}": worker,
-        "{shard_name}": progress_shard,
+        "{shard_name}": progress_shard_name,
         "{progress_command}": (
-            f'"{sys.executable}" "{cli_script}" progress '
-            f'--shard "{progress_shard}" --worker "{worker}"'
+            f'"{sys.executable}" "{cli_script_path}" progress '
+            f'--shard "{progress_shard_name}" --worker "{worker}"'
         ),
         "{resume_plan}": _render_resume_plan_section(resume_plan),
     }
-    for placeholder, value in replacements.items():
-        prompt = prompt.replace(placeholder, value)
-    return prompt
+    for placeholder, rendered_value in replacement_map.items():
+        prompt_text = prompt_text.replace(placeholder, rendered_value)
+    return prompt_text
 
 
 def _render_seed_urls(seed_urls: tuple[str, ...]) -> str:
+    # 中文注释：把持久化的种子 URL 渲染成列表；为空时给出明确占位说明。
     if not seed_urls:
         return "  (no seed URLs provided)"
     return "\n".join(f"  - {url}" for url in seed_urls)
 
 
-def _render_difficulty_distribution(distribution) -> str:
-    if not distribution:
+def _render_difficulty_distribution(difficulty_distribution) -> str:
+    # 中文注释：把难度分布映射压缩成易读的一行文本，方便 Agent 快速理解目标配比。
+    if not difficulty_distribution:
         return "(unspecified)"
-    return ", ".join(f"{label}={count}" for label, count in distribution.items())
+    return ", ".join(f"{label}={count}" for label, count in difficulty_distribution.items())
 
 
-def _render_runtime_constraints(constraints) -> str:
-    if not constraints:
+def _render_runtime_constraints(runtime_constraints) -> str:
+    # 中文注释：运行约束以稳定 JSON 字符串输出，避免字典顺序导致提示词抖动。
+    if not runtime_constraints:
         return "{}"
-    return json.dumps(dict(constraints), ensure_ascii=False, sort_keys=True)
+    return json.dumps(dict(runtime_constraints), ensure_ascii=False, sort_keys=True)
 
 
 def _render_worked_example(category: str) -> str:
-    sample = {
+    # 中文注释：生成一个随 category 变化的示例，证明提示词不硬编码初始分类集合。
+    example_payload = {
         "sources": [
             {
                 "url": "https://example.com/reference-1",
@@ -117,20 +123,20 @@ def _render_worked_example(category: str) -> str:
             }
         ],
     }
-    return json.dumps(sample, indent=2, ensure_ascii=False)
+    return json.dumps(example_payload, indent=2, ensure_ascii=False)
 
 
 def render_research_prompt(generation_request: GenerationRequest) -> str:
-    """Render `prompts/research_prompt.md` for one generation request.
+    """为单个 generation request 渲染 `prompts/research_prompt.md`。
 
-    The category is rendered at the top of the prompt body so the Agent reads
-    it before anything else. Seed URLs come from `generation_request.seed_urls`
-    (persisted at submission time) — never from ephemeral CLI state.
+    category 会出现在提示词正文顶部，保证 Agent 在其他信息之前先读到范围约束。
+    seed URLs 来自提交时持久化的 `generation_request.seed_urls`，不依赖 CLI 临时状态。
     """
-    template = RESEARCH_PROMPT_TEMPLATE_PATH.read_text(encoding="utf-8")
-    category = generation_request.category
-    replacements = {
-        "{category}": category,
+    # 中文注释：从已持久化的 generation_request 渲染 Research Agent 的完整提示词。
+    prompt_template = RESEARCH_PROMPT_TEMPLATE_PATH.read_text(encoding="utf-8")
+    category_code = generation_request.category
+    replacement_map = {
+        "{category}": category_code,
         "{topic}": generation_request.topic,
         "{target_count}": str(generation_request.target_count),
         "{difficulty_distribution}": _render_difficulty_distribution(
@@ -140,8 +146,8 @@ def render_research_prompt(generation_request: GenerationRequest) -> str:
             generation_request.runtime_constraints
         ),
         "{seed_urls}": _render_seed_urls(generation_request.seed_urls),
-        "{worked_example}": _render_worked_example(category),
+        "{worked_example}": _render_worked_example(category_code),
     }
-    for placeholder, value in replacements.items():
-        template = template.replace(placeholder, value)
-    return template
+    for placeholder, rendered_value in replacement_map.items():
+        prompt_template = prompt_template.replace(placeholder, rendered_value)
+    return prompt_template

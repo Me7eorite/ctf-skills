@@ -1,16 +1,12 @@
-"""Render-time tests for the Hermes Research Agent prompt.
+"""Hermes Research Agent 提示词渲染测试。
 
-Asserts that `prompts/research_prompt.md` is rendered with the category
-declared up front, the persisted seed URLs, the JSON output contract, the
-source-index constraint phrase, the category-scope rule, and a worked
-example that names the rendered category. Parametrized over `web`, `re`,
-and a fresh dynamic category `crypto` to prove the prompt does NOT
-hardcode the seeded trio.
+验证 `prompts/research_prompt.md` 渲染后包含靠前的 category、持久化 seed URLs、
+JSON 输出合同、source_indices 约束、category 范围规则，以及带当前 category 的示例。
+测试覆盖 `web`、`re` 和动态 category `crypto`，证明提示词没有硬编码初始三类。
 """
 
 from __future__ import annotations
 
-import re
 import unittest
 from datetime import datetime, timezone
 from types import MappingProxyType
@@ -49,27 +45,23 @@ def _make_request(
 
 class RenderResearchPromptTests(unittest.TestCase):
     def _common_assertions(self, prompt: str, category: str) -> None:
-        # Category must appear prominently — within the first ~600 chars
-        # (the "Category" section near the top), not only inside the JSON
-        # spec further down.
+        # 中文注释：category 必须出现在前 600 个字符内，而不是只藏在后面的 JSON 规范里。
         head = prompt[:600]
         self.assertIn(f"`{category}`", head)
 
-        # JSON output contract terms
+        # 中文注释：确认提示词包含 JSON 输出合同的核心字段。
         self.assertIn("sources", prompt)
         self.assertIn("findings", prompt)
         self.assertIn("source_indices", prompt)
 
-        # Source-index constraint phrase: each integer is a 0-based index
-        # into sources[] and the list must be non-empty.
+        # 中文注释：确认 source_indices 明确要求非空，并且使用 0-based 索引。
         self.assertRegex(prompt, r"length\s*≥\s*1|non-empty")
         self.assertIn("0-based", prompt)
 
-        # Category-scope rule
+        # 中文注释：确认提示词要求拒绝跨 category 材料。
         self.assertIn("Refuse cross-category material", prompt)
 
-        # Worked example mentions the rendered category and a non-empty
-        # source_indices.
+        # 中文注释：确认示例使用当前 category，并给出非空 source_indices。
         self.assertIn(f"Sample technique within {category}", prompt)
         self.assertRegex(prompt, r'"source_indices":\s*\[\s*0\s*\]')
 
@@ -96,9 +88,7 @@ class RenderResearchPromptTests(unittest.TestCase):
         self.assertIn("GLIBC ROP gadget chains", prompt)
 
     def test_renders_dynamic_category_not_hardcoded(self):
-        # `crypto` is NOT in the seeded trio (web/pwn/re). If the prompt
-        # were hardcoded against that trio, this rendering would either
-        # crash, miss the category, or substitute a wrong worked example.
+        # 中文注释：crypto 不在初始三类中，用它验证提示词不会硬编码 web/pwn/re。
         request = _make_request(
             "crypto",
             topic="Padding oracle on AES-CBC",
@@ -110,7 +100,7 @@ class RenderResearchPromptTests(unittest.TestCase):
         self.assertIn("Padding oracle on AES-CBC", prompt)
         self.assertIn("https://example.com/po-aes", prompt)
 
-        # And no leakage of the seeded category codes into this prompt.
+        # 中文注释：动态 category 的提示词里不应泄漏初始 category 代码。
         self.assertNotIn("`web`", prompt)
         self.assertNotIn("`pwn`", prompt)
         self.assertNotIn("`re`", prompt)
@@ -128,7 +118,7 @@ class RenderResearchPromptTests(unittest.TestCase):
         )
         prompt = render_research_prompt(request)
 
-        # JSON object literal appears somewhere in the prompt body.
+        # 中文注释：运行约束应以 JSON 对象文本形式出现在提示词正文中。
         self.assertRegex(prompt, r'"runtime":\s*"node"')
         self.assertRegex(prompt, r'"framework":\s*"Express"')
 
