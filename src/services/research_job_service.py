@@ -175,10 +175,10 @@ class ResearchJobService:
             for source in sources:
                 saved = repo.add_source(
                     run_id,
-                    url=str(source["url"]),
-                    title=str(source["title"]),
-                    summary=str(source["summary"]),
-                    content_hash=str(source["content_hash"]),
+                    url=_required_str(source, "url"),
+                    title=_required_str(source, "title"),
+                    summary=_required_str(source, "summary"),
+                    content_hash=_required_str(source, "content_hash"),
                     fetched_at=_coerce_datetime(source.get("fetched_at")),
                     raw_text_path=_optional_str(source.get("raw_text_path")),
                 )
@@ -188,9 +188,9 @@ class ResearchJobService:
                 finding_source_ids = _finding_source_ids(finding, source_ids)
                 repo.create_finding(
                     run_id,
-                    kind=str(finding["kind"]),
-                    label=str(finding["label"]),
-                    summary=str(finding["summary"]),
+                    kind=_required_str(finding, "kind"),
+                    label=_required_str(finding, "label"),
+                    summary=_required_str(finding, "summary"),
                     source_ids=finding_source_ids,
                 )
 
@@ -301,18 +301,45 @@ def _coerce_datetime(value: Any) -> datetime:
 def _optional_str(value: Any) -> str | None:
     if value is None:
         return None
-    return str(value)
+    if not isinstance(value, str):
+        raise ResearchValidationError(
+            f"expected string or None, got {type(value).__name__}"
+        )
+    return value
+
+
+def _required_str(payload: Mapping[str, Any], field: str) -> str:
+    if field not in payload:
+        raise ResearchValidationError(f"missing required field {field!r}")
+    value = payload[field]
+    if not isinstance(value, str) or not value:
+        raise ResearchValidationError(
+            f"field {field!r} must be a non-empty string, got {value!r}"
+        )
+    return value
 
 
 def _finding_source_ids(finding: Mapping[str, Any], source_ids: Sequence[UUID]) -> list[UUID]:
-    if "source_ids" in finding:
+    has_ids = "source_ids" in finding
+    has_indices = "source_indices" in finding
+    if has_ids and has_indices:
+        raise ResearchValidationError(
+            "finding must include either source_ids or source_indices, not both"
+        )
+    if has_ids:
         return list(finding["source_ids"])
-    indices = finding.get("source_indices")
-    if not isinstance(indices, Sequence):
+    if not has_indices:
         raise ResearchValidationError("finding must include source_indices or source_ids")
+    indices = finding["source_indices"]
+    # Use list/tuple explicitly: `str` satisfies Sequence and would otherwise
+    # iterate as single characters, producing a confusing error downstream.
+    if not isinstance(indices, (list, tuple)):
+        raise ResearchValidationError(
+            f"source_indices must be a list or tuple, got {type(indices).__name__}"
+        )
     resolved: list[UUID] = []
     for index in indices:
-        if not isinstance(index, int):
+        if not isinstance(index, int) or isinstance(index, bool):
             raise ResearchValidationError(f"source_indices must contain integers, got {index!r}")
         try:
             resolved.append(source_ids[index])

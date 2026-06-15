@@ -36,6 +36,18 @@ def session_factory() -> SessionFactory:
         yield SessionFactory(engine)
     finally:
         engine.dispose()
+        # Leave the test DB clean so the next test module's fixtures see
+        # an empty schema. Without this, pytest-randomly or running this
+        # file before test_alembic_migrations.py would leave 8 stale
+        # application tables behind, breaking the baseline-only assertion
+        # in that test. check=False so a partial failure during the test
+        # module does not mask the original error.
+        subprocess.run(
+            ["uv", "run", "alembic", "downgrade", "base"],
+            cwd=ROOT,
+            env=env,
+            check=False,
+        )
 
 
 @pytest.fixture(autouse=True)
@@ -386,3 +398,91 @@ def test_attempt_greater_than_max_attempts_is_rejected(session_factory: SessionF
 
     with pytest.raises(ResearchAttemptError):
         service.mark_run_failed(claimed.id, "w1", claimed.claim_token, "tampered")
+
+
+def test_complete_run_with_results_rejects_malformed_payloads(session_factory: SessionFactory):
+    """Defensive validation in complete_run_with_results: empty strings,
+    None values where strings are required, malformed source_indices
+    types, and mutually exclusive source_ids+source_indices are all
+    rejected before any DB write.
+    """
+    service = ResearchJobService(session_factory)
+    _, run = service.submit_request("web", "edge-cases", 1, {"easy": 1})
+    claimed = service.claim_next_run("w1", 60)
+    assert claimed is not None
+
+    base_kwargs = dict(
+        run_id=claimed.id,
+        agent_id="w1",
+        claim_token=claimed.claim_token,
+        binding_role="research",
+        log_path="/tmp/x.log",
+    )
+
+    # (1) source url is None -> rejected (no "None" string stored)
+    with pytest.raises(ResearchValidationError):
+        service.complete_run_with_results(
+            sources=[{"url": None, "title": "t", "summary": "s", "content_hash": "h"}],
+            findings=[],
+            **base_kwargs,
+        )
+
+    # (2) source missing required field
+    with pytest.raises(ResearchValidationError):
+        service.complete_run_with_results(
+            sources=[{"url": "https://x", "title": "t", "summary": "s"}],  # no content_hash
+            findings=[],
+            **base_kwargs,
+        )
+
+    # (3) source field empty string
+    with pytest.raises(ResearchValidationError):
+        service.complete_run_with_results(
+            sources=[{"url": "", "title": "t", "summary": "s", "content_hash": "h"}],
+            findings=[],
+            **base_kwargs,
+        )
+
+    # (4) finding source_indices is a string, NOT a list (str is a Sequence!)
+    with pytest.raises(ResearchValidationError):
+        service.complete_run_with_results(
+            sources=[
+                {"url": "https://x", "title": "t", "summary": "s", "content_hash": "h"}
+            ],
+            findings=[
+                {
+                    "kind": "technique",
+                    "label": "l",
+                    "summary": "s",
+                    "source_indices": "0",
+                }
+            ],
+            **base_kwargs,
+        )
+
+    # (5) finding has both source_ids and source_indices (ambiguous)
+    with pytest.raises(ResearchValidationError):
+        service.complete_run_with_results(
+            sources=[
+                {"url": "https://x", "title": "t", "summary": "s", "content_hash": "h"}
+            ],
+            findings=[
+                {
+                    "kind": "technique",
+                    "label": "l",
+                    "summary": "s",
+                    "source_ids": [],
+                    "source_indices": [0],
+                }
+            ],
+            **base_kwargs,
+        )
+
+    # All five rejections rolled back; the claim is still ours, still running.
+    with session_factory() as session:
+        run_row = ResearchRepository(session).get_run(claimed.id)
+        assert run_row is not None
+        assert run_row.status == "running"
+        assert run_row.claim_token == claimed.claim_token
+        assert ResearchRepository(session).list_sources(claimed.id) == []
+        assert ResearchRepository(session).list_findings(claimed.id) == []
