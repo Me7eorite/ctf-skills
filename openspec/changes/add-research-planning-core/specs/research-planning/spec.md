@@ -137,7 +137,7 @@ The system SHALL expose `ResearchJobService.heartbeat(run_id, agent_id, claim_to
 
 ### Requirement: Research runs follow a strict state machine
 
-The system SHALL model research run lifecycle with statuses `queued`, `running`, `completed`, `failed`. Transitions: `queued → running → (completed | failed)`. The `running` state SHALL NOT be skipped. A run that enters `failed` SHALL carry a non-empty `last_error`. A run that enters `completed` SHALL have `finished_at` set and `last_error` null. Once a run reaches `completed` or `failed`, no column except `heartbeat_at` (briefly, by a stale worker) may change.
+The system SHALL model research run lifecycle with statuses `queued`, `running`, `completed`, `failed`. Transitions: `queued → running → (completed | failed)`. The `running` state SHALL NOT be skipped. A run that enters `failed` SHALL carry a non-empty `last_error`. A run that enters `completed` SHALL have `finished_at` set and `last_error` null. Once a run reaches `completed` or `failed`, no column SHALL change through the queue API — `heartbeat`, `mark_run_completed`, `mark_run_failed`, and `complete_run_with_results` all gate their UPDATEs on `status='running'`, so a stale write to a terminal row is structurally impossible.
 
 Terminal transitions SHALL require `status='running'` plus the current `claimed_by` and `claim_token`. A worker whose lease was reclaimed SHALL NOT be able to mark the old run completed or failed, even if it later receives a valid Hermes result. The token-fenced service methods (`mark_run_completed`, `mark_run_failed`, `complete_run_with_results`) SHALL raise `StaleClaimError` when the WHERE clause matches zero rows, so the executor can branch on a typed exception rather than inspecting return values.
 
@@ -265,7 +265,7 @@ The system SHALL NOT, during the research stage, write any file to `work/shards/
 
 #### Scenario: Research run does not touch the shard queue
 
-- **WHEN** `ResearchAgentExecutor.execute(claimed_run, agent_id, lease_seconds)` runs to completion against an empty `work/shards/pending/`
+- **WHEN** `ResearchAgentExecutor.execute(claimed_run, agent_id, lease_seconds, hermes_timeout_seconds)` runs to completion against an empty `work/shards/pending/`
 - **THEN** `work/shards/pending/` remains empty
 - **AND** `ShardQueue.list_pending()` returns the same set as before the run
 
