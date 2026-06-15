@@ -25,7 +25,7 @@ A shared PostgreSQL instance is available on the lab network. Point
 your own name and put it in the URL).
 
 ```
-DATABASE_URL=postgresql+psycopg://<user>:<password>@<dev-postgres-host>:15432/challenge_factory
+DATABASE_URL=postgresql+psycopg://<user>:<password>@<dev-postgres-host>:5432/challenge_factory
 ```
 
 The host is documented in the team's onboarding notes; the password is
@@ -80,7 +80,7 @@ green on machines without database access.
 uv run pytest
 
 # Run only the Postgres-marked tests against the dev database:
-export TEST_DATABASE_URL=postgresql+psycopg://<user>:<password>@<dev-postgres-host>:15432/challenge_factory_test
+export TEST_DATABASE_URL=postgresql+psycopg://<user>:<password>@<dev-postgres-host>:5432/challenge_factory_test
 uv run pytest -m postgres
 ```
 
