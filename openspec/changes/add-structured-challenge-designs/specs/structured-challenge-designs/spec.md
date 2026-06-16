@@ -11,7 +11,7 @@ Each `challenge_designs` row SHALL reference exactly one producing
 via `design_task_id`.
 
 `design_attempts` SHALL store: `attempt` (1-based integer unique per
-task), `status` in `{queued, running, completed, failed}`,
+task), `status` in `{running, completed, failed}`,
 `parent_attempt_id` (nullable, FK to a previous attempt for retries),
 `claimed_by`, `claim_token`, `started_at`, `finished_at`,
 `profile_name_used`, `prompt_path`, `hermes_log_path`, `last_error`,
@@ -72,8 +72,11 @@ rendered prompt SHALL include, in this order:
    "machine-readable output" section, with exactly one entry in the
    `challenges[]` array.
 
-The prompt renderer SHALL be a pure function of its inputs and SHALL
-NOT read from any other database row, file, or environment variable.
+The prompt context loader SHALL read the skill and reference files
+from repository paths. The prompt renderer itself SHALL be a pure
+function of the loaded context, design task, generation request,
+findings, and sources, and SHALL NOT read from any database row, file,
+or environment variable.
 
 #### Scenario: Same inputs render byte-identical prompt files
 
@@ -147,11 +150,14 @@ insert the default value `flag{...}` rather than reject.
 
 ### Requirement: Quality gate is checked and recorded but does not block persistence
 
-The system SHALL run the bundled `quality-gate.md` checklist against
-the validated JSON and record the boolean result as
-`challenge_designs.quality_gate_passed`. A failed quality gate SHALL
-NOT cause the attempt to be rejected; the persistence of the design
-proceeds and the operator decides whether to act on it downstream.
+The system SHALL run explicit in-code quality-gate predicates derived
+from the bundled `quality-gate.md` checklist against the validated
+JSON and record the boolean result as
+`challenge_designs.quality_gate_passed`. The Markdown checklist remains
+human-readable guidance and SHALL NOT be parsed as an executable rule
+source. A failed quality gate SHALL NOT cause the attempt to be
+rejected; the persistence of the design proceeds and the operator
+decides whether to act on it downstream.
 
 #### Scenario: Failing quality gate persists with flag set to false
 
@@ -172,10 +178,9 @@ The system SHALL transition `design_tasks.status` from
   `challenge_designs` row,
 - `failed` when the failed attempt has `attempt == max_attempts`
   (no further retries),
-- `queued` when a failed attempt has `attempt < max_attempts` and a
-  new sibling `design_attempts(status='queued',
-  parent_attempt_id=<failed>, attempt=N+1)` row is inserted in the
-  same transaction.
+- `queued` when a failed attempt has `attempt < max_attempts`, so the
+  operator can trigger a later real attempt. The failure transaction
+  SHALL NOT insert a queued placeholder attempt row.
 
 Each terminal write SHALL be gated on the `(design_attempt.id,
 claim_token)` tuple so a stale caller cannot overwrite the row.
@@ -192,14 +197,14 @@ planning layer and SHALL NOT be written by this layer.
   in two separate transactions
 - **AND** the `design_attempts` row is `completed`
 
-#### Scenario: Failed attempt below max_attempts opens a retry
+#### Scenario: Failed attempt below max_attempts reopens the task
 
 - **GIVEN** a design task whose parent request has `max_attempts = 3`
   and one prior failed attempt (`attempt = 1`)
 - **WHEN** a second attempt fails validation
-- **THEN** a third `design_attempts(status='queued', attempt=3)` row
-  is inserted in the same transaction
+- **THEN** no third attempt row is inserted in that transaction
 - **AND** the parent `design_tasks.status` is set back to `queued`
+- **AND** the next operator trigger creates `attempt = 3`
 
 #### Scenario: Failed attempt at max_attempts terminates as failed
 
@@ -231,6 +236,11 @@ The endpoint SHALL:
 The endpoint SHALL enforce a per-attempt wall-clock timeout (default
 600 seconds) and SHALL record a `failed` attempt with
 `last_error = 'timeout'` if Hermes does not return in time.
+
+The system SHALL expose prompt/log content only through a bounded
+design-artifact endpoint keyed by `design_attempts.id`. That endpoint
+SHALL serve only the stored prompt/log paths for the matching attempt
+and SHALL reject arbitrary filesystem paths and path traversal.
 
 #### Scenario: Triggering design on a non-queued task is rejected
 

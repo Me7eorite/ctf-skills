@@ -9,7 +9,7 @@
 - [ ] 1.4 Add constraints/indexes:
   - `unique(design_task_id, attempt)` on `design_attempts`
   - `attempt > 0` on `design_attempts`
-  - status check `queued|running|completed|failed` on
+  - status check `running|completed|failed` on
     `design_attempts`
   - index `(design_task_id, status)` on `design_attempts`
   - status check `draft|accepted|superseded` on `challenge_designs`
@@ -39,24 +39,28 @@
 - [ ] 2.4 Add `parse_design_output(stdout)` that strips ` ```json `
   fences and extracts the first balanced JSON object; raise typed
   errors on missing/invalid blocks.
-- [ ] 2.5 Add `run_quality_gate(payload)` that reads
+- [ ] 2.5 Add `run_quality_gate(payload)` that applies explicit
+  in-code predicates derived from
   `skills/design-challenges/references/quality-gate.md` and returns
-  `(passed: bool, notes: list[str])`.
+  `(passed: bool, notes: list[str])`; do not parse Markdown as
+  executable rules.
 - [ ] 2.6 Tests for validate / parse / quality-gate (good and bad
   inputs covering each rule).
 
 ## 3. Prompt Wrapper
 
-- [ ] 3.1 Add `build_design_prompt(design_task,
-  generation_request, findings, sources) -> str` in
-  `src/services/design_prompt.py`.
-- [ ] 3.2 Pure function: no IO, no DB, no env reads.
-- [ ] 3.3 Cap the evidence block at 20 findings (in insertion order).
-- [ ] 3.4 Route category to the correct reference file (`web-design`,
+- [ ] 3.1 Add `load_design_prompt_context(paths)` in
+  `src/services/design_prompt.py` to read `SKILL.md` and required
+  reference files.
+- [ ] 3.2 Add `build_design_prompt(context, design_task,
+  generation_request, findings, sources) -> str` in the same module.
+- [ ] 3.3 Keep `build_design_prompt` pure: no IO, no DB, no env reads.
+- [ ] 3.4 Cap the evidence block at 20 findings (in insertion order).
+- [ ] 3.5 Route category to the correct reference file (`web-design`,
   `pwn-design`, `reverse-design`, `other-categories`).
-- [ ] 3.5 Always append `spec-template.md`, `quality-gate.md`, and
+- [ ] 3.6 Always append `spec-template.md`, `quality-gate.md`, and
   (for web/pwn) `delivery-format.md` reference links.
-- [ ] 3.6 Tests:
+- [ ] 3.7 Tests:
   - byte-identical output for identical inputs
   - category routing
   - evidence cap
@@ -79,13 +83,13 @@
     'designed'`)
   - `fail_attempt(attempt_id, claim_token, log_path, last_error,
     max_attempts)` (single transaction: marks failed and either
-    inserts a queued sibling row + sets task status `queued`, or
-    sets task status `failed`)
+    sets task status `queued` for a later real retry attempt, or sets
+    task status `failed`; never inserts a queued attempt placeholder)
   - `latest_design(design_task_id, status='draft')`
 - [ ] 4.3 All writes use the supplied session, never commit themselves.
 - [ ] 4.4 Postgres tests for round-trip, partial unique constraint,
-  status-sync rules (`queued → designing → designed`, retry insert,
-  exhausted retries).
+  status-sync rules (`queued -> designing -> designed`, retry resets
+  task without inserting an attempt placeholder, exhausted retries).
 
 ## 5. Hermes Executor
 
@@ -108,27 +112,27 @@
 - [ ] 6.1 Add `ChallengeDesignService.design_for_task(
   design_task_id, caller)` in
   `src/services/challenge_design_service.py`.
-- [ ] 6.2 Step 1 — open short transaction:
-  - load task; require `status == 'queued'` else raise typed conflict
+- [ ] 6.2 Step 1 - open short transaction:
+  - select and lock task; require `status == 'queued'` else raise typed conflict
   - read latest attempt; require `attempt < max_attempts` or none
   - insert `design_attempts(status='running', attempt=N,
     claim_token=uuid4(), claimed_by=caller, profile_name_used=<resolved>)`
   - set `design_tasks.status = 'designing'`
   - commit
-- [ ] 6.3 Step 2 — render prompt to
+- [ ] 6.3 Step 2 - render prompt to
   `work/design/prompts/<attempt_id>.md`, persist `prompt_path` via
   `mark_attempt_started`.
-- [ ] 6.4 Step 3 — invoke executor with timeout from config (default
+- [ ] 6.4 Step 3 - invoke executor with timeout from config (default
   600s); capture stdout + log path.
-- [ ] 6.5 Step 4 — parse + validate + quality-gate; on success, call
+- [ ] 6.5 Step 4 - parse + validate + quality-gate; on success, call
   `complete_attempt`; on any failure call `fail_attempt`.
 - [ ] 6.6 Resolve Hermes profile via the new `design` role binding;
   fall back to `default` profile when binding missing.
 - [ ] 6.7 Service tests with a fake executor:
-  - happy path: queued → designing → designed + design row inserted
-  - schema-invalid: queued → designing → failed + retry queued (when
-    max_attempts > 1)
-  - exhausted retries: queued → designing → failed (no retry)
+  - happy path: `queued -> designing -> designed` + design row inserted
+  - schema-invalid: `queued -> designing -> queued` and one failed
+    attempt row when `max_attempts > 1`
+  - exhausted retries: `queued -> designing -> failed` (no retry)
   - timeout path
   - concurrent call returns 409 on the second caller
 
@@ -148,7 +152,8 @@
     started_at, finished_at, last_error, prompt_path, hermes_log_path)
   - `latest_design: ChallengeDesignDict | null`
 - [ ] 7.4 API tests for: success, 404, 409, validation failure,
-  retry produces second attempt, exhausted attempts returns `failed`.
+  retry resets the task to `queued`, a second operator trigger
+  produces the second attempt, exhausted attempts returns `failed`.
 
 ## 8. Dashboard
 
@@ -157,11 +162,11 @@
 - [ ] 8.2 Header: latest attempt status pill + "Design now" button
   enabled only when task status is `queued`.
 - [ ] 8.3 Attempts list: numbered rows with start/end, status,
-  link to the Hermes log via the existing log endpoint.
+  link to the Hermes log via the bounded design-artifact endpoint.
 - [ ] 8.4 Design payload: collapsible JSON tree of
   `latest_design.payload` plus quality-gate badge.
-- [ ] 8.5 No prompt body shown inline — only a "View prompt" link
-  pointing at `prompt_path` (served by the existing log endpoint).
+- [ ] 8.5 No prompt body shown inline - only a "View prompt" link
+  served by the bounded design-artifact endpoint for the attempt.
 - [ ] 8.6 Auto-refresh the panel while any attempt is `running`.
 
 ## 9. Validation
