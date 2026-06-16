@@ -70,8 +70,8 @@
 
 ## 4. Persistence
 
-- [ ] 4.1 Add SQLAlchemy models `DesignAttempt`, `ChallengeDesign`.
-- [ ] 4.2 Add `ChallengeDesignRepository` with methods:
+- [x] 4.1 Add SQLAlchemy models `DesignAttempt`, `ChallengeDesign`.
+- [x] 4.2 Add `ChallengeDesignRepository` with methods:
   - `list_attempts(design_task_id)`
   - `get_attempt(attempt_id)`
   - `latest_attempt(design_task_id)`
@@ -89,13 +89,13 @@
     sets task status `queued` for a later real retry attempt, or sets
     task status `failed`; never inserts a queued attempt placeholder)
   - `latest_design(design_task_id, status='draft')`
-- [ ] 4.3 Execution-owned status writes in `create_attempt`,
+- [x] 4.3 Execution-owned status writes in `create_attempt`,
   `complete_attempt`, and `fail_attempt` must update
   `design_tasks.status` directly inside their transaction and must not
   call the planning-side `DesignTaskRepository.set_design_task_status()`
   or its transition validator.
-- [ ] 4.4 All writes use the supplied session, never commit themselves.
-- [ ] 4.5 Postgres tests for round-trip, partial unique constraint,
+- [x] 4.4 All writes use the supplied session, never commit themselves.
+- [x] 4.5 Postgres tests for round-trip, partial unique constraint,
   status-sync rules (`queued -> designing -> designed`, retry resets
   task without inserting an attempt placeholder, exhausted retries).
 
