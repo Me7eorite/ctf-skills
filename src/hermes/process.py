@@ -230,19 +230,42 @@ def invoke_capture(
     cancelled_at: str | None = None
     timed_out = False
     deadline = time.monotonic() + timeout
-    while True:
-        if process.poll() is not None:
-            break
-        if cancel_event is not None and cancel_event.is_set():
-            cancelled = True
-            cancelled_at = datetime.now(tz=timezone.utc).isoformat()
-            _terminate(process)
-            break
-        if time.monotonic() > deadline:
-            timed_out = True
-            _terminate(process)
-            break
-        time.sleep(0.1)
+    try:
+        while True:
+            if process.poll() is not None:
+                break
+            if cancel_event is not None and cancel_event.is_set():
+                cancelled = True
+                cancelled_at = datetime.now(tz=timezone.utc).isoformat()
+                _terminate(process)
+                break
+            if time.monotonic() > deadline:
+                timed_out = True
+                _terminate(process)
+                break
+            time.sleep(0.1)
+    except BaseException:
+        # 中文注释：调用方被中断时也要清理 Hermes 子进程，避免后台进程继续占用租约窗口。
+        _terminate(process)
+        stdout_thread.join(timeout=2)
+        stderr_thread.join(timeout=2)
+        process.wait()
+        stdout = "".join(stdout_chunks)
+        stderr = "".join(stderr_chunks)
+        log_path.write_text(
+            header
+            + "\ninterrupted before completion\n"
+            + "\n--- stderr ---\n"
+            + stderr
+            + ("" if stderr.endswith("\n") or not stderr else "\n")
+            + "--- end stderr ---\n"
+            + "\n--- stdout ---\n"
+            + stdout
+            + ("" if stdout.endswith("\n") or not stdout else "\n")
+            + "--- end stdout ---\n",
+            encoding="utf-8",
+        )
+        raise
 
     stdout_thread.join(timeout=2)
     stderr_thread.join(timeout=2)

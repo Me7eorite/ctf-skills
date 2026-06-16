@@ -15,6 +15,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from hermes.process import (
     HERMES_TIMEOUT_RETURNCODE,
@@ -130,6 +131,36 @@ class InvokeCaptureTests(unittest.TestCase):
         self.assertEqual(result.stdout, "")
         log_text = self.log.read_text(encoding="utf-8")
         self.assertIn("Hermes command not found", log_text)
+
+    def test_keyboard_interrupt_terminates_subprocess_and_reraises(self):
+        # 中文注释：模拟主线程中断，确保 invoke_capture 清理子进程并把异常继续抛给 worker。
+        arguments = _python(
+            "import time",
+            "time.sleep(30)",
+        )
+        original_sleep = time.sleep
+        sleep_calls = 0
+
+        def interrupt_once(seconds):
+            nonlocal sleep_calls
+            sleep_calls += 1
+            if sleep_calls == 1:
+                raise KeyboardInterrupt
+            original_sleep(seconds)
+
+        with patch("hermes.process.time.sleep", side_effect=interrupt_once):
+            with self.assertRaises(KeyboardInterrupt):
+                invoke_capture(
+                    "noop",
+                    arguments=arguments,
+                    log_path=self.log,
+                    cwd=self.workdir,
+                    environment={},
+                    timeout=10,
+                )
+
+        log_text = self.log.read_text(encoding="utf-8")
+        self.assertIn("interrupted before completion", log_text)
 
 
 if __name__ == "__main__":  # pragma: no cover

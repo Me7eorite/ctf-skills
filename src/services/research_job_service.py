@@ -1,4 +1,4 @@
-"""Short-transaction queue operations for research runs."""
+"""research run 的短事务队列操作。"""
 
 from __future__ import annotations
 
@@ -18,15 +18,15 @@ from persistence.session import SessionFactory, transaction
 
 
 class StaleClaimError(RuntimeError):
-    """Raised when a token-fenced transition no longer owns the run."""
+    """token-fenced 状态转换不再持有 run 时抛出。"""
 
 
 class ResearchAttemptError(RuntimeError):
-    """Raised when persisted attempt state violates the retry contract."""
+    """持久化 attempt 状态违反重试合同时抛出。"""
 
 
 class ResearchJobService:
-    """Owns research queue state changes and their transaction boundaries."""
+    """负责 research queue 状态变化和事务边界。"""
 
     def __init__(self, repository_factory: SessionFactory | None = None) -> None:
         self.repository_factory = repository_factory
@@ -370,6 +370,8 @@ def _finding_source_ids(finding: Mapping[str, Any], source_ids: Sequence[UUID]) 
     for index in indices:
         if not isinstance(index, int) or isinstance(index, bool):
             raise ResearchValidationError(f"source_indices must contain integers, got {index!r}")
+        if index < 0:
+            raise ResearchValidationError(f"source index {index} is out of range")
         try:
             resolved.append(source_ids[index])
         except IndexError as exc:
