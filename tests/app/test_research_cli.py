@@ -383,5 +383,21 @@ class ResearchListTests(unittest.TestCase):
         self.assertIn("unknown category 'crypto'", stderr)
 
 
+class DatabaseUrlMissingTests(unittest.TestCase):
+    def test_list_without_database_url_prints_clean_error(self):
+        # 中文注释：DATABASE_URL 未设置时必须给出明确错误而不是 Python traceback。
+        from persistence.errors import PersistenceConfigurationError
+
+        actual_msg = "DATABASE_URL is not set; persistence requires a PostgreSQL URL."
+        with patch(
+            "persistence.session.transaction",
+            side_effect=PersistenceConfigurationError(actual_msg),
+        ):
+            code, _stdout, stderr = _capture_run(["research", "list"])
+        self.assertEqual(code, 2)
+        self.assertIn(actual_msg, stderr)
+        self.assertNotIn("Traceback", stderr)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

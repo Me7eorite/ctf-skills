@@ -250,21 +250,29 @@ def _resolve_run_timeout(cli_value: int | None) -> tuple[int, str]:
 
 def _handle_research(args: argparse.Namespace, paths: ProjectPaths) -> None:
     """Dispatch one of the six `research <subcmd>` operations."""
-    if args.research_command == "submit":
-        _research_submit(args)
-    elif args.research_command == "worker":
-        _research_worker(args, paths)
-    elif args.research_command == "wait":
-        _research_wait(args)
-    elif args.research_command == "show":
-        _research_show(args)
-    elif args.research_command == "list":
-        _research_list(args)
-    elif args.research_command == "categories":
-        _research_categories()
-    else:  # pragma: no cover — argparse rejects this earlier
-        print(f"error: unknown research command {args.research_command!r}", file=sys.stderr)
-        sys.exit(2)
+    try:
+        if args.research_command == "submit":
+            _research_submit(args)
+        elif args.research_command == "worker":
+            _research_worker(args, paths)
+        elif args.research_command == "wait":
+            _research_wait(args)
+        elif args.research_command == "show":
+            _research_show(args)
+        elif args.research_command == "list":
+            _research_list(args)
+        elif args.research_command == "categories":
+            _research_categories()
+        else:  # pragma: no cover — argparse rejects this earlier
+            print(f"error: unknown research command {args.research_command!r}", file=sys.stderr)
+            sys.exit(2)
+    except Exception as exc:  # noqa: BLE001 — translate any persistence-layer config error
+        from persistence.errors import PersistenceConfigurationError
+
+        if isinstance(exc, PersistenceConfigurationError):
+            print(f"error: {exc}", file=sys.stderr)
+            sys.exit(2)
+        raise
 
 
 def _research_submit(args: argparse.Namespace) -> None:
