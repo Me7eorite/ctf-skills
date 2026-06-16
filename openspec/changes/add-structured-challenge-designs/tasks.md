@@ -1,12 +1,12 @@
 ## 1. Schema
 
-- [ ] 1.1 Add Alembic revision `0004_design_attempts_and_designs`
+- [x] 1.1 Add Alembic revision `0004_design_attempts_and_designs`
   after `0003_design_tasks`.
-- [ ] 1.2 Add `design_attempts` with columns described in `design.md`.
-- [ ] 1.3 Add `challenge_designs` with columns described in
+- [x] 1.2 Add `design_attempts` with columns described in `design.md`.
+- [x] 1.3 Add `challenge_designs` with columns described in
   `design.md`, including `payload jsonb`, `summary`, `flag_format`,
   `validation_notes`, `quality_gate_passed bool`, `status text`.
-- [ ] 1.4 Add constraints/indexes:
+- [x] 1.4 Add constraints/indexes:
   - `unique(design_task_id, attempt)` on `design_attempts`
   - `attempt > 0` on `design_attempts`
   - status check `running|completed|failed` on
@@ -18,10 +18,10 @@
     `challenge_designs`
   - FK `design_attempt_id REFERENCES design_attempts(id)
      ON DELETE RESTRICT`
-- [ ] 1.5 Seed a new `agent_roles` row with code `design` and a
+- [x] 1.5 Seed a new `agent_roles` row with code `design` and a
   `hermes_profile_bindings(role='design',
   profile_name='default', status='enabled')` row.
-- [ ] 1.6 Down-migration drops the two tables and the seed rows;
+- [x] 1.6 Down-migration drops the two tables and the seed rows;
   do not drop `agent_roles.research` or the existing research
   binding.
 

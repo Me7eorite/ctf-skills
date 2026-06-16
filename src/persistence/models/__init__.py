@@ -1,6 +1,7 @@
 """Public SQLAlchemy model exports."""
 
 from persistence.models.base import Base
+from persistence.models.challenge_designs import ChallengeDesign, DesignAttempt
 from persistence.models.design_tasks import DesignTask
 from persistence.models.research import (
     AgentRole,
@@ -17,6 +18,8 @@ __all__ = [
     "AgentRole",
     "Base",
     "ChallengeCategory",
+    "ChallengeDesign",
+    "DesignAttempt",
     "DesignTask",
     "GenerationRequest",
     "HermesProfileBinding",
