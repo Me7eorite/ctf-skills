@@ -1,0 +1,64 @@
+.metrics-grid {
+  display: grid;
+  gap: var(--space-md);
+  grid-template-columns: repeat(4, 1fr);
+}
+
+@media (max-width: 1023px) {
+  .metrics-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 639px) {
+  .metrics-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.metrics-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  padding: var(--space-lg);
+}
+
+.metrics-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--font-sm);
+  font-weight: 500;
+  color: var(--ink-500);
+}
+
+.metrics-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--ink-400);
+}
+
+.metrics-value {
+  font-size: var(--font-xl);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin-top: var(--space-lg);
+}
+
+.metrics-note {
+  font-size: var(--font-sm);
+  color: var(--ink-500);
+  margin-top: var(--space-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metrics-card-highlight {
+  border-color: var(--brand-500);
+}
+
+.metrics-card-highlight .metrics-value {
+  color: var(--brand-600);
+}

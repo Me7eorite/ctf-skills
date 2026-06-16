@@ -1,0 +1,127 @@
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px var(--space-lg);
+  border-bottom: 1px solid var(--line);
+}
+
+.card-body {
+  padding: var(--space-lg);
+}
+
+.card-title {
+  font-size: var(--font-md);
+  font-weight: 600;
+  color: var(--ink-900);
+}
+
+.card-subtitle {
+  font-size: var(--font-sm);
+  color: var(--ink-500);
+  margin-top: 2px;
+}
+
+.card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-md) var(--space-lg);
+  border-top: 1px solid var(--ink-100);
+  background: var(--ink-50);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+
+/* === Card Section (step-based form sections) === */
+.card-section {
+  padding: var(--space-lg);
+}
+
+.card-section + .card-section {
+  border-top: 1px solid var(--ink-100);
+}
+
+/* === Step Header === */
+.card-section-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: var(--space-lg);
+}
+
+.card-section-number {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-md);
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  font-weight: 600;
+  flex-shrink: 0;
+  background: var(--ink-100);
+  color: var(--ink-500);
+}
+
+.card-section-number.info { background: var(--brand-100); color: var(--brand-600); }
+.card-section-number.warn { background: var(--accent-amber-light); color: var(--accent-amber); }
+.card-section-number.ok   { background: var(--accent-green-light); color: var(--accent-green); }
+
+.card-section-label {
+  font-size: var(--font-md);
+  font-weight: 600;
+  color: var(--ink-900);
+}
+
+.card-section-sub {
+  font-size: var(--font-sm);
+  color: var(--ink-400);
+  margin-top: 2px;
+}
+
+/* === Compact & Interactive === */
+.card-compact {
+  padding: var(--space-md);
+}
+
+.card-interactive {
+  transition: box-shadow var(--transition-normal) ease,
+              border-color var(--transition-normal) ease;
+}
+
+.card-interactive:hover {
+  box-shadow: var(--shadow-elevated);
+  border-color: var(--line-strong);
+}
+
+.card-grid {
+  display: grid;
+  gap: var(--space-md);
+}
+
+.card-grid-2 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.card-grid-4 {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+@media (max-width: 1023px) {
+  .card-grid-4 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 639px) {
+  .card-grid-2,
+  .card-grid-4 {
+    grid-template-columns: 1fr;
+  }
+}

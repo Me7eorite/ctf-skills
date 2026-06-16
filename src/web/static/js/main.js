@@ -3,24 +3,41 @@ import { api, postJson } from "./api.js";
 import { showToast } from "./ui/toast.js";
 import { registerViews, setView, jumpTo } from "./router.js";
 
-import * as overview   from "./views/overview.js";
-import * as progress   from "./views/progress.js";
-import * as seeds      from "./views/seeds.js";
+import * as overview from "./views/overview.js";
+import * as progress from "./views/progress.js";
 import * as challenges from "./views/challenges.js";
-import * as shards     from "./views/shards.js";
-import * as logs       from "./views/logs.js";
-import * as research   from "./views/research.js";
+import * as shards from "./views/shards.js";
+import * as logs from "./views/logs.js";
+import * as seeds from "./views/seeds.js";
+import * as researchSubmit from "./views/research-submit.js";
+import * as researchRequests from "./views/research-requests.js";
+import * as researchRuns from "./views/research-runs.js";
+import * as researchLogs from "./views/research-logs.js";
 
-const views = { overview, progress, seeds, challenges, shards, logs, research };
+const views = {
+  overview,
+  progress,
+  challenges,
+  shards,
+  logs,
+  seeds,
+  "research-submit": researchSubmit,
+  "research-requests": researchRequests,
+  "research-runs": researchRuns,
+  "research-logs": researchLogs,
+};
 
 registerViews({
-  overview:   overview.render,
-  progress:   progress.render,
-  seeds:      seeds.render,
+  overview: overview.render,
+  progress: progress.render,
   challenges: challenges.render,
-  shards:     shards.render,
-  logs:       logs.render,
-  research:   research.render,
+  shards: shards.render,
+  logs: logs.render,
+  seeds: seeds.render,
+  "research-submit": researchSubmit.render,
+  "research-requests": researchRequests.render,
+  "research-runs": researchRuns.render,
+  "research-logs": researchLogs.render,
 });
 
 async function loadState() {
@@ -50,14 +67,22 @@ function renderProcess() {
   const proc = appState.data.process || {};
   const label = document.querySelector("#workerLabel");
   const bar = document.querySelector("#workerBar");
-  if (label) label.textContent = proc.message || "空闲";
-  if (bar) bar.className = `h-full transition-all ${proc.running ? "w-full animate-pulse bg-amber-500" : "w-0 bg-emerald-500"}`;
+  const dot = document.querySelector("#workerDot");
+
+  if (proc.running) {
+    if (label) { label.textContent = proc.message || "运行中"; label.className = "sidebar-worker-state running"; }
+    if (bar) { bar.className = "sidebar-worker-bar-fill running"; }
+    if (dot) { dot.className = "sidebar-worker-dot running"; }
+  } else {
+    if (label) { label.textContent = "空闲"; label.className = "sidebar-worker-state idle"; }
+    if (bar) { bar.className = "sidebar-worker-bar-fill idle"; }
+    if (dot) { dot.className = "sidebar-worker-dot idle"; }
+  }
   ["workerButton", "validateButton", "mobileWorkerButton", "mobileValidateButton"].forEach((id) => {
     const button = document.querySelector(`#${id}`);
     if (!button) return;
     button.disabled = !!proc.running;
-    button.classList.toggle("opacity-50", !!proc.running);
-    button.classList.toggle("pointer-events-none", !!proc.running);
+    button.classList.toggle("disabled", !!proc.running);
   });
 }
 
@@ -72,11 +97,12 @@ async function runAction(kind) {
   }
 }
 
-// ---- Global event wiring (header + sidebar) ----
-
 document.addEventListener("click", (event) => {
-  const nav = event.target.closest(".nav-item");
-  if (nav) { setView(nav.dataset.target); return; }
+  const nav = event.target.closest(".sidebar-nav-item");
+  if (nav) {
+    setView(nav.dataset.target);
+    return;
+  }
   const jump = event.target.closest("[data-jump]");
   if (jump) jumpTo(jump.dataset.jump);
 });
@@ -90,14 +116,13 @@ document.querySelector("#validateButton")?.addEventListener("click", () => runAc
 document.querySelector("#mobileWorkerButton")?.addEventListener("click", () => runAction("worker"));
 document.querySelector("#mobileValidateButton")?.addEventListener("click", () => runAction("validate"));
 
-// ---- View-local event binding ----
-
 challenges.bind?.(loadState);
 seeds.bind?.(loadState);
 shards.bind?.(loadState);
 logs.bind?.(loadState);
-research.bind?.(loadState);
-
-// ---- Boot ----
+researchSubmit.bind?.(loadState);
+researchRequests.bind?.(loadState);
+researchRuns.bind?.(loadState);
+researchLogs.bind?.(loadState);
 
 loadState();

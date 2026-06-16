@@ -1,0 +1,130 @@
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-md) var(--space-lg);
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+.filter-bar-standalone {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-md);
+}
+
+.filter-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-md);
+  color: var(--ink-500);
+}
+
+.filter-select {
+  height: 32px;
+  min-width: 120px;
+  padding: 0 var(--space-sm);
+  font-size: var(--font-md);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  outline: none;
+}
+
+.filter-select:focus {
+  border-color: var(--ink-700);
+}
+
+.filter-input {
+  height: 32px;
+  width: 180px;
+  padding: 0 var(--space-sm);
+  font-size: var(--font-md);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  outline: none;
+}
+
+.filter-input:focus {
+  border-color: var(--ink-700);
+}
+
+.filter-input-icon {
+  position: relative;
+}
+
+.filter-input-icon .filter-icon {
+  position: absolute;
+  left: var(--space-sm);
+  top: 50%;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 16px;
+  color: var(--ink-400);
+  pointer-events: none;
+}
+
+.filter-input-icon .filter-input {
+  padding-left: 32px;
+}
+
+.filter-clear {
+  margin-left: auto;
+  font-size: var(--font-md);
+  color: var(--ink-500);
+  cursor: pointer;
+}
+
+.filter-clear:hover {
+  color: var(--ink-900);
+}
+
+.filter-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
+.filter-button {
+  height: 36px;
+  padding: 0 var(--space-md);
+  border-radius: var(--radius-md);
+  font-size: var(--font-md);
+  font-weight: 500;
+  transition: background-color var(--transition-fast) ease,
+              color var(--transition-fast) ease,
+              border-color var(--transition-fast) ease;
+}
+
+.filter-button.active {
+  background: var(--ink-900);
+  color: white;
+  border: none;
+}
+
+.filter-button:not(.active) {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--ink-700);
+}
+
+.filter-button:not(.active):hover {
+  background: var(--ink-50);
+}
+
+.filter-bar-responsive {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+@media (min-width: 640px) {
+  .filter-bar-responsive {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+}

@@ -1,0 +1,168 @@
+.input,
+.select,
+.textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  font-size: var(--font-md);
+  padding: 0 12px;
+  height: var(--input-h);
+  outline: none;
+  color: var(--ink-900);
+  transition: border-color var(--transition-fast) ease,
+              box-shadow var(--transition-fast) ease;
+}
+
+.input::placeholder,
+.select::placeholder,
+.textarea::placeholder {
+  color: var(--ink-400);
+}
+
+.input:hover,
+.select:hover,
+.textarea:hover {
+  border-color: var(--ink-300);
+}
+
+.input:focus,
+.select:focus,
+.textarea:focus {
+  border-color: var(--brand-500);
+  box-shadow: var(--shadow-focus);
+}
+
+.input:disabled,
+.select:disabled,
+.textarea:disabled {
+  background: var(--ink-50);
+  color: var(--ink-400);
+  cursor: not-allowed;
+}
+
+.textarea {
+  padding: 10px 12px;
+  height: auto;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.input-mono {
+  font-family: var(--font-mono-family);
+  font-size: var(--font-mono);
+}
+
+/* === Input Group === */
+.input-group {
+  display: grid;
+  gap: var(--space-md);
+}
+
+.input-group-2 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.input-group-4 {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+@media (max-width: 1023px) {
+  .input-group-4 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 639px) {
+  .input-group-2,
+  .input-group-4 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* === Label === */
+.label {
+  display: block;
+  font-size: var(--font-sm);
+  font-weight: 500;
+  color: var(--ink-700);
+  margin-bottom: 6px;
+}
+
+.label-hint {
+  font-size: var(--font-xs);
+  font-weight: 400;
+  color: var(--ink-400);
+  margin-top: var(--space-xs);
+  display: block;
+}
+
+/* === Select caret fix === */
+.select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 36px;
+}
+
+/* === Input Icon === */
+.input-icon-wrapper {
+  position: relative;
+}
+
+.input-icon-left {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 16px;
+  color: var(--ink-400);
+  pointer-events: none;
+}
+
+.input-icon-left + .input,
+.input-icon-left + .select {
+  padding-left: 36px;
+}
+
+/* === Error State === */
+.input-error {
+  border-color: var(--accent-red);
+  background: var(--accent-red-50);
+}
+
+.input-error:focus {
+  border-color: var(--accent-red);
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.12);
+}
+
+.input-error-message {
+  font-size: var(--font-sm);
+  color: var(--accent-red);
+  margin-top: var(--space-xs);
+}
+
+/* === Checkbox === */
+.checkbox-wrapper {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.checkbox {
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  background: var(--surface);
+  cursor: pointer;
+  accent-color: var(--brand-600);
+}
+
+.checkbox:disabled {
+  background: var(--ink-100);
+  cursor: not-allowed;
+}

@@ -1,0 +1,106 @@
+:root {
+  /* === 背景 === */
+  --canvas: #f6f8fb;
+  --surface: #FFFFFF;
+
+  /* === 边框 === */
+  --line: #e5e7eb;
+  --line-strong: #d1d5db;
+
+  /* === 文字层级 (Tailwind Gray) === */
+  --ink-50: #f9fafb;
+  --ink-100: #f3f4f6;
+  --ink-200: #e5e7eb;
+  --ink-300: #d1d5db;
+  --ink-400: #9ca3af;
+  --ink-500: #6b7280;
+  --ink-600: #4b5563;
+  --ink-700: #374151;
+  --ink-800: #1f2937;
+  --ink-900: #111827;
+
+  /* === 品牌蓝 === */
+  --brand-50: #eff6ff;
+  --brand-100: #dbeafe;
+  --brand-200: #bfdbfe;
+  --brand-500: #3b82f6;
+  --brand-600: #2563eb;
+  --brand-700: #1d4ed8;
+
+  /* === 语义色 === */
+  --accent-red: #ef4444;
+  --accent-red-50: #fef2f2;
+  --accent-red-100: #fee2e2;
+  --accent-red-200: #fecaca;
+  --accent-red-500: #ef4444;
+  --accent-red-light: #fef2f2;
+  --accent-red-border: #fecaca;
+  --accent-green: #22c55e;
+  --accent-green-50: #f0fdf4;
+  --accent-green-100: #dcfce7;
+  --accent-green-500: #22c55e;
+  --accent-green-light: #f0fdf4;
+  --accent-amber: #f59e0b;
+  --accent-amber-50: #fffbeb;
+  --accent-amber-light: #fffbeb;
+  --accent-amber-border: #fde68a;
+
+  /* === 分类色 === */
+  --cat-web: #0ea5e9;
+  --cat-web-bg: #ecfeff;
+  --cat-web-text: #164e63;
+  --cat-pwn: #f43f5e;
+  --cat-pwn-bg: #fff1f2;
+  --cat-pwn-text: #9f1239;
+  --cat-re: #f59e0b;
+  --cat-re-bg: #fef3c7;
+  --cat-re-text: #92400e;
+
+  /* === 间距 === */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+
+  /* === 尺寸 === */
+  --sidebar-w: 240px;
+  --header-h: 64px;
+  --mobile-header-h: 56px;
+  --input-h: 40px;
+  --button-h: 40px;
+  --button-sm-h: 36px;
+
+  /* === 圆角 === */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 999px;
+
+  /* === 字号 === */
+  --font-xs: 11px;
+  --font-sm: 12px;
+  --font-md: 13px;
+  --font-lg: 15px;
+  --font-xl: 24px;
+  --font-mono: 12px;
+
+  /* === 阴影 === */
+  --shadow-card: 0 1px 3px rgba(15, 23, 42, 0.04), 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-elevated: 0 8px 24px rgba(15, 23, 42, 0.04), 0 0 1px rgba(15, 23, 42, 0.06);
+  --shadow-focus: 0 0 0 3px rgba(37, 99, 235, 0.12);
+  --shadow-toast: 0 12px 28px rgba(15, 23, 42, 0.08), 0 1px 3px rgba(15, 23, 42, 0.06);
+
+  /* === 过渡 === */
+  --transition-fast: 120ms;
+  --transition-normal: 200ms;
+
+  /* === 字体族 === */
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono-family: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+
+  /* === 右侧面板 === */
+  --right-panel-w: 320px;
+}

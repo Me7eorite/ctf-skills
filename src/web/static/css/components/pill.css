@@ -1,0 +1,73 @@
+.pill {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 var(--space-sm);
+  border-radius: var(--radius-full);
+  font-size: var(--font-sm);
+  font-weight: 500;
+  color: var(--ink-700);
+  background: var(--ink-100);
+  border: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+.pill-sm {
+  height: 18px;
+  font-size: var(--font-xs);
+  padding: 0 6px;
+}
+
+.pill-lg {
+  height: 26px;
+  font-size: var(--font-md);
+  padding: 0 10px;
+}
+
+.pill-cat-web {
+  color: var(--cat-web-text);
+  background: var(--cat-web-bg);
+}
+
+.pill-cat-pwn {
+  color: var(--cat-pwn-text);
+  background: var(--cat-pwn-bg);
+}
+
+.pill-cat-re {
+  color: var(--cat-re-text);
+  background: var(--cat-re-bg);
+}
+
+.pill-status-ok {
+  color: #047857;
+  background: #D1FAE5;
+}
+
+.pill-status-warn {
+  color: #B45309;
+  background: #FEF3C7;
+}
+
+.pill-status-err {
+  color: #B91C1C;
+  background: #FEE2E2;
+}
+
+.pill-status-idle {
+  color: var(--ink-700);
+  background: var(--ink-100);
+}
+
+.pill-with-dot {
+  padding-left: 6px;
+}
+
+.pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  margin-right: 6px;
+  background: currentColor;
+  opacity: 0.8;
+}

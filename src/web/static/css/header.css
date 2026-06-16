@@ -1,0 +1,127 @@
+.header-left {
+  flex: 1;
+  min-width: 0;
+}
+
+.header-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: var(--font-sm);
+  color: var(--ink-400);
+}
+
+.header-breadcrumb-separator {
+  width: 12px;
+  height: 12px;
+  color: var(--ink-300);
+}
+
+.header-breadcrumb-current {
+  color: var(--ink-600);
+  font-weight: 500;
+}
+
+.header-title {
+  font-size: var(--font-lg);
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--ink-900);
+  margin-top: 1px;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-shrink: 0;
+}
+
+.header-sync-time {
+  display: none;
+  font-size: var(--font-sm);
+  color: var(--ink-400);
+}
+
+@media (min-width: 640px) {
+  .header-sync-time {
+    display: inline;
+  }
+}
+
+.header-icon-button {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-500);
+  transition: background-color var(--transition-fast) ease,
+              border-color var(--transition-fast) ease;
+}
+
+.header-icon-button:hover {
+  background: var(--ink-50);
+  border-color: var(--line-strong);
+}
+
+.header-icon-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.header-action-button {
+  display: none;
+  height: var(--button-sm-h);
+  align-items: center;
+  gap: var(--space-sm);
+  border-radius: var(--radius-md);
+  padding: 0 var(--space-md);
+  font-size: var(--font-md);
+  font-weight: 500;
+  transition: background-color var(--transition-fast) ease,
+              opacity var(--transition-fast) ease,
+              box-shadow var(--transition-fast) ease;
+}
+
+@media (min-width: 640px) {
+  .header-action-button {
+    display: flex;
+  }
+}
+
+.header-action-button.secondary {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-700);
+}
+
+.header-action-button.secondary:hover {
+  background: var(--ink-50);
+  border-color: var(--line-strong);
+}
+
+.header-action-button.primary {
+  background: var(--brand-600);
+  color: white;
+  box-shadow: 0 1px 2px rgba(37, 99, 235, 0.2);
+}
+
+.header-action-button.primary:hover {
+  background: var(--brand-700);
+  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.3);
+}
+
+.header-action-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.header-action-button.disabled,
+.header-action-button[disabled] {
+  opacity: 0.5;
+  pointer-events: none;
+  box-shadow: none;
+}

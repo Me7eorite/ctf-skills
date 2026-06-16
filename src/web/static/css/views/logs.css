@@ -1,0 +1,133 @@
+.log-panel {
+  display: grid;
+  gap: var(--space-md);
+}
+
+@media (min-width: 1024px) {
+  .log-panel {
+    grid-template-columns: 280px 1fr;
+  }
+}
+
+.log-list {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.log-list-header {
+  padding: var(--space-md);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--font-md);
+  font-weight: 600;
+}
+
+.log-list-body {
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+.log-item {
+  display: block;
+  width: 100%;
+  padding: var(--space-md);
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+  transition: background-color var(--transition-fast) ease;
+}
+
+.log-item:last-child {
+  border-bottom: none;
+}
+
+.log-item:hover {
+  background: var(--ink-50);
+}
+
+.log-item.active {
+  background: var(--ink-50);
+}
+
+.log-item-name {
+  font-family: var(--font-mono-family);
+  font-size: var(--font-md);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log-item-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--font-sm);
+  color: var(--ink-500);
+  margin-top: 2px;
+}
+
+.log-viewer {
+  background: #1A1D21;
+  border: 1px solid #2A2E33;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  min-width: 0;
+}
+
+.log-viewer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 44px;
+  padding: var(--space-md);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: var(--font-sm);
+  color: #9CA3AF;
+}
+
+.log-viewer-title {
+  font-family: var(--font-mono-family);
+}
+
+.log-viewer-copy {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-md);
+  color: #9CA3AF;
+  cursor: pointer;
+  transition: background-color var(--transition-fast) ease,
+              color var(--transition-fast) ease;
+}
+
+.log-viewer-copy:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+}
+
+.log-content {
+  height: 520px;
+  overflow-y: auto;
+  padding: var(--space-md);
+  font-family: var(--font-mono-family);
+  font-size: var(--font-mono);
+  line-height: 1.5;
+  color: #E5E5E5;
+  white-space: pre-wrap;
+}
+
+.log-content::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.log-content::-webkit-scrollbar-thumb {
+  background: #3A3F47;
+  border-radius: var(--radius-full);
+}
+
+.log-content::-webkit-scrollbar-track {
+  background: transparent;
+}

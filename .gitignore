@@ -1,3 +1,5 @@
+.gitignore
+
 # Claude Code
 .claude/worktrees
 
@@ -34,3 +36,7 @@ work/
 # OS
 .DS_Store
 Thumbs.db
+
+#workbuddy
+
+.workbuddy/

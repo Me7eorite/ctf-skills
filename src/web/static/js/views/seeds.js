@@ -11,55 +11,54 @@ const SEED_CORE_FIELDS = new Set([
 
 function seedFormHtml() {
   return `
-    <form id="seedForm" class="card p-5">
-      <div class="mb-5 flex items-start justify-between gap-3">
+    <form id="seedForm" class="card card-body">
+      <div style="display: flex; align-items: start; justify-content: space-between; gap: var(--space-md); margin-bottom: var(--space-lg);">
         <div>
           <div id="seedFormTitle" class="card-title">新增题目种子</div>
           <p class="card-subtitle">保存 matrix 兼容的生成参数，不会立即启动 Worker。</p>
         </div>
-        <button id="resetSeedButton" type="button" class="text-[11px] font-medium text-ink-500 hover:text-ink-900">清空</button>
+        <button id="resetSeedButton" type="button" style="font-size: var(--font-sm); font-weight: 500; color: var(--ink-500);">清空</button>
       </div>
-      <div class="grid gap-4 sm:grid-cols-2">
+      <div class="input-group input-group-2">
         <label class="label">题目 ID
-          <input id="seedId" required placeholder="web-0001" class="input mt-1.5">
+          <input id="seedId" required placeholder="web-0001" class="input" style="margin-top: 6px;">
         </label>
         <label class="label">题目名称
-          <input id="seedTitle" required placeholder="Login Leak" class="input mt-1.5">
+          <input id="seedTitle" required placeholder="Login Leak" class="input" style="margin-top: 6px;">
         </label>
         <label class="label">类别
-          <select id="seedCategory" class="select mt-1.5">
+          <select id="seedCategory" class="select" style="margin-top: 6px;">
             <option value="web">Web</option><option value="pwn">Pwn</option><option value="re">Reverse</option>
           </select>
         </label>
         <label class="label">难度
-          <select id="seedDifficulty" class="select mt-1.5">
+          <select id="seedDifficulty" class="select" style="margin-top: 6px;">
             <option value="easy">Easy</option><option value="medium">Medium</option>
             <option value="hard">Hard</option><option value="expert">Expert</option>
           </select>
         </label>
         <label class="label">分值
-          <input id="seedPoints" required type="number" min="1" value="100" class="input mt-1.5">
+          <input id="seedPoints" required type="number" min="1" value="100" class="input" style="margin-top: 6px;">
         </label>
         <label class="label">服务端口
-          <input id="seedPort" type="number" min="1" max="65535" value="8080" class="input mt-1.5">
+          <input id="seedPort" type="number" min="1" max="65535" value="8080" class="input" style="margin-top: 6px;">
         </label>
-        <label class="label sm:col-span-2">模板
-          <input id="seedTemplate" placeholder="web-sqli-basic" class="input mt-1.5">
+        <label class="label" style="grid-column: span 2;">模板
+          <input id="seedTemplate" placeholder="web-sqli-basic" class="input" style="margin-top: 6px;">
         </label>
-        <label class="label sm:col-span-2">核心考点
-          <input id="seedTechnique" required placeholder="SQL injection login bypass" class="input mt-1.5">
+        <label class="label" style="grid-column: span 2;">核心考点
+          <input id="seedTechnique" required placeholder="SQL injection login bypass" class="input" style="margin-top: 6px;">
         </label>
-        <label class="label sm:col-span-2">学习目标
-          <textarea id="seedObjective" required rows="3" placeholder="玩家完成题目后应掌握什么" class="textarea mt-1.5"></textarea>
+        <label class="label" style="grid-column: span 2;">学习目标
+          <textarea id="seedObjective" required rows="3" placeholder="玩家完成题目后应掌握什么" class="textarea" style="margin-top: 6px;"></textarea>
         </label>
-        <label class="label sm:col-span-2">高级 JSON
-          <textarea id="seedAdvanced" rows="7" placeholder='{"runtime":"node","framework":"Express","deployment":"http/docker"}'
-            class="textarea mt-1.5 font-mono text-[12px] leading-5"></textarea>
-          <span class="mt-1 block font-normal text-ink-400 text-[10px]">用于 runtime、framework、compiler、mitigations、target_platform 等类别特有字段。</span>
+        <label class="label" style="grid-column: span 2;">高级 JSON
+          <textarea id="seedAdvanced" rows="7" placeholder='{"runtime":"node","framework":"Express","deployment":"http/docker"}' class="textarea input-mono" style="margin-top: 6px;"></textarea>
+          <span class="label-hint">用于 runtime、framework、compiler、mitigations、target_platform 等类别特有字段。</span>
         </label>
       </div>
-      <button type="submit" class="mt-5 flex h-10 w-full items-center justify-center gap-2 rounded-md bg-ink-900 px-4 text-[13px] font-medium text-white transition-colors hover:bg-ink-800">
-        <i data-lucide="save" class="size-4"></i>保存种子
+      <button type="submit" class="btn btn-primary btn-block" style="margin-top: var(--space-lg);">
+        <i data-lucide="save"></i>保存种子
       </button>
     </form>
   `;
@@ -67,28 +66,28 @@ function seedFormHtml() {
 
 function seedItemHtml(seed) {
   return `
-    <article class="card p-4">
-      <div class="flex flex-wrap items-start justify-between gap-3">
-        <div class="min-w-0 flex-1">
-          <div class="flex flex-wrap items-center gap-2">
-            <span class="font-mono text-[13px] font-semibold">${escapeHtml(seed.id)}</span>
+    <article class="card card-compact">
+      <div style="display: flex; flex-wrap: wrap; align-items: start; justify-content: space-between; gap: var(--space-md);">
+        <div style="flex: 1; min-width: 0;">
+          <div style="display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-sm);">
+            <span style="font-size: var(--font-md); font-weight: 600; font-family: var(--font-mono-family);">${escapeHtml(seed.id)}</span>
             ${softPill(categoryLabel(seed.category), categoryTone(seed.category))}
             ${softPill(seed.difficulty, "text-ink-700 bg-ink-100")}
           </div>
-          <h3 class="mt-3 text-[13px] font-medium">${escapeHtml(seed.title)}</h3>
-          <p class="mt-1 text-[12px] leading-5 text-ink-500">${escapeHtml(seed.learning_objective)}</p>
-          <div class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-ink-500">
+          <h3 style="font-size: var(--font-md); font-weight: 500; margin-top: var(--space-md);">${escapeHtml(seed.title)}</h3>
+          <p style="font-size: var(--font-md); line-height: 1.5; color: var(--ink-500); margin-top: 2px;">${escapeHtml(seed.learning_objective)}</p>
+          <div style="display: flex; flex-wrap: wrap; gap: var(--space-md); margin-top: var(--space-md); font-size: var(--font-sm); color: var(--ink-500);">
             <span>${escapeHtml(seed.primary_technique)}</span>
-            <span class="tabular-nums">${escapeHtml(seed.points)} 分</span>
-            ${seed.port ? `<span class="tabular-nums">端口 ${escapeHtml(seed.port)}</span>` : ""}
+            <span>${escapeHtml(seed.points)} 分</span>
+            ${seed.port ? `<span>端口 ${escapeHtml(seed.port)}</span>` : ""}
           </div>
         </div>
-        <div class="flex gap-2">
-          <button class="edit-seed grid size-9 place-items-center rounded-md border border-line text-ink-700 hover:bg-ink-50" data-id="${escapeHtml(seed.id)}" title="编辑">
-            <i data-lucide="pencil" class="size-4"></i>
+        <div class="btn-group">
+          <button class="btn btn-icon btn-secondary edit-seed" data-id="${escapeHtml(seed.id)}" title="编辑">
+            <i data-lucide="pencil"></i>
           </button>
-          <button class="delete-seed grid size-9 place-items-center rounded-md border border-rose-200 text-rose-600 hover:bg-rose-50" data-id="${escapeHtml(seed.id)}" title="删除">
-            <i data-lucide="trash-2" class="size-4"></i>
+          <button class="btn btn-icon" style="border-color: var(--accent-red-border); color: var(--accent-red); background: var(--accent-red-light);" data-id="${escapeHtml(seed.id)}" title="删除">
+            <i data-lucide="trash-2"></i>
           </button>
         </div>
       </div>
@@ -100,36 +99,38 @@ export function render(data) {
   const root = document.querySelector('[data-view="seeds"]');
   if (!root) return;
   const seeds = data.seeds || [];
+
   root.innerHTML = `
-    <div class="grid gap-5 xl:grid-cols-[minmax(340px,.8fr)_minmax(0,1.2fr)]">
+    <div style="display: grid; gap: var(--space-lg);">
       ${seedFormHtml()}
-      <div class="min-w-0">
-        <div class="mb-4 card p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div style="min-width: 0;">
+        <div class="card card-compact" style="margin-bottom: var(--space-md); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-md);">
           <div>
             <div class="card-title">已配置种子</div>
-            <p class="mt-1 text-[11px] text-ink-500">
-              <span class="tabular-nums">${seeds.length}</span> 个种子，保存后可生成待处理分片
+            <p style="font-size: var(--font-sm); color: var(--ink-500); margin-top: 2px;">
+              <span>${seeds.length}</span> 个种子，保存后可生成待处理分片
             </p>
           </div>
-          <div class="flex items-center gap-2">
-            <label class="text-[11px] text-ink-500 flex items-center gap-1.5">每分片
-              <input id="seedShardSize" type="number" min="1" value="5"
-                class="h-9 w-16 rounded-md border border-line-strong bg-surface px-2 text-[13px] text-ink-900 outline-none focus:border-ink-700">
+          <div class="btn-group">
+            <label style="font-size: var(--font-sm); color: var(--ink-500); display: flex; align-items: center; gap: var(--space-sm);">
+              每分片
+              <input id="seedShardSize" type="number" min="1" value="5" class="input" style="width: 64px; text-align: center;">
             </label>
-            <button id="enqueueSeedsButton" type="button"
-              class="flex h-9 items-center gap-2 rounded-md bg-emerald-600 px-3 text-[13px] font-medium text-white hover:bg-emerald-700">
-              <i data-lucide="layers-3" class="size-4"></i>生成分片
+            <button id="enqueueSeedsButton" type="button" class="btn btn-success">
+              <i data-lucide="layers-3"></i>生成分片
             </button>
           </div>
         </div>
-        <div class="space-y-3">${
-          seeds.length
+        <div style="display: flex; flex-direction: column; gap: var(--space-md);">
+          ${seeds.length
             ? seeds.map(seedItemHtml).join("")
-            : `<div class="empty">还没有种子，请先在左侧配置第一道题</div>`
-        }</div>
+            : `<div class="empty">还没有种子，请先在上方配置第一道题</div>`
+          }
+        </div>
       </div>
     </div>
   `;
+
   applyEditingForm();
   updateSeedCategoryFields();
 }
@@ -165,7 +166,7 @@ function updateSeedCategoryFields() {
   if (!cat || !port) return;
   const reverse = cat.value === "re";
   port.disabled = reverse;
-  port.classList.toggle("bg-ink-100", reverse);
+  port.style.background = reverse ? "var(--ink-100)" : "var(--surface)";
   if (reverse) port.value = "";
   else if (!port.value) port.value = cat.value === "pwn" ? 9001 : 8080;
 }
@@ -240,6 +241,7 @@ export function bind(reload) {
   document.addEventListener("submit", (event) => {
     if (event.target?.id === "seedForm") saveSeed(event, reload);
   });
+
   document.addEventListener("click", (event) => {
     if (event.target.closest("#resetSeedButton")) { resetSeedForm(); return; }
     if (event.target.closest("#enqueueSeedsButton")) { enqueueSeeds(reload); return; }
@@ -254,6 +256,7 @@ export function bind(reload) {
     const remove = event.target.closest(".delete-seed");
     if (remove) deleteSeed(remove.dataset.id, reload);
   });
+
   document.addEventListener("change", (event) => {
     if (event.target?.id === "seedCategory") updateSeedCategoryFields();
   });

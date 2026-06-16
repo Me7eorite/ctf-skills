@@ -1,0 +1,177 @@
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
+  height: var(--button-h);
+  padding: 0 var(--space-lg);
+  border-radius: var(--radius-md);
+  font-size: var(--font-md);
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  transition: background-color var(--transition-fast) ease,
+              opacity var(--transition-fast) ease,
+              box-shadow var(--transition-fast) ease;
+}
+
+.btn svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.btn-sm {
+  height: var(--button-sm-h);
+  padding: 0 var(--space-md);
+  font-size: var(--font-sm);
+}
+
+.btn-lg {
+  height: 48px;
+  padding: 0 var(--space-xl);
+  font-size: var(--font-lg);
+}
+
+.btn:disabled,
+.btn.disabled {
+  opacity: 0.5;
+  pointer-events: none;
+  cursor: not-allowed;
+}
+
+/* === Primary (Brand Blue) === */
+.btn-primary {
+  background: var(--brand-600);
+  color: white;
+  box-shadow: 0 1px 2px rgba(37, 99, 235, 0.2);
+}
+
+.btn-primary:hover {
+  background: var(--brand-700);
+  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.3);
+}
+
+.btn-primary:active {
+  background: #1d4ed8;
+  box-shadow: none;
+}
+
+.btn-primary:disabled {
+  box-shadow: none;
+}
+
+/* === Secondary === */
+.btn-secondary {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--ink-700);
+}
+
+.btn-secondary:hover {
+  background: var(--ink-50);
+  border-color: var(--line-strong);
+}
+
+.btn-secondary:disabled {
+  background: var(--surface);
+  border-color: var(--line);
+}
+
+/* === Danger === */
+.btn-danger {
+  background: var(--accent-red);
+  color: white;
+}
+
+.btn-danger:hover {
+  background: #dc2626;
+}
+
+/* === Success === */
+.btn-success {
+  background: var(--accent-green);
+  color: white;
+}
+
+.btn-success:hover {
+  background: #16a34a;
+}
+
+/* === Ghost === */
+.btn-ghost {
+  background: transparent;
+  color: var(--ink-600);
+}
+
+.btn-ghost:hover {
+  background: var(--ink-50);
+  color: var(--ink-900);
+}
+
+/* === Brand (explicit blue) === */
+.btn-brand {
+  background: var(--brand-500);
+  color: white;
+  box-shadow: 0 1px 2px rgba(59, 130, 246, 0.2);
+}
+
+.btn-brand:hover {
+  background: var(--brand-600);
+  box-shadow: 0 2px 6px rgba(59, 130, 246, 0.3);
+}
+
+/* === Icon === */
+.btn-icon {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+}
+
+.btn-icon-sm {
+  width: 32px;
+  height: 32px;
+}
+
+.btn-icon-lg {
+  width: 40px;
+  height: 40px;
+}
+
+.btn-block {
+  width: 100%;
+}
+
+.btn-group {
+  display: flex;
+  gap: var(--space-sm);
+}
+
+/* === Loading state === */
+.btn-loading {
+  position: relative;
+  color: transparent !important;
+  pointer-events: none;
+}
+
+.btn-loading::after {
+  content: '';
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-right-color: white;
+  border-radius: var(--radius-full);
+  animation: spin 0.8s linear infinite;
+}
+
+.btn-secondary.btn-loading::after {
+  border-color: var(--ink-300);
+  border-right-color: var(--ink-600);
+}
+
+.btn-primary.btn-loading::after {
+  border-color: rgba(255, 255, 255, 0.3);
+  border-right-color: white;
+}

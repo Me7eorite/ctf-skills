@@ -1,0 +1,128 @@
+.layout {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: var(--sidebar-w) 1fr;
+  grid-template-rows: 1fr;
+}
+
+@media (max-width: 1023px) {
+  .layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr auto;
+  }
+}
+
+.layout-sidebar {
+  min-height: 100vh;
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+@media (max-width: 1023px) {
+  .layout-sidebar {
+    position: relative;
+    height: auto;
+    min-height: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
+}
+
+.layout-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.layout-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  height: var(--header-h);
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line);
+  padding: 0 var(--space-lg);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+@media (max-width: 1023px) {
+  .layout-header {
+    height: var(--mobile-header-h);
+    padding: 0 var(--space-md);
+  }
+}
+
+.layout-content {
+  padding: var(--space-xl);
+  padding-bottom: 100px;
+  flex: 1;
+}
+
+@media (max-width: 1023px) {
+  .layout-content {
+    padding: var(--space-md);
+  }
+}
+
+@media (max-width: 639px) {
+  .layout-content {
+    padding: var(--space-md);
+    padding-bottom: 120px;
+  }
+}
+
+/* === 右侧面板双栏布局 === */
+.layout-content-inner {
+  display: flex;
+  gap: var(--space-xl);
+  align-items: flex-start;
+}
+
+.layout-content-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.layout-content-side {
+  width: var(--right-panel-w);
+  flex-shrink: 0;
+  display: none;
+  position: sticky;
+  top: calc(var(--header-h) + var(--space-xl));
+}
+
+@media (min-width: 1280px) {
+  .layout-content-side {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+  }
+}
+
+.layout-mobile-bar {
+  display: none;
+}
+
+@media (max-width: 639px) {
+  .layout-mobile-bar {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-sm);
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 20;
+    background: var(--surface);
+    border-top: 1px solid var(--line);
+    padding: var(--space-md);
+  }
+}

@@ -1,0 +1,51 @@
+.dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  margin-right: 6px;
+  background: var(--ink-400);
+  vertical-align: middle;
+}
+
+.dot-ok {
+  background: var(--accent-green);
+}
+
+.dot-warn {
+  background: var(--accent-amber);
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.15);
+}
+
+.dot-err {
+  background: var(--accent-red);
+}
+
+.dot-idle {
+  background: var(--ink-400);
+}
+
+.dot-lg {
+  width: 10px;
+  height: 10px;
+}
+
+.dot-sm {
+  width: 4px;
+  height: 4px;
+}
+
+.dot-animated {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.status-indicator {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--font-mono);
+  color: var(--ink-700);
+}
+
+.status-indicator .dot {
+  margin-right: 6px;
+}

@@ -1,0 +1,72 @@
+.tabs {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-lg);
+}
+
+.tabs-bar {
+  display: flex;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line);
+}
+
+.tabs-tab {
+  flex-shrink: 0;
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: 2px solid transparent;
+  font-size: var(--font-md);
+  font-weight: 500;
+  color: var(--ink-500);
+  background: transparent;
+  cursor: pointer;
+  transition: color var(--transition-fast) ease,
+              background-color var(--transition-fast) ease,
+              border-color var(--transition-fast) ease;
+}
+
+.tabs-tab:hover {
+  color: var(--ink-900);
+  background: var(--ink-50);
+}
+
+.tabs-tab.active {
+  color: var(--ink-900);
+  background: rgba(240, 240, 240, 0.5);
+  border-bottom-color: var(--ink-900);
+}
+
+.tabs-info {
+  padding: var(--space-sm) var(--space-lg);
+  font-size: var(--font-sm);
+  color: var(--ink-400);
+  font-family: var(--font-mono-family);
+  border-top: 1px solid var(--line);
+}
+
+.tabs-content {
+  display: none;
+}
+
+.tabs-content.active {
+  display: block;
+}
+
+.tabs-pills {
+  display: flex;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+  background: transparent;
+  border: none;
+}
+
+.tabs-pills .tabs-tab {
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-sm);
+  border-bottom: none;
+}
+
+.tabs-pills .tabs-tab.active {
+  background: var(--ink-900);
+  color: white;
+}
