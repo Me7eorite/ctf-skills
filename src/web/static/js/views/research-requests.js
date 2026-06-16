@@ -13,6 +13,8 @@ import { setView } from "../router.js";
 import { showRunsForRequest } from "./research-runs.js";
 
 const REQUEST_STATUSES = ["draft", "researching", "researched", "failed"];
+const ACTIVE_POLL_MS = 2000;
+const SETTLED_POLL_MS = 12000;
 
 const state = {
   requests: null,
@@ -22,6 +24,7 @@ const state = {
   worker: null,
   flags: {},
   filter: { category: "", status: "" },
+  detailPoll: { timer: null, loading: false },
 };
 
 async function ensureRequests() {
@@ -85,6 +88,76 @@ async function fetchDetail(id) {
   }
 }
 
+function isDetailViewActive() {
+  const root = document.querySelector('[data-view="research-requests"]');
+  return !!root?.classList.contains("active") && !!state.detailId;
+}
+
+function detailNeedsActivePolling() {
+  const latestStatus = state.detail?.latest_run?.status;
+  const requestStatus = state.detail?.request?.status;
+  return (
+    state.worker?.running ||
+    latestStatus === "queued" ||
+    latestStatus === "running" ||
+    requestStatus === "researching"
+  );
+}
+
+function clearDetailPoll() {
+  if (state.detailPoll.timer) {
+    window.clearTimeout(state.detailPoll.timer);
+    state.detailPoll.timer = null;
+  }
+  state.detailPoll.loading = false;
+}
+
+function scheduleDetailPoll(delay = ACTIVE_POLL_MS) {
+  if (!isDetailViewActive()) {
+    clearDetailPoll();
+    return;
+  }
+  if (document.hidden) return;
+  if (state.detailPoll.timer) window.clearTimeout(state.detailPoll.timer);
+  state.detailPoll.timer = window.setTimeout(() => {
+    pollDetail();
+  }, delay);
+}
+
+async function pollDetail() {
+  if (!isDetailViewActive()) {
+    clearDetailPoll();
+    return;
+  }
+  if (document.hidden) {
+    state.detailPoll.timer = null;
+    return;
+  }
+  if (state.detailPoll.loading) return;
+
+  state.detailPoll.timer = null;
+  state.detailPoll.loading = true;
+  try {
+    const detailId = state.detailId;
+    const [detail, worker] = await Promise.all([
+      api(`/api/research/requests/${detailId}`),
+      api("/api/research/worker/status").catch(() => ({ running: false, available: false })),
+    ]);
+    if (state.detailId !== detailId) return;
+    state.detail = detail;
+    state.worker = worker;
+    state.requests = null;
+    render(state.data);
+    window.lucide?.createIcons();
+  } catch (err) {
+    showToast(err.message, true);
+  } finally {
+    state.detailPoll.loading = false;
+    const delay = detailNeedsActivePolling() ? ACTIVE_POLL_MS : SETTLED_POLL_MS;
+    scheduleDetailPoll(delay);
+  }
+}
+
 async function forceReloadRequests() {
   state.requests = null;
   state.flags.requests = { loading: false, error: null };
@@ -96,15 +169,21 @@ async function reloadDetail() {
   if (state.detailId) await fetchDetail(state.detailId);
 }
 
+async function refreshDetail({ startPolling = false } = {}) {
+  state.worker = null;
+  state.requests = null;
+  await reloadDetail();
+  await ensureRequests();
+  await ensureWorker();
+  if (startPolling || detailNeedsActivePolling()) scheduleDetailPoll(ACTIVE_POLL_MS);
+}
+
 async function runWorkerAction(action, body = {}) {
   try {
     const result = await postJson(`/api/research/worker/${action}`, body);
     showToast(result.message || "OK");
     state.worker = result.state || null;
-    state.requests = null;
-    await reloadDetail();
-    await ensureRequests();
-    await ensureWorker();
+    await refreshDetail({ startPolling: true });
   } catch (err) {
     showToast(err.message, true);
   }
@@ -112,10 +191,14 @@ async function runWorkerAction(action, body = {}) {
 
 export function render(data) {
   state.data = data;
+  if (!state.detailId) clearDetailPoll();
   ensureRequests();
   ensureCategories();
   const root = document.querySelector('[data-view="research-requests"]');
-  if (!root) return;
+  if (!root) {
+    clearDetailPoll();
+    return;
+  }
 
   const flag = state.flags.requests || {};
   if (flag.loading && !state.requests) {
@@ -228,6 +311,9 @@ function renderDetail(root) {
         <button class="btn btn-danger btn-sm" id="detail-run-stop"${!workerRunning || !available ? " disabled" : ""}>
           <i data-lucide="pause"></i> Pause
         </button>
+        <button class="btn btn-secondary btn-sm" id="detail-refresh"${state.flags.detail?.refreshing ? " disabled" : ""}>
+          <i data-lucide="refresh-cw"></i> Refresh
+        </button>
         <button class="btn btn-secondary btn-sm" id="detail-open-runs">
           <i data-lucide="list"></i> Runs
         </button>
@@ -276,6 +362,8 @@ function renderDetail(root) {
     ${renderFindings(findings_by_kind)}
     ${renderSources(sources)}
   `;
+
+  scheduleDetailPoll(detailNeedsActivePolling() ? ACTIVE_POLL_MS : SETTLED_POLL_MS);
 }
 
 function renderRunsTable(runs) {
@@ -357,6 +445,12 @@ function renderSources(sources) {
 }
 
 export function bind() {
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && isDetailViewActive()) {
+      scheduleDetailPoll(ACTIVE_POLL_MS);
+    }
+  });
+
   document.addEventListener("click", (e) => {
     const root = document.querySelector('[data-view="research-requests"]');
     if (!root || !root.contains(e.target)) return;
@@ -364,6 +458,7 @@ export function bind() {
     if (e.target.closest("#research-back")) {
       state.detailId = null;
       state.detail = null;
+      clearDetailPoll();
       render(state.data);
       window.lucide?.createIcons();
       return;
@@ -378,6 +473,16 @@ export function bind() {
     }
     if (e.target.closest("#detail-run-stop")) {
       runWorkerAction("stop");
+      return;
+    }
+    if (e.target.closest("#detail-refresh")) {
+      state.flags.detail = { ...(state.flags.detail || {}), refreshing: true };
+      render(state.data);
+      refreshDetail({ startPolling: true }).finally(() => {
+        state.flags.detail = { ...(state.flags.detail || {}), refreshing: false };
+        render(state.data);
+        window.lucide?.createIcons();
+      });
       return;
     }
     if (e.target.closest("#detail-open-runs")) {
