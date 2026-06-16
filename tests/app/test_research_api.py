@@ -492,6 +492,47 @@ class BindingDetailEndpointTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# GET /api/research/logs
+# GET /api/research/logs/{name}
+# ---------------------------------------------------------------------------
+
+
+class ResearchLogsEndpointTests(unittest.TestCase):
+    def test_lists_research_logs_from_research_log_dir(self):
+        client = _client(SimpleNamespace())
+        try:
+            root = Path(client._temp.name)  # type: ignore[attr-defined]
+            log_dir = root / "work" / "research" / "logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            (log_dir / "web-worker.log").write_text("worker\n", encoding="utf-8")
+
+            resp = client.get("/api/research/logs")
+
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.json()
+            self.assertEqual(len(payload), 1)
+            self.assertEqual(payload[0]["name"], "web-worker.log")
+            self.assertEqual(payload[0]["size"], (log_dir / "web-worker.log").stat().st_size)
+        finally:
+            _close(client)
+
+    def test_reads_research_log_content(self):
+        client = _client(SimpleNamespace())
+        try:
+            root = Path(client._temp.name)  # type: ignore[attr-defined]
+            log_dir = root / "work" / "research" / "logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            (log_dir / "run.log").write_text("hello\nresearch\n", encoding="utf-8")
+
+            resp = client.get("/api/research/logs/run.log")
+
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(resp.json(), {"name": "run.log", "content": "hello\nresearch\n"})
+        finally:
+            _close(client)
+
+
+# ---------------------------------------------------------------------------
 # POST /api/research/requests
 # ---------------------------------------------------------------------------
 

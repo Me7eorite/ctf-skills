@@ -39,6 +39,7 @@ def register_research_endpoints(app: FastAPI, worker_manager=None) -> None:
     _register_queue_stats(app)
     _register_bindings_list(app)
     _register_binding_detail(app)
+    _register_log_endpoints(app, worker_manager)
     _register_worker_endpoints(app, worker_manager)
 
 
@@ -111,6 +112,54 @@ def _register_worker_endpoints(app: FastAPI, manager) -> None:
                 status_code=HTTPStatus.CONFLICT, detail=message
             )
         return JSONResponse({"ok": True, "message": message, "state": manager.state()})
+
+
+# ---------------------------------------------------------------------------
+# GET /api/research/logs
+# GET /api/research/logs/{name}
+# ---------------------------------------------------------------------------
+
+
+def _register_log_endpoints(app: FastAPI, manager) -> None:
+    @app.get("/api/research/logs")
+    def list_research_logs() -> JSONResponse:
+        if manager is None:
+            raise HTTPException(
+                status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+                detail="worker manager is not configured",
+            )
+        log_dir = manager.paths.research_logs
+        if not log_dir.exists():
+            return JSONResponse([])
+        rows = []
+        for path in sorted(log_dir.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True):
+            stat = path.stat()
+            rows.append(
+                {
+                    "name": path.name,
+                    "size": stat.st_size,
+                    "updated_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                }
+            )
+        return JSONResponse(rows)
+
+    @app.get("/api/research/logs/{name:path}")
+    def get_research_log(name: str) -> JSONResponse:
+        if manager is None:
+            raise HTTPException(
+                status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+                detail="worker manager is not configured",
+            )
+        safe_name = name.replace("\\", "/").rsplit("/", 1)[-1]
+        path = manager.paths.research_logs / safe_name
+        try:
+            path.resolve().relative_to(manager.paths.research_logs.resolve())
+            content = path.read_text(encoding="utf-8", errors="replace")[-30000:]
+        except ValueError as exc:
+            raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="forbidden") from exc
+        except OSError as exc:
+            raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="log not found") from exc
+        return JSONResponse({"name": path.name, "content": content})
 
 
 # ---------------------------------------------------------------------------
