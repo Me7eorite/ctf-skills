@@ -51,18 +51,18 @@
 
 ## 3. Prompt Wrapper
 
-- [ ] 3.1 Add `load_design_prompt_context(paths)` in
+- [x] 3.1 Add `load_design_prompt_context(paths)` in
   `src/services/design_prompt.py` to read `SKILL.md` and required
   reference files.
-- [ ] 3.2 Add `build_design_prompt(context, design_task,
+- [x] 3.2 Add `build_design_prompt(context, design_task,
   generation_request, findings, sources) -> str` in the same module.
-- [ ] 3.3 Keep `build_design_prompt` pure: no IO, no DB, no env reads.
-- [ ] 3.4 Cap the evidence block at 20 findings (in insertion order).
-- [ ] 3.5 Route category to the correct reference file (`web-design`,
+- [x] 3.3 Keep `build_design_prompt` pure: no IO, no DB, no env reads.
+- [x] 3.4 Cap the evidence block at 20 findings (in insertion order).
+- [x] 3.5 Route category to the correct reference file (`web-design`,
   `pwn-design`, `reverse-design`, `other-categories`).
-- [ ] 3.6 Always append `spec-template.md`, `quality-gate.md`, and
+- [x] 3.6 Always append `spec-template.md`, `quality-gate.md`, and
   (for web/pwn) `delivery-format.md` reference links.
-- [ ] 3.7 Tests:
+- [x] 3.7 Tests:
   - byte-identical output for identical inputs
   - category routing
   - evidence cap

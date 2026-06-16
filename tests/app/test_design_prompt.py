@@ -1,0 +1,174 @@
+"""Unit tests for structured challenge design prompt assembly."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from types import MappingProxyType
+from uuid import uuid4
+
+from core.paths import ProjectPaths
+from domain.design_tasks import DesignTask
+from domain.research import GenerationRequest, ResearchFinding, ResearchSource
+from services.design_prompt import (
+    EVIDENCE_FINDING_LIMIT,
+    build_design_prompt,
+    load_design_prompt_context,
+)
+
+
+def _write_prompt_files(paths: ProjectPaths) -> None:
+    paths.design_skill.parent.mkdir(parents=True, exist_ok=True)
+    paths.design_skill.write_text(
+        """
+# Design Skill
+
+For machine-readable output, use this JSON shape:
+{"event": {"flag_format": "flag{...}"}, "challenges": [{"id": "web-01"}]}
+""".strip(),
+        encoding="utf-8",
+    )
+    paths.design_references.mkdir(parents=True, exist_ok=True)
+    for name in (
+        "web-design.md",
+        "pwn-design.md",
+        "reverse-design.md",
+        "other-categories.md",
+        "spec-template.md",
+        "quality-gate.md",
+        "delivery-format.md",
+    ):
+        paths.design_references.joinpath(name).write_text(
+            f"# {name}\nreference body for {name}\n",
+            encoding="utf-8",
+        )
+
+
+def _paths(tmp_path) -> ProjectPaths:
+    paths = ProjectPaths(root=tmp_path, repository=tmp_path)
+    _write_prompt_files(paths)
+    return paths
+
+
+def _request(category: str = "web") -> GenerationRequest:
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    return GenerationRequest(
+        id=uuid4(),
+        category=category,
+        topic="JWT key confusion",
+        target_count=1,
+        difficulty_distribution=MappingProxyType({"medium": 1}),
+        runtime_constraints=MappingProxyType({"docker_required": True}),
+        seed_urls=(),
+        max_attempts=3,
+        status="researched",
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def _task(category: str = "web") -> DesignTask:
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    return DesignTask(
+        id=uuid4(),
+        generation_request_id=uuid4(),
+        research_run_id=uuid4(),
+        task_no=1,
+        challenge_id=f"{category}-0001",
+        title="Key Confusion",
+        category=category,
+        difficulty="medium",
+        primary_technique="JWT kid path traversal",
+        learning_objective="Inspect token key selection boundaries",
+        points=300,
+        port=8080 if category in {"web", "pwn"} else None,
+        scenario="Internal note service",
+        constraints=MappingProxyType({"single_service": True}),
+        evidence_summary="JWT research summary",
+        finding_ids=(),
+        status="queued",
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def _findings(count: int) -> list[ResearchFinding]:
+    return [
+        ResearchFinding(
+            id=uuid4(),
+            research_run_id=uuid4(),
+            kind="technique",
+            label=f"finding-{index:02d}",
+            summary=f"summary {index}",
+        )
+        for index in range(1, count + 1)
+    ]
+
+
+def _sources() -> list[ResearchSource]:
+    return [
+        ResearchSource(
+            id=uuid4(),
+            research_run_id=uuid4(),
+            url="https://example.test/reference",
+            title="Reference",
+            summary="Reference summary",
+            content_hash="0" * 64,
+            fetched_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+    ]
+
+
+def test_build_design_prompt_is_byte_identical_for_identical_inputs(tmp_path):
+    context = load_design_prompt_context(_paths(tmp_path))
+    args = (context, _task(), _request(), _findings(2), _sources())
+
+    first = build_design_prompt(*args)
+    second = build_design_prompt(*args)
+
+    assert first == second
+    assert "/skill design-challenges" in first
+    assert "For machine-readable output" in first
+    assert '"challenges"' in first
+
+
+def test_category_routing_uses_pwn_reference(tmp_path):
+    context = load_design_prompt_context(_paths(tmp_path))
+
+    prompt = build_design_prompt(context, _task("pwn"), _request("pwn"), [], [])
+
+    assert "@skills/design-challenges/references/pwn-design.md" in prompt
+    assert "@skills/design-challenges/references/web-design.md" not in prompt
+    assert "@skills/design-challenges/references/reverse-design.md" not in prompt
+    assert "@skills/design-challenges/references/delivery-format.md" in prompt
+
+
+def test_category_routing_uses_other_reference_for_dynamic_category(tmp_path):
+    context = load_design_prompt_context(_paths(tmp_path))
+
+    prompt = build_design_prompt(context, _task("crypto"), _request("crypto"), [], [])
+
+    assert "@skills/design-challenges/references/other-categories.md" in prompt
+    assert "@skills/design-challenges/references/delivery-format.md" not in prompt
+
+
+def test_evidence_cap_preserves_insertion_order(tmp_path):
+    context = load_design_prompt_context(_paths(tmp_path))
+    findings = _findings(EVIDENCE_FINDING_LIMIT + 5)
+
+    prompt = build_design_prompt(context, _task(), _request(), findings, _sources())
+
+    assert "finding-01" in prompt
+    assert f"finding-{EVIDENCE_FINDING_LIMIT:02d}" in prompt
+    assert f"finding-{EVIDENCE_FINDING_LIMIT + 1:02d}" not in prompt
+    assert f"evidence capped at {EVIDENCE_FINDING_LIMIT}" in prompt
+
+
+def test_prompt_includes_always_on_references_and_contract(tmp_path):
+    context = load_design_prompt_context(_paths(tmp_path))
+
+    prompt = build_design_prompt(context, _task(), _request(), [], [])
+
+    assert "@skills/design-challenges/references/spec-template.md" in prompt
+    assert "@skills/design-challenges/references/quality-gate.md" in prompt
+    assert "Return exactly one JSON object" in prompt
+    assert "`challenges` array with exactly one entry" in prompt
