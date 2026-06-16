@@ -119,14 +119,14 @@
 
 ## 10. Web read endpoints
 
-- [ ] 10.1 Add `GET /api/research/requests?category=...&status=...` to `src/web/server.py` returning a JSON array of generation requests. Both query params optional and AND-combined. Unknown `category` (not present in `challenge_categories`) returns 400 with a message listing the current allowed set queried from the DB.
-- [ ] 10.4 Add `GET /api/research/categories` to `src/web/server.py` returning the contents of `challenge_categories` as a JSON array `[{"code", "display_name", "description"}, ...]`. Used by the future UI (change 4) and by external operators discovering the allowed set.
-- [ ] 10.5 Add `GET /api/profile/bindings` returning the contents of `hermes_profile_bindings` joined with `agent_roles.display_name`. Read-only.
-- [ ] 10.6 Add `GET /api/profile/bindings/{role}` returning a single binding or 404 if the role has no binding.
-- [ ] 10.7 Add `GET /api/research/runs?status=...&claimed_by=...&generation_request_id=...&limit=...` returning a paginated JSON array of `research_runs` rows joined with category for queue inspection. All filters optional, AND-combined.
-- [ ] 10.8 Add `GET /api/research/queue/stats` returning `{queued: int, running: int, completed: int, failed: int, oldest_queued_age_seconds: number | null, runs_near_lease_expiry: [run_id, ...]}`. `runs_near_lease_expiry` SHALL only include rows whose `status='running' AND lease_expires_at < now() + interval '60 seconds'`; rows in `completed`/`failed` retain their forensic `lease_expires_at` values but MUST NOT appear here, even though their stored timestamp is in the past. Single query against `research_runs` with grouped aggregates.
-- [ ] 10.2 Add `GET /api/research/requests/{id}` returning the request, the latest run, the source list, and the finding list (grouped by kind) as one JSON object. 404 on unknown id.
-- [ ] 10.3 Add `tests/app/test_research_api.py` using the existing FastAPI test client to assert response shapes against a stubbed repository.
+- [x] 10.1 Add `GET /api/research/requests?category=...&status=...` to `src/web/server.py` returning a JSON array of generation requests. Both query params optional and AND-combined. Unknown `category` (not present in `challenge_categories`) returns 400 with a message listing the current allowed set queried from the DB.
+- [x] 10.4 Add `GET /api/research/categories` to `src/web/server.py` returning the contents of `challenge_categories` as a JSON array `[{"code", "display_name", "description"}, ...]`. Used by the future UI (change 4) and by external operators discovering the allowed set.
+- [x] 10.5 Add `GET /api/profile/bindings` returning the contents of `hermes_profile_bindings` joined with `agent_roles.display_name`. Read-only.
+- [x] 10.6 Add `GET /api/profile/bindings/{role}` returning a single binding or 404 if the role has no binding.
+- [x] 10.7 Add `GET /api/research/runs?status=...&claimed_by=...&generation_request_id=...&limit=...` returning a paginated JSON array of `research_runs` rows joined with category for queue inspection. All filters optional, AND-combined.
+- [x] 10.8 Add `GET /api/research/queue/stats` returning `{queued: int, running: int, completed: int, failed: int, oldest_queued_age_seconds: number | null, runs_near_lease_expiry: [run_id, ...]}`. `runs_near_lease_expiry` SHALL only include rows whose `status='running' AND lease_expires_at < now() + interval '60 seconds'`; rows in `completed`/`failed` retain their forensic `lease_expires_at` values but MUST NOT appear here, even though their stored timestamp is in the past. Single query against `research_runs` with grouped aggregates.
+- [x] 10.2 Add `GET /api/research/requests/{id}` returning the request, the latest run, the source list, and the finding list (grouped by kind) as one JSON object. 404 on unknown id.
+- [x] 10.3 Add `tests/app/test_research_api.py` using the existing FastAPI test client to assert response shapes against a stubbed repository.
 
 ## 11. Dependency direction guardrail
 
