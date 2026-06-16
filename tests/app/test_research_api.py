@@ -491,5 +491,123 @@ class BindingDetailEndpointTests(unittest.TestCase):
             _close(client)
 
 
+# ---------------------------------------------------------------------------
+# POST /api/research/requests
+# ---------------------------------------------------------------------------
+
+
+class SubmitRequestEndpointTests(unittest.TestCase):
+    def _body(self, **overrides) -> dict:
+        body = {
+            "category": "web",
+            "topic": "SQL injection sample",
+            "target_count": 2,
+            "difficulty_distribution": {"easy": 1, "medium": 1},
+            "seed_urls": ["https://example.com/sqli"],
+            "max_attempts": 3,
+        }
+        body.update(overrides)
+        return body
+
+    def test_happy_path_returns_201_with_ids(self):
+        request = _make_request(category="web")
+        run = _make_run(request_id=request.id, status="queued")
+
+        captured: dict = {}
+
+        class FakeJobService:
+            def __init__(self, *_a, **_kw):
+                pass
+
+            def submit_request(self, **kwargs):
+                captured.update(kwargs)
+                return (request, run)
+
+        client = _client(SimpleNamespace())
+        try:
+            with patch("services.ResearchJobService", FakeJobService):
+                resp = client.post("/api/research/requests", json=self._body())
+            self.assertEqual(resp.status_code, 201)
+            payload = resp.json()
+            self.assertEqual(payload["request_id"], str(request.id))
+            self.assertEqual(payload["run_id"], str(run.id))
+            self.assertEqual(payload["category"], "web")
+            self.assertEqual(payload["status"], "queued")
+            # 中文注释：seed_urls 与 distribution 必须原样进入 service。
+            self.assertEqual(captured["seed_urls"], ["https://example.com/sqli"])
+            self.assertEqual(
+                captured["difficulty_distribution"], {"easy": 1, "medium": 1}
+            )
+        finally:
+            _close(client)
+
+    def test_missing_category_returns_400(self):
+        client = _client(SimpleNamespace())
+        try:
+            resp = client.post(
+                "/api/research/requests",
+                json={k: v for k, v in self._body().items() if k != "category"},
+            )
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn("category", resp.json()["detail"])
+        finally:
+            _close(client)
+
+    def test_non_positive_target_count_returns_400(self):
+        client = _client(SimpleNamespace())
+        try:
+            resp = client.post(
+                "/api/research/requests", json=self._body(target_count=0)
+            )
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn("target_count", resp.json()["detail"])
+        finally:
+            _close(client)
+
+    def test_invalid_distribution_returns_400(self):
+        client = _client(SimpleNamespace())
+        try:
+            resp = client.post(
+                "/api/research/requests", json=self._body(difficulty_distribution=[])
+            )
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn("difficulty_distribution", resp.json()["detail"])
+        finally:
+            _close(client)
+
+    def test_seed_urls_must_be_list_of_strings(self):
+        client = _client(SimpleNamespace())
+        try:
+            resp = client.post(
+                "/api/research/requests",
+                json=self._body(seed_urls=[123, "ok"]),
+            )
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn("seed_urls", resp.json()["detail"])
+        finally:
+            _close(client)
+
+    def test_service_validation_error_translates_to_400(self):
+        from domain.research_validators import ResearchValidationError as RVE
+
+        class FakeJobService:
+            def __init__(self, *_a, **_kw):
+                pass
+
+            def submit_request(self, **_kw):
+                raise RVE("distribution sum 2 != target_count 3")
+
+        client = _client(SimpleNamespace())
+        try:
+            with patch("services.ResearchJobService", FakeJobService):
+                resp = client.post(
+                    "/api/research/requests", json=self._body(target_count=3)
+                )
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn("distribution sum", resp.json()["detail"])
+        finally:
+            _close(client)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

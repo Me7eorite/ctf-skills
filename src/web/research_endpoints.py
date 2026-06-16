@@ -1,9 +1,10 @@
-"""Read-only HTTP endpoints for the research-planning data.
+"""HTTP endpoints for the research-planning data.
 
-Section 10 of add-research-planning-core. Each handler opens its own
-short persistence transaction (`with transaction() as session:`) and
-returns plain dict / list payloads. No write paths — those go through
-the CLI / services layer.
+Section 10 of add-research-planning-core provides the seven read
+endpoints; ``POST /api/research/requests`` is a pragmatic addition so
+operators can submit through the dashboard form without leaving the
+browser (the CLI path remains available and is unchanged). Each
+handler opens its own short persistence transaction.
 """
 
 from __future__ import annotations
@@ -13,21 +14,23 @@ from http import HTTPStatus
 from typing import Any
 from uuid import UUID
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from domain import research as dto
 from domain.research import GenerationRequestStatus, ResearchRunStatus
+from domain.research_validators import ResearchValidationError
 
 
 def register_research_endpoints(app: FastAPI) -> None:
-    """Attach the seven Section 10 read endpoints to `app`.
+    """Attach the Section 10 read endpoints + the submit endpoint to `app`.
 
     MUST be called BEFORE the static catch-all route in `create_app`
     so the `/api/...` paths win over the wildcard.
     """
     _register_categories(app)
     _register_requests_list(app)
+    _register_request_submit(app)
     _register_request_detail(app)
     _register_runs_list(app)
     _register_queue_stats(app)
@@ -93,6 +96,116 @@ def _register_requests_list(app: FastAPI) -> None:
                 category=category, status=status
             )
         return JSONResponse([_request_dict(r) for r in requests])
+
+
+# ---------------------------------------------------------------------------
+# POST /api/research/requests  (web-side parity with `cli research submit`)
+# ---------------------------------------------------------------------------
+
+
+def _register_request_submit(app: FastAPI) -> None:
+    @app.post("/api/research/requests", status_code=HTTPStatus.CREATED)
+    async def submit_request(request: Request) -> JSONResponse:
+        try:
+            payload = await request.json()
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail=f"request body must be JSON: {exc}",
+            ) from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail="request body must be a JSON object",
+            )
+
+        # Pull the required + optional fields out of the body. The service
+        # layer raises ResearchValidationError on bad shapes (unknown
+        # category, distribution sum mismatch, illegal difficulty label,
+        # empty topic, etc.) — those are translated to 400.
+        try:
+            category = _require_str(payload, "category")
+            topic = _require_str(payload, "topic")
+            target_count = _require_positive_int(payload, "target_count")
+            distribution = _require_distribution(payload)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST, detail=str(exc)
+            ) from exc
+
+        seed_urls = payload.get("seed_urls", [])
+        if not isinstance(seed_urls, list) or not all(
+            isinstance(url, str) for url in seed_urls
+        ):
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail="seed_urls must be an array of strings",
+            )
+        max_attempts = payload.get("max_attempts", 3)
+        if not isinstance(max_attempts, int) or max_attempts <= 0:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail="max_attempts must be a positive integer",
+            )
+
+        from services import ResearchJobService
+
+        try:
+            generation_request, run = ResearchJobService().submit_request(
+                category=category,
+                topic=topic,
+                target_count=target_count,
+                difficulty_distribution=distribution,
+                seed_urls=seed_urls,
+                max_attempts=max_attempts,
+            )
+        except ResearchValidationError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST, detail=str(exc)
+            ) from exc
+
+        return JSONResponse(
+            {
+                "request_id": str(generation_request.id),
+                "run_id": str(run.id),
+                "category": generation_request.category,
+                "status": "queued",
+            },
+            status_code=HTTPStatus.CREATED,
+        )
+
+
+def _require_str(payload: dict[str, Any], key: str) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{key!r} must be a non-empty string")
+    return value
+
+
+def _require_positive_int(payload: dict[str, Any], key: str) -> int:
+    value = payload.get(key)
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ValueError(f"{key!r} must be a positive integer")
+    return value
+
+
+def _require_distribution(payload: dict[str, Any]) -> dict[str, int]:
+    raw = payload.get("difficulty_distribution")
+    if not isinstance(raw, dict) or not raw:
+        raise ValueError(
+            "'difficulty_distribution' must be a non-empty object mapping "
+            "label to positive integer count"
+        )
+    result: dict[str, int] = {}
+    for label, count in raw.items():
+        if not isinstance(label, str) or not label:
+            raise ValueError("difficulty_distribution labels must be strings")
+        if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
+            raise ValueError(
+                f"difficulty_distribution[{label!r}] must be a positive integer"
+            )
+        result[label] = count
+    return result
 
 
 # ---------------------------------------------------------------------------
