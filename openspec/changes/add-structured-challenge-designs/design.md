@@ -265,7 +265,7 @@ designing  -> queued     (retry available; no queued attempt row is inserted)
 
 - `POST /api/design-tasks/{id}/design`
   - 200 -> `{ "design_task_id", "attempt_id",
-    "design_task_status", "attempt_status", "retry_available",
+    "design_task_status", "attempt_status",
     "challenge_design": {...} | null, "error": null | "<reason>" }`
   - 409 if task is not `queued`
   - 404 if task does not exist
@@ -276,6 +276,11 @@ designing  -> queued     (retry available; no queued attempt row is inserted)
     (`id`, `attempt`, `status`, `started_at`, `finished_at`,
     `last_error`, `prompt_artifact_url`, `log_artifact_url`). Raw
     filesystem paths are not exposed in this response.
+    `prompt_artifact_url` is
+    `/api/design-attempts/<attempt_id>/artifact?kind=prompt` when
+    `prompt_path` exists, otherwise `null`; `log_artifact_url` is
+    `/api/design-attempts/<attempt_id>/artifact?kind=log` when
+    `hermes_log_path` exists, otherwise `null`.
 - `GET /api/design-attempts/{id}/artifact?kind={prompt|log}`:
   - serves the file stored at `design_attempts.prompt_path` (when
     `kind=prompt`) or `hermes_log_path` (when `kind=log`).
@@ -296,7 +301,7 @@ Inside each Design Task row, a collapsible sub-panel:
 - Header line: latest attempt status pill + "Design now" button (only
   enabled when task status is `queued`).
 - Attempts list: numbered rows with start/end time, status, link to
-  the Hermes log.
+  the Hermes log via the artifact endpoint.
 - Design payload: collapsible JSON tree of `latest_design.payload`
   with the validator's quality-gate badge.
 

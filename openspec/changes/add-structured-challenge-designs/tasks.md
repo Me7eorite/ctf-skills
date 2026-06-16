@@ -35,7 +35,9 @@
   enforces the JSON schema and parent-equality rules from `design.md`
   (id/title/category/difficulty/points equality with parent,
   hints length, docker/port rules for web/pwn, no URLs in artifacts
-  or validation, generated summary length <= 280 chars).
+  or validation). It also generates `challenge_designs.summary` from
+  the validated payload and truncates it to <= 280 chars when needed;
+  summary is not read from model JSON.
 - [ ] 2.4 Add `parse_design_output(stdout)` that strips ` ```json `
   fences and extracts the first balanced JSON object; raise typed
   errors on missing/invalid blocks.
@@ -146,18 +148,23 @@
 
 - [ ] 7.1 Add `POST /api/design-tasks/{id}/design` returning
   `{design_task_id, attempt_id, design_task_status, attempt_status,
-  retry_available, challenge_design|null, error|null}`.
+  challenge_design|null, error|null}`.
 - [ ] 7.2 Translate the typed errors:
   - task not found -> 404
   - not queued / concurrent -> 409
   - validation/timeout/Hermes error -> 200 with
     `attempt_status='failed'`, current `design_task_status`,
-    `retry_available`, and `error=<reason>`
+    and `error=<reason>`
 - [ ] 7.3 Extend `GET /api/research/requests/{id}` so each
   `design_tasks[]` entry has:
   - `attempts: AttemptSummaryDict[]` ordered oldest-first
     (id, attempt, status, started_at, finished_at, last_error,
     prompt_artifact_url, log_artifact_url; no raw filesystem paths)
+    `prompt_artifact_url` is
+    `/api/design-attempts/<attempt_id>/artifact?kind=prompt` when
+    `prompt_path` is set, otherwise null; `log_artifact_url` uses the
+    same shape with `kind=log` when `hermes_log_path` is set,
+    otherwise null.
   - `latest_design: ChallengeDesignDict | null`
 - [ ] 7.4 Add `GET /api/design-attempts/{id}/artifact?kind={prompt|log}`
   serving the stored prompt or Hermes log for one attempt. Stored
@@ -168,7 +175,14 @@
   checks with 403; unknown `kind` with 400; missing rows/paths with
   404.
 - [ ] 7.5 API tests for:
-  - success, 404, 409, validation failure
+  - success returns `design_task_status='designed'`,
+    `attempt_status='completed'`, `challenge_design` populated, and
+    no `retry_available` key
+  - 404, 409, validation failure
+  - retryable failure returns `design_task_status='queued'`,
+    `attempt_status='failed'`, and no `retry_available` key
+  - exhausted failure returns `design_task_status='failed'`,
+    `attempt_status='failed'`, and no `retry_available` key
   - retry resets the task to `queued`, a second operator trigger
     produces the second attempt, exhausted attempts returns `failed`
   - artifact endpoint: serves prompt + log, rejects traversal /

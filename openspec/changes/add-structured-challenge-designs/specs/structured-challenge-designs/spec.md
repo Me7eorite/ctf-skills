@@ -124,10 +124,14 @@ attempt if any of the following hold:
   the parent `design_tasks.port`
 - `artifacts` or `validation` contains any `http://` or `https://`
   URL string
-- the generated `summary` is longer than 280 characters
 
 When `event.flag_format` is missing from the JSON, the validator SHALL
 insert the default value `flag{...}` rather than reject.
+
+The validator SHALL generate the `challenge_designs.summary` value
+from the validated payload and SHALL keep it at or below 280
+characters, truncating if necessary. This generated value is persisted
+as `challenge_designs.summary`; it is not read from the model JSON.
 
 #### Scenario: Missing required hint count rejects the design
 
@@ -195,7 +199,7 @@ planning layer and SHALL NOT be written by this layer.
 - **GIVEN** a design task with `status = 'queued'`
 - **WHEN** an attempt is started, runs Hermes, and the response
   validates
-- **THEN** the design task transitions through `designing → designed`
+- **THEN** the design task transitions through `designing -> designed`
   in two separate transactions
 - **AND** the `design_attempts` row is `completed`
 
@@ -233,12 +237,17 @@ The endpoint SHALL:
 
 - return 404 if the task does not exist
 - return 409 if the task is not in `status = 'queued'`
-- on success return 200 with the produced `challenge_designs` row
+- on success return 200 with:
+  - `design_task_id` equal to the parent task id
+  - `attempt_id` equal to the completed attempt id
+  - `design_task_status = 'designed'`
+  - `attempt_status = 'completed'`
+  - `challenge_design` containing the produced row
+  - `error = null`
 - on validation/timeout/Hermes failure return 200 with
   `attempt_status = 'failed'`, the current `design_task_status`
-  (`queued` when retry remains, `failed` when exhausted), a
-  `retry_available` boolean, and the `error` field populated; the
-  attempt row is still persisted
+  (`queued` when retry remains, `failed` when exhausted), and the
+  `error` field populated; the attempt row is still persisted
 
 The endpoint SHALL enforce a per-attempt wall-clock timeout (default
 600 seconds) and SHALL record a `failed` attempt with
@@ -304,6 +313,12 @@ for each `design_tasks[]` entry:
   finished_at, last_error, and artifact URLs for `prompt` and `log`
   when the corresponding stored path exists. Raw filesystem paths
   SHALL NOT be exposed in this response.
+
+`prompt_artifact_url` SHALL be
+`/api/design-attempts/<attempt_id>/artifact?kind=prompt` when
+`prompt_path` is set, otherwise `null`. `log_artifact_url` SHALL use
+the same shape with `kind=log` when `hermes_log_path` is set,
+otherwise `null`.
 
 The dashboard SHALL render those fields inline under each Design Task
 row as a collapsible panel showing the attempt list, a JSON viewer for
