@@ -74,8 +74,9 @@
   - `get_attempt(attempt_id)`
   - `latest_attempt(design_task_id)`
   - `create_attempt(design_task_id, attempt_no, caller, profile_name)`
-  - `mark_attempt_started(attempt_id, claim_token, started_at,
-    prompt_path)` (token-fenced)
+  - `record_prompt_path(attempt_id, claim_token, prompt_path)`
+    (token-fenced; `started_at` is already set by `create_attempt`,
+    this only persists where the rendered prompt was written)
   - `complete_attempt(attempt_id, claim_token, log_path, payload,
     summary, flag_format, validation_notes, quality_gate_passed)`
     (single transaction: writes attempt completed, inserts
@@ -121,7 +122,7 @@
   - commit
 - [ ] 6.3 Step 2 - render prompt to
   `work/design/prompts/<attempt_id>.md`, persist `prompt_path` via
-  `mark_attempt_started`.
+  `record_prompt_path`.
 - [ ] 6.4 Step 3 - invoke executor with timeout from config (default
   600s); capture stdout + log path.
 - [ ] 6.5 Step 4 - parse + validate + quality-gate; on success, call
@@ -148,12 +149,21 @@
     and `error=<reason>`
 - [ ] 7.3 Extend `GET /api/research/requests/{id}` so each
   `design_tasks[]` entry has:
-  - `attempts: AttemptSummaryDict[]` (id, attempt, status,
-    started_at, finished_at, last_error, prompt_path, hermes_log_path)
+  - `attempts: AttemptSummaryDict[]` ordered oldest-first
+    (id, attempt, status, started_at, finished_at, last_error,
+    prompt_path, hermes_log_path)
   - `latest_design: ChallengeDesignDict | null`
-- [ ] 7.4 API tests for: success, 404, 409, validation failure,
-  retry resets the task to `queued`, a second operator trigger
-  produces the second attempt, exhausted attempts returns `failed`.
+- [ ] 7.4 Add `GET /api/design-attempts/{id}/artifact?kind={prompt|log}`
+  serving the stored prompt or Hermes log for one attempt. Re-resolve
+  the path and confirm it lives under `work/design/prompts/` or
+  `work/design/logs/`; reject path traversal with 403, unknown `kind`
+  with 400, and missing rows/paths with 404.
+- [ ] 7.5 API tests for:
+  - success, 404, 409, validation failure
+  - retry resets the task to `queued`, a second operator trigger
+    produces the second attempt, exhausted attempts returns `failed`
+  - artifact endpoint: serves prompt + log, rejects traversal /
+    arbitrary paths / unknown `kind`
 
 ## 8. Dashboard
 

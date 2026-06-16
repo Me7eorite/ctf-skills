@@ -60,8 +60,13 @@ attempt/design tables after adding real claim leasing behavior.
   via a new role binding).
 - No spec-template-driven Markdown writeup; only the JSON schema from
   `SKILL.md` is persisted.
-- No edit-after-the-fact UI for `challenge_designs`; operator either
-  accepts (by acting on the design downstream) or re-runs design.
+- No edit-after-the-fact UI for `challenge_designs`. Once a task
+  reaches `designed`, this change has no path back to `queued`;
+  operator either accepts the draft (by acting on it downstream) or
+  waits for a later supersede/requeue capability before re-running
+  design. Re-design on a still-queued task (e.g. after a failed
+  attempt that returned the task to `queued`) is supported by simply
+  pressing "Design now" again.
 
 ## Data Model
 
@@ -71,8 +76,7 @@ attempt/design tables after adding real claim leasing behavior.
 | --- | --- |
 | `id uuid pk` | Attempt identity. |
 | `design_task_id uuid fk` | Parent design task. |
-| `parent_attempt_id uuid nullable fk` | Previous attempt for retries. |
-| `attempt int` | 1-based attempt counter within the task. |
+| `attempt int` | 1-based attempt counter within the task. Failed attempts stay on disk as audit rows; the chain is reconstructed by `design_task_id` + `attempt` order, so no `parent_attempt_id` column is needed. |
 | `status text` | `running | completed | failed`. |
 | `claimed_by text` | Caller identity (operator session or worker id). |
 | `claim_token uuid` | Request-local fencing token. It is not a lease in this change. |
@@ -181,11 +185,13 @@ and rejects the attempt unless:
   - `deployment` contains `docker` (case-insensitive)
   - `port` field present and equal to `design_tasks.port`
 - safety guardrails (rejects):
-  - mention of any real domain (regex against
-    `(?:google|github|microsoft|apple)\.com` etc.) - initial pass
-    only checks a small denylist; full SAFER review is out of scope
   - any HTTP URL in `artifacts` or `validation` (artifacts must be
     relative paths)
+
+A content-aware safety review (real-domain denylist, PII patterns,
+live-malware references, etc.) is out of scope here and is left to a
+later content-safety change; the validator above only enforces the
+shape rules in this spec.
 
 The validator also runs a deterministic in-code quality gate derived
 from `quality-gate.md`. The Markdown file remains the human-readable
@@ -259,8 +265,19 @@ designing  -> queued     (retry available; no queued attempt row is inserted)
 - `GET /api/research/requests/{id}` (extended):
   - each `design_tasks[]` entry now includes
     `latest_design: ChallengeDesignDict | null` and
-    `attempts: AttemptSummaryDict[]` (`id`, `attempt`, `status`,
-    `started_at`, `finished_at`, `last_error`).
+    `attempts: AttemptSummaryDict[]` ordered **oldest first**
+    (`id`, `attempt`, `status`, `started_at`, `finished_at`,
+    `last_error`).
+- `GET /api/design-attempts/{id}/artifact?kind={prompt|log}`:
+  - serves the file stored at `design_attempts.prompt_path` (when
+    `kind=prompt`) or `hermes_log_path` (when `kind=log`).
+  - 404 if the attempt does not exist or has no path of the requested
+    kind.
+  - 400 on unknown `kind`.
+  - SHALL re-resolve the stored path and verify it lives under
+    `work/design/prompts/` or `work/design/logs/` respectively before
+    reading; arbitrary filesystem paths and `..` traversal in the
+    stored value are rejected with 403.
 
 ## UI Shape
 
@@ -285,9 +302,10 @@ id. The endpoint must reject arbitrary paths and path traversal.
   default 600s), and surface the running attempt via the existing UI
   poll so operators see it without page reload. A future worker pool
   removes this entirely.
-- **The validator's safety denylist is intentionally shallow.** ->
-  Mitigation: clearly mark it as a first-line filter; full content
-  review is a downstream change.
+- **The validator only enforces shape rules; no content-safety
+  review.** -> Mitigation: documented as out of scope here; a follow-up
+  content-safety change can plug in additional rejectors at the same
+  validation seam.
 - **Prompt size grows with finding count.** -> Mitigation: cap evidence
   bullets at the first N=20 findings (logged); raw text never inlined.
 - **Hermes JSON parsing.** Models often wrap JSON in fences. ->

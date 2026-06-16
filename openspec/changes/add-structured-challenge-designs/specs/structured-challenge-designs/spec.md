@@ -11,11 +11,11 @@ Each `challenge_designs` row SHALL reference exactly one producing
 via `design_task_id`.
 
 `design_attempts` SHALL store: `attempt` (1-based integer unique per
-task), `status` in `{running, completed, failed}`,
-`parent_attempt_id` (nullable, FK to a previous attempt for retries),
-`claimed_by`, `claim_token`, `started_at`, `finished_at`,
-`profile_name_used`, `prompt_path`, `hermes_log_path`, `last_error`,
-and audit timestamps.
+task), `status` in `{running, completed, failed}`, `claimed_by`,
+`claim_token`, `started_at`, `finished_at`, `profile_name_used`,
+`prompt_path`, `hermes_log_path`, `last_error`, and audit timestamps.
+The retry chain is reconstructed from `(design_task_id, attempt)`
+ordering; there is no `parent_attempt_id` column.
 
 `challenge_designs` SHALL store: the full validated JSON object in
 `payload jsonb`, a short `summary` text (≤ 280 chars), `flag_format`,
@@ -213,13 +213,15 @@ planning layer and SHALL NOT be written by this layer.
 - **THEN** no retry row is inserted
 - **AND** `design_tasks.status` is set to `failed`
 
-#### Scenario: Stale caller cannot complete an attempt
+#### Scenario: Wrong claim_token cannot complete an attempt
 
-- **GIVEN** an attempt whose `claim_token` has been rotated (a
-  follow-up change) or whose row has been deleted
-- **WHEN** a caller posts a completion with the old token
-- **THEN** the terminal write affects zero rows and a typed error is
-  surfaced
+- **GIVEN** an existing `design_attempts` row with a known
+  `claim_token`
+- **WHEN** a caller posts a completion against
+  `(attempt_id, wrong_token)`
+- **THEN** the terminal `UPDATE` affects zero rows
+- **AND** a typed `StaleClaimError` is surfaced
+- **AND** the row's status is unchanged
 
 ### Requirement: Operator can trigger one synchronous design attempt
 
@@ -237,10 +239,34 @@ The endpoint SHALL enforce a per-attempt wall-clock timeout (default
 600 seconds) and SHALL record a `failed` attempt with
 `last_error = 'timeout'` if Hermes does not return in time.
 
-The system SHALL expose prompt/log content only through a bounded
-design-artifact endpoint keyed by `design_attempts.id`. That endpoint
-SHALL serve only the stored prompt/log paths for the matching attempt
-and SHALL reject arbitrary filesystem paths and path traversal.
+The system SHALL expose prompt/log content only through
+`GET /api/design-attempts/{id}/artifact?kind={prompt|log}`. That
+endpoint SHALL look up the stored `prompt_path` (for `kind=prompt`)
+or `hermes_log_path` (for `kind=log`) of the matching attempt,
+re-resolve the path, and verify it lives under `work/design/prompts/`
+or `work/design/logs/` before reading. It SHALL respond with:
+
+- 404 when the attempt does not exist or has no path of the requested
+  kind,
+- 400 when `kind` is not one of `prompt` or `log`,
+- 403 when the stored path resolves outside the allowed directory or
+  contains `..` traversal,
+- 200 with the file body on success.
+
+#### Scenario: Artifact endpoint serves the stored prompt for an attempt
+
+- **GIVEN** an attempt with a written `prompt_path` under
+  `work/design/prompts/<id>.md`
+- **WHEN** `GET /api/design-attempts/<id>/artifact?kind=prompt` is
+  called
+- **THEN** the response is 200 with the file body
+
+#### Scenario: Artifact endpoint rejects path traversal
+
+- **GIVEN** an attempt whose stored `prompt_path` resolves outside
+  `work/design/prompts/` (e.g. `../../../etc/passwd`)
+- **WHEN** the artifact endpoint is called for that attempt
+- **THEN** the response is 403 and the file is not read
 
 #### Scenario: Triggering design on a non-queued task is rejected
 
@@ -261,10 +287,10 @@ and SHALL reject arbitrary filesystem paths and path traversal.
 The request detail API `GET /api/research/requests/{id}` SHALL include,
 for each `design_tasks[]` entry:
 
-- `latest_design`: the most recent `challenge_designs` row for that
-  task with `status = 'draft'`, serialized with payload, summary,
-  flag_format, validation_notes, quality_gate_passed, created_at; or
-  `null` if none.
+- `latest_design`: the (at most one, by partial unique constraint)
+  `challenge_designs` row for that task with `status = 'draft'`,
+  serialized with payload, summary, flag_format, validation_notes,
+  quality_gate_passed, created_at; or `null` if none.
 - `attempts`: ordered list of `design_attempts` rows for that task,
   oldest first, each with id, attempt, status, started_at,
   finished_at, last_error, prompt_path, hermes_log_path.
