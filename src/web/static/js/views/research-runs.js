@@ -115,7 +115,7 @@ function renderRunsTable(items) {
         <tbody>
           ${items.map(r => `
             <tr>
-              <td class="table-cell-id" title="${escapeHtml(r.id)}">${escapeHtml(r.id.slice(0, 8))}...</td>
+              <td class="table-cell-id" title="${escapeHtml(r.id)}">${escapeHtml(r.id.slice(0, 6))}</td>
               <td>${r.category ? softPill(categoryLabel(r.category), categoryTone(r.category)) : "-"}</td>
               <td style="text-align: center;">${r.attempt}</td>
               <td>${statusIndicator(r.status)}</td>

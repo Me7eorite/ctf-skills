@@ -258,7 +258,7 @@ function renderRequestsTable(items) {
       <table class="table">
         <thead>
           <tr>
-            <th>ID</th>
+            <th>#</th>
             <th>Category</th>
             <th>Topic</th>
             <th>Target</th>
@@ -269,7 +269,7 @@ function renderRequestsTable(items) {
         <tbody>
           ${items.map(r => `
             <tr class="table-row-clickable" data-id="${escapeHtml(r.id)}">
-              <td class="table-cell-id" title="${escapeHtml(r.id)}">${escapeHtml(r.id.slice(0, 8))}...</td>
+              <td class="table-cell-id">${items.indexOf(r) + 1}</td>
               <td>${softPill(categoryLabel(r.category), categoryTone(r.category))}</td>
               <td><div class="truncate" style="max-width: 360px;">${escapeHtml(r.topic)}</div></td>
               <td style="text-align: right;">${r.target_count}</td>
@@ -372,21 +372,21 @@ function renderRunsTable(runs) {
       <table class="table">
         <thead>
           <tr>
-            <th>Attempt</th>
+            <th>ID</th>
             <th>Status</th>
             <th>Worker</th>
+            <th>Started</th>
             <th>Finished</th>
-            <th>Log</th>
           </tr>
         </thead>
         <tbody>
           ${runs.map(run => `
             <tr>
-              <td style="text-align: center;">${run.attempt}</td>
+              <td class="table-cell-id">${runs.indexOf(run) + 1}</td>
               <td>${statusIndicator(run.status)}</td>
               <td class="mono" style="font-size: var(--font-mono);">${escapeHtml(run.claimed_by || "-")}</td>
+              <td class="table-cell-time">${escapeHtml(formatDateTime(run.started_at))}</td>
               <td class="table-cell-time">${escapeHtml(formatDateTime(run.finished_at))}</td>
-              <td>${run.hermes_log_path ? `<button class="btn btn-ghost btn-sm detail-open-logs"><i data-lucide="file-text"></i></button>` : "-"}</td>
             </tr>
           `).join("")}
         </tbody>
