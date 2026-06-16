@@ -56,6 +56,14 @@ class ProjectPaths:
         return self.work / "research" / "logs"
 
     @property
+    def design_prompts(self) -> Path:
+        return self.work / "design" / "prompts"
+
+    @property
+    def design_logs(self) -> Path:
+        return self.work / "design" / "logs"
+
+    @property
     def state_database(self) -> Path:
         return self.work / "state.sqlite3"
 
@@ -94,6 +102,8 @@ class ProjectPaths:
             self.logs,
             self.research_sources,
             self.research_logs,
+            self.design_prompts,
+            self.design_logs,
         ]
         for directory in directories:
             directory.mkdir(parents=True, exist_ok=True)

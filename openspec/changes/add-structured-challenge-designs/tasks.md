@@ -101,16 +101,16 @@
 
 ## 5. Hermes Executor
 
-- [ ] 5.1 Add `DesignChallengeExecutor` in
+- [x] 5.1 Add `DesignChallengeExecutor` in
   `src/services/design_agent_executor.py` modeled on
   `ResearchAgentExecutor`.
-- [ ] 5.2 The executor takes `(prompt_text, profile_name,
+- [x] 5.2 The executor takes `(prompt_text, profile_name,
   timeout_seconds, log_path)` and returns `(stdout, exit_code,
   duration_s)`; no DB access.
-- [ ] 5.3 Reuse the existing Hermes subprocess machinery
+- [x] 5.3 Reuse the existing Hermes subprocess machinery
   (`src/hermes/runner.py`) and log to
   `work/design/logs/<attempt_id>.log`.
-- [ ] 5.4 Tests:
+- [x] 5.4 Tests:
   - subprocess args (skill + profile flags)
   - timeout path produces `last_error = 'timeout'`
   - subprocess non-zero exit produces `last_error` with code
