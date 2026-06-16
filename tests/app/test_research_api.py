@@ -290,6 +290,7 @@ class RequestDetailEndpointTests(unittest.TestCase):
         repo = SimpleNamespace(
             get_generation_request=lambda _: req,
             list_runs=lambda **_kw: [run_old, run_new],
+            get_latest_run_for_request=lambda _: run_new,
             list_sources=lambda _: [src],
             list_findings=lambda _: [finding_a, finding_b, finding_c],
         )
@@ -305,6 +306,30 @@ class RequestDetailEndpointTests(unittest.TestCase):
             # Spec 10.2: findings grouped by kind.
             self.assertEqual(len(payload["findings_by_kind"]["technique"]), 2)
             self.assertEqual(len(payload["findings_by_kind"]["variant"]), 1)
+        finally:
+            _close(client)
+
+    def test_latest_run_uses_unpaginated_repository_lookup(self):
+        req = _make_request()
+        run_visible = _make_run(request_id=req.id, attempt=100, status="failed")
+        run_latest = _make_run(request_id=req.id, attempt=101, status="completed")
+
+        repo = SimpleNamespace(
+            get_generation_request=lambda _: req,
+            list_runs=lambda **_kw: [run_visible],
+            get_latest_run_for_request=lambda _: run_latest,
+            list_sources=lambda run_id: [] if run_id == run_latest.id else [object()],
+            list_findings=lambda run_id: [] if run_id == run_latest.id else [object()],
+        )
+        client = _client(repo)
+        try:
+            resp = client.get(f"/api/research/requests/{req.id}")
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.json()
+            self.assertEqual(payload["latest_run"]["id"], str(run_latest.id))
+            self.assertEqual([r["id"] for r in payload["runs"]], [str(run_visible.id)])
+            self.assertEqual(payload["sources"], [])
+            self.assertEqual(payload["findings_by_kind"], {})
         finally:
             _close(client)
 

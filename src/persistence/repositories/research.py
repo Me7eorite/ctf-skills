@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -87,6 +87,20 @@ class ResearchRepository:
             stmt = stmt.where(model.ResearchRun.generation_request_id == generation_request_id)
         return [_run(row) for row in self.session.scalars(stmt)]
 
+    def get_latest_run_for_request(
+        self,
+        generation_request_id: UUID,
+    ) -> dto.ResearchRun | None:
+        """Read the newest run for a generation request without list pagination."""
+        stmt = (
+            sa.select(model.ResearchRun)
+            .where(model.ResearchRun.generation_request_id == generation_request_id)
+            .order_by(model.ResearchRun.created_at.desc(), model.ResearchRun.attempt.desc())
+            .limit(1)
+        )
+        row = self.session.scalar(stmt)
+        return _run(row) if row else None
+
     def list_runs_with_category(
         self,
         *,
@@ -141,7 +155,6 @@ class ResearchRepository:
         # 用 FILTER 把四个 status 计数 + oldest_queued + near_expiry 合到一行，
         # 避免顺序触发三次 round-trip。array_agg(... ORDER BY ...) 保留按 lease
         # 到期时间排序，跟旧实现的顺序一致。
-        now = _utcnow()
         run = model.ResearchRun
 
         queued_filter = run.status == "queued"
@@ -150,7 +163,7 @@ class ResearchRepository:
         failed_filter = run.status == "failed"
         near_expiry_filter = sa.and_(
             running_filter,
-            run.lease_expires_at <= now + timedelta(seconds=60),
+            run.lease_expires_at < sa.func.now() + sa.text("interval '60 seconds'"),
         )
 
         row = self.session.execute(
@@ -159,19 +172,21 @@ class ResearchRepository:
                 sa.func.count().filter(running_filter).label("running"),
                 sa.func.count().filter(completed_filter).label("completed"),
                 sa.func.count().filter(failed_filter).label("failed"),
-                sa.func.min(run.created_at)
-                .filter(queued_filter)
-                .label("oldest_queued"),
+                sa.func.extract(
+                    "epoch",
+                    sa.func.now() - sa.func.min(run.created_at).filter(queued_filter),
+                ).label("oldest_queued_age_seconds"),
                 sa.func.array_agg(run.id)
                 .filter(near_expiry_filter)
                 .label("near_expiry"),
             )
         ).one()
 
-        oldest_age = None
-        if row.oldest_queued is not None:
-            # 系统时钟轻微回拨时不返回负数。
-            oldest_age = max(0.0, (now - row.oldest_queued).total_seconds())
+        oldest_age = (
+            max(0.0, float(row.oldest_queued_age_seconds))
+            if row.oldest_queued_age_seconds is not None
+            else None
+        )
 
         # array_agg 在没有匹配行时返回 None，统一成空 list。psycopg 已经把 PG
         # uuid[] 解码成 list[UUID]，无需再次转换。

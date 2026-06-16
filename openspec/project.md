@@ -40,21 +40,17 @@ The challenge artifacts produced must conform to `docs/delivery-formats/ctf-v2/`
 
 ## Source layout
 
-Flat module layout under `src/`:
+Current layout under `src/`:
 
 | Module          | Responsibility |
 | --------------- | -------------- |
-| `cli.py`        | argparse entrypoints only |
-| `paths.py`      | filesystem locations (`ProjectPaths`) |
-| `jsonio.py`     | JSON read/write helpers |
-| `shards.py`     | matrix splitting + atomic queue transitions |
-| `hermes.py`     | prompt rendering + subprocess invocation |
-| `state.py`      | SQLite progress events + snapshots |
-| `validation.py` | artifact contract + reference-solve validation |
-| `reports.py`    | per-shard report aggregation |
-| `dashboard.py`  | read model + local task manager |
-| `webserver.py`  | FastAPI app |
-| `static/`       | dashboard UI |
+| `cli.py`        | argparse entrypoints and command wiring |
+| `core/`         | filesystem paths, JSON helpers, shard queue, reports, progress state |
+| `domain/`       | DTOs and validation rules shared across adapters |
+| `hermes/`       | prompt rendering and Hermes subprocess invocation |
+| `persistence/`  | PostgreSQL engine/session setup, SQLAlchemy models, Alembic-backed repositories |
+| `services/`     | cross-subsystem orchestration with transaction boundaries, for example research submit/claim/execute workflows |
+| `web/`          | FastAPI dashboard app, static UI, and read-only HTTP adapters |
 
 Application tests live under `tests/app/`; skill structure and security tests
 live under `tests/skills/`. `pyproject.toml` configures pytest with

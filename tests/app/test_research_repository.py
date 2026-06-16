@@ -7,6 +7,7 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 import sqlalchemy as sa
@@ -111,6 +112,40 @@ def test_categories_and_generation_request_round_trip(session_factory: SessionFa
         assert [req.id for req in repo.list_generation_requests(category="web")] == [request.id]
         assert repo.list_generation_requests(category="pwn") == []
     finally:
+        session.close()
+
+
+def test_latest_run_lookup_is_not_limited_to_first_page(session_factory: SessionFactory):
+    session = session_factory()
+    try:
+        repo = ResearchRepository(session)
+        request = repo.create_generation_request(
+            category="web",
+            topic="many attempts",
+            target_count=1,
+            difficulty_distribution={"easy": 1},
+        )
+        base_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        for attempt in range(1, 102):
+            row = model.ResearchRun(
+                id=uuid4(),
+                generation_request_id=request.id,
+                attempt=attempt,
+                status="failed" if attempt < 101 else "completed",
+                created_at=base_time + timedelta(days=attempt),
+            )
+            session.add(row)
+        session.flush()
+
+        listed = repo.list_runs(generation_request_id=request.id)
+        latest = repo.get_latest_run_for_request(request.id)
+
+        assert len(listed) == 100
+        assert latest is not None
+        assert latest.attempt == 101
+        assert listed[-1].attempt == 100
+    finally:
+        session.rollback()
         session.close()
 
 
@@ -288,6 +323,46 @@ def test_claim_heartbeat_and_failure_retry(session_factory: SessionFactory):
         assert stats["running"] >= 2
         assert stats["failed"] >= 1
         assert isinstance(stats["runs_near_lease_expiry"], list)
+
+
+def test_queue_stats_excludes_exact_lease_expiry_boundary(session_factory: SessionFactory):
+    session = session_factory()
+    try:
+        request = model.GenerationRequest(
+            id=uuid4(),
+            category="web",
+            topic="boundary",
+            target_count=1,
+            difficulty_distribution={"easy": 1},
+            runtime_constraints={},
+            seed_urls=[],
+            max_attempts=1,
+            status="researching",
+        )
+        exact_boundary = model.ResearchRun(
+            id=uuid4(),
+            generation_request_id=request.id,
+            attempt=1,
+            status="running",
+            lease_expires_at=sa.func.now() + sa.text("interval '60 seconds'"),
+        )
+        inside_boundary = model.ResearchRun(
+            id=uuid4(),
+            generation_request_id=request.id,
+            attempt=2,
+            status="running",
+            lease_expires_at=sa.func.now() + sa.text("interval '59 seconds'"),
+        )
+        session.add_all([request, exact_boundary, inside_boundary])
+        session.flush()
+
+        stats = ResearchRepository(session).queue_stats()
+
+        assert exact_boundary.id not in stats["runs_near_lease_expiry"]
+        assert inside_boundary.id in stats["runs_near_lease_expiry"]
+    finally:
+        session.rollback()
+        session.close()
 
 
 def test_expired_lease_recovery_and_max_attempt_failure(session_factory: SessionFactory):

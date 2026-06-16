@@ -123,7 +123,7 @@ def _register_request_detail(app: FastAPI) -> None:
                     detail="request not found",
                 )
             runs = repo.list_runs(generation_request_id=request_uuid)
-            latest = max(runs, key=lambda r: r.created_at) if runs else None
+            latest = repo.get_latest_run_for_request(request_uuid)
             sources = repo.list_sources(latest.id) if latest else []
             findings = repo.list_findings(latest.id) if latest else []
 
