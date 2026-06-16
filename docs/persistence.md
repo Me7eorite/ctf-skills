@@ -56,6 +56,37 @@ A new database starts empty. The initial Alembic revision (`0001_baseline`) is
 a no-op so the migration chain is well-formed; real tables arrive in follow-up
 changes.
 
+## Schema
+
+Revision `0002_research_tables` adds the research-planning schema:
+
+- `challenge_categories`: lookup table for categories accepted by the research
+  layer. It is seeded with `pwn`, `re`, and `web`. Operators can enable a new
+  research category with a single `INSERT`; no migration is needed. The shard
+  pipeline may still support a smaller set, so startup logs a warning when the
+  research lookup table and shard categories diverge.
+- `generation_requests`: one operator intent record per research request,
+  including `category`, `topic`, `target_count`, `difficulty_distribution`,
+  `runtime_constraints`, persisted `seed_urls`, retry budget, and request
+  status.
+- `research_runs`: retryable execution attempts for a generation request.
+  Claims use `claimed_by`, `claim_token`, heartbeat, and lease timestamps so a
+  stale worker cannot finalize a run after losing ownership.
+- `research_sources`, `research_findings`, and `research_finding_sources`:
+  normalized research output. Every finding must reference at least one source,
+  and every referenced source must belong to the same run as the finding. The
+  repository validates this before writing the finding row, so the finding and
+  join rows are atomic.
+- `agent_roles` and `hermes_profile_bindings`: map project-owned agent roles to
+  Hermes profile names. The seeded research binding is
+  `(role='research', profile_name='default', status='enabled')`.
+
+The database stores only the binding from a project role to a Hermes profile
+name. It does **not** mirror Hermes profile contents such as `SOUL.md`,
+`config.yaml`, skills, sessions, memory, cron, or Hermes-owned state. Those
+remain under Hermes' profile directory and outside this project's persistence
+boundary.
+
 ## Day-to-day commands
 
 ```
