@@ -104,18 +104,18 @@
 
 ## 9a. Profile binding CLI
 
-- [ ] 9a.1 Add `challenge-factory profile` argparse subparser group in `src/cli.py`. All subcommands open a short DB session via `persistence.transaction()`.
-- [ ] 9a.2 Subcommand `profile list`: prints `role  profile_name  status  last_used_at` one per line via `ResearchRepository.list_bindings()`.
-- [ ] 9a.3 Subcommand `profile show <role>`: prints all fields of the binding for the given role (joined with `agent_roles.display_name`). Unknown role exits 2 with a clear error.
-- [ ] 9a.4 Subcommand `profile bind <role> <profile_name> [--description STR]`: validates `role` exists in `agent_roles`; calls `hermes.process.profile_exists(profile_name)` and refuses with a clear error if the profile is absent (suggests `hermes profile create <name>`); calls `ResearchRepository.upsert_binding(...)`. Argparse `choices=` for `<role>` is loaded from `agent_roles` at parser-build time with the same fallback pattern as `--category`.
-- [ ] 9a.5 Subcommand `profile enable <role>` / `profile disable <role>`: call `ResearchRepository.set_binding_status(...)`. Idempotent (re-enabling an already-enabled binding is not an error).
-- [ ] 9a.6 Subcommand `profile hermes-available`: runs `hermes profile list --json` as a subprocess, parses output, prints `profile_name  description` one per line. Helps operators discover what profiles Hermes actually has installed before they run `bind`.
-- [ ] 9a.7 Add `tests/app/test_profile_cli.py` covering: `list` empty + populated; `show` known and unknown role; `bind` happy path with `hermes.process.profile_exists` stubbed True; `bind` rejected when stubbed False with clear error; `bind` rejected for unknown role; `enable` / `disable` round-trip; `hermes-available` stubbing the subprocess.
+- [x] 9a.1 Add `challenge-factory profile` argparse subparser group in `src/cli.py`. All subcommands open a short DB session via `persistence.transaction()`.
+- [x] 9a.2 Subcommand `profile list`: prints `role  profile_name  status  last_used_at` one per line via `ResearchRepository.list_bindings()`.
+- [x] 9a.3 Subcommand `profile show <role>`: prints all fields of the binding for the given role (joined with `agent_roles.display_name`). Unknown role exits 2 with a clear error.
+- [x] 9a.4 Subcommand `profile bind <role> <profile_name> [--description STR]`: validates `role` exists in `agent_roles`; calls `hermes.process.profile_exists(profile_name)` and refuses with a clear error if the profile is absent (suggests `hermes profile create <name>`); calls `ResearchRepository.upsert_binding(...)`. Argparse `choices=` for `<role>` is loaded from `agent_roles` at parser-build time with the same fallback pattern as `--category`.
+- [x] 9a.5 Subcommand `profile enable <role>` / `profile disable <role>`: call `ResearchRepository.set_binding_status(...)`. Idempotent (re-enabling an already-enabled binding is not an error).
+- [x] 9a.6 Subcommand `profile hermes-available`: runs `hermes profile list --json` as a subprocess, parses output, prints `profile_name  description` one per line. Helps operators discover what profiles Hermes actually has installed before they run `bind`.
+- [x] 9a.7 Add `tests/app/test_profile_cli.py` covering: `list` empty + populated; `show` known and unknown role; `bind` happy path with `hermes.process.profile_exists` stubbed True; `bind` rejected when stubbed False with clear error; `bind` rejected for unknown role; `enable` / `disable` round-trip; `hermes-available` stubbing the subprocess.
 
 ## 9b. Category consistency check at startup
 
-- [ ] 9b.1 In `src/cli.py` before argparse runs, open a short read-only session (skipped silently if DB unreachable) and query `SELECT code FROM challenge_categories`. Compare against `core.queue.SUPPORTED_CATEGORIES`. For every code present in `challenge_categories` but NOT in `SUPPORTED_CATEGORIES`, log a single WARNING line of the form `"category 'crypto' is allowed for research but not yet supported by the shard pipeline"`. Do NOT block boot. Symmetric (`SUPPORTED_CATEGORIES` not in `challenge_categories`) is also warned but is unusual since the migration seed should match initially.
-- [ ] 9b.2 Add `tests/app/test_research_category_startup.py` (postgres-marked subtest) asserting the warning fires when a row is INSERTed into `challenge_categories` that `SUPPORTED_CATEGORIES` does not contain.
+- [x] 9b.1 In `src/cli.py` before argparse runs, open a short read-only session (skipped silently if DB unreachable) and query `SELECT code FROM challenge_categories`. Compare against `core.queue.SUPPORTED_CATEGORIES`. For every code present in `challenge_categories` but NOT in `SUPPORTED_CATEGORIES`, log a single WARNING line of the form `"category 'crypto' is allowed for research but not yet supported by the shard pipeline"`. Do NOT block boot. Symmetric (`SUPPORTED_CATEGORIES` not in `challenge_categories`) is also warned but is unusual since the migration seed should match initially.
+- [x] 9b.2 Add `tests/app/test_research_category_startup.py` (postgres-marked subtest) asserting the warning fires when a row is INSERTed into `challenge_categories` that `SUPPORTED_CATEGORIES` does not contain.
 
 ## 10. Web read endpoints
 
@@ -130,9 +130,9 @@
 
 ## 11. Dependency direction guardrail
 
-- [ ] 11.1 Extend `tests/app/test_dependency_direction.py::INTERNAL_ROOTS` with `services`.
-- [ ] 11.2 Extend `ALLOWED_IMPORTS` with `services: {persistence, hermes, domain, core}` and update `cli`, `web` to include `services` in their allow-lists.
-- [ ] 11.3 Add rejection tests for `hermes -> services`, `services -> web`, `domain -> services`. Reuse the `find_violations()` helper introduced in the previous change.
+- [x] 11.1 Extend `tests/app/test_dependency_direction.py::INTERNAL_ROOTS` with `services`.
+- [x] 11.2 Extend `ALLOWED_IMPORTS` with `services: {persistence, hermes, domain, core}` and update `cli`, `web` to include `services` in their allow-lists.
+- [x] 11.3 Add rejection tests for `hermes -> services`, `services -> web`, `domain -> services`. Reuse the `find_violations()` helper introduced in the previous change.
 
 ## 12. Tests against the dev database
 

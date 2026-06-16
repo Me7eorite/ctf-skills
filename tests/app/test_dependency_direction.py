@@ -4,10 +4,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
-INTERNAL_ROOTS = {"cli", "core", "domain", "packing", "hermes", "persistence", "web"}
+INTERNAL_ROOTS = {
+    "cli", "core", "domain", "packing", "hermes", "persistence", "services", "web",
+}
 ALLOWED_IMPORTS = {
-    "cli": {"web", "hermes", "packing", "persistence", "domain", "core"},
-    "web": {"persistence", "domain", "core"},
+    "cli": {"services", "web", "hermes", "packing", "persistence", "domain", "core"},
+    "web": {"services", "persistence", "domain", "core"},
+    "services": {"persistence", "hermes", "domain", "core"},
     "hermes": {"domain", "core"},
     "packing": {"core"},
     "persistence": {"domain", "core"},
@@ -116,6 +119,38 @@ class DependencyDirectionTests(unittest.TestCase):
         self.assertEqual(
             ["src/persistence/engine.py:1: import hermes.runner "
              "violates persistence -> hermes"],
+            violations,
+        )
+
+    def test_rejects_hermes_importing_services(self):
+        # 中文注释：hermes 必须独立于 services；executor 反向 import hermes 才符合方向。
+        tree = ast.parse("from services import ResearchWorker")
+        violations = find_violations("hermes", tree, "src/hermes/runner.py")
+        self.assertEqual(
+            ["src/hermes/runner.py:1: from services import ... "
+             "violates hermes -> services"],
+            violations,
+        )
+
+    def test_rejects_services_importing_web(self):
+        # 中文注释：services 不能依赖 web，否则把队列层和 HTTP 层耦合在一起。
+        tree = ast.parse("from web.server import serve")
+        violations = find_violations(
+            "services", tree, "src/services/research_worker.py"
+        )
+        self.assertEqual(
+            ["src/services/research_worker.py:1: from web.server import ... "
+             "violates services -> web"],
+            violations,
+        )
+
+    def test_rejects_domain_importing_services(self):
+        # 中文注释：domain 是纯数据 + 校验，不允许反向引用 services 编排层。
+        tree = ast.parse("import services.research_job_service")
+        violations = find_violations("domain", tree, "src/domain/research.py")
+        self.assertEqual(
+            ["src/domain/research.py:1: import services.research_job_service "
+             "violates domain -> services"],
             violations,
         )
 

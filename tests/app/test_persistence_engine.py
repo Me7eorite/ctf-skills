@@ -3,6 +3,17 @@ import pytest
 from persistence import PersistenceConfigurationError, create_engine_from_env
 
 
+@pytest.fixture(autouse=True)
+def _skip_dotenv(monkeypatch):
+    """Don't let project-root .env clobber `monkeypatch.delenv("DATABASE_URL")`.
+
+    `create_engine_from_env` calls `_ensure_dotenv_loaded` which reads .env
+    when present. The tests in this file probe the env-var fallback path,
+    so we mark dotenv as already-loaded to make the loader a no-op.
+    """
+    monkeypatch.setattr("persistence.engine._DOTENV_LOADED", True)
+
+
 def test_missing_database_url_raises(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     with pytest.raises(PersistenceConfigurationError) as excinfo:

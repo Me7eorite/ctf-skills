@@ -14,7 +14,7 @@ from pathlib import Path
 from uuid import UUID
 
 from core.paths import ProjectPaths
-from core.queue import ShardQueue, split_matrix
+from core.queue import SUPPORTED_CATEGORIES, ShardQueue, split_matrix
 from core.state import STAGES, STATUSES, StateStore
 from domain.metrics import duration_breakdown
 from domain.reports import merge_reports
@@ -118,6 +118,7 @@ def parser() -> argparse.ArgumentParser:
     web.add_argument("--port", type=int, default=4173)
 
     _register_research_commands(commands)
+    _register_profile_commands(commands)
     return root
 
 
@@ -246,6 +247,214 @@ def _resolve_run_timeout(cli_value: int | None) -> tuple[int, str]:
             sys.exit(2)
         return env_value, "env"
     return DEFAULT_HERMES_TIMEOUT, "default"
+
+
+# ---------------------------------------------------------------------------
+# `profile` subcommand group
+# ---------------------------------------------------------------------------
+
+
+_FALLBACK_AGENT_ROLES: tuple[str, ...] = ("research",)
+
+
+def _register_profile_commands(commands: argparse._SubParsersAction) -> None:
+    """Attach the `profile` subparser group (Hermes profile binding management)."""
+    profile = commands.add_parser(
+        "profile",
+        help="Hermes profile binding operations (list, show, bind, enable, disable, hermes-available)",
+    )
+    sub = profile.add_subparsers(dest="profile_command", required=True)
+    role_choices = _fetch_agent_role_choices()
+
+    sub.add_parser("list", help="list current role → Hermes profile bindings")
+
+    show = sub.add_parser("show", help="show one binding")
+    show.add_argument("role", choices=role_choices)
+
+    bind = sub.add_parser("bind", help="set a binding (validates profile exists in Hermes)")
+    bind.add_argument("role", choices=role_choices)
+    bind.add_argument("profile_name")
+    bind.add_argument("--description", default=None)
+
+    enable = sub.add_parser("enable", help="enable a binding (idempotent)")
+    enable.add_argument("role", choices=role_choices)
+
+    disable = sub.add_parser("disable", help="disable a binding (idempotent)")
+    disable.add_argument("role", choices=role_choices)
+
+    sub.add_parser("hermes-available", help="list profiles Hermes itself has installed")
+
+
+def _fetch_agent_role_choices() -> list[str]:
+    """Read `agent_roles.code` for argparse `choices`; safe fallback on DB miss."""
+    try:
+        import sqlalchemy as sa
+
+        from persistence.models import research as model
+        from persistence.session import transaction
+
+        with transaction() as session:
+            rows = session.scalars(sa.select(model.AgentRole.code)).all()
+            return list(rows) or list(_FALLBACK_AGENT_ROLES)
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"warning: could not query agent_roles ({exc.__class__.__name__}); "
+            f"falling back to {list(_FALLBACK_AGENT_ROLES)}",
+            file=sys.stderr,
+        )
+        return list(_FALLBACK_AGENT_ROLES)
+
+
+def _handle_profile(args: argparse.Namespace) -> None:
+    """Dispatch one of the six `profile <subcmd>` operations."""
+    try:
+        if args.profile_command == "list":
+            _profile_list()
+        elif args.profile_command == "show":
+            _profile_show(args)
+        elif args.profile_command == "bind":
+            _profile_bind(args)
+        elif args.profile_command == "enable":
+            _profile_set_status(args, "enabled")
+        elif args.profile_command == "disable":
+            _profile_set_status(args, "disabled")
+        elif args.profile_command == "hermes-available":
+            _profile_hermes_available()
+        else:  # pragma: no cover — argparse rejects this earlier
+            print(f"error: unknown profile command {args.profile_command!r}", file=sys.stderr)
+            sys.exit(2)
+    except Exception as exc:  # noqa: BLE001 — translate any persistence-layer error
+        from persistence.errors import (
+            PersistenceConfigurationError,
+            PersistenceConnectionError,
+        )
+
+        if isinstance(exc, (PersistenceConfigurationError, PersistenceConnectionError)):
+            print(f"error: {exc}", file=sys.stderr)
+            sys.exit(2)
+        raise
+
+
+def _profile_list() -> None:
+    from persistence.repositories import ResearchRepository
+    from persistence.session import transaction
+
+    with transaction() as session:
+        bindings = ResearchRepository(session).list_bindings()
+    if not bindings:
+        print("(no bindings)")
+        return
+    for binding in bindings:
+        last_used = binding.last_used_at.isoformat() if binding.last_used_at else "-"
+        print(
+            f"{binding.role:12s}  {binding.profile_name:20s}  "
+            f"{binding.status:8s}  last_used={last_used}"
+        )
+
+
+def _profile_show(args: argparse.Namespace) -> None:
+    from persistence.repositories import ResearchRepository
+    from persistence.session import transaction
+
+    with transaction() as session:
+        binding = ResearchRepository(session).get_binding(args.role)
+    if binding is None:
+        print(f"error: no binding for role {args.role!r}", file=sys.stderr)
+        sys.exit(2)
+    print(f"role            : {binding.role}")
+    print(f"profile_name    : {binding.profile_name}")
+    print(f"description     : {binding.description or '-'}")
+    print(f"status          : {binding.status}")
+    print(f"last_used_at    : {binding.last_used_at.isoformat() if binding.last_used_at else '-'}")
+    print(f"last_used_run_id: {binding.last_used_run_id or '-'}")
+    print(f"created_at      : {binding.created_at.isoformat()}")
+    print(f"updated_at      : {binding.updated_at.isoformat()}")
+
+
+def _profile_bind(args: argparse.Namespace) -> None:
+    from hermes.process import profile_exists
+    from persistence.repositories import ResearchRepository
+    from persistence.session import transaction
+
+    if not profile_exists(args.profile_name):
+        print(
+            f"error: Hermes profile {args.profile_name!r} does not exist; "
+            f"create it with 'hermes profile create {args.profile_name}' first",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    try:
+        with transaction() as session:
+            binding = ResearchRepository(session).upsert_binding(
+                args.role, args.profile_name, description=args.description
+            )
+    except ResearchValidationError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(2)
+    print(
+        f"bound {binding.role} → {binding.profile_name} (status={binding.status})"
+    )
+
+
+def _profile_set_status(args: argparse.Namespace, status: str) -> None:
+    from persistence.repositories import ResearchRepository
+    from persistence.session import transaction
+
+    try:
+        with transaction() as session:
+            binding = ResearchRepository(session).set_binding_status(args.role, status)
+    except ResearchValidationError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(2)
+    print(f"{binding.role} status set to {binding.status}")
+
+
+def _profile_hermes_available() -> None:
+    """Shell out to `hermes profile list --json` and pretty-print."""
+    import subprocess
+
+    from hermes.process import hermes_arguments
+
+    base = hermes_arguments()
+    try:
+        chat_index = base.index("chat")
+    except ValueError:
+        chat_index = 1 if base else 0
+    argv = [*base[:chat_index], "profile", "list", "--json"]
+    try:
+        proc = subprocess.run(
+            argv, capture_output=True, text=True, timeout=10, check=False
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        print(f"error: could not run Hermes ({exc.__class__.__name__})", file=sys.stderr)
+        sys.exit(2)
+    if proc.returncode != 0:
+        print(
+            f"error: Hermes exited {proc.returncode}\n{proc.stderr.strip()}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    try:
+        profiles = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        print(f"error: Hermes output is not valid JSON: {exc}", file=sys.stderr)
+        sys.exit(2)
+    if not isinstance(profiles, list):
+        print(
+            f"error: expected a JSON list from Hermes, got {type(profiles).__name__}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if not profiles:
+        print("(no Hermes profiles installed)")
+        return
+    for item in profiles:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name") or item.get("profile_name") or "?"
+        desc = item.get("description") or ""
+        print(f"{name:20s}  {desc}")
 
 
 def _handle_research(args: argparse.Namespace, paths: ProjectPaths) -> None:
@@ -451,7 +660,43 @@ def _research_categories() -> None:
         print(f"{cat.code:8s}  {cat.display_name:20s}  {cat.description or ''}")
 
 
+def _check_category_consistency() -> None:
+    """Warn when `challenge_categories` (DB) diverges from `SUPPORTED_CATEGORIES`.
+
+    DB-side codes missing from `core.queue.SUPPORTED_CATEGORIES` are allowed
+    for research but not yet supported by the shard pipeline downstream;
+    operators need to know before they queue work that has nowhere to go.
+    Codes in `SUPPORTED_CATEGORIES` missing from the DB are unusual since
+    the migration seed should match initially — warn anyway.
+
+    Silently skipped if the DB is unreachable (CLI must still run for users
+    without DB access — e.g. `--help`, `init`, `split`).
+    """
+    try:
+        from persistence.repositories import ResearchRepository
+        from persistence.session import transaction
+
+        with transaction() as session:
+            db_codes = {cat.code for cat in ResearchRepository(session).list_categories()}
+    except Exception:  # noqa: BLE001 — DB issues must not block CLI boot
+        return
+
+    for code in sorted(db_codes - SUPPORTED_CATEGORIES):
+        print(
+            f"warning: category {code!r} is allowed for research but not yet "
+            "supported by the shard pipeline",
+            file=sys.stderr,
+        )
+    for code in sorted(SUPPORTED_CATEGORIES - db_codes):
+        print(
+            f"warning: category {code!r} is in core.queue.SUPPORTED_CATEGORIES "
+            "but missing from challenge_categories",
+            file=sys.stderr,
+        )
+
+
 def main() -> None:
+    _check_category_consistency()
     args = parser().parse_args()
     paths = ProjectPaths.discover()
 
@@ -553,6 +798,10 @@ def main() -> None:
 
     if args.command == "research":
         _handle_research(args, paths)
+        return
+
+    if args.command == "profile":
+        _handle_profile(args)
 
 
 if __name__ == "__main__":
