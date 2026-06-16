@@ -1,5 +1,5 @@
 import { api } from "../api.js";
-import { escapeHtml, categoryLabel, categoryTone, statusIndicator, softPill } from "../ui/format.js";
+import { escapeHtml, categoryLabel, categoryTone, formatDateTime, statusIndicator, softPill } from "../ui/format.js";
 import { setView } from "../router.js";
 
 const RUN_STATUSES = ["queued", "running", "completed", "failed"];
@@ -121,7 +121,7 @@ function renderRunsTable(items) {
               <td>${statusIndicator(r.status)}</td>
               <td class="mono" style="font-size: var(--font-mono);">${escapeHtml(r.claimed_by || "-")}</td>
               <td class="mono" style="font-size: var(--font-mono);">${escapeHtml(r.profile_name_used || "-")}</td>
-              <td class="table-cell-time">${escapeHtml(r.started_at?.slice(0, 19) || "-")}</td>
+              <td class="table-cell-time">${escapeHtml(formatDateTime(r.started_at))}</td>
               <td>
                 ${r.hermes_log_path ? `<button class="btn btn-ghost btn-sm run-open-log" data-log="${escapeHtml(r.hermes_log_path)}"><i data-lucide="file-text"></i></button>` : "-"}
               </td>

@@ -1,6 +1,6 @@
 import { api } from "../api.js";
 import { showToast } from "../ui/toast.js";
-import { escapeHtml } from "../ui/format.js";
+import { escapeHtml, formatDateTime } from "../ui/format.js";
 
 let openName = null;
 let logs = [];
@@ -54,7 +54,7 @@ function logListHtml() {
       <div class="log-item-name">${escapeHtml(log.name)}</div>
       <div class="log-item-meta">
         <span>${Math.ceil(log.size / 1024)} KB</span>
-        <span>${escapeHtml((log.updated_at || "").slice(0, 19))}</span>
+        <span>${escapeHtml(formatDateTime(log.updated_at))}</span>
       </div>
     </button>
   `).join("");

@@ -216,10 +216,20 @@ def _register_requests_list(app: FastAPI) -> None:
                             f"allowed: {allowed}"
                         ),
                     )
-            requests = repo.list_generation_requests(
-                category=category, status=status
-            )
-        return JSONResponse([_request_dict(r) for r in requests])
+            requests = repo.list_generation_requests(category=category)
+            latest_for_request = {}
+            latest_lookup = getattr(repo, "get_latest_run_for_request", None)
+            if latest_lookup is not None:
+                latest_for_request = {
+                    request.id: latest_lookup(request.id) for request in requests
+                }
+            rows = [
+                _request_dict(request, latest_run=latest_for_request.get(request.id))
+                for request in requests
+            ]
+            if status is not None:
+                rows = [row for row in rows if row["status"] == status]
+        return JSONResponse(rows)
 
 
 # ---------------------------------------------------------------------------
@@ -373,7 +383,7 @@ def _register_request_detail(app: FastAPI) -> None:
 
         return JSONResponse(
             {
-                "request": _request_dict(request),
+                "request": _request_dict(request, latest_run=latest),
                 "latest_run": _run_dict(latest, category=request.category)
                 if latest is not None
                 else None,
@@ -535,7 +545,28 @@ def _category_dict(category: dto.ChallengeCategory) -> dict[str, Any]:
     }
 
 
-def _request_dict(request: dto.GenerationRequest) -> dict[str, Any]:
+def _display_request_status(
+    request: dto.GenerationRequest,
+    latest_run: dto.ResearchRun | None = None,
+) -> str:
+    if latest_run is None:
+        return "draft" if request.status == "researching" else request.status
+    if latest_run.status == "running":
+        return "researching"
+    if latest_run.status == "completed":
+        return "researched"
+    if latest_run.status == "failed":
+        return "failed" if request.status == "failed" else "draft"
+    if latest_run.status == "queued":
+        return "draft"
+    return request.status
+
+
+def _request_dict(
+    request: dto.GenerationRequest,
+    *,
+    latest_run: dto.ResearchRun | None = None,
+) -> dict[str, Any]:
     return {
         "id": str(request.id),
         "category": request.category,
@@ -545,7 +576,8 @@ def _request_dict(request: dto.GenerationRequest) -> dict[str, Any]:
         "runtime_constraints": dict(request.runtime_constraints),
         "seed_urls": list(request.seed_urls),
         "max_attempts": request.max_attempts,
-        "status": request.status,
+        "status": _display_request_status(request, latest_run),
+        "stored_status": request.status,
         "created_at": _isofmt(request.created_at),
         "updated_at": _isofmt(request.updated_at),
     }

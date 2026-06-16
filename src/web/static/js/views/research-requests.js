@@ -1,6 +1,14 @@
 import { api, postJson } from "../api.js";
 import { showToast } from "../ui/toast.js";
-import { escapeHtml, categoryLabel, categoryTone, statusIndicator, softPill } from "../ui/format.js";
+import {
+  escapeHtml,
+  categoryLabel,
+  categoryTone,
+  formatDateTime,
+  requestStatusPill,
+  statusIndicator,
+  softPill,
+} from "../ui/format.js";
 import { setView } from "../router.js";
 import { showRunsForRequest } from "./research-runs.js";
 
@@ -93,7 +101,9 @@ async function runWorkerAction(action, body = {}) {
     const result = await postJson(`/api/research/worker/${action}`, body);
     showToast(result.message || "OK");
     state.worker = result.state || null;
+    state.requests = null;
     await reloadDetail();
+    await ensureRequests();
     await ensureWorker();
   } catch (err) {
     showToast(err.message, true);
@@ -180,8 +190,8 @@ function renderRequestsTable(items) {
               <td>${softPill(categoryLabel(r.category), categoryTone(r.category))}</td>
               <td><div class="truncate" style="max-width: 360px;">${escapeHtml(r.topic)}</div></td>
               <td style="text-align: right;">${r.target_count}</td>
-              <td>${statusIndicator(r.status)}</td>
-              <td class="table-cell-time">${escapeHtml(r.created_at?.slice(0, 19) ?? "-")}</td>
+              <td>${requestStatusPill(r.status)}</td>
+              <td class="table-cell-time">${escapeHtml(formatDateTime(r.created_at))}</td>
             </tr>
           `).join("")}
         </tbody>
@@ -230,7 +240,7 @@ function renderDetail(root) {
     <section class="card card-body">
       <div class="flex items-center gap-2" style="flex-wrap: wrap;">
         ${softPill(categoryLabel(request.category), categoryTone(request.category))}
-        ${statusIndicator(request.status)}
+        ${requestStatusPill(request.status)}
         ${statusIndicator(workerRunning ? "running" : "idle")}
       </div>
       <h2 style="font-size: var(--font-lg); font-weight: 600; margin-top: var(--space-sm);">${escapeHtml(request.topic)}</h2>
@@ -287,7 +297,7 @@ function renderRunsTable(runs) {
               <td style="text-align: center;">${run.attempt}</td>
               <td>${statusIndicator(run.status)}</td>
               <td class="mono" style="font-size: var(--font-mono);">${escapeHtml(run.claimed_by || "-")}</td>
-              <td class="table-cell-time">${escapeHtml(run.finished_at?.slice(0, 19) || "-")}</td>
+              <td class="table-cell-time">${escapeHtml(formatDateTime(run.finished_at))}</td>
               <td>${run.hermes_log_path ? `<button class="btn btn-ghost btn-sm detail-open-logs"><i data-lucide="file-text"></i></button>` : "-"}</td>
             </tr>
           `).join("")}

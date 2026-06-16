@@ -58,7 +58,7 @@ class ResearchJobService:
                 seed_urls=seed_urls,
                 max_attempts=max_attempts,
                 runtime_constraints=runtime_constraints,
-                status="researching",
+                status="draft",
             )
             run = repo.create_run(generation_request_id=request.id, attempt=1, status="queued")
             # 返回的是 DTO；事务提交后调用方不会拿到仍绑定 session 的 ORM 对象。
@@ -114,6 +114,9 @@ class ResearchJobService:
             queued.claimed_at = now
             queued.heartbeat_at = now
             queued.lease_expires_at = now + timedelta(seconds=lease_seconds)
+            request = _get_request(session, queued.generation_request_id)
+            request.status = "researching"
+            request.updated_at = now
             session.flush()
             # flush 后 DTO 中能看到 claim_token、claimed_at、lease_expires_at 等新值。
             return _run_dto(queued)
@@ -346,7 +349,7 @@ class ResearchJobService:
                 status="queued",
             )
             session.add(retry)
-            # 还有 retry 可执行时，父 request 仍处于 researching。
+            # 还有 retry 可执行时，父 request 仍处于 researching，执行过应该就是 ing 状态
             request.status = "researching"
             was_retried = True
         else:

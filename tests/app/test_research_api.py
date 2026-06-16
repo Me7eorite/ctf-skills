@@ -490,6 +490,47 @@ class BindingDetailEndpointTests(unittest.TestCase):
         finally:
             _close(client)
 
+    def test_queued_latest_run_displays_as_draft_even_when_stored_researching(self):
+        req = _make_request(category="web", topic="Queued", status="researching")
+        run = _make_run(request_id=req.id, status="queued")
+        repo = SimpleNamespace(
+            list_categories=lambda: [],
+            list_generation_requests=lambda **_kw: [req],
+            get_latest_run_for_request=lambda _request_id: run,
+        )
+        client = _client(repo)
+        try:
+            resp = client.get("/api/research/requests")
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.json()[0]
+            self.assertEqual(payload["status"], "draft")
+            self.assertEqual(payload["stored_status"], "researching")
+        finally:
+            _close(client)
+
+    def test_status_filter_uses_display_status(self):
+        queued = _make_request(category="web", topic="Queued", status="researching")
+        running = _make_request(category="web", topic="Running", status="researching")
+        latest_by_request = {
+            queued.id: _make_run(request_id=queued.id, status="queued"),
+            running.id: _make_run(request_id=running.id, status="running"),
+        }
+        repo = SimpleNamespace(
+            list_categories=lambda: [],
+            list_generation_requests=lambda **_kw: [queued, running],
+            get_latest_run_for_request=lambda request_id: latest_by_request[request_id],
+        )
+        client = _client(repo)
+        try:
+            resp = client.get("/api/research/requests?status=draft")
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.json()
+            self.assertEqual(len(payload), 1)
+            self.assertEqual(payload[0]["id"], str(queued.id))
+            self.assertEqual(payload[0]["status"], "draft")
+        finally:
+            _close(client)
+
 
 # ---------------------------------------------------------------------------
 # GET /api/research/logs

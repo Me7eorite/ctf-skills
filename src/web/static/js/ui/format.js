@@ -52,3 +52,31 @@ export function statusIndicator(status) {
 export function softPill(text, tone = "text-ink-700 bg-ink-100") {
   return `<span class="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${tone}">${escapeHtml(text)}</span>`;
 }
+
+export const requestStatusMeta = {
+  draft: { label: "Draft", tone: "text-ink-700 bg-ink-100" },
+  researching: { label: "Researching", tone: "text-blue-700 bg-blue-50" },
+  researched: { label: "Researched", tone: "text-emerald-700 bg-emerald-50" },
+  failed: { label: "Failed", tone: "text-rose-700 bg-rose-50" },
+};
+
+export function requestStatusPill(status) {
+  const meta = requestStatusMeta[status] || { label: status || "unknown", tone: "text-ink-700 bg-ink-100" };
+  return softPill(meta.label, meta.tone);
+}
+
+export function formatDateTime(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value).slice(0, 19);
+  return date.toLocaleString("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
