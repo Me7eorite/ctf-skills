@@ -1,4 +1,4 @@
-"""Repository primitives for research-planning persistence."""
+"""research-planning 持久化仓储原语。"""
 
 from __future__ import annotations
 
@@ -21,18 +21,24 @@ from persistence.models import research as model
 
 
 class ResearchRepository:
-    """Typed CRUD/query primitives; callers own transaction boundaries."""
+    """类型化 CRUD/查询原语；事务边界由调用方负责。"""
 
     def __init__(self, session: Session) -> None:
+        # Repository 只持有调用方传入的 session，不自行 commit/rollback。
         self.session = session
 
     def list_categories(self) -> list[dto.ChallengeCategory]:
+        """列出 research 层允许的题目分类。"""
+        # challenge_categories 是分类白名单来源，按 code 排序保证输出稳定。
         rows = self.session.scalars(
             sa.select(model.ChallengeCategory).order_by(model.ChallengeCategory.code)
         ).all()
+        # ORM row 不向上泄漏，统一转换成 domain DTO。
         return [_category(row) for row in rows]
 
     def get_generation_request(self, request_id: UUID) -> dto.GenerationRequest | None:
+        """按 id 读取 generation request。"""
+        # session.get 走主键读取；找不到时返回 None，让上层决定 404/失败策略。
         row = self.session.get(model.GenerationRequest, request_id)
         return _generation_request(row) if row else None
 
@@ -42,14 +48,20 @@ class ResearchRepository:
         category: str | None = None,
         status: str | None = None,
     ) -> list[dto.GenerationRequest]:
+        """按可选 category/status 过滤 generation requests。"""
         stmt = sa.select(model.GenerationRequest).order_by(model.GenerationRequest.created_at)
+        # 先构造基础查询，再按传入过滤条件逐步收窄。
         if category is not None:
+            # category 过滤用于运营侧按题目类型查看 research 请求。
             stmt = stmt.where(model.GenerationRequest.category == category)
         if status is not None:
+            # status 过滤用于队列和 UI 只展示特定生命周期状态。
             stmt = stmt.where(model.GenerationRequest.status == status)
         return [_generation_request(row) for row in self.session.scalars(stmt)]
 
     def get_run(self, run_id: UUID) -> dto.ResearchRun | None:
+        """按 id 读取 research run。"""
+        # run 是队列尝试记录，主键查询保持最小开销。
         row = self.session.get(model.ResearchRun, run_id)
         return _run(row) if row else None
 
@@ -61,16 +73,23 @@ class ResearchRepository:
         generation_request_id: UUID | None = None,
         limit: int = 100,
     ) -> list[dto.ResearchRun]:
+        """列出 research runs，并支持常用队列过滤条件。"""
+        # 默认按 created_at 排序，便于观察队列尝试的时间顺序。
         stmt = sa.select(model.ResearchRun).order_by(model.ResearchRun.created_at).limit(limit)
         if status is not None:
+            # status 用于查看 queued/running/completed/failed 子集。
             stmt = stmt.where(model.ResearchRun.status == status)
         if claimed_by is not None:
+            # claimed_by 用于定位某个 worker 当前或历史持有的任务。
             stmt = stmt.where(model.ResearchRun.claimed_by == claimed_by)
         if generation_request_id is not None:
+            # generation_request_id 用于查看同一请求的重试链。
             stmt = stmt.where(model.ResearchRun.generation_request_id == generation_request_id)
         return [_run(row) for row in self.session.scalars(stmt)]
 
     def list_sources(self, run_id: UUID) -> list[dto.ResearchSource]:
+        """列出某个 run 采集到的 sources。"""
+        # 按 fetched_at 和 id 排序，保证同一批结果重复读取顺序稳定。
         rows = self.session.scalars(
             sa.select(model.ResearchSource)
             .where(model.ResearchSource.research_run_id == run_id)
@@ -79,6 +98,8 @@ class ResearchRepository:
         return [_source(row) for row in rows]
 
     def list_findings(self, run_id: UUID) -> list[dto.ResearchFinding]:
+        """列出某个 run 提炼出的 findings。"""
+        # 按 label 和 id 排序，方便 UI/CLI 展示和测试断言稳定。
         rows = self.session.scalars(
             sa.select(model.ResearchFinding)
             .where(model.ResearchFinding.research_run_id == run_id)
@@ -87,15 +108,18 @@ class ResearchRepository:
         return [_finding(row) for row in rows]
 
     def queue_stats(self) -> dict[str, Any]:
-        counts = dict(
-            self.session.execute(
-                sa.select(model.ResearchRun.status, sa.func.count()).group_by(model.ResearchRun.status)
-            ).all()
-        )
+        """统计 research queue 的状态概览。"""
+        # 先按 status 聚合数量；显式推导避免 SQLAlchemy Row 触发类型检查误报。
+        count_rows = self.session.execute(
+            sa.select(model.ResearchRun.status, sa.func.count()).group_by(model.ResearchRun.status)
+        ).all()
+        counts = {str(row[0]): int(row[1]) for row in count_rows}
+        # oldest queued 用于估算队列积压时间。
         oldest_queued = self.session.scalar(
             sa.select(sa.func.min(model.ResearchRun.created_at)).where(model.ResearchRun.status == "queued")
         )
         now = _utcnow()
+        # 只统计 running 且 60 秒内到期的 run；终态 run 的历史 lease 不参与告警。
         near_expiry = self.session.scalars(
             sa.select(model.ResearchRun.id)
             .where(
@@ -106,6 +130,7 @@ class ResearchRepository:
         ).all()
         oldest_age = None
         if oldest_queued is not None:
+            # 系统时钟轻微回拨时不返回负数。
             oldest_age = max(0.0, (now - oldest_queued).total_seconds())
         return {
             "queued": int(counts.get("queued", 0)),
@@ -128,11 +153,15 @@ class ResearchRepository:
         runtime_constraints: Mapping[str, Any] | None = None,
         status: str = "draft",
     ) -> dto.GenerationRequest:
+        """创建 generation request，但不提交事务。"""
+        # category 不是 Python 常量，必须从数据库 lookup table 动态读取允许值。
         allowed_codes = [cat.code for cat in self.list_categories()]
         validate_category(category, allowed_codes)
+        # difficulty_distribution 属于业务约束，写入前先在 domain 层校验。
         validate_distribution(target_count, difficulty_distribution)
         if max_attempts <= 0:
             raise ResearchValidationError(f"max_attempts must be positive, got {max_attempts}")
+        # JSONB 字段统一复制成普通 dict/list，避免持久化外部可变对象引用。
         row = model.GenerationRequest(
             id=uuid4(),
             category=category,
@@ -145,7 +174,9 @@ class ResearchRepository:
             status=status,
         )
         self.session.add(row)
+        # flush 让数据库执行约束检查并生成 server default 字段。
         self.session.flush()
+        # refresh 读取 created_at/updated_at 等数据库默认值后再转 DTO。
         self.session.refresh(row)
         return _generation_request(row)
 
@@ -157,8 +188,11 @@ class ResearchRepository:
         attempt: int = 1,
         status: str = "queued",
     ) -> dto.ResearchRun:
+        """创建 research run 队列记录，但不提交事务。"""
+        # attempt 从 1 开始，0 或负数会破坏重试链语义。
         if attempt <= 0:
             raise ResearchValidationError(f"attempt must be positive, got {attempt}")
+        # parent_run_id 用于把失败重试串成可审计的链。
         row = model.ResearchRun(
             id=uuid4(),
             generation_request_id=generation_request_id,
@@ -167,6 +201,7 @@ class ResearchRepository:
             status=status,
         )
         self.session.add(row)
+        # flush 提前触发 FK/unique/check 约束，调用方事务仍可统一回滚。
         self.session.flush()
         self.session.refresh(row)
         return _run(row)
@@ -182,6 +217,8 @@ class ResearchRepository:
         fetched_at: datetime,
         raw_text_path: str | None = None,
     ) -> dto.ResearchSource:
+        """为某个 research run 添加 source 元数据。"""
+        # raw_text 本体放文件系统；数据库只保存 raw_text_path 和内容摘要。
         row = model.ResearchSource(
             id=uuid4(),
             research_run_id=run_id,
@@ -193,6 +230,7 @@ class ResearchRepository:
             raw_text_path=raw_text_path,
         )
         self.session.add(row)
+        # 立即 flush 以拿到 id，后续 finding join table 需要引用 source_id。
         self.session.flush()
         return _source(row)
 
@@ -205,14 +243,19 @@ class ResearchRepository:
         summary: str,
         source_ids: Sequence[UUID],
     ) -> dto.ResearchFinding:
+        """创建 finding 及其 source 引用关系。"""
+        # 先校验 kind 和 source_ids 非空/不重复，避免写入孤立 finding。
         validate_finding(kind, source_ids)
+        # 一次查询取回所有 source 的 run 归属，用于检测缺失和跨 run 引用。
         rows = self.session.execute(
             sa.select(model.ResearchSource.id, model.ResearchSource.research_run_id).where(
                 model.ResearchSource.id.in_(source_ids)
             )
         ).all()
         found = {row.id: row.research_run_id for row in rows}
+        # 显式报 missing，而不是依赖数据库 FK 抛低层 IntegrityError。
         missing = [source_id for source_id in source_ids if source_id not in found]
+        # finding 只能引用同一个 run 捕获的 source，防止跨请求污染证据链。
         wrong_run = [source_id for source_id, found_run_id in found.items() if found_run_id != run_id]
         if missing:
             raise ResearchValidationError(f"source_id(s) do not exist: {missing}")
@@ -227,6 +270,7 @@ class ResearchRepository:
             summary=summary,
         )
         self.session.add(finding)
+        # finding 和 join rows 在同一 session/事务中写入，调用方失败时整体回滚。
         for source_id in source_ids:
             self.session.add(
                 model.ResearchFindingSource(
@@ -238,10 +282,14 @@ class ResearchRepository:
         return _finding(finding)
 
     def get_binding(self, role: str) -> dto.HermesProfileBinding | None:
+        """按 role 读取 Hermes profile binding。"""
+        # role 是 hermes_profile_bindings 的主键，直接主键读取。
         row = self.session.get(model.HermesProfileBinding, role)
         return _binding(row) if row else None
 
     def list_bindings(self) -> list[dto.HermesProfileBinding]:
+        """列出所有 Hermes profile bindings。"""
+        # 按 role 排序保证运营输出稳定。
         rows = self.session.scalars(
             sa.select(model.HermesProfileBinding).order_by(model.HermesProfileBinding.role)
         ).all()
@@ -253,10 +301,13 @@ class ResearchRepository:
         profile_name: str,
         description: str | None = None,
     ) -> dto.HermesProfileBinding:
+        """新增或更新某个 role 对应的 Hermes profile binding。"""
+        # 先校验 role 已在 agent_roles 中注册，避免 FK 错误暴露给调用方。
         self._require_role(role)
         now = _utcnow()
         row = self.session.get(model.HermesProfileBinding, role)
         if row is None:
+            # 首次绑定默认启用；operator 可后续显式 disable。
             row = model.HermesProfileBinding(
                 role=role,
                 profile_name=profile_name,
@@ -266,6 +317,7 @@ class ResearchRepository:
             )
             self.session.add(row)
         else:
+            # upsert 不改变 last_used_*，只更新配置值和 updated_at。
             row.profile_name = profile_name
             row.description = description
             row.updated_at = now
@@ -274,6 +326,8 @@ class ResearchRepository:
         return _binding(row)
 
     def set_binding_status(self, role: str, status: str) -> dto.HermesProfileBinding:
+        """启用或禁用某个 Hermes profile binding。"""
+        # status 不是数据库 enum，这里用 domain 常量提前校验。
         if status not in dto.BindingStatus:
             raise ResearchValidationError(
                 f"binding status {status!r} is not allowed; allowed: {list(dto.BindingStatus)}"
@@ -281,6 +335,7 @@ class ResearchRepository:
         row = self.session.get(model.HermesProfileBinding, role)
         if row is None:
             raise ResearchValidationError(f"binding role {role!r} does not exist")
+        # 幂等设置同一状态也会刷新 updated_at，便于审计最近操作。
         row.status = status
         row.updated_at = _utcnow()
         self.session.flush()
@@ -294,6 +349,8 @@ class ResearchRepository:
         last_used_at: datetime,
         last_used_run_id: UUID,
     ) -> None:
+        """记录某个 binding 最近一次被 research run 使用。"""
+        # 执行成功后由 service 调用；不会改变 profile_name/status 配置。
         row = self.session.get(model.HermesProfileBinding, role)
         if row is None:
             raise ResearchValidationError(f"binding role {role!r} does not exist")
@@ -303,16 +360,20 @@ class ResearchRepository:
         self.session.flush()
 
     def _require_role(self, role: str) -> None:
+        """确认 agent role 已存在。"""
+        # 只查询布尔值，避免把完整 AgentRole row 加载进 session。
         exists = self.session.scalar(sa.select(sa.literal(True)).where(model.AgentRole.code == role))
         if not exists:
             raise ResearchValidationError(f"agent role {role!r} does not exist")
 
 
 def _utcnow() -> datetime:
+    """返回带 UTC 时区的当前时间。"""
     return datetime.now(timezone.utc)
 
 
 def _category(row: model.ChallengeCategory) -> dto.ChallengeCategory:
+    """把 ChallengeCategory ORM row 转成 DTO。"""
     return dto.ChallengeCategory(
         code=row.code,
         display_name=row.display_name,
@@ -321,6 +382,7 @@ def _category(row: model.ChallengeCategory) -> dto.ChallengeCategory:
 
 
 def _binding(row: model.HermesProfileBinding) -> dto.HermesProfileBinding:
+    """把 HermesProfileBinding ORM row 转成 DTO。"""
     return dto.HermesProfileBinding(
         role=row.role,
         profile_name=row.profile_name,
@@ -334,6 +396,8 @@ def _binding(row: model.HermesProfileBinding) -> dto.HermesProfileBinding:
 
 
 def _generation_request(row: model.GenerationRequest) -> dto.GenerationRequest:
+    """把 GenerationRequest ORM row 转成 DTO。"""
+    # JSONB 字段复制成普通 dict/list，避免 DTO 暴露 ORM 内部可变状态。
     return dto.GenerationRequest(
         id=row.id,
         category=row.category,
@@ -350,6 +414,8 @@ def _generation_request(row: model.GenerationRequest) -> dto.GenerationRequest:
 
 
 def _run(row: model.ResearchRun) -> dto.ResearchRun:
+    """把 ResearchRun ORM row 转成 DTO。"""
+    # 普通查询场景没有 was_retried 分支信息，统一置为 None。
     return dto.ResearchRun(
         id=row.id,
         generation_request_id=row.generation_request_id,
@@ -372,6 +438,7 @@ def _run(row: model.ResearchRun) -> dto.ResearchRun:
 
 
 def _source(row: model.ResearchSource) -> dto.ResearchSource:
+    """把 ResearchSource ORM row 转成 DTO。"""
     return dto.ResearchSource(
         id=row.id,
         research_run_id=row.research_run_id,
@@ -385,6 +452,7 @@ def _source(row: model.ResearchSource) -> dto.ResearchSource:
 
 
 def _finding(row: model.ResearchFinding) -> dto.ResearchFinding:
+    """把 ResearchFinding ORM row 转成 DTO。"""
     return dto.ResearchFinding(
         id=row.id,
         research_run_id=row.research_run_id,
