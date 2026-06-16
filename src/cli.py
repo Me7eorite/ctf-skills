@@ -18,7 +18,7 @@ from core.queue import SUPPORTED_CATEGORIES, ShardQueue, split_matrix
 from core.state import STAGES, STATUSES, StateStore
 from domain.metrics import duration_breakdown
 from domain.reports import merge_reports
-from domain.research import DIFFICULTY_LABELS, GenerationRequestStatus, ResearchRunStatus
+from domain.research import DIFFICULTY_LABELS, GenerationRequestStatus
 from domain.research_validators import ResearchValidationError
 from domain.validation import ChallengeValidator
 from hermes import HermesRunner

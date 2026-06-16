@@ -16,12 +16,9 @@ import unittest
 from datetime import datetime, timezone
 from types import MappingProxyType, SimpleNamespace
 from unittest.mock import patch
-from uuid import UUID, uuid4
-
-import pytest
+from uuid import uuid4
 
 import cli
-
 
 # ---------------------------------------------------------------------------
 # Small helpers

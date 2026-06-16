@@ -113,7 +113,7 @@ def _sigterm_as_keyboard_interrupt() -> Iterator[None]:
         yield
         return
 
-    previous_handler = signal.getsignal(signal.SIGTERM)    
+    previous_handler = signal.getsignal(signal.SIGTERM)
     # 先保存原有的 SIGTERM 处理器，退出时恢复它，避免影响其他代码。
 
     def raise_keyboard_interrupt(_signum, _frame):

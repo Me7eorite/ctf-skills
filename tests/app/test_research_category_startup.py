@@ -18,11 +18,10 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy import create_engine
 
+import cli
 import persistence.session as persistence_session
 from persistence.models import research as model
 from persistence.session import SessionFactory
-
-import cli
 
 ROOT = Path(__file__).resolve().parents[2]
 

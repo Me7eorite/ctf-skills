@@ -14,10 +14,8 @@ import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
-from uuid import uuid4
 
 import cli
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -191,7 +189,6 @@ class ProfileBindTests(unittest.TestCase):
 
 class ProfileStatusTests(unittest.TestCase):
     def test_enable_round_trip(self):
-        binding = _make_binding(status="enabled")
         repo = SimpleNamespace(
             set_binding_status=lambda _r, status: _make_binding(status=status)
         )
