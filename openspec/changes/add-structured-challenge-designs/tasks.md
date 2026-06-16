@@ -117,26 +117,26 @@
 
 ## 6. Service
 
-- [ ] 6.1 Add `ChallengeDesignService.design_for_task(
+- [x] 6.1 Add `ChallengeDesignService.design_for_task(
   design_task_id, caller)` in
   `src/services/challenge_design_service.py`.
-- [ ] 6.2 Step 1 - open short transaction:
+- [x] 6.2 Step 1 - open short transaction:
   - select and lock task; require `status == 'queued'` else raise typed conflict
   - read latest attempt; require `attempt < max_attempts` or none
   - insert `design_attempts(status='running', attempt=N,
     claim_token=uuid4(), claimed_by=caller, profile_name_used=<resolved>)`
   - set `design_tasks.status = 'designing'`
   - commit
-- [ ] 6.3 Step 2 - render prompt to
+- [x] 6.3 Step 2 - render prompt to
   `work/design/prompts/<attempt_id>.md`, persist `prompt_path` via
   `record_prompt_path`.
-- [ ] 6.4 Step 3 - invoke executor with timeout from config (default
+- [x] 6.4 Step 3 - invoke executor with timeout from config (default
   600s); capture stdout + log path.
-- [ ] 6.5 Step 4 - parse + validate + quality-gate; on success, call
+- [x] 6.5 Step 4 - parse + validate + quality-gate; on success, call
   `complete_attempt`; on any failure call `fail_attempt`.
-- [ ] 6.6 Resolve Hermes profile via the new `design` role binding;
+- [x] 6.6 Resolve Hermes profile via the new `design` role binding;
   fall back to `default` profile when binding missing.
-- [ ] 6.7 Service tests with a fake executor:
+- [x] 6.7 Service tests with a fake executor:
   - happy path: `queued -> designing -> designed` + design row inserted
   - schema-invalid: `queued -> designing -> queued` and one failed
     attempt row when `max_attempts > 1`
