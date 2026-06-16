@@ -141,9 +141,12 @@ function errorPlaceholder(message, retryKey) {
 // ---------------------------------------------------------------------------
 
 async function ensureLoaded(key, url, mutator = null) {
+  // Idempotent — bail if data is already cached OR a fetch is already in flight.
+  // The previous version called paint() before awaiting, which on first-render
+  // re-entered renderXTab → ensureLoaded synchronously and recursed forever.
   if (state[key] !== null && state[key] !== undefined) return;
+  if (state.flags[key]?.loading) return;
   setFlag(key, { loading: true, error: null });
-  paint();
   try {
     const data = await api(url);
     state[key] = mutator ? mutator(data) : data;
@@ -156,6 +159,7 @@ async function ensureLoaded(key, url, mutator = null) {
 
 async function forceReload(key, url) {
   state[key] = null;
+  setFlag(key, { loading: false, error: null });
   await ensureLoaded(key, url);
 }
 
@@ -660,11 +664,15 @@ function renderDetailFindings(byKind) {
 
 async function fetchDetail(id) {
   if (state.detail !== null) return;
+  if (state.flags.detail?.loading) return;
+  setFlag("detail", { loading: true });
   try {
     state.detail = await api(`/api/research/requests/${id}`);
+    setFlag("detail", { loading: false });
     paint();
   } catch (err) {
     showToast(err.message, true);
+    setFlag("detail", { loading: false });
     state.detailId = null;
     state.detail = null;
     paint();
