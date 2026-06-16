@@ -266,10 +266,13 @@ def _handle_research(args: argparse.Namespace, paths: ProjectPaths) -> None:
         else:  # pragma: no cover — argparse rejects this earlier
             print(f"error: unknown research command {args.research_command!r}", file=sys.stderr)
             sys.exit(2)
-    except Exception as exc:  # noqa: BLE001 — translate any persistence-layer config error
-        from persistence.errors import PersistenceConfigurationError
+    except Exception as exc:  # noqa: BLE001 — translate any persistence-layer error
+        from persistence.errors import (
+            PersistenceConfigurationError,
+            PersistenceConnectionError,
+        )
 
-        if isinstance(exc, PersistenceConfigurationError):
+        if isinstance(exc, (PersistenceConfigurationError, PersistenceConnectionError)):
             print(f"error: {exc}", file=sys.stderr)
             sys.exit(2)
         raise

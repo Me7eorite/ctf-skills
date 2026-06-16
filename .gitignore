@@ -27,6 +27,10 @@ work/
 # Local Hermes state and credentials
 .hermes/
 
+# Local environment overrides (loaded via python-dotenv)
+.env
+.env.local
+
 # OS
 .DS_Store
 Thumbs.db
