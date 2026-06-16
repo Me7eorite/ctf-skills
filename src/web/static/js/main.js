@@ -96,6 +96,7 @@ challenges.bind?.(loadState);
 seeds.bind?.(loadState);
 shards.bind?.(loadState);
 logs.bind?.(loadState);
+research.bind?.(loadState);
 
 // ---- Boot ----
 
