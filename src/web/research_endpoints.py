@@ -22,11 +22,14 @@ from domain.research import GenerationRequestStatus, ResearchRunStatus
 from domain.research_validators import ResearchValidationError
 
 
-def register_research_endpoints(app: FastAPI) -> None:
-    """Attach the Section 10 read endpoints + the submit endpoint to `app`.
+def register_research_endpoints(app: FastAPI, worker_manager=None) -> None:
+    """Attach the Section 10 read endpoints + the submit / worker endpoints to `app`.
 
     MUST be called BEFORE the static catch-all route in `create_app`
-    so the `/api/...` paths win over the wildcard.
+    so the `/api/...` paths win over the wildcard. `worker_manager` is
+    optional — when omitted, the worker control endpoints respond 503
+    so test fixtures that don't need a spawnable subprocess can still
+    mount the read-only endpoints in isolation.
     """
     _register_categories(app)
     _register_requests_list(app)
@@ -36,6 +39,78 @@ def register_research_endpoints(app: FastAPI) -> None:
     _register_queue_stats(app)
     _register_bindings_list(app)
     _register_binding_detail(app)
+    _register_worker_endpoints(app, worker_manager)
+
+
+# ---------------------------------------------------------------------------
+# POST /api/research/worker/start
+# POST /api/research/worker/stop
+# GET  /api/research/worker/status
+# ---------------------------------------------------------------------------
+
+
+def _register_worker_endpoints(app: FastAPI, manager) -> None:
+    @app.get("/api/research/worker/status")
+    def worker_status() -> JSONResponse:
+        if manager is None:
+            return JSONResponse({"running": False, "available": False})
+        snapshot = manager.state()
+        snapshot["available"] = True
+        return JSONResponse(snapshot)
+
+    @app.post("/api/research/worker/start")
+    async def worker_start(request: Request) -> JSONResponse:
+        if manager is None:
+            raise HTTPException(
+                status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+                detail="worker manager is not configured",
+            )
+        try:
+            payload = await request.json()
+        except ValueError:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        kind = payload.get("kind", "once")
+        try:
+            max_jobs = int(payload.get("max_jobs", 1))
+            lease_seconds = int(payload.get("lease_seconds", 900))
+            hermes_timeout_seconds = int(payload.get("hermes_timeout_seconds", 810))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail=f"worker parameters must be integers: {exc}",
+            ) from exc
+
+        ok, message = manager.start(
+            kind=kind,
+            agent_id=payload.get("agent_id"),
+            max_jobs=max_jobs,
+            lease_seconds=lease_seconds,
+            hermes_timeout_seconds=hermes_timeout_seconds,
+        )
+        if not ok:
+            raise HTTPException(
+                status_code=HTTPStatus.CONFLICT, detail=message
+            )
+        return JSONResponse(
+            {"ok": True, "message": message, "state": manager.state()},
+            status_code=HTTPStatus.ACCEPTED,
+        )
+
+    @app.post("/api/research/worker/stop")
+    def worker_stop() -> JSONResponse:
+        if manager is None:
+            raise HTTPException(
+                status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+                detail="worker manager is not configured",
+            )
+        ok, message = manager.stop()
+        if not ok:
+            raise HTTPException(
+                status_code=HTTPStatus.CONFLICT, detail=message
+            )
+        return JSONResponse({"ok": True, "message": message, "state": manager.state()})
 
 
 # ---------------------------------------------------------------------------

@@ -45,6 +45,7 @@ const state = {
   requests: null,
   runs: null,
   detail: null,
+  worker: null,           // /api/research/worker/status snapshot
 
   // per-tab loading / error flags (key → { loading, error })
   flags: {},
@@ -52,6 +53,16 @@ const state = {
   // filters
   reqFilter: { category: "", status: "" },
   runFilter: { status: "", claimed_by: "" },
+
+  // worker control form
+  workerForm: {
+    kind: "once",         // "once" | "loop"
+    max_jobs: 1,
+    lease_seconds: 900,
+    hermes_timeout_seconds: 810,
+    busy: false,
+  },
+  workerPollHandle: null,
 
   // submit form (kept across re-renders so the user doesn't lose their work)
   form: {
@@ -411,6 +422,7 @@ function resetForm() {
 
 function renderStatsTab() {
   ensureLoaded("stats", "/api/research/queue/stats");
+  ensureWorkerStatus();
   const flag = state.flags.stats || {};
   if (flag.loading && !state.stats) return loadingPlaceholder("队列统计");
   if (flag.error) return errorPlaceholder(flag.error, "stats");
@@ -452,12 +464,173 @@ function renderStatsTab() {
         </ul>
       </section>
     ` : ""}
+
+    ${renderWorkerControl()}
+
     <div class="mt-5 text-center">
       <button id="stats-refresh" class="inline-flex h-9 items-center gap-2 rounded-md border border-line px-3 text-[13px] font-medium hover:bg-ink-50">
-        <i data-lucide="refresh-cw" class="size-4"></i> 刷新
+        <i data-lucide="refresh-cw" class="size-4"></i> 刷新状态
       </button>
     </div>
   `;
+}
+
+// ---------------------------------------------------------------------------
+// Worker control (bottom of the queue-stats tab)
+// ---------------------------------------------------------------------------
+
+function renderWorkerControl() {
+  const w = state.worker;
+  const form = state.workerForm;
+  const running = w?.running;
+  const available = w?.available !== false;
+  const statusTone = running
+    ? "dot-warn"
+    : w?.returncode === 0
+    ? "dot-ok"
+    : w?.returncode != null
+    ? "dot-err"
+    : "dot-idle";
+  return `
+    <section class="card mt-5">
+      <div class="card-header">
+        <div>
+          <div class="card-title">Research Worker</div>
+          <div class="card-subtitle">触发后端 <code class="font-mono text-[11px]">cli research worker</code> 子进程，把队列里 queued 的任务跑起来</div>
+        </div>
+        <span class="inline-flex items-center text-[12px] text-ink-700">
+          <span class="dot ${statusTone}"></span>
+          ${running ? "运行中" : w?.returncode === 0 ? "已完成" : w?.returncode != null ? "已退出" : "空闲"}
+        </span>
+      </div>
+
+      ${!available ? `
+        <div class="p-5 text-[13px] text-ink-500">
+          这个 dashboard 实例没配 worker 管理器，无法在 UI 触发。请用 <code class="font-mono text-[12px]">cli research worker</code>.
+        </div>
+      ` : `
+        <div class="p-5 grid gap-4">
+          ${running ? `
+            <div class="rounded-md border border-amber-300 bg-amber-50 px-3 py-2.5 text-[12px] text-amber-800">
+              ${escapeHtml(w.message || "worker 正在跑")} ·
+              <code class="font-mono text-[11px]">${escapeHtml(w.kind || "")}</code> · 启动于 ${escapeHtml(w.started_at || "")}
+              ${w.log_path ? `<div class="mt-1 text-[11px] text-amber-700">日志：${escapeHtml(w.log_path)}</div>` : ""}
+            </div>
+          ` : ""}
+          ${(!running && w?.returncode != null) ? `
+            <div class="rounded-md border ${w.returncode === 0 ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-rose-200 bg-rose-50 text-rose-800"} px-3 py-2.5 text-[12px]">
+              ${escapeHtml(w.message || "")} ${w.log_path ? `<span class="ml-1">· 日志 <code class="font-mono text-[11px]">${escapeHtml(w.log_path)}</code></span>` : ""}
+              ${w.log_tail ? `<pre class="mt-2 max-h-40 overflow-auto whitespace-pre-wrap font-mono text-[11px] leading-snug">${escapeHtml(w.log_tail)}</pre>` : ""}
+            </div>
+          ` : ""}
+
+          <div class="grid gap-3 sm:grid-cols-4">
+            <label class="grid gap-1">
+              <span class="text-[10px] uppercase tracking-wider text-ink-500">模式</span>
+              <select id="worker-kind" class="select" ${running ? "disabled" : ""}>
+                <option value="once"${form.kind === "once" ? " selected" : ""}>跑一次</option>
+                <option value="loop"${form.kind === "loop" ? " selected" : ""}>持续 loop</option>
+              </select>
+            </label>
+            <label class="grid gap-1">
+              <span class="text-[10px] uppercase tracking-wider text-ink-500">max_jobs</span>
+              <input id="worker-max-jobs" type="number" min="1" value="${form.max_jobs}" ${form.kind === "loop" || running ? "disabled" : ""} class="input text-center" />
+            </label>
+            <label class="grid gap-1">
+              <span class="text-[10px] uppercase tracking-wider text-ink-500">lease s</span>
+              <input id="worker-lease" type="number" min="1" value="${form.lease_seconds}" ${running ? "disabled" : ""} class="input text-center" />
+            </label>
+            <label class="grid gap-1">
+              <span class="text-[10px] uppercase tracking-wider text-ink-500">hermes timeout s</span>
+              <input id="worker-hermes-timeout" type="number" min="1" value="${form.hermes_timeout_seconds}" ${running ? "disabled" : ""} class="input text-center" />
+            </label>
+          </div>
+
+          <div class="flex items-center gap-2">
+            ${running ? `
+              <button id="worker-stop" ${form.busy ? "disabled" : ""}
+                class="flex h-10 items-center gap-2 rounded-md bg-rose-600 px-4 text-[13px] font-medium text-white hover:bg-rose-700 disabled:opacity-50">
+                <i data-lucide="square" class="size-4"></i> 停止 Worker
+              </button>
+            ` : `
+              <button id="worker-start" ${form.busy ? "disabled" : ""}
+                class="flex h-10 items-center gap-2 rounded-md bg-ink-900 px-4 text-[13px] font-medium text-white hover:bg-ink-800 disabled:opacity-50">
+                ${form.busy ? '<i data-lucide="loader" class="size-4 animate-spin"></i> 请求中…' : '<i data-lucide="play" class="size-4"></i> ' + (form.kind === "loop" ? "持续运行" : "运行一次")}
+              </button>
+            `}
+            <span class="text-[11px] text-ink-500">
+              ${form.kind === "loop" ? "持续 loop：占据 dashboard 一个 worker 进程，直到点停止" : `跑一次：处理 ${form.max_jobs} 个 queued 任务后自动退出`}
+            </span>
+          </div>
+        </div>
+      `}
+    </section>
+  `;
+}
+
+async function ensureWorkerStatus() {
+  if (state.worker !== null) return;
+  await refreshWorkerStatus();
+}
+
+async function refreshWorkerStatus() {
+  try {
+    state.worker = await api("/api/research/worker/status");
+  } catch (err) {
+    state.worker = { available: false, running: false, error: err.message };
+  }
+  // While running, poll every 2s + invalidate stats so user sees progress.
+  if (state.worker?.running) {
+    if (state.workerPollHandle) clearTimeout(state.workerPollHandle);
+    state.workerPollHandle = setTimeout(async () => {
+      state.stats = null;
+      state.workerPollHandle = null;
+      await refreshWorkerStatus();
+    }, 2000);
+  } else if (state.workerPollHandle) {
+    clearTimeout(state.workerPollHandle);
+    state.workerPollHandle = null;
+  }
+  paint();
+}
+
+async function startWorker() {
+  const f = state.workerForm;
+  f.busy = true;
+  paint();
+  try {
+    await postJson("/api/research/worker/start", {
+      kind: f.kind,
+      max_jobs: Number(f.max_jobs),
+      lease_seconds: Number(f.lease_seconds),
+      hermes_timeout_seconds: Number(f.hermes_timeout_seconds),
+    });
+    showToast(f.kind === "loop" ? "Worker 已持续启动" : "Worker 已启动（跑一次）");
+    state.stats = null;
+    state.runs = null;
+    state.requests = null;
+    await refreshWorkerStatus();
+  } catch (err) {
+    showToast(err.message, true);
+  } finally {
+    f.busy = false;
+    paint();
+  }
+}
+
+async function stopWorker() {
+  state.workerForm.busy = true;
+  paint();
+  try {
+    await postJson("/api/research/worker/stop", {});
+    showToast("Worker 已停止");
+    await refreshWorkerStatus();
+  } catch (err) {
+    showToast(err.message, true);
+  } finally {
+    state.workerForm.busy = false;
+    paint();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -818,6 +991,15 @@ export function bind() {
     }
     if (e.target.closest("#stats-refresh")) {
       forceReload("stats", "/api/research/queue/stats");
+      refreshWorkerStatus();
+      return;
+    }
+    if (e.target.closest("#worker-start")) {
+      startWorker();
+      return;
+    }
+    if (e.target.closest("#worker-stop")) {
+      stopWorker();
       return;
     }
     if (e.target.closest("#req-clear-filter")) {
@@ -858,6 +1040,9 @@ export function bind() {
       forceReload("runs", buildRunsUrl());
     } else if (e.target.id === "form-category") {
       state.form.category = e.target.value;
+    } else if (e.target.id === "worker-kind") {
+      state.workerForm.kind = e.target.value;
+      paint();
     } else if (e.target.dataset?.difficulty) {
       state.form.distribution[e.target.dataset.difficulty] = Number(e.target.value) || 0;
       paint();
@@ -879,5 +1064,8 @@ export function bind() {
     else if (e.target.id === "form-target-count") state.form.target_count = e.target.value;
     else if (e.target.id === "form-max-attempts") state.form.max_attempts = e.target.value;
     else if (e.target.id === "form-seed-urls") state.form.seed_urls = e.target.value;
+    else if (e.target.id === "worker-max-jobs") state.workerForm.max_jobs = e.target.value;
+    else if (e.target.id === "worker-lease") state.workerForm.lease_seconds = e.target.value;
+    else if (e.target.id === "worker-hermes-timeout") state.workerForm.hermes_timeout_seconds = e.target.value;
   });
 }

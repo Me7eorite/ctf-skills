@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse, Response
 from core.paths import ProjectPaths
 from web.dashboard import DashboardService
 from web.research_endpoints import register_research_endpoints
+from web.research_worker_manager import ResearchWorkerManager
 
 
 def create_app(service: DashboardService) -> FastAPI:
@@ -109,9 +110,11 @@ def create_app(service: DashboardService) -> FastAPI:
             {"ok": True, "message": f"{destination.name} 已重新入队"}
         )
 
-    # Section 10 read endpoints: must be registered BEFORE the static catch-all
-    # so `/api/research/...` and `/api/profile/...` win over the wildcard.
-    register_research_endpoints(app)
+    # Section 10 read endpoints + worker control: must be registered BEFORE
+    # the static catch-all so `/api/research/...` and `/api/profile/...` win
+    # over the wildcard.
+    worker_manager = ResearchWorkerManager(service.paths)
+    register_research_endpoints(app, worker_manager=worker_manager)
 
     # Static catch-all stays last so API routes win.
     @app.get("/{request_path:path}")
