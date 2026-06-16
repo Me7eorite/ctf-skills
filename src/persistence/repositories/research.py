@@ -87,6 +87,34 @@ class ResearchRepository:
             stmt = stmt.where(model.ResearchRun.generation_request_id == generation_request_id)
         return [_run(row) for row in self.session.scalars(stmt)]
 
+    def list_runs_with_category(
+        self,
+        *,
+        status: str | None = None,
+        claimed_by: str | None = None,
+        generation_request_id: UUID | None = None,
+        limit: int = 100,
+    ) -> list[tuple[dto.ResearchRun, str]]:
+        """列出 research runs，并通过 SQL JOIN 一次性带出 category。"""
+        # spec 10.7 要求 "joined with category"；用真实 JOIN 替代 N+1 查询，
+        # 在 UI 频繁刷新时把数据库 round-trip 数量从 1+N 收敛到 1。
+        stmt = (
+            sa.select(model.ResearchRun, model.GenerationRequest.category)
+            .join(
+                model.GenerationRequest,
+                model.ResearchRun.generation_request_id == model.GenerationRequest.id,
+            )
+            .order_by(model.ResearchRun.created_at)
+            .limit(limit)
+        )
+        if status is not None:
+            stmt = stmt.where(model.ResearchRun.status == status)
+        if claimed_by is not None:
+            stmt = stmt.where(model.ResearchRun.claimed_by == claimed_by)
+        if generation_request_id is not None:
+            stmt = stmt.where(model.ResearchRun.generation_request_id == generation_request_id)
+        return [(_run(row[0]), row[1]) for row in self.session.execute(stmt)]
+
     def list_sources(self, run_id: UUID) -> list[dto.ResearchSource]:
         """列出某个 run 采集到的 sources。"""
         # 按 fetched_at 和 id 排序，保证同一批结果重复读取顺序稳定。
@@ -109,36 +137,53 @@ class ResearchRepository:
 
     def queue_stats(self) -> dict[str, Any]:
         """统计 research queue 的状态概览。"""
-        # 先按 status 聚合数量；显式推导避免 SQLAlchemy Row 触发类型检查误报。
-        count_rows = self.session.execute(
-            sa.select(model.ResearchRun.status, sa.func.count()).group_by(model.ResearchRun.status)
-        ).all()
-        counts = {str(row[0]): int(row[1]) for row in count_rows}
-        # oldest queued 用于估算队列积压时间。
-        oldest_queued = self.session.scalar(
-            sa.select(sa.func.min(model.ResearchRun.created_at)).where(model.ResearchRun.status == "queued")
-        )
+        # spec 10.8: "Single query against research_runs with grouped aggregates."
+        # 用 FILTER 把四个 status 计数 + oldest_queued + near_expiry 合到一行，
+        # 避免顺序触发三次 round-trip。array_agg(... ORDER BY ...) 保留按 lease
+        # 到期时间排序，跟旧实现的顺序一致。
         now = _utcnow()
-        # 只统计 running 且 60 秒内到期的 run；终态 run 的历史 lease 不参与告警。
-        near_expiry = self.session.scalars(
-            sa.select(model.ResearchRun.id)
-            .where(
-                model.ResearchRun.status == "running",
-                model.ResearchRun.lease_expires_at <= now + timedelta(seconds=60),
+        run = model.ResearchRun
+
+        queued_filter = run.status == "queued"
+        running_filter = run.status == "running"
+        completed_filter = run.status == "completed"
+        failed_filter = run.status == "failed"
+        near_expiry_filter = sa.and_(
+            running_filter,
+            run.lease_expires_at <= now + timedelta(seconds=60),
+        )
+
+        row = self.session.execute(
+            sa.select(
+                sa.func.count().filter(queued_filter).label("queued"),
+                sa.func.count().filter(running_filter).label("running"),
+                sa.func.count().filter(completed_filter).label("completed"),
+                sa.func.count().filter(failed_filter).label("failed"),
+                sa.func.min(run.created_at)
+                .filter(queued_filter)
+                .label("oldest_queued"),
+                sa.func.array_agg(run.id)
+                .filter(near_expiry_filter)
+                .label("near_expiry"),
             )
-            .order_by(model.ResearchRun.lease_expires_at)
-        ).all()
+        ).one()
+
         oldest_age = None
-        if oldest_queued is not None:
+        if row.oldest_queued is not None:
             # 系统时钟轻微回拨时不返回负数。
-            oldest_age = max(0.0, (now - oldest_queued).total_seconds())
+            oldest_age = max(0.0, (now - row.oldest_queued).total_seconds())
+
+        # array_agg 在没有匹配行时返回 None，统一成空 list。psycopg 已经把 PG
+        # uuid[] 解码成 list[UUID]，无需再次转换。
+        near_uuids: list[UUID] = list(row.near_expiry or [])
+
         return {
-            "queued": int(counts.get("queued", 0)),
-            "running": int(counts.get("running", 0)),
-            "completed": int(counts.get("completed", 0)),
-            "failed": int(counts.get("failed", 0)),
+            "queued": int(row.queued or 0),
+            "running": int(row.running or 0),
+            "completed": int(row.completed or 0),
+            "failed": int(row.failed or 0),
             "oldest_queued_age_seconds": oldest_age,
-            "runs_near_lease_expiry": list(near_expiry),
+            "runs_near_lease_expiry": near_uuids,
         }
 
     def create_generation_request(

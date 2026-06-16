@@ -215,6 +215,21 @@ class RequestsListEndpointTests(unittest.TestCase):
         finally:
             _close(client)
 
+    def test_invalid_status_returns_400(self):
+        # 中文注释：spec 10.1 应在 enum 命中前拒绝非法 status，避免 500。
+        repo = SimpleNamespace(
+            list_categories=lambda: [],
+            list_generation_requests=lambda **_kw: [],
+        )
+        client = _client(repo)
+        try:
+            resp = client.get("/api/research/requests?status=bogus")
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn("bogus", resp.json()["detail"])
+            self.assertIn("draft", resp.json()["detail"])
+        finally:
+            _close(client)
+
     def test_no_filters_returns_all(self):
         req_a = _make_request(category="web", topic="A")
         req_b = _make_request(category="pwn", topic="B")
@@ -319,11 +334,11 @@ class RequestDetailEndpointTests(unittest.TestCase):
 
 class RunsListEndpointTests(unittest.TestCase):
     def test_returns_runs_joined_with_category(self):
-        req = _make_request(category="web")
-        run = _make_run(request_id=req.id, status="running")
+        run = _make_run(status="running")
+        # Spec 10.7: real SQL JOIN — endpoint uses list_runs_with_category
+        # which returns [(ResearchRun, category)] tuples, no extra get calls.
         repo = SimpleNamespace(
-            list_runs=lambda **_kw: [run],
-            get_generation_request=lambda _: req,
+            list_runs_with_category=lambda **_kw: [(run, "web")],
         )
         client = _client(repo)
         try:
@@ -333,19 +348,30 @@ class RunsListEndpointTests(unittest.TestCase):
             self.assertEqual(len(payload), 1)
             self.assertEqual(payload[0]["id"], str(run.id))
             self.assertEqual(payload[0]["status"], "running")
-            # Spec 10.7: joined with category.
             self.assertEqual(payload[0]["category"], "web")
         finally:
             _close(client)
 
     def test_invalid_generation_request_id_returns_400(self):
-        repo = SimpleNamespace(list_runs=lambda **_kw: [])
+        repo = SimpleNamespace(list_runs_with_category=lambda **_kw: [])
         client = _client(repo)
         try:
             resp = client.get(
                 "/api/research/runs?generation_request_id=not-a-uuid"
             )
             self.assertEqual(resp.status_code, 400)
+        finally:
+            _close(client)
+
+    def test_invalid_status_returns_400(self):
+        # 中文注释：spec 10.7 应在 enum 命中前拒绝非法 status，避免 500。
+        repo = SimpleNamespace(list_runs_with_category=lambda **_kw: [])
+        client = _client(repo)
+        try:
+            resp = client.get("/api/research/runs?status=bogus")
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn("bogus", resp.json()["detail"])
+            self.assertIn("queued", resp.json()["detail"])
         finally:
             _close(client)
 

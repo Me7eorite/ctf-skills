@@ -17,6 +17,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 from domain import research as dto
+from domain.research import GenerationRequestStatus, ResearchRunStatus
 
 
 def register_research_endpoints(app: FastAPI) -> None:
@@ -63,6 +64,18 @@ def _register_requests_list(app: FastAPI) -> None:
     ) -> JSONResponse:
         from persistence.repositories import ResearchRepository
         from persistence.session import transaction
+
+        # Spec 10.1: validate `status` against the PG enum's allowed set so an
+        # unknown value yields a clean 400 instead of leaking a DataError 500
+        # from PostgreSQL when the query hits the enum column.
+        if status is not None and status not in GenerationRequestStatus:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail=(
+                    f"unknown status {status!r}; "
+                    f"allowed: {list(GenerationRequestStatus)}"
+                ),
+            )
 
         with transaction() as session:
             repo = ResearchRepository(session)
@@ -150,6 +163,17 @@ def _register_runs_list(app: FastAPI) -> None:
         from persistence.repositories import ResearchRepository
         from persistence.session import transaction
 
+        # Spec 10.7: validate `status` against ResearchRunStatus so an unknown
+        # value yields a clean 400 instead of a PG DataError 500.
+        if status is not None and status not in ResearchRunStatus:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail=(
+                    f"unknown status {status!r}; "
+                    f"allowed: {list(ResearchRunStatus)}"
+                ),
+            )
+
         request_uuid: UUID | None = None
         if generation_request_id is not None:
             try:
@@ -161,27 +185,17 @@ def _register_runs_list(app: FastAPI) -> None:
                 ) from exc
 
         with transaction() as session:
-            repo = ResearchRepository(session)
-            runs = repo.list_runs(
+            # Spec 10.7: "joined with category for queue inspection" — one SQL
+            # JOIN, no N+1.
+            rows = ResearchRepository(session).list_runs_with_category(
                 status=status,
                 claimed_by=claimed_by,
                 generation_request_id=request_uuid,
                 limit=limit,
             )
-            # Spec 10.7: "joined with category for queue inspection". Pulling each
-            # parent request individually is N+1 but limit caps at 500 and this is
-            # a read-only inspection endpoint — fine until a real bottleneck shows.
-            categories: dict[UUID, str] = {}
-            for parent_id in {r.generation_request_id for r in runs}:
-                parent = repo.get_generation_request(parent_id)
-                if parent is not None:
-                    categories[parent_id] = parent.category
 
         return JSONResponse(
-            [
-                _run_dict(r, category=categories.get(r.generation_request_id))
-                for r in runs
-            ]
+            [_run_dict(run, category=category) for run, category in rows]
         )
 
 
