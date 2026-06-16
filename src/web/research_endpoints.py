@@ -17,7 +17,9 @@ from uuid import UUID
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
+from domain import design_tasks as design_dto
 from domain import research as dto
+from domain.design_task_validators import DesignTaskValidationError
 from domain.research import GenerationRequestStatus, ResearchRunStatus
 from domain.research_validators import ResearchValidationError
 
@@ -41,6 +43,7 @@ def register_research_endpoints(app: FastAPI, worker_manager=None) -> None:
     _register_binding_detail(app)
     _register_log_endpoints(app, worker_manager)
     _register_worker_endpoints(app, worker_manager)
+    _register_design_task_endpoints(app)
 
 
 # ---------------------------------------------------------------------------
@@ -350,7 +353,7 @@ def _require_distribution(payload: dict[str, Any]) -> dict[str, int]:
 def _register_request_detail(app: FastAPI) -> None:
     @app.get("/api/research/requests/{request_id}")
     def get_request_detail(request_id: str) -> JSONResponse:
-        from persistence.repositories import ResearchRepository
+        from persistence.repositories import DesignTaskRepository, ResearchRepository
         from persistence.session import transaction
 
         try:
@@ -373,6 +376,7 @@ def _register_request_detail(app: FastAPI) -> None:
             latest = repo.get_latest_run_for_request(request_uuid)
             sources = repo.list_sources(latest.id) if latest else []
             findings = repo.list_findings(latest.id) if latest else []
+            design_tasks = DesignTaskRepository(session).list_design_tasks(request_uuid)
 
         # Spec 10.2: finding list "grouped by kind".
         findings_by_kind: dict[str, list[dict[str, Any]]] = {}
@@ -390,6 +394,7 @@ def _register_request_detail(app: FastAPI) -> None:
                 "runs": [_run_dict(r, category=request.category) for r in runs],
                 "sources": [_source_dict(s) for s in sources],
                 "findings_by_kind": findings_by_kind,
+                "design_tasks": [_design_task_dict(t) for t in design_tasks],
             }
         )
 
@@ -642,4 +647,101 @@ def _binding_dict(
         else None,
         "created_at": _isofmt(binding.created_at),
         "updated_at": _isofmt(binding.updated_at),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Design task planning endpoints (add-design-task-planning §5)
+# ---------------------------------------------------------------------------
+
+
+def _register_design_task_endpoints(app: FastAPI) -> None:
+    @app.post("/api/research/requests/{request_id}/design-tasks/generate")
+    def generate_design_tasks(request_id: str) -> JSONResponse:
+        from services import DesignTaskPlanningService
+
+        try:
+            request_uuid = UUID(request_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND,
+                detail="request not found",
+            ) from exc
+
+        try:
+            tasks = DesignTaskPlanningService().generate_for_request(request_uuid)
+        except DesignTaskValidationError as exc:
+            status = (
+                HTTPStatus.NOT_FOUND
+                if "does not exist" in str(exc)
+                else HTTPStatus.CONFLICT
+            )
+            raise HTTPException(status_code=status, detail=str(exc)) from exc
+
+        return JSONResponse(
+            {
+                "request_id": str(request_uuid),
+                "design_tasks": [_design_task_dict(t) for t in tasks],
+            },
+            status_code=HTTPStatus.CREATED,
+        )
+
+    @app.post("/api/design-tasks/{task_id}/queue")
+    def queue_design_task(task_id: str) -> JSONResponse:
+        return _transition_design_task(task_id, "queued")
+
+    @app.post("/api/design-tasks/{task_id}/archive")
+    def archive_design_task(task_id: str) -> JSONResponse:
+        return _transition_design_task(task_id, "archived")
+
+
+def _transition_design_task(task_id: str, target_status: str) -> JSONResponse:
+    from persistence.repositories import DesignTaskRepository
+    from persistence.session import transaction
+
+    try:
+        task_uuid = UUID(task_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail="design task not found",
+        ) from exc
+
+    try:
+        with transaction() as session:
+            updated = DesignTaskRepository(session).set_design_task_status(
+                task_uuid, target_status
+            )
+    except DesignTaskValidationError as exc:
+        status = (
+            HTTPStatus.NOT_FOUND
+            if "does not exist" in str(exc)
+            else HTTPStatus.CONFLICT
+        )
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+
+    return JSONResponse(_design_task_dict(updated))
+
+
+def _design_task_dict(task: design_dto.DesignTask) -> dict[str, Any]:
+    return {
+        "id": str(task.id),
+        "generation_request_id": str(task.generation_request_id),
+        "research_run_id": str(task.research_run_id),
+        "task_no": task.task_no,
+        "challenge_id": task.challenge_id,
+        "title": task.title,
+        "category": task.category,
+        "difficulty": task.difficulty,
+        "primary_technique": task.primary_technique,
+        "learning_objective": task.learning_objective,
+        "points": task.points,
+        "port": task.port,
+        "scenario": task.scenario,
+        "constraints": dict(task.constraints),
+        "evidence_summary": task.evidence_summary,
+        "finding_ids": [str(fid) for fid in task.finding_ids],
+        "status": task.status,
+        "created_at": _isofmt(task.created_at),
+        "updated_at": _isofmt(task.updated_at),
     }

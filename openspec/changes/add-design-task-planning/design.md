@@ -66,7 +66,7 @@ challenge design agent.
 | `generation_request_id uuid fk` | Parent demand/request. |
 | `research_run_id uuid fk` | Completed research run used as evidence. |
 | `task_no int` | Stable 1-based order within the request. |
-| `challenge_id text` | Old shard seed `id`; prefix must match category. |
+| `challenge_id text` | Old shard seed `id`; prefix must match category. Unique per `generation_request_id`, not globally — the planner numbers ids deterministically per request, and global namespacing is left to the future shard-export change. |
 | `title text` | Old shard seed `title`. |
 | `category text fk` | Must equal parent request category. |
 | `difficulty text` | One of `easy|medium|hard|expert`. |
@@ -77,7 +77,7 @@ challenge design agent.
 | `scenario text` | Human-readable scenario framing. |
 | `constraints jsonb` | Runtime and design constraints used by prompt rendering. |
 | `evidence_summary text` | Short summary of why this task exists. |
-| `source_finding_ids jsonb` | Referenced `research_findings.id` values. |
+| `finding_ids jsonb` | Referenced `research_findings.id` values. Stored as findings (not sources) because the planner cites evidence at the finding level; the join from finding to sources is already kept in `research_finding_sources`. |
 | `status text` | `draft|queued|designing|designed|failed|archived`. |
 | `created_at/updated_at` | Audit timestamps. |
 
@@ -132,10 +132,14 @@ except fixtures/tests that validate allowed statuses.
    - `points > 0`
    - Web/Pwn rows have a valid port
    - each task references at least one finding from the same `research_run`
-6. Existing `draft` tasks for the same request may be replaced only when no
-   task has reached `queued` or any later status. This keeps generation
-   repeatable before queueing while preventing silent replacement of work the
-   operator already released.
+6. Existing `draft` or `archived` tasks for the same request may be replaced
+   only when no task has reached `queued`, `designing`, `designed`, or
+   `failed`. This keeps generation repeatable before queueing while preventing
+   silent replacement of work the operator already released. The replacement
+   SHALL happen in a single transaction that first deletes the old
+   `draft`/`archived` rows and then inserts the new set, so the
+   `(generation_request_id, challenge_id)` uniqueness constraint cannot fire
+   transiently.
 7. New rows are inserted as `draft`.
 
 ## Agent Boundary

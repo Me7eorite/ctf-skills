@@ -23,7 +23,7 @@ or batch worker consumes them.
   `learning_objective`, `points`, and `port`.
 - Store planning context needed by later prompt rendering:
   `research_run_id`, `task_no`, `scenario`, `constraints`, `evidence_summary`,
-  and `source_finding_ids`.
+  and `finding_ids`.
 - Do not store rendered `prompt_input` in PostgreSQL. Design prompts are
   rendered at execution time from the skill/template plus database fields,
   generation request fields, and referenced research findings/sources.
@@ -58,8 +58,8 @@ or batch worker consumes them.
 - Adds a planning service for creating task rows from a completed research run.
 - Adds HTTP endpoints and dashboard UI for task generation and task state
   changes.
-- Adds tests for schema, validation, idempotency, API behavior, and UI render
-  coverage.
+- Adds tests for schema, validation, regeneration (replace draft/archived,
+  reject when queued or later), API behavior, and UI render coverage.
 - No design worker, batch table, claim/lease logic, Hermes design invocation,
   or file-shard export in this change.
 

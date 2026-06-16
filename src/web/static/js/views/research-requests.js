@@ -178,6 +178,29 @@ async function refreshDetail({ startPolling = false } = {}) {
   if (startPolling || detailNeedsActivePolling()) scheduleDetailPoll(ACTIVE_POLL_MS);
 }
 
+async function generateDesignTasks() {
+  if (!state.detailId) return;
+  try {
+    await postJson(`/api/research/requests/${state.detailId}/design-tasks/generate`, {});
+    showToast("Design tasks generated");
+    await reloadDetail();
+    window.lucide?.createIcons();
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+async function transitionDesignTask(taskId, action) {
+  try {
+    await postJson(`/api/design-tasks/${taskId}/${action}`, {});
+    showToast(`Task ${action}d`);
+    await reloadDetail();
+    window.lucide?.createIcons();
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
 async function runWorkerAction(action, body = {}) {
   try {
     const result = await postJson(`/api/research/worker/${action}`, body);
@@ -291,7 +314,7 @@ function renderDetail(root) {
     return;
   }
 
-  const { request, latest_run: latest, runs = [], sources = [], findings_by_kind = {} } = state.detail;
+  const { request, latest_run: latest, runs = [], sources = [], findings_by_kind = {}, design_tasks = [] } = state.detail;
   const worker = state.worker || {};
   const workerRunning = !!worker.running;
   const available = worker.available !== false;
@@ -359,6 +382,7 @@ function renderDetail(root) {
       ${runs.length ? renderRunsTable(runs) : `<div class="empty card-body">No runs yet</div>`}
     </section>
 
+    ${renderDesignTasks(design_tasks, request)}
     ${renderFindings(findings_by_kind)}
     ${renderSources(sources)}
   `;
@@ -387,6 +411,73 @@ function renderRunsTable(runs) {
               <td class="mono" style="font-size: var(--font-mono);">${escapeHtml(run.claimed_by || "-")}</td>
               <td class="table-cell-time">${escapeHtml(formatDateTime(run.started_at))}</td>
               <td class="table-cell-time">${escapeHtml(formatDateTime(run.finished_at))}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderDesignTasks(designTasks, request) {
+  const tasks = designTasks || [];
+  const counts = tasks.reduce((acc, task) => {
+    acc[task.status] = (acc[task.status] || 0) + 1;
+    return acc;
+  }, {});
+  const summaryEntries = Object.entries(counts)
+    .map(([status, n]) => `${escapeHtml(status)}=${n}`)
+    .join(", ");
+  const canGenerate = (request?.status === "researched");
+  return `
+    <section class="card" style="margin-top: var(--space-lg);">
+      <div class="card-header">
+        <div>
+          <div class="card-title">Design Tasks</div>
+          <div class="card-subtitle">${summaryEntries || "No tasks yet"}</div>
+        </div>
+        <div class="btn-group">
+          <button class="btn btn-primary btn-sm" id="design-tasks-generate"${canGenerate ? "" : " disabled"}>
+            <i data-lucide="wand"></i> Generate design tasks
+          </button>
+          <span class="pill">${tasks.length}</span>
+        </div>
+      </div>
+      ${tasks.length ? renderDesignTasksTable(tasks) : `<div class="empty card-body">No design tasks yet — run "Generate design tasks" once the research run completes.</div>`}
+    </section>
+  `;
+}
+
+function renderDesignTasksTable(tasks) {
+  return `
+    <div class="table-container">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Challenge ID</th>
+            <th>Title</th>
+            <th>Difficulty</th>
+            <th>Primary technique</th>
+            <th>Evidence</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${tasks.map(task => `
+            <tr data-design-task-id="${escapeHtml(task.id)}">
+              <td class="table-cell-id">${task.task_no}</td>
+              <td class="mono">${escapeHtml(task.challenge_id)}</td>
+              <td><div class="truncate" style="max-width: 280px;">${escapeHtml(task.title)}</div></td>
+              <td>${escapeHtml(task.difficulty)}</td>
+              <td><div class="truncate" style="max-width: 220px;">${escapeHtml(task.primary_technique)}</div></td>
+              <td style="text-align: right;">${(task.finding_ids || []).length}</td>
+              <td>${escapeHtml(task.status)}</td>
+              <td>
+                <button class="btn btn-secondary btn-sm design-task-queue"${task.status === "draft" ? "" : " disabled"}>Queue</button>
+                <button class="btn btn-ghost btn-sm design-task-archive"${(task.status === "draft" || task.status === "queued") ? "" : " disabled"}>Archive</button>
+              </td>
             </tr>
           `).join("")}
         </tbody>
@@ -496,6 +587,22 @@ export function bind() {
     if (e.target.closest("#req-clear-filter")) {
       state.filter = { category: "", status: "" };
       forceReloadRequests();
+      return;
+    }
+    if (e.target.closest("#design-tasks-generate")) {
+      generateDesignTasks();
+      return;
+    }
+    const queueBtn = e.target.closest(".design-task-queue");
+    if (queueBtn) {
+      const row = queueBtn.closest("[data-design-task-id]");
+      if (row) transitionDesignTask(row.dataset.designTaskId, "queue");
+      return;
+    }
+    const archiveBtn = e.target.closest(".design-task-archive");
+    if (archiveBtn) {
+      const row = archiveBtn.closest("[data-design-task-id]");
+      if (row) transitionDesignTask(row.dataset.designTaskId, "archive");
       return;
     }
 

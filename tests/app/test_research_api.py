@@ -36,7 +36,7 @@ from web.server import create_app
 # ---------------------------------------------------------------------------
 
 
-def _client(stub_repo, *, scalar=None, scalars=None) -> TestClient:
+def _client(stub_repo, *, scalar=None, scalars=None, design_repo=None) -> TestClient:
     """Build a TestClient whose research endpoints see `stub_repo`."""
     temp = tempfile.TemporaryDirectory()
     paths = ProjectPaths(root=Path(temp.name), repository=Path(temp.name))
@@ -54,11 +54,24 @@ def _client(stub_repo, *, scalar=None, scalars=None) -> TestClient:
     def _ctx():
         yield fake_session
 
+    # Default design-task repo stub: an empty list_design_tasks so the
+    # request-detail endpoint can return `design_tasks: []` without each
+    # legacy test having to wire its own stub.
+    default_design_repo = SimpleNamespace(
+        list_design_tasks=lambda _request_id: [],
+        set_design_task_status=lambda _task_id, _status: None,
+    )
+    design_repo_stub = design_repo if design_repo is not None else default_design_repo
+
     client = TestClient(app)
     client._patches = [  # type: ignore[attr-defined]
         patch("persistence.session.transaction", _ctx),
         patch(
             "persistence.repositories.ResearchRepository", return_value=stub_repo
+        ),
+        patch(
+            "persistence.repositories.DesignTaskRepository",
+            return_value=design_repo_stub,
         ),
     ]
     for p in client._patches:  # type: ignore[attr-defined]

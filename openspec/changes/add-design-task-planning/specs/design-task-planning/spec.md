@@ -11,7 +11,7 @@ existing file-backed shard format: `challenge_id`, `title`, `category`,
 `difficulty`, `primary_technique`, `learning_objective`, `points`, and `port`.
 The database and repository SHALL also store task planning metadata:
 `research_run_id`, `task_no`, `scenario`, `constraints`, `evidence_summary`,
-`source_finding_ids`, `status`, `created_at`, and `updated_at`.
+`finding_ids`, `status`, `created_at`, and `updated_at`.
 
 The system SHALL NOT store rendered prompt text or a `prompt_input` blob on
 `design_tasks`.
@@ -95,7 +95,9 @@ operator transitions `draft -> queued`, `draft -> archived`, and
 
 #### Scenario: Designed task cannot be archived by the planning endpoint
 
-- **GIVEN** a design task with `status = "designed"`
+- **GIVEN** a design task fixture-injected with `status = "designed"` (this
+  change does not create any code path that sets `designed`; the row exists
+  only to verify the guard for the future design-worker change)
 - **WHEN** the operator calls the planning archive endpoint
 - **THEN** the operation is rejected
 - **AND** the status remains `designed`
@@ -113,6 +115,14 @@ new generated set. If any existing task is `queued`, `designing`, `designed`, or
 - **GIVEN** a researched request with existing design tasks all in `draft`
 - **WHEN** the operator regenerates design tasks
 - **THEN** the previous draft rows are replaced
+- **AND** the request again has exactly `target_count` draft tasks
+
+#### Scenario: Archived-only tasks can be regenerated
+
+- **GIVEN** a researched request whose existing design tasks are all
+  `archived` (no `draft` or later-status rows)
+- **WHEN** the operator regenerates design tasks
+- **THEN** the archived rows are replaced by a fresh set of `draft` tasks
 - **AND** the request again has exactly `target_count` draft tasks
 
 #### Scenario: Queued task blocks regeneration
