@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -266,7 +267,7 @@ class FakeAgentExecutor:
 
 def test_worker_processes_max_jobs(tmp_path):
     # 中文注释：worker 达到 max_jobs 后应停止，即使队列里还有可 claim 的任务。
-    fake_runs = [object(), object(), object()]
+    fake_runs = [SimpleNamespace(id=f"r{i}", attempt=1) for i in range(3)]
     job_service = FakeJobService(fake_runs)
     agent_executor = FakeAgentExecutor()
     worker = ResearchWorker(
@@ -303,6 +304,36 @@ def test_worker_rejects_timeout_greater_than_lease(tmp_path):
             lease_seconds=60,
             hermes_timeout_seconds=60,
         )
+
+
+def test_worker_logs_transitions_to_injected_stream(tmp_path):
+    # 中文注释：spec 9.2b 要求 transition 写 stderr；这里注入 StringIO 断言关键事件都出现。
+    import io
+
+    runs = [SimpleNamespace(id=f"r{i}", attempt=1) for i in range(2)]
+    job_service = FakeJobService(runs)
+    agent_executor = FakeAgentExecutor()
+    log_stream = io.StringIO()
+    worker = ResearchWorker(
+        ProjectPaths(root=tmp_path, repository=tmp_path),
+        job_service,
+        agent_executor,
+        log_stream=log_stream,
+    )
+
+    worker.run(
+        "worker-2",
+        loop=False,
+        max_jobs=2,
+        poll_interval_seconds=0.01,
+        lease_seconds=60,
+        hermes_timeout_seconds=30,
+    )
+    output = log_stream.getvalue()
+    assert "started" in output
+    assert "claimed run" in output
+    assert "finished run" in output
+    assert "max_jobs=2" in output
 
 
 def test_sigterm_handler_is_restored():

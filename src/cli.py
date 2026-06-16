@@ -353,15 +353,28 @@ def _profile_list() -> None:
 
 
 def _profile_show(args: argparse.Namespace) -> None:
+    import sqlalchemy as sa
+
+    from persistence.models import research as model
     from persistence.repositories import ResearchRepository
     from persistence.session import transaction
 
     with transaction() as session:
         binding = ResearchRepository(session).get_binding(args.role)
+        # Spec 9a.3: joined with `agent_roles.display_name` so operators see the
+        # human-readable role label alongside the raw code. Only run the join
+        # when a binding exists so the unknown-role error path stays cheap.
+        role_display = None
+        if binding is not None:
+            role_display = session.scalar(
+                sa.select(model.AgentRole.display_name).where(
+                    model.AgentRole.code == args.role
+                )
+            )
     if binding is None:
         print(f"error: no binding for role {args.role!r}", file=sys.stderr)
         sys.exit(2)
-    print(f"role            : {binding.role}")
+    print(f"role            : {binding.role} ({role_display or '-'})")
     print(f"profile_name    : {binding.profile_name}")
     print(f"description     : {binding.description or '-'}")
     print(f"status          : {binding.status}")

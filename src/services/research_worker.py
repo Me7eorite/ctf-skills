@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import signal
+import sys
 import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, TextIO
 
 from core.paths import ProjectPaths
 from services.research_agent_executor import ResearchAgentExecutor
@@ -22,10 +23,14 @@ class ResearchWorker:
         paths: ProjectPaths,
         job_service: ResearchJobService,
         agent_executor: ResearchAgentExecutor,
+        *,
+        log_stream: TextIO | None = None,
     ) -> None:
         self.paths = paths
         self.job_service = job_service
         self.agent_executor = agent_executor
+        # 中文注释：默认写 stderr；测试可注入 StringIO 以便断言每一行 transition。
+        self._log_stream = log_stream if log_stream is not None else sys.stderr
 
     def run(
         self,
@@ -45,6 +50,11 @@ class ResearchWorker:
             hermes_timeout_seconds=hermes_timeout_seconds,
         )
         self.paths.initialize()
+        self._log(
+            f"[research-worker {agent_id}] started "
+            f"(loop={loop} max_jobs={max_jobs} lease={lease_seconds}s "
+            f"hermes_timeout={hermes_timeout_seconds}s)"
+        )
 
         processed_count = 0
         try:
@@ -55,10 +65,22 @@ class ResearchWorker:
                     research_run = self.job_service.claim_next_run(agent_id, lease_seconds)
                     if research_run is None:
                         if not loop:
+                            self._log(
+                                f"[research-worker {agent_id}] queue empty; exit "
+                                f"(processed={processed_count})"
+                            )
                             break
+                        self._log(
+                            f"[research-worker {agent_id}] queue empty; "
+                            f"sleeping {poll_interval_seconds}s"
+                        )
                         time.sleep(poll_interval_seconds)
                         continue
 
+                    self._log(
+                        f"[research-worker {agent_id}] claimed run "
+                        f"{research_run.id} (attempt={research_run.attempt})"
+                    )
                     self.agent_executor.execute(
                         research_run,
                         agent_id,
@@ -66,9 +88,21 @@ class ResearchWorker:
                         hermes_timeout_seconds,
                     )
                     processed_count += 1
+                    self._log(
+                        f"[research-worker {agent_id}] finished run "
+                        f"{research_run.id} (processed={processed_count})"
+                    )
                     if max_jobs and processed_count >= max_jobs:
+                        self._log(
+                            f"[research-worker {agent_id}] reached "
+                            f"max_jobs={max_jobs}; exit"
+                        )
                         break
         except KeyboardInterrupt:
+            self._log(
+                f"[research-worker {agent_id}] interrupted "
+                f"(processed={processed_count}); leaving claimed run for lease recovery"
+            )
             return {
                 "processed": processed_count,
                 "agent_id": agent_id,
@@ -76,6 +110,11 @@ class ResearchWorker:
             }
 
         return {"processed": processed_count, "agent_id": agent_id}
+
+    def _log(self, message: str) -> None:
+        """写一条 transition 日志到配置的流。"""
+        # 中文注释：单行写出 + flush，便于 tail / journalctl 实时观察。
+        print(message, file=self._log_stream, flush=True)
 
     @staticmethod
     def _validate_config(

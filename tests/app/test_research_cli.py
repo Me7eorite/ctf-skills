@@ -380,6 +380,273 @@ class ResearchListTests(unittest.TestCase):
         self.assertIn("unknown category 'crypto'", stderr)
 
 
+class ResearchSubmitMoreTests(unittest.TestCase):
+    def test_max_attempts_forwarded(self):
+        # 中文注释：--max-attempts 5 应原样传给 ResearchJobService.submit_request。
+        captured = {}
+        request = _make_request(category="web", target_count=2)
+        run = _make_run(request_id=request.id, status="queued")
+
+        class FakeJobService:
+            def __init__(self, *_a, **_kw):
+                pass
+
+            def submit_request(self, **kwargs):
+                captured.update(kwargs)
+                return (request, run)
+
+        with patch("persistence.session.transaction", side_effect=RuntimeError), patch(
+            "services.ResearchJobService", FakeJobService
+        ):
+            code, _stdout, _stderr = _capture_run(
+                ["research", "submit",
+                 "--category", "web", "--topic", "x",
+                 "--count", "2", "--difficulty", "easy:2",
+                 "--max-attempts", "5"]
+            )
+        self.assertEqual(code, 0)
+        self.assertEqual(captured["max_attempts"], 5)
+
+    def test_submit_has_no_timeout_flag(self):
+        # 中文注释：submit 不应有 --timeout；argparse 必须拒绝。
+        with patch("persistence.session.transaction", side_effect=RuntimeError):
+            code, _stdout, stderr = _capture_run(
+                ["research", "submit",
+                 "--category", "web", "--topic", "x",
+                 "--count", "1", "--difficulty", "easy:1",
+                 "--timeout", "60"]
+            )
+        self.assertEqual(code, 2)
+        self.assertIn("unrecognized arguments", stderr)
+        self.assertIn("--timeout", stderr)
+
+    def test_submit_does_not_invoke_hermes(self):
+        # 中文注释：submit 必须毫秒级返回；hermes_invoke 一旦被触达就 assert fail。
+        request = _make_request(category="web", target_count=1)
+        run = _make_run(request_id=request.id, status="queued")
+
+        class FakeJobService:
+            def __init__(self, *_a, **_kw):
+                pass
+
+            def submit_request(self, **_kw):
+                return (request, run)
+
+        with patch("persistence.session.transaction", side_effect=RuntimeError), patch(
+            "services.ResearchJobService", FakeJobService
+        ), patch(
+            "hermes.research.invoke_research_agent",
+            side_effect=AssertionError("Hermes must not be invoked by submit"),
+        ):
+            code, _stdout, _stderr = _capture_run(
+                ["research", "submit",
+                 "--category", "web", "--topic", "x",
+                 "--count", "1", "--difficulty", "easy:1"]
+            )
+        self.assertEqual(code, 0)
+
+
+class ResearchWorkerExecutionTests(unittest.TestCase):
+    def test_worker_processes_exactly_max_jobs(self):
+        # 中文注释：用真实 ResearchWorker，但桩出 service/executor；--max-jobs 2 时应只跑 2 次。
+        executed: list = []
+
+        class FakeJob:
+            def __init__(self, *_a, **_kw):
+                self.counter = 0
+
+            def claim_next_run(self, _agent_id, _lease):
+                self.counter += 1
+                return SimpleNamespace(id=uuid4(), claim_token=uuid4(), attempt=self.counter)
+
+        class FakeExec:
+            def __init__(self, *_a, **_kw):
+                pass
+
+            def execute(self, run, *_args, **_kw):
+                executed.append(run.id)
+
+        with patch("persistence.session.transaction", side_effect=RuntimeError), patch(
+            "services.ResearchJobService", FakeJob
+        ), patch("services.ResearchAgentExecutor", FakeExec):
+            code, stdout, _stderr = _capture_run(
+                ["research", "worker", "--agent-id", "w1",
+                 "--max-jobs", "2",
+                 "--lease-seconds", "60", "--hermes-timeout-seconds", "30"]
+            )
+        self.assertEqual(code, 0)
+        self.assertEqual(len(executed), 2)
+        import json
+
+        payload = json.loads(stdout)
+        self.assertEqual(payload["processed"], 2)
+
+    def test_worker_keyboard_interrupt_returns_interrupted_true(self):
+        # 中文注释：claim 阶段被 KeyboardInterrupt 打断，应返回 interrupted=True 并 exit 0。
+        class FakeJob:
+            def __init__(self, *_a, **_kw):
+                pass
+
+            def claim_next_run(self, *_args, **_kw):
+                raise KeyboardInterrupt
+
+        class FakeExec:
+            def __init__(self, *_a, **_kw):
+                pass
+
+            def execute(self, *_a, **_kw):
+                pass
+
+        with patch("persistence.session.transaction", side_effect=RuntimeError), patch(
+            "services.ResearchJobService", FakeJob
+        ), patch("services.ResearchAgentExecutor", FakeExec):
+            code, stdout, _stderr = _capture_run(
+                ["research", "worker", "--agent-id", "w1",
+                 "--lease-seconds", "60", "--hermes-timeout-seconds", "30"]
+            )
+        self.assertEqual(code, 0)
+        import json
+
+        payload = json.loads(stdout)
+        self.assertTrue(payload.get("interrupted"))
+        self.assertEqual(payload["processed"], 0)
+
+
+class ResearchWaitTimeoutTests(unittest.TestCase):
+    def test_wait_timeout_exits_2(self):
+        # 中文注释：run 一直处于非终态时，超过 --timeout 应当退出码 2。
+        run_id = uuid4()
+        run = _make_run(run_id=run_id, status="queued")
+        repo = SimpleNamespace(get_run=lambda _: run)
+
+        @contextlib.contextmanager
+        def _ctx():
+            yield "session"
+
+        # 中文注释：patch time.sleep + time.monotonic 让超时立刻命中。
+        with patch("persistence.session.transaction", _ctx), patch(
+            "persistence.repositories.ResearchRepository", return_value=repo
+        ), patch("cli.time.sleep", return_value=None), patch(
+            "cli.time.monotonic", side_effect=[0.0, 99.0, 99.0]
+        ):
+            code, stdout, _stderr = _capture_run(
+                ["research", "wait", str(run_id), "--timeout", "5"]
+            )
+        self.assertEqual(code, 2)
+        self.assertIn("timeout", stdout)
+
+
+class ResearchShowMultiRunTests(unittest.TestCase):
+    def test_show_renders_multiple_runs(self):
+        # 中文注释：同一 generation_request 的 2 次 attempt 都应出现在输出。
+        from domain.research import ChallengeCategory
+
+        request = _make_request(category="web")
+        runs = [
+            _make_run(request_id=request.id, attempt=1, status="failed"),
+            _make_run(request_id=request.id, attempt=2, status="completed"),
+        ]
+        cats = [
+            ChallengeCategory("web", "Web 安全", None),
+            ChallengeCategory("pwn", "Pwn", None),
+            ChallengeCategory("re", "Reverse", None),
+        ]
+        repo = SimpleNamespace(
+            get_generation_request=lambda _: request,
+            list_categories=lambda: cats,
+            list_runs=lambda **_kw: runs,
+            list_sources=lambda _: [],
+            list_findings=lambda _: [],
+        )
+
+        @contextlib.contextmanager
+        def _ctx():
+            yield "session"
+
+        with patch("persistence.session.transaction", _ctx), patch(
+            "persistence.repositories.ResearchRepository", return_value=repo
+        ):
+            code, stdout, _stderr = _capture_run(["research", "show", str(request.id)])
+        self.assertEqual(code, 0)
+        self.assertIn("runs (2)", stdout)
+        self.assertIn("attempt=1", stdout)
+        self.assertIn("attempt=2", stdout)
+        self.assertIn("failed", stdout)
+        self.assertIn("completed", stdout)
+
+
+class ResearchListHappyPathTests(unittest.TestCase):
+    def test_list_renders_filtered_requests(self):
+        # 中文注释：--category web 过滤后，应只列出 web 行；输出包含 topic。
+        from domain.research import ChallengeCategory
+
+        web_req = _make_request(category="web", topic="SQLi")
+        cats = [
+            ChallengeCategory("web", "Web 安全", None),
+            ChallengeCategory("pwn", "Pwn", None),
+            ChallengeCategory("re", "Reverse", None),
+        ]
+        repo = SimpleNamespace(
+            list_categories=lambda: cats,
+            list_generation_requests=lambda **_kw: [web_req],
+        )
+
+        @contextlib.contextmanager
+        def _ctx():
+            yield "session"
+
+        with patch("persistence.session.transaction", _ctx), patch(
+            "persistence.repositories.ResearchRepository", return_value=repo
+        ):
+            code, stdout, _stderr = _capture_run(
+                ["research", "list", "--category", "web"]
+            )
+        self.assertEqual(code, 0)
+        self.assertIn(str(web_req.id), stdout)
+        self.assertIn("SQLi", stdout)
+        self.assertIn("web", stdout)
+
+
+class ResearchCategoriesOutputTests(unittest.TestCase):
+    def test_categories_lists_each_row(self):
+        # 中文注释：每行应包含 code + display_name + description。
+        from domain.research import ChallengeCategory
+
+        cats = [
+            ChallengeCategory("web", "Web 安全", "HTTP/Web 服务的题目"),
+            ChallengeCategory("pwn", "Pwn", "二进制利用"),
+        ]
+        repo = SimpleNamespace(list_categories=lambda: cats)
+
+        @contextlib.contextmanager
+        def _ctx():
+            yield "session"
+
+        with patch("persistence.session.transaction", _ctx), patch(
+            "persistence.repositories.ResearchRepository", return_value=repo
+        ):
+            code, stdout, _stderr = _capture_run(["research", "categories"])
+        self.assertEqual(code, 0)
+        self.assertIn("web", stdout)
+        self.assertIn("Web 安全", stdout)
+        self.assertIn("pwn", stdout)
+        self.assertIn("二进制利用", stdout)
+
+    def test_categories_empty_message(self):
+        repo = SimpleNamespace(list_categories=lambda: [])
+
+        @contextlib.contextmanager
+        def _ctx():
+            yield "session"
+
+        with patch("persistence.session.transaction", _ctx), patch(
+            "persistence.repositories.ResearchRepository", return_value=repo
+        ):
+            code, stdout, _stderr = _capture_run(["research", "categories"])
+        self.assertEqual(code, 0)
+        self.assertIn("(no categories)", stdout)
+
+
 class DatabaseUrlMissingTests(unittest.TestCase):
     def test_list_without_database_url_prints_clean_error(self):
         # 中文注释：DATABASE_URL 未设置时必须给出明确错误而不是 Python traceback。

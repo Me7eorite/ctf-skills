@@ -107,13 +107,15 @@ class ProfileShowTests(unittest.TestCase):
 
         @contextlib.contextmanager
         def _ctx():
-            yield "session"
+            yield SimpleNamespace(scalar=lambda _stmt: "研究 Agent")
 
         with patch("persistence.session.transaction", _ctx), patch(
             "persistence.repositories.ResearchRepository", return_value=repo
         ):
             code, stdout, _stderr = _capture_run(["profile", "show", "research"])
         self.assertEqual(code, 0)
+        # Spec 9a.3: row joined with agent_roles.display_name.
+        self.assertIn("role            : research (研究 Agent)", stdout)
         self.assertIn("profile_name    : default", stdout)
         self.assertIn("status          : enabled", stdout)
 
