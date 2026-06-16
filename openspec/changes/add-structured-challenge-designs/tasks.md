@@ -27,26 +27,26 @@
 
 ## 2. Domain and Validation
 
-- [ ] 2.1 Add `DesignAttempt` DTO with `DesignAttemptStatus`
+- [x] 2.1 Add `DesignAttempt` DTO with `DesignAttemptStatus`
   constants.
-- [ ] 2.2 Add `ChallengeDesign` DTO with `ChallengeDesignStatus`
+- [x] 2.2 Add `ChallengeDesign` DTO with `ChallengeDesignStatus`
   constants.
-- [ ] 2.3 Add `validate_design_payload(payload, parent_task)` that
+- [x] 2.3 Add `validate_design_payload(payload, parent_task)` that
   enforces the JSON schema and parent-equality rules from `design.md`
   (id/title/category/difficulty/points equality with parent,
   hints length, docker/port rules for web/pwn, no URLs in artifacts
   or validation). It also generates `challenge_designs.summary` from
   the validated payload and truncates it to <= 280 chars when needed;
   summary is not read from model JSON.
-- [ ] 2.4 Add `parse_design_output(stdout)` that strips ` ```json `
+- [x] 2.4 Add `parse_design_output(stdout)` that strips ` ```json `
   fences and extracts the first balanced JSON object; raise typed
   errors on missing/invalid blocks.
-- [ ] 2.5 Add `run_quality_gate(payload)` that applies explicit
+- [x] 2.5 Add `run_quality_gate(payload)` that applies explicit
   in-code predicates derived from
   `skills/design-challenges/references/quality-gate.md` and returns
   `(passed: bool, notes: list[str])`; do not parse Markdown as
   executable rules.
-- [ ] 2.6 Tests for validate / parse / quality-gate (good and bad
+- [x] 2.6 Tests for validate / parse / quality-gate (good and bad
   inputs covering each rule).
 
 ## 3. Prompt Wrapper
