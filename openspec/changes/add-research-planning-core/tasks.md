@@ -152,5 +152,5 @@
 - [x] 14.1 Run `uv run ruff check`.
 - [x] 14.2 Run `uv run pytest tests/` and confirm Postgres-marked tests skip cleanly when `TEST_DATABASE_URL` is unset; non-Postgres tests pass.
 - [x] 14.3 Export `TEST_DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5432/challenge_factory_test`. Run `uv run pytest tests/ -m postgres` and confirm zero failures, zero skips.
-- [ ] 14.4 Run `openspec validate add-research-planning-core --strict`.
+- [x] 14.4 Run `openspec validate add-research-planning-core --strict`.
 - [x] 14.5 Run the queue smoke: `challenge-factory research submit --category web --topic "SQL injection sample" --count 4 --difficulty easy:2,medium:2 --seed-url https://example.com/sqli`, then `challenge-factory research worker --agent-id smoke-worker --max-jobs 1 --lease-seconds 900 --hermes-timeout-seconds 810`. Either: a real Hermes runs end-to-end against the dev DB OR a stub Hermes binary returns canned JSON. Confirm a `research_runs` row reaches the expected terminal status; the parent `generation_requests` row has `category="web"` and persisted `seed_urls`; `research_runs.profile_name_used` is non-null and matches the resolved binding (default unless `profile bind research <name>` was run earlier in the smoke); `research_runs.claim_token` is non-null on the completed row.
