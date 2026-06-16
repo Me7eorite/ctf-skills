@@ -49,7 +49,8 @@ validated, structured design we can show to the operator."
 - Expose `POST /api/design-tasks/{id}/design` to trigger one attempt
   synchronously (operator-initiated, not a worker pool), and extend
   `GET /api/research/requests/{id}` so each `design_tasks` row includes
-  its latest `challenge_design` summary + attempt history.
+  its latest `challenge_design` summary + attempt history with
+  artifact URLs instead of raw filesystem paths.
 - Add a **Designs** subsection under each Design Task row in the
   request detail page - collapsible JSON viewer for the validated
   design, attempt list with status pills, and a "Design now" button.
@@ -86,6 +87,9 @@ validated, structured design we can show to the operator."
   `ChallengeDesignService` (synchronous claim + execute + persist).
 - Adds HTTP endpoints: `POST /api/design-tasks/{id}/design`; extends
   the request-detail payload with `latest_design` + `attempts`.
+  Attempt responses split `design_task_status` from `attempt_status`
+  so retryable attempt failures can return the task to `queued`
+  without looking like terminal task failure.
 - Adds dashboard collapsible **Designs** section under each Design
   Task row and a "Design now" action.
 - Adds tests for prompt assembly, JSON validation, executor happy + 5

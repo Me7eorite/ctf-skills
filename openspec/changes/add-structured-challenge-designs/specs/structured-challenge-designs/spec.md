@@ -18,7 +18,7 @@ The retry chain is reconstructed from `(design_task_id, attempt)`
 ordering; there is no `parent_attempt_id` column.
 
 `challenge_designs` SHALL store: the full validated JSON object in
-`payload jsonb`, a short `summary` text (≤ 280 chars), `flag_format`,
+`payload jsonb`, a short `summary` text (<= 280 chars), `flag_format`,
 `validation_notes`, `quality_gate_passed boolean`, `status` in
 `{draft, accepted, superseded}` (this change writes only `draft`), and
 audit timestamps.
@@ -63,8 +63,8 @@ rendered prompt SHALL include, in this order:
    label, kind, summary, and source URLs, capped at the first 20
    findings.
 5. A category-specific reference link, chosen by parent category:
-   `web → web-design.md`, `pwn → pwn-design.md`,
-   `re → reverse-design.md`, otherwise `other-categories.md`.
+   `web -> web-design.md`, `pwn -> pwn-design.md`,
+   `re -> reverse-design.md`, otherwise `other-categories.md`.
 6. The always-on references `spec-template.md` and `quality-gate.md`,
    plus `delivery-format.md` for `web`/`pwn` parents only.
 7. An output-contract block instructing the model to emit exactly the
@@ -124,6 +124,7 @@ attempt if any of the following hold:
   the parent `design_tasks.port`
 - `artifacts` or `validation` contains any `http://` or `https://`
   URL string
+- the generated `summary` is longer than 280 characters
 
 When `event.flag_format` is missing from the JSON, the validator SHALL
 insert the default value `flag{...}` rather than reject.
@@ -171,7 +172,7 @@ decides whether to act on it downstream.
 ### Requirement: Status transitions are owned by this layer
 
 The system SHALL transition `design_tasks.status` from
-`queued → designing` when a new attempt is inserted with
+`queued -> designing` when a new attempt is inserted with
 `status = 'running'`, and SHALL transition the same row to:
 
 - `designed` on the same transaction that inserts the
@@ -183,7 +184,8 @@ The system SHALL transition `design_tasks.status` from
   SHALL NOT insert a queued placeholder attempt row.
 
 Each terminal write SHALL be gated on the `(design_attempt.id,
-claim_token)` tuple so a stale caller cannot overwrite the row.
+claim_token)` tuple and the parent `design_tasks.status = 'designing'`
+condition so a stale caller cannot overwrite the row.
 
 `archived` and `draft` design-task states remain owned by the
 planning layer and SHALL NOT be written by this layer.
@@ -232,8 +234,11 @@ The endpoint SHALL:
 - return 404 if the task does not exist
 - return 409 if the task is not in `status = 'queued'`
 - on success return 200 with the produced `challenge_designs` row
-- on validation failure return 200 with `status = 'failed'` and the
-  `error` field populated; the attempt row is still persisted
+- on validation/timeout/Hermes failure return 200 with
+  `attempt_status = 'failed'`, the current `design_task_status`
+  (`queued` when retry remains, `failed` when exhausted), a
+  `retry_available` boolean, and the `error` field populated; the
+  attempt row is still persisted
 
 The endpoint SHALL enforce a per-attempt wall-clock timeout (default
 600 seconds) and SHALL record a `failed` attempt with
@@ -242,15 +247,18 @@ The endpoint SHALL enforce a per-attempt wall-clock timeout (default
 The system SHALL expose prompt/log content only through
 `GET /api/design-attempts/{id}/artifact?kind={prompt|log}`. That
 endpoint SHALL look up the stored `prompt_path` (for `kind=prompt`)
-or `hermes_log_path` (for `kind=log`) of the matching attempt,
-re-resolve the path, and verify it lives under `work/design/prompts/`
-or `work/design/logs/` before reading. It SHALL respond with:
-
+or `hermes_log_path` (for `kind=log`) of the matching attempt. Stored
+paths SHALL be project-relative paths under `work/design/prompts/` or
+`work/design/logs/`. Before reading, the endpoint SHALL resolve the
+stored path against the project root, canonicalize both the candidate
+path and the allowed root directory, and require the candidate to be
+relative to the allowed root. String-prefix checks alone are not
+sufficient. It SHALL respond with:
 - 404 when the attempt does not exist or has no path of the requested
   kind,
 - 400 when `kind` is not one of `prompt` or `log`,
-- 403 when the stored path resolves outside the allowed directory or
-  contains `..` traversal,
+- 403 when the stored path is absolute, contains traversal, or its
+  canonical resolved path is outside the allowed directory,
 - 200 with the file body on success.
 
 #### Scenario: Artifact endpoint serves the stored prompt for an attempt
@@ -293,7 +301,9 @@ for each `design_tasks[]` entry:
   quality_gate_passed, created_at; or `null` if none.
 - `attempts`: ordered list of `design_attempts` rows for that task,
   oldest first, each with id, attempt, status, started_at,
-  finished_at, last_error, prompt_path, hermes_log_path.
+  finished_at, last_error, and artifact URLs for `prompt` and `log`
+  when the corresponding stored path exists. Raw filesystem paths
+  SHALL NOT be exposed in this response.
 
 The dashboard SHALL render those fields inline under each Design Task
 row as a collapsible panel showing the attempt list, a JSON viewer for

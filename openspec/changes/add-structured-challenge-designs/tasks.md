@@ -35,7 +35,7 @@
   enforces the JSON schema and parent-equality rules from `design.md`
   (id/title/category/difficulty/points equality with parent,
   hints length, docker/port rules for web/pwn, no URLs in artifacts
-  or validation).
+  or validation, generated summary length <= 280 chars).
 - [ ] 2.4 Add `parse_design_output(stdout)` that strips ` ```json `
   fences and extracts the first balanced JSON object; raise typed
   errors on missing/invalid blocks.
@@ -87,8 +87,13 @@
     sets task status `queued` for a later real retry attempt, or sets
     task status `failed`; never inserts a queued attempt placeholder)
   - `latest_design(design_task_id, status='draft')`
-- [ ] 4.3 All writes use the supplied session, never commit themselves.
-- [ ] 4.4 Postgres tests for round-trip, partial unique constraint,
+- [ ] 4.3 Execution-owned status writes in `create_attempt`,
+  `complete_attempt`, and `fail_attempt` must update
+  `design_tasks.status` directly inside their transaction and must not
+  call the planning-side `DesignTaskRepository.set_design_task_status()`
+  or its transition validator.
+- [ ] 4.4 All writes use the supplied session, never commit themselves.
+- [ ] 4.5 Postgres tests for round-trip, partial unique constraint,
   status-sync rules (`queued -> designing -> designed`, retry resets
   task without inserting an attempt placeholder, exhausted retries).
 
@@ -140,24 +145,28 @@
 ## 7. HTTP API
 
 - [ ] 7.1 Add `POST /api/design-tasks/{id}/design` returning
-  `{design_task_id, attempt_id, status, challenge_design|null,
-  error|null}`.
+  `{design_task_id, attempt_id, design_task_status, attempt_status,
+  retry_available, challenge_design|null, error|null}`.
 - [ ] 7.2 Translate the typed errors:
-  - task not found → 404
-  - not queued / concurrent → 409
-  - validation/timeout/Hermes error → 200 with `status='failed'`
-    and `error=<reason>`
+  - task not found -> 404
+  - not queued / concurrent -> 409
+  - validation/timeout/Hermes error -> 200 with
+    `attempt_status='failed'`, current `design_task_status`,
+    `retry_available`, and `error=<reason>`
 - [ ] 7.3 Extend `GET /api/research/requests/{id}` so each
   `design_tasks[]` entry has:
   - `attempts: AttemptSummaryDict[]` ordered oldest-first
     (id, attempt, status, started_at, finished_at, last_error,
-    prompt_path, hermes_log_path)
+    prompt_artifact_url, log_artifact_url; no raw filesystem paths)
   - `latest_design: ChallengeDesignDict | null`
 - [ ] 7.4 Add `GET /api/design-attempts/{id}/artifact?kind={prompt|log}`
-  serving the stored prompt or Hermes log for one attempt. Re-resolve
-  the path and confirm it lives under `work/design/prompts/` or
-  `work/design/logs/`; reject path traversal with 403, unknown `kind`
-  with 400, and missing rows/paths with 404.
+  serving the stored prompt or Hermes log for one attempt. Stored
+  paths are project-relative. Resolve against the project root,
+  canonicalize the candidate and allowed root, require the candidate
+  to stay under `work/design/prompts/` or `work/design/logs/`, and
+  reject absolute paths, traversal, symlink escapes, or prefix-only
+  checks with 403; unknown `kind` with 400; missing rows/paths with
+  404.
 - [ ] 7.5 API tests for:
   - success, 404, 409, validation failure
   - retry resets the task to `queued`, a second operator trigger

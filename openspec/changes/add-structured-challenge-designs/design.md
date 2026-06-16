@@ -242,6 +242,12 @@ pair and the current `design_tasks.status` so a stale request cannot
 overwrite the row. This is not a lease; a future worker-pool change
 may add heartbeat and lease-expiry columns/behavior.
 
+These executor-owned status writes must not go through the planning
+layer's `set_design_task_status()` / planning transition validator,
+which intentionally rejects `queued -> designing -> designed|failed`.
+The challenge-design repository owns these transitions inside the same
+transactions that create or finish attempts.
+
 ## Status Sync With `design_tasks`
 
 This change implements the previously reserved transitions:
@@ -258,7 +264,8 @@ designing  -> queued     (retry available; no queued attempt row is inserted)
 ## API Shape
 
 - `POST /api/design-tasks/{id}/design`
-  - 200 -> `{ "design_task_id", "attempt_id", "status",
+  - 200 -> `{ "design_task_id", "attempt_id",
+    "design_task_status", "attempt_status", "retry_available",
     "challenge_design": {...} | null, "error": null | "<reason>" }`
   - 409 if task is not `queued`
   - 404 if task does not exist
@@ -267,17 +274,20 @@ designing  -> queued     (retry available; no queued attempt row is inserted)
     `latest_design: ChallengeDesignDict | null` and
     `attempts: AttemptSummaryDict[]` ordered **oldest first**
     (`id`, `attempt`, `status`, `started_at`, `finished_at`,
-    `last_error`).
+    `last_error`, `prompt_artifact_url`, `log_artifact_url`). Raw
+    filesystem paths are not exposed in this response.
 - `GET /api/design-attempts/{id}/artifact?kind={prompt|log}`:
   - serves the file stored at `design_attempts.prompt_path` (when
     `kind=prompt`) or `hermes_log_path` (when `kind=log`).
   - 404 if the attempt does not exist or has no path of the requested
     kind.
   - 400 on unknown `kind`.
-  - SHALL re-resolve the stored path and verify it lives under
-    `work/design/prompts/` or `work/design/logs/` respectively before
-    reading; arbitrary filesystem paths and `..` traversal in the
-    stored value are rejected with 403.
+  - stored paths are project-relative paths under
+    `work/design/prompts/` or `work/design/logs/`; before reading,
+    resolve the stored path against the project root, canonicalize the
+    candidate and allowed root, and require the candidate to be
+    relative to the allowed root. Absolute paths, traversal, symlink
+    escapes, and string-prefix-only checks are rejected with 403.
 
 ## UI Shape
 
