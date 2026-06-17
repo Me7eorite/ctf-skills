@@ -83,18 +83,62 @@ def build_design_prompt(
         ),
         "## Output Contract",
         (
-            "Return exactly one JSON object matching the machine-readable output "
-            "shape from SKILL.md. The object must contain `event` and a "
-            "`challenges` array with exactly one entry for this design task. "
-            "Echo or default `event.flag_format` and include every field that "
-            "the validator enforces."
+            "You MUST reply with a SINGLE JSON object and nothing else.\n"
+            "\n"
+            "Hard rules (the executor parses your reply verbatim):\n"
+            "- The first character of your reply MUST be `{` and the last MUST "
+            "be `}`.\n"
+            "- Do NOT wrap the JSON in markdown, code fences, headings, tables, "
+            "prose, or commentary.\n"
+            "- Do NOT write the JSON to a file. Do NOT call Write/Edit/Bash to "
+            "create `*.json`, `*.md`, or any other output artifact. Any files "
+            "you produce are ignored — only this reply is consumed.\n"
+            "- The object MUST match the machine-readable shape from SKILL.md "
+            "and MUST contain top-level keys `event` and `challenges`.\n"
+            "- `challenges` MUST be an array of length 1.\n"
+            "- Echo or default `event.flag_format` and include every field the "
+            "validator enforces.\n"
+            "\n"
+            "If you explored with tools, ignore those side artifacts and emit "
+            "the final JSON only."
         ),
+        "## Pinned Values (copy verbatim into `challenges[0]`)",
+        _render_pinned_values(design_task),
     ]
     return "\n\n".join(sections).rstrip() + "\n"
 
 
 def _category_reference_file(category: str) -> str:
     return CATEGORY_REFERENCE_FILES.get(category, OTHER_CATEGORY_REFERENCE_FILE)
+
+
+def _render_pinned_values(task: DesignTask) -> str:
+    # Hard-coded copies of the fields the validator compares for equality
+    # against the parent design task. These are the exact strings/numbers
+    # the agent must echo into `challenges[0]`; any drift fails the attempt.
+    lines = [
+        "These values are validated by exact match against the database.",
+        "Any drift (even cosmetic) fails the attempt.",
+        "",
+        f"- `challenges[0].id` = `{task.challenge_id}`",
+        f"- `challenges[0].category` = `{task.category}`",
+        f"- `challenges[0].difficulty` = `{task.difficulty}`",
+        f"- `challenges[0].points` = {task.points}",
+    ]
+    if task.port is not None:
+        lines.append(f"- `challenges[0].port` = {task.port}")
+        lines.append(
+            "- `challenges[0].deployment` MUST include the substring "
+            "`docker` (case-insensitive)."
+        )
+    lines.extend(
+        [
+            "",
+            "Do NOT use the example id `web-0001` from SKILL.md — use the id "
+            "pinned above. SKILL.md examples are illustrative, not authoritative.",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _render_event_brief(request: GenerationRequest) -> str:

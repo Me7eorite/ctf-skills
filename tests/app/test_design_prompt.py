@@ -167,12 +167,34 @@ def test_evidence_cap_preserves_insertion_order(tmp_path):
 def test_prompt_includes_always_on_references_and_contract(tmp_path):
     context = load_design_prompt_context(_paths(tmp_path))
 
-    prompt = build_design_prompt(context, _task(), _request(), [], [])
+    task = _task()
+    prompt = build_design_prompt(context, task, _request(), [], [])
 
     assert "@skills/design-challenges/references/spec-template.md" in prompt
     assert "@skills/design-challenges/references/quality-gate.md" in prompt
-    assert "Return exactly one JSON object" in prompt
-    assert "`challenges` array with exactly one entry" in prompt
+    # Hardened Output Contract (post split-design-tasks fix #2):
+    assert "SINGLE JSON object and nothing else" in prompt
+    assert "`challenges` MUST be an array of length 1" in prompt
+    assert "Do NOT write the JSON to a file" in prompt
+
+
+def test_prompt_pins_parent_values_verbatim(tmp_path):
+    context = load_design_prompt_context(_paths(tmp_path))
+
+    task = _task()
+    prompt = build_design_prompt(context, task, _request(), [], [])
+
+    # Pinned Values block must echo the exact parent-task values the
+    # validator does equality checks against, so the agent cannot drift
+    # to SKILL.md example values like ``web-0001``.
+    assert "## Pinned Values" in prompt
+    assert f"`challenges[0].id` = `{task.challenge_id}`" in prompt
+    assert f"`challenges[0].category` = `{task.category}`" in prompt
+    assert f"`challenges[0].difficulty` = `{task.difficulty}`" in prompt
+    assert f"`challenges[0].points` = {task.points}" in prompt
+    if task.port is not None:
+        assert f"`challenges[0].port` = {task.port}" in prompt
+        assert "deployment` MUST include the substring `docker`" in prompt
 
 
 def test_long_references_are_truncated_for_command_line_safety(tmp_path):

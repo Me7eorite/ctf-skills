@@ -45,27 +45,61 @@ class ValidatedDesignPayload:
 
 
 def parse_design_output(stdout: str) -> dict[str, Any]:
-    """Extract the first balanced JSON object from Hermes stdout."""
+    """Extract the first design-shaped JSON object from Hermes stdout.
+
+    The agent's reply ideally is a single JSON object (the prompt's Output
+    Contract forbids prose/files). In practice models still occasionally
+    surround the JSON with markdown, write the JSON to a file and summarize
+    in prose, or emit incidental ``{flag{...}}`` style braces. This parser
+    keeps scanning candidate ``{`` positions until it finds a balanced block
+    that parses as JSON AND has the design-output shape (top-level ``event``
+    and ``challenges`` keys). Anything that fails either check is treated as
+    noise and the scan continues. If nothing matches, the error names the
+    contract so the operator can see the symptom directly.
+    """
     if not isinstance(stdout, str) or not stdout.strip():
         raise ChallengeDesignValidationError("Hermes output is empty")
 
     text = _strip_json_fences(stdout)
-    start = text.find("{")
-    if start < 0:
+    saw_any_brace = False
+    last_decode_error: str | None = None
+
+    cursor = 0
+    while True:
+        start = text.find("{", cursor)
+        if start < 0:
+            break
+        saw_any_brace = True
+        end = _find_balanced_json_object_end(text, start)
+        if end is None:
+            # Unbalanced from here on; nothing further can match.
+            break
+        block = text[start : end + 1]
+        # Advance past this candidate before retrying, so noise braces
+        # (e.g. ``flag{...}``) don't infinitely re-match.
+        cursor = end + 1
+        try:
+            parsed = json.loads(block)
+        except json.JSONDecodeError as exc:
+            last_decode_error = exc.msg
+            continue
+        if isinstance(parsed, dict) and "event" in parsed and "challenges" in parsed:
+            return parsed
+        # Parsed JSON but not the design shape — keep scanning.
+
+    if not saw_any_brace:
         raise ChallengeDesignValidationError("Hermes output does not contain JSON")
-
-    end = _find_balanced_json_object_end(text, start)
-    if end is None:
-        raise ChallengeDesignValidationError("Hermes output contains unbalanced JSON")
-
-    block = text[start : end + 1]
-    try:
-        parsed = json.loads(block)
-    except json.JSONDecodeError as exc:
-        raise ChallengeDesignValidationError(f"invalid JSON: {exc.msg}") from exc
-    if not isinstance(parsed, dict):
-        raise ChallengeDesignValidationError("design output JSON must be an object")
-    return parsed
+    if last_decode_error is not None:
+        raise ChallengeDesignValidationError(
+            "Hermes output does not contain a JSON object with `event` and "
+            f"`challenges` (last decode error: {last_decode_error})"
+        )
+    raise ChallengeDesignValidationError(
+        "Hermes output does not contain a JSON object with `event` and "
+        "`challenges`; the agent likely wrote the design to a file or replied "
+        "with prose. The Output Contract requires the reply itself to be the "
+        "JSON object."
+    )
 
 
 def validate_design_payload(
@@ -90,6 +124,7 @@ def validate_design_payload(
     challenges = normalized.get("challenges")
     if not isinstance(challenges, list) or len(challenges) != 1:
         raise ChallengeDesignValidationError("challenges must be an array of length 1")
+    challenges[0] = _normalize_skill_fields(challenges[0])
     challenge = challenges[0]
     if not isinstance(challenge, dict):
         raise ChallengeDesignValidationError("challenges[0] must be an object")
@@ -198,6 +233,60 @@ def run_quality_gate(payload: Mapping[str, Any]) -> tuple[bool, list[str]]:
         _note_if(notes, "port" not in challenge, "web/pwn design must define a port")
 
     return not notes, notes
+
+
+def _normalize_skill_fields(challenge: Any) -> Any:
+    """Bridge SKILL.md's output shape to the validator's flat shape.
+
+    The published design-challenges skill (see
+    `skills/design-challenges/SKILL.md` ``## Output Shape``) emits a richer
+    schema than this validator was originally written for:
+
+    - reply uses ``player_prompt``; validator expects ``prompt``
+    - reply nests under ``flag_plan.location``; validator expects ``flag_location``
+    - reply emits ``validation`` as an object with ``reference_solve`` /
+      ``expected_result`` / ``regression_checks``; validator expects a string
+
+    Normalize here so existing flat-shape fixtures stay unchanged (each
+    branch checks ``if X not in out`` / ``isinstance(..., dict)`` and is a
+    no-op when the field is already in the validator's shape) while
+    SKILL.md-shaped agent output also validates without a parallel
+    code path in the parser.
+    """
+    if not isinstance(challenge, dict):
+        return challenge
+    out = dict(challenge)
+
+    if "prompt" not in out:
+        player_prompt = out.get("player_prompt")
+        if isinstance(player_prompt, str):
+            out["prompt"] = player_prompt
+
+    if "flag_location" not in out:
+        flag_plan = out.get("flag_plan")
+        if isinstance(flag_plan, dict):
+            location = flag_plan.get("location")
+            if isinstance(location, str):
+                out["flag_location"] = location
+
+    validation = out.get("validation")
+    if isinstance(validation, dict):
+        parts: list[str] = []
+        for key in ("reference_solve", "expected_result"):
+            value = validation.get(key)
+            if isinstance(value, str) and value.strip():
+                parts.append(value.strip())
+        regression = validation.get("regression_checks")
+        if isinstance(regression, list):
+            parts.extend(
+                item.strip()
+                for item in regression
+                if isinstance(item, str) and item.strip()
+            )
+        if parts:
+            out["validation"] = "\n".join(parts)
+
+    return out
 
 
 def _strip_json_fences(text: str) -> str:

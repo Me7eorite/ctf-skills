@@ -77,8 +77,108 @@ def test_parse_design_output_strips_json_fence_and_trailing_text():
 
 
 def test_parse_design_output_rejects_unbalanced_json():
-    with pytest.raises(ChallengeDesignValidationError, match="unbalanced"):
+    # Unbalanced JSON yields the same diagnostic as "no event/challenges
+    # match" because both leave the scan with nothing valid to return.
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match=r"`event` and\s+`challenges`",
+    ):
         parse_design_output('prefix {"event": {"x": 1}')
+
+
+def test_parse_design_output_skips_flag_brace_noise_and_finds_real_json():
+    # Mirrors a real Hermes regression: the model emitted a markdown summary
+    # that contained ``flag{...}`` BEFORE the actual JSON object. The first
+    # ``{`` belongs to the flag string, not the design payload — the parser
+    # must skip past it and find the real object further down.
+    stdout = (
+        "Designed web-0001.\n"
+        "Flag: `flag{noisy_brace_inside}`\n"
+        '{"event": {"flag_format": "flag{...}"}, '
+        '"challenges": [{"id": "web-0001"}]}\n'
+    )
+    parsed = parse_design_output(stdout)
+    assert parsed["challenges"][0]["id"] == "web-0001"
+
+
+def test_validate_design_payload_accepts_skill_md_shape():
+    # The published design-challenges skill uses `player_prompt`,
+    # `flag_plan.location`, and `validation` as an object. The validator
+    # MUST normalize these into its flat shape so a SKILL.md-conformant
+    # agent reply validates without code changes per attempt.
+    skill_shape = {
+        "event": {"flag_format": "flag{...}"},
+        "challenges": [
+            {
+                "id": "web-0001",
+                "title": "Key Confusion",
+                "category": "web",
+                "difficulty": "medium",
+                "points": 300,
+                "deployment": "docker compose service on port 8080",
+                "port": 8080,
+                "primary_technique": "JWT kid path traversal",
+                "learning_objective": "Inspect token key selection boundaries",
+                # SKILL.md shape uses these three:
+                "player_prompt": "Recover the admin note from the service.",
+                "flag_plan": {
+                    "format": "flag{...}",
+                    "location": "FLAG environment variable",
+                    "generation": "static",
+                },
+                "validation": {
+                    "reference_solve": "Run solve.py against the local compose service.",
+                    "expected_result": "Flag printed to stdout.",
+                    "regression_checks": ["solve.py exits 0"],
+                },
+                "artifacts": ["deploy/Dockerfile", "deploy/src/app.py"],
+                "hints": [
+                    "Inspect the JWT header.",
+                    "The key id influences verification.",
+                    "Control the key lookup before signing a token.",
+                ],
+            }
+        ],
+    }
+    validated = validate_design_payload(skill_shape, _parent_task())
+    # After normalization the flat fields exist on the persisted payload
+    # and the validation_notes is composed from the SKILL.md sub-fields.
+    assert (
+        validated.challenge["prompt"]
+        == "Recover the admin note from the service."
+    )
+    assert validated.challenge["flag_location"] == "FLAG environment variable"
+    assert "Run solve.py" in validated.validation_notes
+    assert "Flag printed to stdout." in validated.validation_notes
+    assert "solve.py exits 0" in validated.validation_notes
+
+
+def test_validate_design_payload_skill_md_normalization_does_not_clobber_flat_fields():
+    # When both shapes coexist (defensive), the validator prefers the
+    # flat field that was already there.
+    payload = _payload(
+        prompt="flat wins",
+        player_prompt="should be ignored",
+    )
+    validated = validate_design_payload(payload, _parent_task())
+    assert validated.challenge["prompt"] == "flat wins"
+
+
+def test_parse_design_output_rejects_summary_only_reply():
+    # The "design wrote a file and only summarized" failure mode: stdout
+    # has ``{`` characters but none of them open a design-shaped object.
+    # We expect a diagnostic that names the Output Contract so the operator
+    # can act on it instead of seeing a misleading ``invalid JSON`` error.
+    stdout = (
+        "Designed web-0001.\n"
+        "Machine-readable JSON: `/private/tmp/web-0001-output.json`\n"
+        "Flag: `flag{written_to_file_not_returned}`\n"
+    )
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match=r"`event` and\s+`challenges`",
+    ):
+        parse_design_output(stdout)
 
 
 def test_validate_design_payload_accepts_and_generates_summary():
