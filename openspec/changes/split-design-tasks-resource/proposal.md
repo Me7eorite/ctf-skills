@@ -18,8 +18,10 @@ endpoint 的复杂度都会指数级增长。
 - 新增 `GET /api/design-tasks/{id}` 详情 endpoint，返回单个任务的完整字段，
   含 `attempts` 数组和 `latest_design` 对象（即原本嵌在 request detail 里的
   per-task 数据）。
-- 保留 `POST /api/research/requests/{id}/design-tasks/generate` 作为生成入口
-  （生成动作语义上仍属于 research request 上下文）。
+- 保留 `POST /api/research/requests/{id}/design-tasks/generate` 路径与副作用
+  （生成动作语义上仍属于 research request 上下文）；**BREAKING**：响应体改为
+  精简形状 `{ request_id, design_task_ids, total }`，不再内联完整任务行
+  （调用方需要完整数据时改用列表 endpoint）。
 - 保留 `POST /api/design-tasks/{id}/queue|archive|design` 三个动作 endpoint，
   路径和语义不变。
 - 后端 handler 拆分：research detail handler 不再读 `design_tasks` /
@@ -52,7 +54,11 @@ endpoint 的复杂度都会指数级增长。
 
 ## Impact
 
-- **API**: `GET /api/research/requests/{id}` 响应体 BREAKING；新增 2 个
+- **API**: `GET /api/research/requests/{id}` 响应体 BREAKING（移除
+  `design_tasks`，新增固定形状 `design_tasks_summary = { total, by_status }`，
+  `by_status` 含全部 6 个状态键且零填充）；
+  `POST /api/research/requests/{id}/design-tasks/generate` 响应体 BREAKING
+  （改为 `{ request_id, design_task_ids, total }`）；新增 2 个
   `/api/design-tasks*` GET endpoints。
 - **后端**: `src/web/research_endpoints.py` handler 拆分，N+1 查询从研究详情
   handler 移除；新增 `src/web/design_task_endpoints.py`（或同名分文件）承载

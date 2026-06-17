@@ -15,9 +15,12 @@
   status, category, limit) -> list[DesignTask]`; enforce `limit` default
   100, max 500; ordering `(generation_request_id, task_no)`.
 - [ ] 2.3 Add `DesignTaskRepository.summarize_for_request(generation_request_id)
-  -> dict[str, int]` returning `{ "total": int, "by_status": { ... } }` from
-  a single `GROUP BY status` query against the existing
-  `ix_design_tasks_generation_request_status` index.
+  -> dict[str, Any]` returning exactly
+  `{ "total": int, "by_status": { "draft": int, "queued": int, "designing": int, "designed": int, "failed": int, "archived": int } }`
+  — `by_status` MUST contain all six status keys (value 0 when absent) so the
+  API contract has a fixed shape. Use a single `GROUP BY status` query against
+  the existing `ix_design_tasks_generation_request_status` index, then merge
+  into the zero-filled skeleton in Python.
 - [ ] 2.4 Add repository tests asserting round-trip counts (e.g. via
   `sqlalchemy.event.listen("after_execute")` or a session-level counter) so
   future regressions don't silently reintroduce N+1.
@@ -37,9 +40,11 @@
   `src/web/research_endpoints.py`: remove the `design_tasks` field and the
   `attempts_by_task` / `latest_design_by_task` loops; add
   `design_tasks_summary` computed via `summarize_for_request`.
-- [ ] 3.5 Modify `_register_design_task_endpoints` generate handler: return a
-  slim payload `{ "request_id", "design_task_ids": [...], "total": N }`
-  instead of inlining task rows.
+- [ ] 3.5 Modify `_register_design_task_endpoints` generate handler: return
+  exactly `{ "request_id": str(UUID), "design_task_ids": [str(UUID), ...],
+  "total": N }` (ids ordered by `task_no` ascending) instead of inlining task
+  rows. Contract owned by spec *Generate endpoint returns task identifiers,
+  not full rows*.
 - [ ] 3.6 Leave `POST /api/design-tasks/{id}/queue|archive|design` and
   `POST /api/research/requests/{id}/design-tasks/generate` paths/semantics
   unchanged.
@@ -64,34 +69,54 @@
   reachable without going through a research request.
 - [ ] 4.6 In `src/web/static/js/views/research-requests.js`, remove
   `renderDesignTasks`, `renderDesignTasksTable`, `renderDesignPanel`,
-  `renderDesignAttempts`, `renderLatestDesign`, the `designTaskNow` /
-  `transitionDesignTask` / `generateDesignTasks` actions if they are not
-  used elsewhere, and the `hasRunningDesign` polling branch.
+  `renderDesignAttempts`, `renderLatestDesign`, the `designTaskNow` and
+  `transitionDesignTask` actions, and the `hasRunningDesign` polling branch.
+  **Keep `generateDesignTasks`** — it is still wired to the summary card's
+  `Generate design tasks` button (see 4.7/4.8).
 - [ ] 4.7 Add a `Design Tasks` summary card to the research request detail
-  page: shows `total` and per-status counts from `design_tasks_summary`;
-  primary action `View design tasks →` navigates to
-  `#/design-tasks?generation_request_id={id}`.
-- [ ] 4.8 Make the `Generate design tasks` button live on the summary card
-  in research detail (semantically still a research-request action) and
-  on its success refetch ONLY `design_tasks_summary` + navigate to the
-  list view; do not refetch the full research detail.
+  page rendering the spec-defined `design_tasks_summary` shape: `total` and
+  all six per-status counts (zero-filled). Card includes a
+  `View design tasks →` link navigating to
+  `#/design-tasks?generation_request_id={id}` and a `Generate design tasks`
+  button (both are on the same card, per spec
+  *Request detail exposes design tasks*).
+- [ ] 4.8 On `Generate design tasks` success, refetch ONLY
+  `design_tasks_summary` (via a targeted summary endpoint or by re-reading
+  the request detail and picking only that field) and navigate to the list
+  view filtered by the current request. Do NOT refetch the full research
+  detail payload, and do NOT iterate the returned `design_task_ids` to fetch
+  each task individually.
 
 ## 5. Tests
 
-- [ ] 5.1 Update `tests/app/test_design_task_api.py`: remove assertions
-  that the research request detail response contains `design_tasks`;
-  add assertions that it contains `design_tasks_summary` with `total`
-  and `by_status`.
+- [ ] 5.1 Update `tests/app/test_design_task_api.py`:
+  - remove assertions that the research request detail response contains
+    `design_tasks`;
+  - assert response includes `design_tasks_summary` with exactly the keys
+    `total` and `by_status`;
+  - assert `by_status` contains all six status keys
+    (`draft|queued|designing|designed|failed|archived`) even when count is
+    zero;
+  - assert the example two-task fixture produces
+    `{ "total": 2, "by_status": { "draft": 1, "queued": 1, "designing": 0, "designed": 0, "failed": 0, "archived": 0 } }`;
+  - assert the empty-request fixture produces a zero-filled summary with
+    `total = 0`.
 - [ ] 5.2 Add `tests/app/test_design_task_list_endpoint.py` covering: empty
   list, filter by `generation_request_id`, filter by `status` (incl.
   unknown 400), filter by `category`, limit/default ordering, and that list
   rows do not inline `attempts` or `latest_design`.
 - [ ] 5.3 Add `tests/app/test_design_task_detail_endpoint.py` covering: 200
   with full task + attempts + latest_design, 404 on unknown id, 404 on
-  malformed id, round-trip count assertion.
+  malformed id, round-trip count assertion (fixed bound, regardless of
+  attempts count).
 - [ ] 5.4 Add a repository unit test asserting
   `summarize_for_request` issues exactly one SQL statement and returns
-  zeros for absent statuses.
+  the zero-filled six-status skeleton for absent statuses.
+- [ ] 5.5 Add a generate-endpoint test asserting the slim payload contract:
+  response body keys are exactly `{request_id, design_task_ids, total}`,
+  `design_task_ids` is ordered by created tasks' `task_no` ascending,
+  `total == len(design_task_ids)`, and the body does NOT include a
+  `design_tasks` array of row objects.
 
 ## 6. Validation
 

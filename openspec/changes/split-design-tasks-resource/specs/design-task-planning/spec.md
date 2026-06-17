@@ -4,32 +4,44 @@
 
 The research request detail API SHALL include a summary of design tasks for the
 requested `generation_request_id`, but SHALL NOT inline the complete design
-task rows. The summary SHALL contain at least the total task count and counts
-grouped by status (`draft|queued|designing|designed|failed|archived`). The
-dashboard SHALL render the summary on the request detail page together with a
-navigation link to the dedicated design tasks view filtered by that
-`generation_request_id`. Complete task rows, attempts, and latest_design data
-SHALL be available only via the dedicated design tasks resource (see
-*Design tasks are queryable via a dedicated resource* below).
+task rows. The summary SHALL be a JSON object with exactly two keys:
+`total` (non-negative integer) and `by_status` (object). The `by_status` object
+SHALL contain a key for every value in
+`draft|queued|designing|designed|failed|archived`, even when the count is zero,
+so consumers can render fixed columns without null checks. The dashboard SHALL
+render the summary on the request detail page together with a navigation link
+to the dedicated design tasks view filtered by that `generation_request_id`,
+and a `Generate design tasks` action that calls
+`POST /api/research/requests/{id}/design-tasks/generate`. Complete task rows,
+attempts, and latest_design data SHALL be available only via the dedicated
+design tasks resource (see *Design tasks are queryable via a dedicated
+resource* below).
 
 #### Scenario: Request detail returns design task summary
 
 - **GIVEN** a request with two design tasks (one `draft`, one `queued`)
 - **WHEN** `GET /api/research/requests/{id}` is called
 - **THEN** the JSON response includes `design_tasks_summary`
-- **AND** the summary contains `total = 2`
-- **AND** the summary contains counts `{ "draft": 1, "queued": 1 }`
+- **AND** the summary equals
+  `{ "total": 2, "by_status": { "draft": 1, "queued": 1, "designing": 0, "designed": 0, "failed": 0, "archived": 0 } }`
 - **AND** the response does NOT include a `design_tasks` field
 
-#### Scenario: Dashboard shows summary and navigation link
+#### Scenario: Request detail returns zero-filled summary for empty request
 
-- **GIVEN** the request detail response includes a non-empty
-  `design_tasks_summary`
+- **GIVEN** a request with no design tasks
+- **WHEN** `GET /api/research/requests/{id}` is called
+- **THEN** the summary equals
+  `{ "total": 0, "by_status": { "draft": 0, "queued": 0, "designing": 0, "designed": 0, "failed": 0, "archived": 0 } }`
+
+#### Scenario: Dashboard shows summary, Generate, and navigation link
+
+- **GIVEN** the request detail response includes `design_tasks_summary`
 - **WHEN** the dashboard renders the request detail page
-- **THEN** it shows a `Design Tasks` summary card with the total and per-status
-  counts
+- **THEN** it shows a `Design Tasks` summary card with the `total` and each of
+  the six per-status counts
 - **AND** it shows a navigation link that opens the dedicated design tasks
   view filtered by the current `generation_request_id`
+- **AND** it shows a `Generate design tasks` action on the same summary card
 - **AND** it does NOT render a table of design task rows
 
 ## ADDED Requirements
@@ -99,6 +111,38 @@ perform per-row N+1 queries against `design_attempts` or `challenge_designs`.
 - **WHEN** `GET /api/design-tasks/{id}` is called with an id that does not
   exist
 - **THEN** the response status is 404
+
+#### Scenario: Detail endpoint returns 404 for malformed id
+
+- **WHEN** `GET /api/design-tasks/{id}` is called with a non-UUID id
+  (e.g. `"not-a-uuid"`)
+- **THEN** the response status is 404
+- **AND** the body does NOT leak the internal parse error
+
+### Requirement: Generate endpoint returns task identifiers, not full rows
+
+`POST /api/research/requests/{id}/design-tasks/generate` SHALL keep its path
+and side effects unchanged but SHALL return a slim JSON payload identifying
+the newly created tasks rather than inlining the task rows themselves. The
+payload SHALL contain exactly: `request_id` (UUID string), `design_task_ids`
+(array of UUID strings, ordered by `task_no` ascending), and `total`
+(non-negative integer equal to `design_task_ids.length`). Callers that need
+the full rows SHALL follow up with
+`GET /api/design-tasks?generation_request_id={request_id}`.
+
+#### Scenario: Generate returns slim payload with ids
+
+- **GIVEN** a researched request with `target_count = 3`
+- **WHEN** `POST /api/research/requests/{id}/design-tasks/generate` is called
+  and succeeds
+- **THEN** the response status is 201
+- **AND** the response body has exactly the keys `request_id`,
+  `design_task_ids`, and `total`
+- **AND** `design_task_ids` has length 3, ordered by the new tasks'
+  `task_no` ascending
+- **AND** `total` equals `3`
+- **AND** the response body does NOT include a `design_tasks` array of
+  task row objects
 
 ### Requirement: Dashboard exposes design tasks as a first-class view
 

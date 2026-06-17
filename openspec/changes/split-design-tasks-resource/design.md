@@ -98,20 +98,31 @@ detailId: null }` slice；路由表新增
 
 **理由**：复用 `state.detail` 等于把耦合移到前端 state 树里，polling 仍会
 互相触发。独立 slice 让 design tasks 视图可以在 research detail 关闭时仍
-保留自己的过滤状态、滚动位置；polling 也可独立按 status 决定 cadence
-（`draft|archived` 慢轮询、`designing|queued` 快轮询，留给后续 design
-worker change 落地）。
+保留自己的过滤状态、滚动位置；本变更的 SHALL 级要求只是"两个 slice 的
+polling 不互相触发"（见 spec *Polling for design tasks is independent of
+research detail*），具体 cadence 是否要按 status 分档由后续 design worker
+change 决定，本变更不实现差异化 cadence。
 
-### 决策 5：research detail 保留 summary card + 跳转链接
+### 决策 5：research detail 保留 summary card，承载 Generate + View 两个入口
 
-**选择**：详情页用 summary card（小尺寸、只显示 counts 和 `View design
-tasks →`），路由跳转到 `#/design-tasks?generation_request_id=…`。
-**备选**：彻底不在 research detail 提及 design tasks，操作员通过 sidebar
+**选择**：详情页用 summary card，**同时**包含：(a) `total` 与按 status 的
+全 6 项计数，(b) `Generate design tasks` 按钮，(c) `View design tasks →`
+跳转链接（指向 `#/design-tasks?generation_request_id=…`）。
+**备选 A**：summary card 只放 counts + View 链接，Generate 按钮放回详情页
+顶部工具栏（与 Run/Refresh 同列）。
+**备选 B**：彻底不在 research detail 提及 design tasks，操作员通过 sidebar
 自己找。
 
-**理由**：操作员的实际任务流就是"看完研究 → 生成 design tasks → 切到任务
-视图"，研究详情页是这个流程的天然起点，保留链接降低导航成本。Summary 是
-轻量级元数据，不会重新引入耦合（后端只是计数，不读 attempts/designs）。
+**理由**：操作员的心理模型就是"summary 卡 = 设计任务在 research request 上
+下文的入口"，生成与查看是同一入口的两条出路（尚未生成时点 Generate，已生成
+时点 View）。备选 A 把入口拆到两处会让操作员困惑"按钮在哪"；备选 B 抬高了
+导航成本（必须先 sidebar 切走再回来）。Summary 仍然是轻量级元数据：后端只
+做一条 `GROUP BY status`，不会读 attempts/designs，不重新引入耦合。
+
+**对前端的具体约束**：保留 `generateDesignTasks` action（仍由 summary card
+触发）；移除 `transitionDesignTask`、`designTaskNow`（搬到 design-tasks
+视图）；generate 成功后只 refetch `design_tasks_summary`（不是整页 detail），
+然后跳转到列表视图。
 
 ### 决策 6：保留 generate 动作放在 research request endpoint 下
 
@@ -196,7 +207,8 @@ request 的 target_count（默认 ≤ 50），延迟可忽略。缓存列引入"
    - 修改 `_register_request_detail` 改为只返回 `design_tasks_summary`；
      删除 handler 内的 `attempts_by_task` / `latest_design_by_task` 循环。
    - 调整 `_register_design_task_endpoints` 的 generate handler 返回精简
-     payload。
+     payload，形状由 spec 中 *Generate endpoint returns task identifiers, not
+     full rows* 钉死（`{ request_id, design_task_ids, total }`）。
 3. **前端实现**：
    - 新增 `src/web/static/js/views/design-tasks.js`（list + detail）。
    - 路由表注册 `#/design-tasks` 与 `#/design-tasks/:id`；sidebar 加入口。
@@ -217,6 +229,11 @@ request 的 target_count（默认 ≤ 50），延迟可忽略。缓存列引入"
 ## Open Questions
 
 - summary card 是否要显示 *"queued: 3 / 10"* 这种"非终态/总数"的占比？默认
-  方案是按 status counts 全部列出，留给 UI 决定展示形式；不写进 spec。
+  方案是按 status counts 全部列出（spec 已规定 6 项 by_status 全列），具体
+  视觉呈现留给 UI 决定；不再写进 spec。
 - list endpoint 排序键是固定 `(generation_request_id, task_no)` 还是支持
   `?sort=...`？倾向先固定，后续真有跨 request 排序需求再加。
+- design tasks 视图是否按 status 走差异化 polling cadence（draft/archived
+  慢、designing/queued 快）？本变更只要求"互不触发"，cadence 留给 design
+  worker change 落地（届时 worker 会引入 heartbeat 字段，自然需要更快的
+  快轮询档）。
