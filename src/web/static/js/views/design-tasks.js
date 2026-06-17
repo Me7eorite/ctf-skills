@@ -343,7 +343,7 @@ function renderAttempts(attempts) {
   return `
     <div class="table-container">
       <table class="table">
-        <thead><tr><th>#</th><th>Status</th><th>Started</th><th>Finished</th><th>Artifacts</th></tr></thead>
+        <thead><tr><th>#</th><th>Status</th><th>Started</th><th>Finished</th><th>Error</th><th>Artifacts</th></tr></thead>
         <tbody>
           ${attempts.map((attempt) => `
             <tr>
@@ -351,6 +351,7 @@ function renderAttempts(attempts) {
               <td>${statusIndicator(attempt.status)}</td>
               <td class="table-cell-time">${escapeHtml(formatDateTime(attempt.started_at))}</td>
               <td class="table-cell-time">${escapeHtml(formatDateTime(attempt.finished_at))}</td>
+              <td><div class="truncate" style="max-width: 320px;" title="${escapeHtml(attempt.last_error || "")}">${escapeHtml(attempt.last_error || "-")}</div></td>
               <td>
                 <div class="btn-group">
                   ${attempt.prompt_artifact_url ? `<a class="btn btn-secondary btn-sm" href="${escapeHtml(attempt.prompt_artifact_url)}" target="_blank" rel="noopener">Prompt</a>` : ""}

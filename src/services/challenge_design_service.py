@@ -162,7 +162,8 @@ class ChallengeDesignService:
         except ChallengeDesignValidationError as exc:
             return self._fail_attempt(attempt, log_rel, str(exc), started.max_attempts)
         except Exception as exc:
-            return self._fail_attempt(attempt, log_rel, str(exc), started.max_attempts)
+            error = f"{type(exc).__name__}: {exc}"
+            return self._fail_attempt(attempt, log_rel, error, started.max_attempts)
 
     def _start_attempt(self, design_task_id: UUID, caller: str) -> _AttemptStart:
         if not caller:
