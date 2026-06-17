@@ -360,9 +360,32 @@ def test_validate_design_payload_rejects_parent_mismatch():
         validate_design_payload(_payload(category="pwn"), _parent_task())
 
 
-def test_validate_design_payload_rejects_bad_hint_count():
-    with pytest.raises(ChallengeDesignValidationError, match="hints"):
-        validate_design_payload(_payload(hints=["only one"]), _parent_task())
+def test_validate_design_payload_pads_short_hints():
+    result = validate_design_payload(_payload(hints=["only one"]), _parent_task())
+
+    assert result.challenge["hints"][0] == "only one"
+    assert len(result.challenge["hints"]) == 3
+    assert "JWT kid path traversal" in result.challenge["hints"][1]
+
+
+def test_validate_design_payload_normalizes_mapping_hints_and_trims_extra():
+    result = validate_design_payload(
+        _payload(
+            hints={
+                "stage_1": "Inspect the visible token.",
+                "stage_2": {"content": "Control the key lookup."},
+                "stage_3": "Forge the trusted state.",
+                "extra": "This should not be persisted.",
+            }
+        ),
+        _parent_task(),
+    )
+
+    assert result.challenge["hints"] == [
+        "Inspect the visible token.",
+        "Control the key lookup.",
+        "Forge the trusted state.",
+    ]
 
 
 def test_validate_design_payload_rejects_web_without_docker():

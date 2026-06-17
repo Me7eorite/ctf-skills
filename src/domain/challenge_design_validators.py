@@ -362,7 +362,7 @@ def _normalize_skill_fields(challenge: Any) -> Any:
             out["validation"] = "\n".join(parts)
 
     out["artifacts"] = _normalize_artifacts(out)
-    out["hints"] = _normalize_hints(out.get("hints"))
+    out["hints"] = _normalize_hints(out.get("hints"), out)
 
     return out
 
@@ -468,18 +468,65 @@ def _normalize_artifact_path(value: str, *, base: str | None = None) -> str | No
     return None
 
 
-def _normalize_hints(value: Any) -> Any:
-    if not isinstance(value, list):
-        return value
+def _normalize_hints(value: Any, challenge: Mapping[str, Any]) -> list[str]:
     hints: list[str] = []
-    for item in value:
+
+    def add(item: Any) -> None:
         if isinstance(item, str):
-            hints.append(item)
+            text = item.strip()
+            if text:
+                hints.append(text)
         elif isinstance(item, Mapping):
             content = item.get("content") or item.get("hint") or item.get("text")
             if isinstance(content, str):
-                hints.append(content)
-    return hints
+                add(content)
+        elif isinstance(item, list):
+            for nested in item:
+                add(nested)
+
+    if isinstance(value, list):
+        for item in value:
+            add(item)
+    elif isinstance(value, Mapping):
+        preferred_keys = (
+            "stage_1",
+            "stage1",
+            "first",
+            "early",
+            "gentle",
+            "stage_2",
+            "stage2",
+            "second",
+            "middle",
+            "medium",
+            "stage_3",
+            "stage3",
+            "third",
+            "final",
+            "reveal",
+        )
+        for key in preferred_keys:
+            if key in value:
+                add(value[key])
+        for key, item in value.items():
+            if key not in preferred_keys:
+                add(item)
+
+    defaults = _default_hints(challenge)
+    while len(hints) < 3:
+        hints.append(defaults[len(hints)])
+    return hints[:3]
+
+
+def _default_hints(challenge: Mapping[str, Any]) -> list[str]:
+    technique = str(challenge.get("primary_technique") or "the core vulnerability").strip()
+    objective = str(challenge.get("learning_objective") or "the intended solve path").strip()
+    flag_location = str(challenge.get("flag_location") or "the configured flag location").strip()
+    return [
+        f"Start from the behavior tied to {objective}.",
+        f"Focus on {technique} rather than unrelated surface area.",
+        f"Use the intended primitive to reach {flag_location}.",
+    ]
 
 
 def _deployment_mentions_docker(challenge: Mapping[str, Any]) -> bool:
