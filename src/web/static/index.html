@@ -49,51 +49,53 @@
         </button>
       </div>
       <nav id="sidebarNav" class="sidebar-nav hidden lg:flex">
-        <!-- 研究 -->
+        <!-- 概览 — 独立在最顶部，默认首页 -->
+        <button class="sidebar-nav-item" data-target="overview">
+          <i data-lucide="layout-dashboard"></i>概览
+        </button>
+        <div class="sidebar-nav-divider"></div>
+
+        <!-- 研究需求 -->
         <div class="sidebar-nav-group">
-          <div class="sidebar-nav-group-title">研究</div>
+          <div class="sidebar-nav-group-title">研究需求</div>
           <button class="sidebar-nav-item" data-target="research-submit">
             <i data-lucide="plus-circle"></i>新建需求
           </button>
           <button class="sidebar-nav-item" data-target="research-requests">
-            <i data-lucide="list"></i>需求管理
+            <i data-lucide="list"></i>需求列表
           </button>
           <button class="sidebar-nav-item" data-target="design-tasks">
             <i data-lucide="workflow"></i>Design Tasks
+          </button>
+        </div>
+        <div class="sidebar-nav-divider"></div>
+
+        <!-- 运行监控 -->
+        <div class="sidebar-nav-group">
+          <div class="sidebar-nav-group-title">运行监控</div>
+          <button class="sidebar-nav-item" data-target="progress">
+            <i data-lucide="activity"></i>实时进度
           </button>
           <button class="sidebar-nav-item" data-target="research-runs">
             <i data-lucide="loader"></i>运行记录
           </button>
           <button class="sidebar-nav-item" data-target="research-logs">
-            <i data-lucide="file-text"></i>运行日志
+            <i data-lucide="file-text"></i>研究日志
           </button>
         </div>
         <div class="sidebar-nav-divider"></div>
-        <!-- 核心 -->
+
+        <!-- 题目管理 -->
         <div class="sidebar-nav-group">
-          <div class="sidebar-nav-group-title">核心</div>
-          <button class="sidebar-nav-item" data-target="overview">
-            <i data-lucide="layout-dashboard"></i>概览
-          </button>
-          <button class="sidebar-nav-item" data-target="progress">
-            <i data-lucide="activity"></i>实时进度
-          </button>
+          <div class="sidebar-nav-group-title">题目管理</div>
           <button class="sidebar-nav-item" data-target="challenges">
-            <i data-lucide="flag"></i>题目分类
+            <i data-lucide="flag"></i>题目列表
           </button>
           <button class="sidebar-nav-item" data-target="shards">
             <i data-lucide="layers-3"></i>任务列表
           </button>
           <button class="sidebar-nav-item" data-target="logs">
-            <i data-lucide="terminal"></i>运行日志
-          </button>
-        </div>
-        <div class="sidebar-nav-divider"></div>
-        <!-- 待删除 -->
-        <div class="sidebar-nav-group">
-          <div class="sidebar-nav-group-title">待删除</div>
-          <button class="sidebar-nav-item" data-target="seeds">
-            <i data-lucide="sprout"></i>种子配置
+            <i data-lucide="terminal"></i>系统日志
           </button>
         </div>
       </nav>

@@ -1,23 +1,27 @@
 # CTF Challenge Factory
 
 Challenge Factory is a file-backed queue and SQLite-observed control plane for
-generating synthetic Web, Pwn, and Reverse Engineering challenges with Hermes.
+generating synthetic Web, Pwn, and Reverse Engineering challenges with Hermes,
+backed by PostgreSQL for the research and design planning subsystems.
 
 It combines the repository's `skills/design-challenges` guidance with explicit
 technology profiles, parallel shard processing, artifact validation, and a
-Tailwind dashboard.
+hand-rolled token-CSS dashboard.
 
 ## Project Structure
 
 ```text
 ctf-skills/
 ├── src/
-│   ├── cli.py              # command composition root
-│   ├── core/               # paths, JSON I/O, SQLite state, shard queue
-│   ├── domain/             # seeds, validation, report aggregation
-│   ├── hermes/             # prompt rendering and Hermes execution
+│   ├── cli.py              # command composition root (argparse)
+│   ├── core/               # paths, JSON I/O, SQLite progress state, shard queue
+│   ├── domain/             # DTOs, seeds, validation, report aggregation
+│   ├── hermes/             # prompt rendering and Hermes subprocess execution
 │   ├── packing/            # delivery bundle packing subsystem
-│   └── web/                # dashboard service, HTTP transport, static UI
+│   ├── persistence/        # PostgreSQL engine, SQLAlchemy models, repositories
+│   ├── services/           # cross-subsystem orchestration (research, design tasks)
+│   └── web/                # FastAPI dashboard, HTTP adapters, static UI
+├── alembic/                # PostgreSQL schema migrations
 ├── skills/                 # reusable CTF authoring skills
 ├── docs/
 │   ├── architecture.md

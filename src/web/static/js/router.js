@@ -15,7 +15,16 @@ export function setView(view) {
   const titleInfo = titles[view];
   document.querySelector("#pageTitle").textContent = titleInfo.title;
   document.querySelector("#breadcrumb").textContent = titleInfo.title;
-  document.querySelector("#breadcrumbGroup").textContent = titleInfo.group;
+
+  const groupEl = document.querySelector("#breadcrumbGroup");
+  if (titleInfo.group) {
+    groupEl.textContent = titleInfo.group;
+    groupEl.style.display = "";
+    if (groupEl.previousElementSibling) groupEl.previousElementSibling.style.display = "";
+  } else {
+    groupEl.style.display = "none";
+    if (groupEl.previousElementSibling) groupEl.previousElementSibling.style.display = "none";
+  }
 
   const sidebarNav = document.querySelector("#sidebarNav");
   if (window.innerWidth < 1024) {
@@ -38,17 +47,17 @@ export function registerViews(map) {
 }
 
 const titles = {
-  "overview": { title: "概览", group: "核心" },
-  "progress": { title: "实时进度", group: "核心" },
-  "challenges": { title: "题目分类", group: "核心" },
-  "shards": { title: "任务列表", group: "核心" },
-  "logs": { title: "运行日志", group: "核心" },
-  "seeds": { title: "种子配置", group: "待删除" },
-  "research-submit": { title: "新建需求", group: "研究" },
-  "research-requests": { title: "需求管理", group: "研究" },
-  "design-tasks": { title: "Design Tasks", group: "研究" },
-  "research-runs": { title: "运行记录", group: "研究" },
-  "research-logs": { title: "运行日志", group: "研究" },
+  "overview": { title: "概览", group: "" },
+  "research-submit": { title: "新建需求", group: "研究需求" },
+  "research-requests": { title: "需求列表", group: "研究需求" },
+  "design-tasks": { title: "Design Tasks", group: "研究需求" },
+  "progress": { title: "实时进度", group: "运行监控" },
+  "research-runs": { title: "运行记录", group: "运行监控" },
+  "research-logs": { title: "研究日志", group: "运行监控" },
+  "challenges": { title: "题目列表", group: "题目管理" },
+  "shards": { title: "任务列表", group: "题目管理" },
+  "seeds": { title: "种子配置", group: "题目管理" },
+  "logs": { title: "系统日志", group: "题目管理" },
 };
 
 let viewRenderers = {};

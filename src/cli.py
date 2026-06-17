@@ -49,6 +49,12 @@ def _positive_int(raw: str) -> int:
 
 
 def parser() -> argparse.ArgumentParser:
+    # DB-backed argparse `choices` are only useful when the user is actually
+    # invoking the relevant subcommand tree. Pre-scanning argv lets `init`,
+    # `split`, `--help`, etc. boot without touching PostgreSQL.
+    needs_categories = _argv_targets("research")
+    needs_roles = _argv_targets("profile")
+
     root = argparse.ArgumentParser(prog="challenge-factory")
     commands = root.add_subparsers(dest="command", required=True)
 
@@ -117,9 +123,22 @@ def parser() -> argparse.ArgumentParser:
     web.add_argument("--host", default="127.0.0.1")
     web.add_argument("--port", type=int, default=4173)
 
-    _register_research_commands(commands)
-    _register_profile_commands(commands)
+    _register_research_commands(commands, fetch_db_choices=needs_categories)
+    _register_profile_commands(commands, fetch_db_choices=needs_roles)
     return root
+
+
+def _argv_targets(command: str) -> bool:
+    """True iff `command` is the first positional token on the current argv.
+
+    Flags like `--help` come before subcommands in some shells, so skip any
+    leading dash-prefixed tokens until we find the first positional one.
+    """
+    for token in sys.argv[1:]:
+        if token.startswith("-"):
+            continue
+        return token == command
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -127,13 +146,17 @@ def parser() -> argparse.ArgumentParser:
 # ---------------------------------------------------------------------------
 
 
-def _register_research_commands(commands: argparse._SubParsersAction) -> None:
+def _register_research_commands(
+    commands: argparse._SubParsersAction,
+    *,
+    fetch_db_choices: bool,
+) -> None:
     """Attach the `research` subparser group with its six leaf commands."""
     research = commands.add_parser(
         "research", help="research queue operations (submit, worker, wait, show, list, categories)"
     )
     sub = research.add_subparsers(dest="research_command", required=True)
-    category_choices = _fetch_category_choices()
+    category_choices = _fetch_category_choices() if fetch_db_choices else None
 
     submit = sub.add_parser("submit", help="enqueue a generation request (returns immediately)")
     submit.add_argument("--category", required=True, choices=category_choices)
@@ -257,14 +280,18 @@ def _resolve_run_timeout(cli_value: int | None) -> tuple[int, str]:
 _FALLBACK_AGENT_ROLES: tuple[str, ...] = ("research",)
 
 
-def _register_profile_commands(commands: argparse._SubParsersAction) -> None:
+def _register_profile_commands(
+    commands: argparse._SubParsersAction,
+    *,
+    fetch_db_choices: bool,
+) -> None:
     """Attach the `profile` subparser group (Hermes profile binding management)."""
     profile = commands.add_parser(
         "profile",
         help="Hermes profile binding operations (list, show, bind, enable, disable, hermes-available)",
     )
     sub = profile.add_subparsers(dest="profile_command", required=True)
-    role_choices = _fetch_agent_role_choices()
+    role_choices = _fetch_agent_role_choices() if fetch_db_choices else None
 
     sub.add_parser("list", help="list current role → Hermes profile bindings")
 
@@ -472,6 +499,10 @@ def _profile_hermes_available() -> None:
 
 def _handle_research(args: argparse.Namespace, paths: ProjectPaths) -> None:
     """Dispatch one of the six `research <subcmd>` operations."""
+    # Surface DB ↔ code drift on the category list, but only when the operator
+    # is actually about to use the research pipeline. CLI commands that do not
+    # touch PG (init/split/run/...) must not pay this round-trip.
+    _check_category_consistency()
     try:
         if args.research_command == "submit":
             _research_submit(args)
@@ -709,7 +740,6 @@ def _check_category_consistency() -> None:
 
 
 def main() -> None:
-    _check_category_consistency()
     args = parser().parse_args()
     paths = ProjectPaths.discover()
 

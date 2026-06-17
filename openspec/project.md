@@ -26,14 +26,24 @@ The challenge artifacts produced must conform to `docs/delivery-formats/ctf-v2/`
 
 ## Tech stack
 
-- **Python 3.13** (project requires ≥3.11), managed with `uv`.
-- **FastAPI + uvicorn** for the dashboard HTTP layer
-  (`src/webserver.py`, recently migrated from stdlib `http.server`).
+- **Python ≥3.11**, managed with `uv`. Ruff targets `py312` syntax; pyright
+  type-checks against 3.11.
+- **FastAPI + uvicorn** for the dashboard HTTP layer (`src/web/server.py`,
+  registered via `web.research_endpoints` / `web.design_task_endpoints`).
+- **PostgreSQL + SQLAlchemy 2.x + Alembic** for the relational store
+  (`src/persistence/`), holding research requests, runs, design tasks, and
+  challenge designs. Connection is configured by `DATABASE_URL`; missing or
+  unreachable PG is a hard failure for any code path that actually touches a
+  repository (no silent fallback).
 - **SQLite** (WAL mode) for the append-only progress event store
-  (`src/state.py`), with a temp-dir fallback when `work/` is not writable.
+  (`src/core/state.py`), with a temp-dir fallback when `work/` is not
+  writable. Coexists with PostgreSQL: SQLite owns per-stage progress events,
+  PG owns research/design domain rows.
 - **subprocess + atomic file renames** for the shard queue
-  (`src/shards.py`), no external broker.
-- **Tailwind** for the dashboard UI under `src/static/`.
+  (`src/core/queue.py`), no external broker.
+- **Hand-rolled CSS** under `src/web/static/css/` using a token + component
+  layer system (`css/tokens.css`, `css/components/*.css`, `css/views/*.css`).
+  No Tailwind.
 - **Hermes agent CLI** (external, via `hermes` / `uvx hermes-agent`) is the
   thing this project drives — we don't own it, we render prompts and read
   back its outputs.
@@ -61,7 +71,7 @@ live under `tests/skills/`. `pyproject.toml` configures pytest with
 - **Don't put dependencies in a second compose service.** The shard prompt and
   `validation.py` both assume a single-service `docker-compose.yml`; DBs /
   caches / queues belong in the base image or `_files/start.sh`.
-- **Progress percent is computed from `(stage, status)` in `state.py`.**
+- **Progress percent is computed from `(stage, status)` in `core/state.py`.**
   `failed/complete` is intentionally capped at 99 so a UI "stuck at 99" is a
   fingerprint for `complete + failed`, not a literal progress reading. Don't
   change this formula without checking `_percent` callers.
@@ -75,6 +85,16 @@ live under `tests/skills/`. `pyproject.toml` configures pytest with
 - **`progress` CLI subcommand is part of the hermes contract.** The shard
   prompt instructs the agent to call it before/after every stage. Don't
   rename it without updating `prompts/shard_prompt.md`.
+- **CLI must boot without a database.** `init`, `split`, `claim`, `run`,
+  `validate`, `progress`, `merge-reports`, `durations`, `pack`, `serve`
+  do not touch PG. Only the `research` and `profile` subcommand groups query
+  PostgreSQL, and only when the user actually enters them. Don't reintroduce
+  a top-level PG lookup at `main()` or at argparse-build time.
+- **DB-backed category codes are authoritative for research.**
+  `challenge_categories.code` drives `research submit --category` choices;
+  `core.queue.SUPPORTED_CATEGORIES` is the legacy hardcoded set for the shard
+  pipeline. Divergence is real and surfaced by `_check_category_consistency`
+  inside the `research` dispatcher.
 - **Two unrelated "spec" directories exist.** `docs/delivery-formats/ctf-v2/` is product
   output format. `openspec/` (this directory) is dev-process change tracking.
   Don't conflate them.

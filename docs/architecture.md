@@ -8,22 +8,28 @@ sideways boundaries.
 ## Dependency Direction
 
 ```text
-cli      -> {web, hermes, packing, domain, core}
-web      -> {domain, core}
-hermes   -> {domain, core}
-packing  -> {core}
-domain   -> {core}
-core     -> stdlib / third-party only
+cli          -> {services, web, hermes, packing, persistence, domain, core}
+web          -> {services, persistence, domain, core}
+services     -> {persistence, hermes, domain, core}
+hermes       -> {domain, core}
+packing      -> {core}
+persistence  -> {domain, core}
+domain       -> {core}
+core         -> stdlib / third-party only
 ```
 
 `tests/app/test_dependency_direction.py` enforces this matrix by parsing
-`src/**/*.py` imports with `ast`.
+`src/**/*.py` imports with `ast`. Notable bans encoded there:
+
+- `hermes` MUST NOT import `persistence` (the runner stays storage-agnostic).
+- `persistence` MUST NOT import `web` or `services` (only the relational
+  layer's own dependencies).
 
 ## Packages
 
 | Package | Responsibility |
 | --- | --- |
-| `src/cli.py` | Parses commands and composes package APIs |
+| `src/cli.py` | Parses commands and composes package APIs; PG lookups are deferred to the `research`/`profile` dispatchers |
 | `src/core/paths.py` | Defines every project path through `ProjectPaths` |
 | `src/core/jsonio.py` | Reads and writes JSON/JSONL files |
 | `src/core/queue.py` | Splits matrices and transitions shard queue state |
@@ -31,9 +37,13 @@ core     -> stdlib / third-party only
 | `src/domain/seeds.py` | Validates and persists generation seed inputs |
 | `src/domain/validation.py` | Checks artifacts and runs `validate.sh` |
 | `src/domain/reports.py` | Aggregates per-shard reports |
+| `src/domain/research.py` / `domain/research_validators.py` | Research DTOs and pure validation rules |
+| `src/domain/design_tasks.py` / `domain/challenge_designs.py` | Design task and challenge design DTOs |
 | `src/hermes/` | Renders prompts, invokes Hermes, and records runner progress |
 | `src/packing/` | Builds delivery bundle v2 artifacts, PDFs, zips, Docker tars, and workbooks |
-| `src/web/` | Builds dashboard data, exposes FastAPI routes, and serves static assets |
+| `src/persistence/` | PostgreSQL engine/session, SQLAlchemy models, Alembic-backed repositories |
+| `src/services/` | Cross-subsystem orchestration with transaction boundaries (research submit/claim/execute, design task planning, challenge design execution) |
+| `src/web/` | Builds dashboard data, exposes FastAPI routes, serves static assets, and hosts the research/design HTTP adapters |
 
 `packing` and `hermes` expose their public APIs through package re-exports, so
 callers use `from packing import Packer` and `from hermes import HermesRunner`.
