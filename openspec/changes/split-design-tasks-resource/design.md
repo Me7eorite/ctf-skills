@@ -20,12 +20,12 @@ worker 心跳而拉回整个 payload。这是必须现在治本的根因。
 
 **Goals:**
 
-- 在 API 边界把 design tasks 拆成独立资源：list / detail / actions 都不再
-  寄生在 research request endpoint。
+- 在 API 边界把 design tasks 拆成独立资源：list / detail / per-task actions
+  都不再寄生在 research request endpoint。
 - 研究详情 endpoint 只保留 `design_tasks_summary`（counts + total）做跨页
   链接，不再嵌入完整任务行 / attempts / latest_design。
 - 后端消除 research detail handler 内的 N+1：design task 的 attempts 与
-  latest_design 改为在新的 list/detail handler 里用一次 JOIN 查询。
+  latest_design 改为在新的 list/detail handler 里用有界查询批量加载。
 - 前端把 design tasks 提升为 sidebar 一级导航，独立的列表 + 详情视图，
   独立的 state slice 与 polling cadence。
 - 测试边界与 OpenSpec 文档同步收敛，避免下一个 change（design worker）
@@ -69,25 +69,24 @@ worker 心跳而拉回整个 payload。这是必须现在治本的根因。
 因为生成动作语义上确实属于"为某个 request 生成 tasks"，不是对 design tasks
 集合的操作。
 
-### 决策 3：detail endpoint 一次 JOIN 查询带回 attempts 和 latest_design
+### 决策 3：detail 返回 history；list 保持轻量并禁止 N+1
 
 **选择**：新增一个聚合查询方法，例如
 `DesignTaskRepository.get_with_history(task_id) -> (DesignTask, list[DesignAttempt], ChallengeDesign | None)`，
-内部用 SQLAlchemy `selectinload` / 显式 JOIN 在一个 round-trip 取齐数据。
+内部用显式 JOIN 或固定数量查询取齐数据；detail endpoint 返回 attempts 与
+latest_design。列表 endpoint 不返回 attempts/latest_design，只返回任务行及轻量
+展示字段，避免把 request detail 的重量搬到全局列表里。
 **备选**：detail handler 顺序调三个 repository 方法
 （`get_design_task` → `list_attempts` → `latest_design`）。
 
 **理由**：连续三次 SELECT 看似无害，但 list endpoint 即将面对"N tasks × 3
-queries"的场景。建立"一个 detail = 一个 JOIN"的范式，list endpoint 才能直
-接复用同一查询方法批量加载。
+queries"的场景。建立"history 数据只能由 detail 或显式 history 查询返回"的
+边界，list endpoint 就能保持稳定延迟并服务全局视图。
 
-list endpoint 同样要避免 N+1：`list_with_history(filters)` 用单条 SQL（按
-任务 id 做 `array_agg` 聚合 attempts，子查询取 latest_design id）返回所有
-匹配的任务及其 attempts/latest_design。如果聚合 SQL 复杂度过高，可改为两
-次扫描：先 `SELECT design_tasks WHERE …` 拿到 id 集合，再
-`SELECT design_attempts WHERE design_task_id IN (…)` 与
-`SELECT challenge_designs WHERE design_task_id IN (…)` —— 两次扫描仍是 O(1)
-round-trip，且 Postgres 计划器对 `IN (subquery)` 比 array_agg 更友好。
+list endpoint 同样要避免 N+1：`list_tasks(filters)` 只查 `design_tasks`，
+按 `generation_request_id`、`status`、`category`、`limit` 过滤并固定排序。
+如果后续确实需要在列表展示 attempt/latest_design 摘要，必须用固定数量查询
+批量加载，不能在循环里按 task 查询。
 
 ### 决策 4：前端 state slice 拆分，path-based 路由
 
@@ -139,6 +138,16 @@ research request 上下文（依赖该 request 的 latest run + findings）。UR
 request 的 target_count（默认 ≤ 50），延迟可忽略。缓存列引入"状态机变更
 要记得改两处"的维护负担，得不偿失。
 
+### 决策 8：list endpoint 暴露 category 过滤参数
+
+**选择**：`GET /api/design-tasks` 支持 `category` 过滤，与 UI sidebar 设计
+一致；实现上直接过滤 `design_tasks.category`。
+**备选**：只支持 request/status 过滤，把 category 留给前端本地过滤。
+
+**理由**：Design Tasks 是跨 request 的全局视图，操作员自然会按题型分类扫描。
+`category` 已经在 `design_tasks` 表中作为 shard-compatible 字段持久化，服务端
+过滤不需要额外 join，也能避免大列表先全量下发再由浏览器过滤。
+
 ## Risks / Trade-offs
 
 - **[Risk] BREAKING 改动会破坏外部脚本/工具**
@@ -156,10 +165,11 @@ request 的 target_count（默认 ≤ 50），延迟可忽略。缓存列引入"
     cadence 刷新；generate 成功的回调显式触发 summary refetch；新增端到端
     场景覆盖：generate → summary 更新 → 跳转列表显示新行。
 
-- **[Risk] 一次 JOIN 查询的 SQL 复杂度上升**
-  → Mitigation：list endpoint 在过滤+limit 后期望返回 ≤ 500 行，单次 IN-list
-    扫描 attempts/designs 表是常规模式；为 `design_attempts.design_task_id`
-    与 `challenge_designs.design_task_id` 检查/补充覆盖索引（如果尚未存在）。
+- **[Risk] history 查询的 SQL 复杂度上升**
+  → Mitigation：list endpoint 保持轻量，只读 `design_tasks`；detail endpoint
+    面对单 task history，用显式 JOIN 或固定数量查询，测试断言不会退回 per-row
+    N+1。为 `design_attempts.design_task_id` 与
+    `challenge_designs.design_task_id` 检查/补充覆盖索引（如果尚未存在）。
 
 - **[Risk] 文档漂移：`add-design-task-planning` 仍未 archive，本变更修改的
   requirement 在 `openspec/specs/` 里还不存在**
@@ -180,7 +190,7 @@ request 的 target_count（默认 ≤ 50），延迟可忽略。缓存列引入"
    `opsx:archive`），让本变更的 delta 有正式的 base spec 可 modify。
 2. **后端实现**：
    - 在 `DesignTaskRepository` 新增 `get_with_history(task_id)` 和
-     `list_with_history(filters)`。
+     `list_tasks(filters)`。
    - 新增 `src/web/design_task_endpoints.py`（或同名挂在
      `research_endpoints.py` 之外）注册 `/api/design-tasks` 两个 GET。
    - 修改 `_register_request_detail` 改为只返回 `design_tasks_summary`；
@@ -200,7 +210,7 @@ request 的 target_count（默认 ≤ 50），延迟可忽略。缓存列引入"
    - 重写 `tests/app/test_design_task_api.py` 中针对 request detail 的断言。
    - 新增 `tests/app/test_design_task_list_endpoint.py`、
      `tests/app/test_design_task_detail_endpoint.py`。
-   - 新增 repository 测试覆盖 `get_with_history` / `list_with_history`，
+   - 新增 repository 测试覆盖 `get_with_history` / `list_tasks`，
      断言 SQL round-trip 数量（用 `sqlalchemy.event` 或会话统计）。
 5. **回滚**：本变更纯 API + 前端层，无 schema/数据迁移，回滚 = 还原 PR。
 
@@ -208,8 +218,5 @@ request 的 target_count（默认 ≤ 50），延迟可忽略。缓存列引入"
 
 - summary card 是否要显示 *"queued: 3 / 10"* 这种"非终态/总数"的占比？默认
   方案是按 status counts 全部列出，留给 UI 决定展示形式；不写进 spec。
-- list endpoint 是否暴露 `category` 过滤参数？方案倾向暴露（与 UI sidebar
-  设计一致），但 `category` 在 `design_tasks` 表里冗余了 `generation_request.category`，
-  实现上选直接过滤 `design_tasks.category` 即可。
 - list endpoint 排序键是固定 `(generation_request_id, task_no)` 还是支持
   `?sort=...`？倾向先固定，后续真有跨 request 排序需求再加。

@@ -9,13 +9,11 @@
 ## 2. Repository / data access
 
 - [ ] 2.1 Add `DesignTaskRepository.get_with_history(task_id) -> (DesignTask,
-  list[DesignAttempt], ChallengeDesign | None)` — single round-trip via
-  `selectinload`/explicit JOIN.
-- [ ] 2.2 Add `DesignTaskRepository.list_with_history(generation_request_id,
-  status, category, limit) -> list[(DesignTask, list[DesignAttempt],
-  ChallengeDesign | None)]` — bounded round-trips (one for tasks, one
-  IN-list for attempts, one IN-list for latest_design); enforce `limit`
-  default 100, max 500; ordering `(generation_request_id, task_no)`.
+  list[DesignAttempt], ChallengeDesign | None)` — explicit JOIN or fixed
+  bounded queries; no per-task/per-history N+1.
+- [ ] 2.2 Add `DesignTaskRepository.list_tasks(generation_request_id,
+  status, category, limit) -> list[DesignTask]`; enforce `limit` default
+  100, max 500; ordering `(generation_request_id, task_no)`.
 - [ ] 2.3 Add `DesignTaskRepository.summarize_for_request(generation_request_id)
   -> dict[str, int]` returning `{ "total": int, "by_status": { ... } }` from
   a single `GROUP BY status` query against the existing
@@ -86,8 +84,8 @@
   and `by_status`.
 - [ ] 5.2 Add `tests/app/test_design_task_list_endpoint.py` covering: empty
   list, filter by `generation_request_id`, filter by `status` (incl.
-  unknown 400), filter by `category`, limit/default ordering, round-trip
-  count assertion.
+  unknown 400), filter by `category`, limit/default ordering, and that list
+  rows do not inline `attempts` or `latest_design`.
 - [ ] 5.3 Add `tests/app/test_design_task_detail_endpoint.py` covering: 200
   with full task + attempts + latest_design, 404 on unknown id, 404 on
   malformed id, round-trip count assertion.

@@ -38,15 +38,16 @@ SHALL be available only via the dedicated design tasks resource (see
 
 The system SHALL expose design tasks as a dedicated REST resource under
 `/api/design-tasks`. The list endpoint
-`GET /api/design-tasks?generation_request_id=&status=&limit=` SHALL return
+`GET /api/design-tasks?generation_request_id=&status=&category=&limit=` SHALL return
 design tasks ordered by `(generation_request_id, task_no)`, support optional
-filtering by `generation_request_id` and `status`, and apply a server-side
-`limit` (default 100, max 500). The detail endpoint `GET /api/design-tasks/{id}`
-SHALL return the full design task fields together with the task's design
-attempts (ordered by `attempt` ascending) and its current `latest_design`
-record. Cross-task data SHALL be loaded in a single bounded SQL round-trip;
-the implementation SHALL NOT perform per-row N+1 queries against
-`design_attempts` or `challenge_designs`.
+filtering by `generation_request_id`, `status`, and `category`, and apply a
+server-side `limit` (default 100, max 500). The list endpoint SHALL return
+task rows only and SHALL NOT inline `attempts` or `latest_design`. The detail
+endpoint `GET /api/design-tasks/{id}` SHALL return the full design task fields
+together with the task's design attempts (ordered by `attempt` ascending) and
+its current `latest_design` record. History data SHALL be loaded with explicit
+JOINs or a fixed bounded number of queries; the implementation SHALL NOT
+perform per-row N+1 queries against `design_attempts` or `challenge_designs`.
 
 #### Scenario: List endpoint filters by request
 
@@ -61,13 +62,27 @@ the implementation SHALL NOT perform per-row N+1 queries against
 - **WHEN** `GET /api/design-tasks?status=queued` is called
 - **THEN** only the `queued` task is returned
 
+#### Scenario: List endpoint filters by category
+
+- **GIVEN** design tasks from Web and Pwn generation requests
+- **WHEN** `GET /api/design-tasks?category=web` is called
+- **THEN** only Web design tasks are returned
+
+#### Scenario: List endpoint returns lightweight rows
+
+- **GIVEN** a design task with attempts and a latest design
+- **WHEN** `GET /api/design-tasks` is called
+- **THEN** the task row is returned
+- **AND** the row does NOT include `attempts`
+- **AND** the row does NOT include `latest_design`
+
 #### Scenario: List endpoint rejects unknown status
 
 - **WHEN** `GET /api/design-tasks?status=nonsense` is called
 - **THEN** the response status is 400
 - **AND** the body explains the allowed status values
 
-#### Scenario: Detail endpoint returns attempts and latest design in one round-trip
+#### Scenario: Detail endpoint returns attempts and latest design without N+1
 
 - **GIVEN** a design task with three design attempts and a current
   `latest_design`
@@ -76,8 +91,8 @@ the implementation SHALL NOT perform per-row N+1 queries against
 - **AND** the response includes `attempts` ordered by `attempt` ascending
 - **AND** the response includes `latest_design` reflecting the most recent
   successful design row, or `null` if none exists
-- **AND** the underlying implementation loads attempts and latest_design via a
-  single JOIN/aggregate query (not a per-task SELECT)
+- **AND** the underlying implementation loads attempts and latest_design via
+  explicit JOINs or a fixed bounded number of queries, not per-task SELECTs
 
 #### Scenario: Detail endpoint returns 404 for unknown task
 

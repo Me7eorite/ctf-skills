@@ -13,8 +13,8 @@ endpoint 的复杂度都会指数级增长。
 - **BREAKING**: `GET /api/research/requests/{id}` 不再返回 `design_tasks` 字段；
   改为只返回 `design_tasks_summary`（按 status 计数 + total），作为跨页链接的
   元数据。
-- 新增 `GET /api/design-tasks?generation_request_id=&status=&limit=` 列表
-  endpoint，按 `(generation_request_id, task_no)` 排序。
+- 新增 `GET /api/design-tasks?generation_request_id=&status=&category=&limit=`
+  列表 endpoint，按 `(generation_request_id, task_no)` 排序。
 - 新增 `GET /api/design-tasks/{id}` 详情 endpoint，返回单个任务的完整字段，
   含 `attempts` 数组和 `latest_design` 对象（即原本嵌在 request detail 里的
   per-task 数据）。
@@ -23,8 +23,8 @@ endpoint 的复杂度都会指数级增长。
 - 保留 `POST /api/design-tasks/{id}/queue|archive|design` 三个动作 endpoint，
   路径和语义不变。
 - 后端 handler 拆分：research detail handler 不再读 `design_tasks` /
-  `design_attempts` / `challenge_designs`，N+1 查询移到新的 design-task 列表
-  handler 内并改为一次性 JOIN。
+  `design_attempts` / `challenge_designs`；design-task list/detail handler 使用
+  有界查询批量加载数据，禁止 per-row N+1。
 - 前端 sidebar 新增一级导航 *Design Tasks*：
   - 列表视图：跨 request 列出所有 design tasks，支持按 request / status /
     category 过滤。
@@ -65,8 +65,8 @@ endpoint 的复杂度都会指数级增长。
 - **测试**: 现有 `tests/app/test_design_task_api.py` 中针对 request detail
   里的 design_tasks 嵌入字段的断言需要重写；新增 design-tasks 列表/详情
   endpoint 测试；前端视图覆盖（如果有）同步调整。
-- **OpenSpec 文档**: 修改 `design-task-planning` 和 `research-planning` 两份
-  spec 的相关 requirement；本变更归档时这两份 spec 的对应 scenario 必须重写。
+- **OpenSpec 文档**: 只修改 `design-task-planning` capability 的相关 requirement；
+  `research-planning` 不拥有 design tasks 的响应契约，本变更不对其加 delta。
 - **范围排除**: design worker / batch / claim / heartbeat 仍由 follow-up
   change 承接；本变更只做资源拆分和导航重构，不引入新功能；无数据库 schema
   变更。
