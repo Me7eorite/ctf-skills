@@ -15,6 +15,8 @@ from domain.research import DIFFICULTY_LABELS
 
 DEFAULT_FLAG_FORMAT = "flag{...}"
 MAX_SUMMARY_CHARS = 280
+MAX_IMPLEMENTATION_PLAN_CHARS = 4000
+MAX_PLAN_STRING_CHARS = 500
 COMMON_ARTIFACTS: tuple[str, ...] = (
     "README.md",
     "metadata.json",
@@ -33,6 +35,32 @@ KNOWN_ARTIFACT_PREFIXES: tuple[str, ...] = (
     "writenup/",
     "attachments/",
     "dist/",
+)
+FORBIDDEN_IMPLEMENTATION_KEYS: frozenset[str] = frozenset(
+    {
+        "app_code",
+        "compose_spec",
+        "docker_compose",
+        "dockerfile",
+        "dockerfile_snippet",
+        "exploit_code",
+        "exploit_sketch",
+        "files_content",
+        "init_sql",
+        "readme_body",
+        "source_code",
+        "writeup_body",
+    }
+)
+PLAN_CODE_MARKERS: tuple[str, ...] = (
+    "```",
+    "#!/bin/bash",
+    "<?php",
+    "CREATE TABLE",
+    "FROM ",
+    "RUN apt-get",
+    "import requests",
+    "services:",
 )
 
 REQUIRED_CHALLENGE_TEXT_FIELDS: tuple[str, ...] = (
@@ -148,6 +176,8 @@ def validate_design_payload(
     challenge = challenges[0]
     if not isinstance(challenge, dict):
         raise ChallengeDesignValidationError("challenges[0] must be an object")
+    _reject_implementation_payload(challenge)
+    _validate_implementation_plan(challenge.get("implementation_plan"))
 
     for field in REQUIRED_CHALLENGE_TEXT_FIELDS:
         _require_non_empty_string(challenge, field)
@@ -466,6 +496,53 @@ def _require_artifacts(
         raise ChallengeDesignValidationError(
             f"{label} must include: {', '.join(missing)}"
         )
+
+
+def _reject_implementation_payload(challenge: Mapping[str, Any]) -> None:
+    present = sorted(key for key in FORBIDDEN_IMPLEMENTATION_KEYS if key in challenge)
+    if present:
+        raise ChallengeDesignValidationError(
+            "design output includes implementation-level fields: "
+            + ", ".join(present)
+        )
+
+
+def _validate_implementation_plan(plan: Any) -> None:
+    if plan is None:
+        return
+    if not isinstance(plan, Mapping):
+        raise ChallengeDesignValidationError("implementation_plan must be an object")
+    encoded = json.dumps(plan, ensure_ascii=False, sort_keys=True)
+    if len(encoded) > MAX_IMPLEMENTATION_PLAN_CHARS:
+        raise ChallengeDesignValidationError(
+            "implementation_plan is too large; keep it intent-level"
+        )
+    _validate_plan_value(plan, path="implementation_plan")
+
+
+def _validate_plan_value(value: Any, *, path: str) -> None:
+    if isinstance(value, str):
+        if len(value) > MAX_PLAN_STRING_CHARS:
+            raise ChallengeDesignValidationError(
+                f"{path} contains a string longer than {MAX_PLAN_STRING_CHARS} characters"
+            )
+        if any(marker in value for marker in PLAN_CODE_MARKERS):
+            raise ChallengeDesignValidationError(
+                "implementation_plan must be intent-level, not file contents"
+            )
+        return
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if str(key) in FORBIDDEN_IMPLEMENTATION_KEYS:
+                raise ChallengeDesignValidationError(
+                    "implementation_plan contains implementation-level field: "
+                    f"{key}"
+                )
+            _validate_plan_value(item, path=f"{path}.{key}")
+        return
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            _validate_plan_value(item, path=f"{path}[{index}]")
 
 
 def _strip_json_fences(text: str) -> str:

@@ -68,6 +68,22 @@ def _payload(**challenge_overrides):
         ],
         "flag_location": "FLAG environment variable",
         "validation": "Run exp.py against the local compose service.",
+        "implementation_plan": {
+            "runtime": "python:3.11-slim",
+            "framework": "Flask",
+            "service_model": "single docker compose service",
+            "entrypoints": [
+                {"path": "/", "purpose": "landing page"},
+                {"path": "/login", "purpose": "vulnerable auth endpoint"},
+                {"path": "/health", "purpose": "readiness check"},
+            ],
+            "data_model": ["users table", "secrets table stores env flag"],
+            "vulnerability": {
+                "location": "/login username parameter",
+                "mechanism": "string-concatenated SQL query",
+            },
+            "constraints": ["no docker volumes", "FLAG comes from environment"],
+        },
         "hints": [
             "Inspect the JWT header.",
             "The key id influences verification.",
@@ -267,6 +283,65 @@ def test_validate_design_payload_ignores_prose_artifacts_but_adds_required_paths
         "deploy/src/app.py",
         "deploy/_files/start.sh",
     ]
+
+
+def test_validate_design_payload_rejects_implementation_level_top_field():
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match="implementation-level fields: dockerfile_snippet",
+    ):
+        validate_design_payload(
+            _payload(dockerfile_snippet="FROM python:3.11-slim\nCOPY . /app"),
+            _parent_task(),
+        )
+
+
+def test_validate_design_payload_rejects_code_in_implementation_plan():
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match="intent-level",
+    ):
+        validate_design_payload(
+            _payload(
+                implementation_plan={
+                    "runtime": "python:3.11-slim",
+                    "docker": "FROM python:3.11-slim\nRUN apt-get update",
+                }
+            ),
+            _parent_task(),
+        )
+
+
+def test_validate_design_payload_rejects_large_implementation_plan():
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match="implementation_plan is too large",
+    ):
+        validate_design_payload(
+            _payload(
+                implementation_plan={
+                    "runtime": "python:3.11-slim",
+                    "notes": ["x" * 100 for _ in range(50)],
+                }
+            ),
+            _parent_task(),
+        )
+
+
+def test_validate_design_payload_rejects_long_plan_string():
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match="longer than",
+    ):
+        validate_design_payload(
+            _payload(
+                implementation_plan={
+                    "runtime": "python:3.11-slim",
+                    "notes": "x" * 600,
+                }
+            ),
+            _parent_task(),
+        )
 
 
 def test_validate_design_payload_fills_default_flag_format_without_mutating_input():
