@@ -14,7 +14,7 @@ rendering happens at design-execution time in a later change.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 from uuid import UUID
 
@@ -61,6 +61,11 @@ class DesignTaskPlanningService:
                 raise DesignTaskValidationError(
                     f"generation_request {request_id} does not exist"
                 )
+            # 锁住父行：当请求当前没有任何 design_tasks 时，repository
+            # 的 SELECT ... FOR UPDATE 锁不到任何行，两个并发 generate
+            # 会都通过校验后才在 INSERT 阶段撞到唯一约束。父行锁让这种
+            # 场景串行化为干净的 409，而非 5xx 完整性错误。
+            research_repo.lock_generation_request(request_id)
 
             latest = research_repo.get_latest_run_for_request(request_id)
             if latest is None or latest.status != "completed":
@@ -78,6 +83,15 @@ class DesignTaskPlanningService:
                 )
 
             candidates = _plan_candidates(request, latest, findings)
+            # 跨表校验：design.md §Task Generation Flow 第 5 步要求
+            # “每个 task 必须引用至少一个来自当前 research_run 的 finding”。
+            # 这一规则需要 SELECT，所以放在 service 层（validators 模块
+            # 注明它只做无 SELECT 的形状校验）。
+            validate_finding_provenance(
+                candidates,
+                allowed_finding_ids={f.id for f in findings},
+                research_run_id=latest.id,
+            )
             return design_repo.replace_draft_or_archived_tasks(
                 generation_request_id=request.id,
                 research_run_id=latest.id,
@@ -85,6 +99,41 @@ class DesignTaskPlanningService:
                 target_count=request.target_count,
                 difficulty_distribution=request.difficulty_distribution,
                 candidates=candidates,
+            )
+
+
+def validate_finding_provenance(
+    candidates: Iterable[Mapping[str, Any]],
+    *,
+    allowed_finding_ids: set[UUID],
+    research_run_id: UUID,
+) -> None:
+    """Reject candidates whose ``finding_ids`` are missing or off-run.
+
+    Enforces the design contract that every generated design task cites
+    at least one finding belonging to the same completed research run.
+    The check is in the service (not :mod:`domain.design_task_validators`)
+    because it requires the SELECT result of ``list_findings(run_id)``.
+    """
+    for candidate in candidates:
+        raw = candidate.get("finding_ids") or ()
+        if not raw:
+            raise DesignTaskValidationError(
+                f"task_no {candidate.get('task_no')!r} cites no finding from "
+                f"research run {research_run_id}"
+            )
+        try:
+            cited = {UUID(str(fid)) for fid in raw}
+        except (TypeError, ValueError) as exc:
+            raise DesignTaskValidationError(
+                f"task_no {candidate.get('task_no')!r} has malformed "
+                f"finding_ids {list(raw)!r}: {exc}"
+            ) from exc
+        foreign = sorted(str(fid) for fid in cited - allowed_finding_ids)
+        if foreign:
+            raise DesignTaskValidationError(
+                f"task_no {candidate.get('task_no')!r} cites finding(s) "
+                f"{foreign} not from research run {research_run_id}"
             )
 
 

@@ -91,7 +91,11 @@ class DesignTaskRepository:
             target_count=target_count,
             difficulty_distribution=difficulty_distribution,
         )
-        for index, candidate in enumerate(candidates):
+        # 按 task_no 排序后再做逐条校验/插入：validate_candidate_set 已经
+        # 保证 task_no 是 1..N 的全集，排序使得未来非确定性 planner 即便
+        # 乱序输出，也能稳定通过位置敏感的 per-candidate 校验。
+        ordered_candidates = sorted(candidates, key=lambda c: int(c["task_no"]))
+        for index, candidate in enumerate(ordered_candidates):
             validate_candidate(
                 candidate,
                 parent_category=parent_category,
@@ -105,7 +109,7 @@ class DesignTaskRepository:
 
         created_rows: list[model.DesignTask] = []
         now = _utcnow()
-        for candidate in candidates:
+        for candidate in ordered_candidates:
             row = model.DesignTask(
                 id=uuid4(),
                 generation_request_id=generation_request_id,

@@ -318,6 +318,33 @@ def test_regeneration_replaces_archived_rows(session_factory: SessionFactory):
         session.close()
 
 
+def test_replace_handles_unordered_candidates(session_factory: SessionFactory):
+    # Repository sorts candidates by ``task_no`` before per-candidate
+    # validation, so a planner that emits rows out of order still passes.
+    request_id, run_id, finding_id = _seed_completed_run(session_factory)
+    session = session_factory()
+    try:
+        repo = DesignTaskRepository(session)
+        created = repo.replace_draft_or_archived_tasks(
+            generation_request_id=request_id,
+            research_run_id=run_id,
+            parent_category="web",
+            target_count=2,
+            difficulty_distribution={"easy": 1, "medium": 1},
+            candidates=[
+                _candidate(2, "medium", finding_id),
+                _candidate(1, "easy", finding_id),
+            ],
+        )
+        session.commit()
+        assert sorted(t.task_no for t in created) == [1, 2]
+        listed = repo.list_design_tasks(request_id)
+        assert [t.task_no for t in listed] == [1, 2]
+        assert [t.difficulty for t in listed] == ["easy", "medium"]
+    finally:
+        session.close()
+
+
 def test_check_constraint_rejects_zero_points(session_factory: SessionFactory):
     request_id, run_id, _ = _seed_completed_run(session_factory)
     session = session_factory()

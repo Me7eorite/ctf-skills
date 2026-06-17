@@ -18,6 +18,8 @@ from persistence.models import research as model
 from persistence.repositories import DesignTaskRepository
 from persistence.session import SessionFactory
 from services import DesignTaskPlanningService, ResearchJobService
+from services import design_task_planning_service as planning_module
+from services.design_task_planning_service import validate_finding_provenance
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -192,6 +194,96 @@ def test_generate_blocked_when_any_task_queued(session_factory: SessionFactory):
 
     with pytest.raises(DesignTaskValidationError, match="cannot regenerate"):
         service.generate_for_request(request.id)
+
+
+def test_validate_finding_provenance_rejects_empty_finding_ids():
+    allowed = {uuid4()}
+    candidates = [
+        {"task_no": 1, "finding_ids": []},
+    ]
+    with pytest.raises(DesignTaskValidationError, match="cites no finding"):
+        validate_finding_provenance(
+            candidates, allowed_finding_ids=allowed, research_run_id=uuid4()
+        )
+
+
+def test_validate_finding_provenance_rejects_foreign_finding_id():
+    allowed_finding = uuid4()
+    foreign_finding = uuid4()
+    candidates = [
+        {"task_no": 1, "finding_ids": [foreign_finding]},
+    ]
+    with pytest.raises(DesignTaskValidationError, match="not from research run"):
+        validate_finding_provenance(
+            candidates,
+            allowed_finding_ids={allowed_finding},
+            research_run_id=uuid4(),
+        )
+
+
+def test_validate_finding_provenance_accepts_subset_from_run():
+    a, b = uuid4(), uuid4()
+    candidates = [
+        {"task_no": 1, "finding_ids": [a]},
+        {"task_no": 2, "finding_ids": [str(b)]},
+    ]
+    validate_finding_provenance(
+        candidates, allowed_finding_ids={a, b}, research_run_id=uuid4()
+    )
+
+
+def test_generate_rejects_planner_with_empty_finding_ids(
+    session_factory: SessionFactory, monkeypatch: pytest.MonkeyPatch
+):
+    request, _ = _seed(session_factory, target_count=2, distribution={"easy": 1, "medium": 1})
+    service = DesignTaskPlanningService(session_factory)
+
+    original = planning_module._plan_candidates
+
+    def _bad_planner(req, run, findings):
+        rows = original(req, run, findings)
+        for row in rows:
+            row["finding_ids"] = []
+        return rows
+
+    monkeypatch.setattr(planning_module, "_plan_candidates", _bad_planner)
+
+    with pytest.raises(DesignTaskValidationError, match="cites no finding"):
+        service.generate_for_request(request.id)
+
+    session = session_factory()
+    try:
+        rows = DesignTaskRepository(session).list_design_tasks(request.id)
+        assert rows == []
+    finally:
+        session.close()
+
+
+def test_generate_rejects_planner_with_foreign_finding_id(
+    session_factory: SessionFactory, monkeypatch: pytest.MonkeyPatch
+):
+    request, _ = _seed(session_factory, target_count=2, distribution={"easy": 1, "medium": 1})
+    service = DesignTaskPlanningService(session_factory)
+
+    original = planning_module._plan_candidates
+    foreign = uuid4()
+
+    def _bad_planner(req, run, findings):
+        rows = original(req, run, findings)
+        rows[0]["finding_ids"] = [foreign]
+        return rows
+
+    monkeypatch.setattr(planning_module, "_plan_candidates", _bad_planner)
+
+    with pytest.raises(DesignTaskValidationError, match="not from research run"):
+        service.generate_for_request(request.id)
+
+    session = session_factory()
+    try:
+        rows = DesignTaskRepository(session).list_design_tasks(request.id)
+        assert rows == []
+    finally:
+        session.close()
 
 
 def test_generate_replaces_archived_tasks(session_factory: SessionFactory):

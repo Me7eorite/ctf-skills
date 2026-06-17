@@ -58,3 +58,16 @@ extend-exclude = [
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
+
+# Pyright/Pylance 配置：项目用的是 uv 管理的 .venv，类型存根（含
+# SQLAlchemy 2.0 自带的 Session.scalars/scalar/execute 重载）都装在
+# 这里。显式指向 venv + 打开 useLibraryCodeForTypes，Pylance 才能
+# 解析 SQLAlchemy 的内联类型，否则会把 Session 的方法识别为 Unknown。
+[tool.pyright]
+include = ["src", "tests"]
+exclude = [".venv", ".uv-cache", ".hermes", "venv", "**/__pycache__"]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.11"
+useLibraryCodeForTypes = true
+typeCheckingMode = "basic"

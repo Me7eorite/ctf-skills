@@ -42,6 +42,18 @@ class ResearchRepository:
         row = self.session.get(model.GenerationRequest, request_id)
         return _generation_request(row) if row else None
 
+    def lock_generation_request(self, request_id: UUID) -> None:
+        # SELECT ... FOR UPDATE 用于在事务内串行化对同一 generation_request
+        # 的并发写入（例如设计任务生成时的“无现有行也要避免竞态”场景）。
+        # 锁在 execute 时即生效，无需消费结果集；存在性检查由调用方通过
+        # get_generation_request 完成。
+        stmt = (
+            sa.select(model.GenerationRequest.id)
+            .where(model.GenerationRequest.id == request_id)
+            .with_for_update()
+        )
+        self.session.execute(stmt)
+
     def list_generation_requests(
         self,
         *,
