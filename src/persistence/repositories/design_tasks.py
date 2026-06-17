@@ -16,6 +16,7 @@ from uuid import UUID, uuid4
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
+from domain import challenge_designs as challenge_dto
 from domain import design_tasks as dto
 from domain.design_task_validators import (
     DesignTaskValidationError,
@@ -23,6 +24,7 @@ from domain.design_task_validators import (
     validate_candidate_set,
     validate_status_transition,
 )
+from persistence.models import challenge_designs as design_model
 from persistence.models import design_tasks as model
 
 
@@ -46,6 +48,78 @@ class DesignTaskRepository:
             .order_by(model.DesignTask.task_no)
         ).all()
         return [_design_task(row) for row in rows]
+
+    def list_tasks(
+        self,
+        *,
+        generation_request_id: UUID | None = None,
+        status: str | None = None,
+        category: str | None = None,
+        limit: int = 100,
+    ) -> list[dto.DesignTask]:
+        """Return globally queryable task rows without history payloads."""
+        if limit <= 0:
+            raise DesignTaskValidationError("limit must be positive")
+        query = sa.select(model.DesignTask)
+        if generation_request_id is not None:
+            query = query.where(
+                model.DesignTask.generation_request_id == generation_request_id
+            )
+        if status is not None:
+            query = query.where(model.DesignTask.status == status)
+        if category is not None:
+            query = query.where(model.DesignTask.category == category)
+        rows = self.session.scalars(
+            query.order_by(
+                model.DesignTask.generation_request_id,
+                model.DesignTask.task_no,
+            ).limit(min(limit, 500))
+        ).all()
+        return [_design_task(row) for row in rows]
+
+    def summarize_for_request(self, generation_request_id: UUID) -> dict[str, Any]:
+        """Return total and per-status counts for a request."""
+        counts = {status: 0 for status in dto.DesignTaskStatus}
+        rows = self.session.execute(
+            sa.select(model.DesignTask.status, sa.func.count())
+            .where(model.DesignTask.generation_request_id == generation_request_id)
+            .group_by(model.DesignTask.status)
+        ).all()
+        for status, count in rows:
+            counts[str(status)] = int(count)
+        return {"total": sum(counts.values()), "by_status": counts}
+
+    def get_with_history(
+        self,
+        task_id: UUID,
+    ) -> tuple[
+        dto.DesignTask,
+        list[challenge_dto.DesignAttempt],
+        challenge_dto.ChallengeDesign | None,
+    ] | None:
+        """Return one task with its attempts and current draft design."""
+        task_row = self.session.get(model.DesignTask, task_id)
+        if task_row is None:
+            return None
+        attempts = self.session.scalars(
+            sa.select(design_model.DesignAttempt)
+            .where(design_model.DesignAttempt.design_task_id == task_id)
+            .order_by(design_model.DesignAttempt.attempt)
+        ).all()
+        latest_design = self.session.scalars(
+            sa.select(design_model.ChallengeDesign)
+            .where(
+                design_model.ChallengeDesign.design_task_id == task_id,
+                design_model.ChallengeDesign.status == "draft",
+            )
+            .order_by(design_model.ChallengeDesign.created_at.desc())
+            .limit(1)
+        ).one_or_none()
+        return (
+            _design_task(task_row),
+            [_attempt(row) for row in attempts],
+            _challenge_design(latest_design) if latest_design else None,
+        )
 
     def replace_draft_or_archived_tasks(
         self,
@@ -178,6 +252,42 @@ def _design_task(row: model.DesignTask) -> dto.DesignTask:
         constraints=dict(row.constraints),
         evidence_summary=row.evidence_summary,
         finding_ids=tuple(UUID(str(fid)) for fid in row.finding_ids),
+        status=row.status,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _attempt(row: design_model.DesignAttempt) -> challenge_dto.DesignAttempt:
+    return challenge_dto.DesignAttempt(
+        id=row.id,
+        design_task_id=row.design_task_id,
+        attempt=row.attempt,
+        status=row.status,
+        claimed_by=row.claimed_by,
+        claim_token=row.claim_token,
+        started_at=row.started_at,
+        finished_at=row.finished_at,
+        profile_name_used=row.profile_name_used,
+        prompt_path=row.prompt_path,
+        hermes_log_path=row.hermes_log_path,
+        last_error=row.last_error,
+        created_at=row.created_at,
+    )
+
+
+def _challenge_design(
+    row: design_model.ChallengeDesign,
+) -> challenge_dto.ChallengeDesign:
+    return challenge_dto.ChallengeDesign(
+        id=row.id,
+        design_task_id=row.design_task_id,
+        design_attempt_id=row.design_attempt_id,
+        payload=dict(row.payload),
+        summary=row.summary,
+        flag_format=row.flag_format,
+        validation_notes=row.validation_notes,
+        quality_gate_passed=row.quality_gate_passed,
         status=row.status,
         created_at=row.created_at,
         updated_at=row.updated_at,

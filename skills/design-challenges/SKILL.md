@@ -68,146 +68,83 @@ Use the bundled category references for authoring guidance. Use `ctf-*` director
 | Pwn | [references/pwn-design.md](references/pwn-design.md) | `/skills/ctf-pwn` | Native services, memory corruption, mitigations, exploit stability |
 | Reverse | [references/reverse-design.md](references/reverse-design.md) | `/skills/ctf-reverse` | Crackmes, VMs, obfuscation, mobile/WASM/firmware-style artifacts |
 | Crypto | [references/other-categories.md](references/other-categories.md) | `/skills/ctf-crypto` | Broken schemes, oracles, math-heavy puzzles |
-| Forensics | [references/other-categories.md](references/other-categories.md) | `/skills/ctf-forensics` | PCAPs, disk images, memory, stego, timelines |
-| Misc | [references/other-categories.md](references/other-categories.md) | `/skills/ctf-misc` | Jails, encodings, games, esolangs, constraint puzzles |
-| OSINT | [references/other-categories.md](references/other-categories.md) | `/skills/ctf-osint` | Fictional personas, geolocation, DNS, public-source trails |
-| Malware | [references/other-categories.md](references/other-categories.md) | `/skills/ctf-malware` | Inert simulated malware, config extraction, toy C2 traffic |
-| AI/ML | [references/other-categories.md](references/other-categories.md) | `/skills/ctf-ai-ml` | Prompt injection, toy model attacks, adversarial examples |
+| Forensics | [references/other-categories.md](references/other-categories.md) | `/skills/ctf-forensics` | Disk/memory artifacts, log analysis, hidden data |
+| Misc | [references/other-categories.md](references/other-categories.md) | `/skills/ctf-misc` | OSINT, steganography, esoteric formats |
 
-Treat the `ctf-*` directories as source material, not as a command to solve a live challenge. Convert techniques into safe toy designs, add validation, and remove exploit-only assumptions.
+## Output Shape
 
-## Challenge Matrix
-
-Create this matrix before writing full specs:
-
-| ID | Title | Category | Difficulty | Points | Deployment | Primary Technique | Artifact | Learning Objective | Risk |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| web-01 | Example | web | easy | 100 | http/docker | auth bypass | toy app | Inspect trust boundaries | low |
-
-For each row, include:
-
-- Spoiler-free player prompt
-- Intended solve outline in 2-4 steps
-- Flag location and generation rule
-- Authoring effort and validation method
-- The reason this challenge is distinct from nearby challenges
-
-## Difficulty Calibration
-
-Use difficulty to describe solver burden, not author pride.
-
-- Easy: one core idea, short path, low tooling friction, forgiving hints.
-- Medium: two linked ideas, clear artifacts, some scripting or debugging.
-- Hard: multi-stage reasoning, careful implementation, meaningful false paths removed.
-- Expert: rare, reliable reference solve required, deep specialization or chained domains.
-
-Suggested static points:
-
-- Easy: 100-150
-- Medium: 200-300
-- Hard: 350-450
-- Expert: 500
-
-## GLM-5 Workflow
-
-When using GLM-5 or another agent to generate many designs, use [references/glm5-generation.md](references/glm5-generation.md) and enforce this loop:
-
-1. Planner pass: produce event assumptions, coverage grid, and generation shards.
-2. Matrix pass: produce challenge rows only.
-3. Expansion pass: expand one shard into full specs using [references/spec-template.md](references/spec-template.md).
-4. Critic pass: apply [references/quality-gate.md](references/quality-gate.md) and revise weak entries.
-5. Deduplication pass: remove repeated tricks, near-duplicate prompts, and unfair leaps.
-
-Do not let a generation pass invent real targets, real credentials, real people, or production-like attack instructions outside a local toy service.
-
-## Output Rules
-
-For a brief, return the event assumptions, matrix, and quality notes.
-
-For full specs, use the template in [references/spec-template.md].
-
-For deliverable-ready challenge packages, always apply [references/delivery-format.md](references/delivery-format.md). The external source of truth is `docs/delivery-formats/ctf-v2/交付格式规范.md` at the repo root (sample layout under `docs/delivery-formats/ctf-v2/资源包/`); this bundled reference summarizes it for the skill.
-
-For containerized challenges, include these implementation requirements in
-the author ticket or generated prompt:
-
-- Keep `docker-compose.yml` to exactly one service.
-- Inject the challenge flag through the service's `environment` as
-  `FLAG: ${FLAG}`; validation or orchestration sets the host-side `FLAG`
-  before Compose starts. Application code must read `FLAG` at runtime instead
-  of baking the plaintext flag into the Compose file, image, source tree, or
-  player attachments.
-- Set both Compose `image` and `container_name` from the challenge name. Convert
-  it to a stable Docker-safe lowercase identifier using only
-  `[a-z0-9][a-z0-9_.-]`; use the same identifier in build, validation, metadata,
-  and delivery commands.
-- Apply least privilege to Web and Pwn images by default. Pwn images normally
-  create an unprivileged `ctf` user/group, use `/home/ctf`, and finish with
-  `USER ctf`.
-- Web images SHOULD reuse the non-root service user and conventional content
-  directory supplied by the selected base image when available, such as
-  `www-data` with `/var/www/html` for Apache/PHP or `tomcat` with the image's
-  standard Tomcat application directory. Create `ctf` only when the base
-  image has no appropriate service account. The final process must not run as
-  root.
-- Do not define Compose `volumes` for generated challenges. Copy source,
-  configuration, startup assets, and required initial data into the image at
-  build time. Create required writable directories inside the image with
-  ownership assigned to the runtime user.
-- Web services should listen on an unprivileged container port such as `8080`;
-  Compose may map a requested host port such as `80` to that internal port.
-  Do not grant a Linux capability merely to bind a low port.
-- Root execution, added capabilities, privileged mode, device mounts, or
-  writable system paths are allowed only when the intended challenge
-  mechanism strictly requires them. Minimize the exception and record its
-  reason in metadata, validation notes, and the writeup.
-- When `apt` access is slow or unreliable in the target build environment,
-  the Dockerfile may switch to an organizer-approved Debian/Ubuntu mirror
-  before `apt-get update`. Keep the base distribution release unchanged,
-  combine update/install/cleanup in one layer, and do not hardcode a regional
-  mirror when the default upstream is reliable.
-
-For author tickets, group tasks by category and include implementation, deployment, solve, and validation work.
-
-For machine-readable output, use this JSON shape:
+When the user requests machine-readable output or the pipeline requires JSON, return a single JSON object:
 
 ```json
 {
   "event": {
-    "name": "Example CTF",
-    "theme": "Example theme",
+    "name": "string",
+    "theme": "string",
+    "audience": "string",
     "flag_format": "flag{...}"
   },
   "challenges": [
     {
-      "id": "web-01",
-      "title": "Example Title",
-      "category": "web",
-      "difficulty": "easy",
+      "id": "web-0001",
+      "title": "string",
+      "category": "web|pwn|reverse|crypto|forensics|misc",
+      "difficulty": "easy|medium|hard|expert",
       "points": 100,
-      "deployment": "http/docker",
-      "primary_technique": "auth bypass",
-      "learning_objective": "Inspect authorization boundaries",
-      "prompt": "Spoiler-free prompt",
-      "artifacts": ["Dockerfile", "src/"],
-      "flag_location": "/flag.txt",
-      "validation": "python solve.py",
-      "hints": ["gentle hint", "technique hint", "near-solution hint"]
+      "techniques": ["primary", "secondary"],
+      "learning_objective": "string",
+      "deployment": "docker|static|tcp|http",
+      "port": 8080,
+      "player_prompt": "string",
+      "intended_path": ["step1", "step2", "step3"],
+      "artifacts": ["file1", "file2"],
+      "flag_plan": {
+        "format": "flag{...}",
+        "location": "string",
+        "generation": "static|seeded|per-team"
+      },
+      "validation": {
+        "reference_solve": "string",
+        "expected_result": "string",
+        "regression_checks": ["check1", "check2"]
+      },
+      "hints": ["hint1", "hint2", "hint3"],
+      "delivery": {
+        "exp_package": "js-web-challenge_nameexp.zip",
+        "docker_config": "js-web-challenge_name.zip",
+        "attachment": "js-web-challenge_name.zip",
+        "pdf_report": "js-web-challenge_name.pdf",
+        "docker_tar": "challenge_name[8080]-YYYYMMDD.tar"
+      }
     }
   ]
 }
 ```
 
-## Safety Rules
+## Quick Modes
 
-- Design only synthetic, organizer-owned targets.
-- Use fictional users, domains, credentials, logs, and infrastructure.
-- Keep web and pwn services isolated in disposable containers.
-- Do not require scanning, exploiting, or social-engineering real third-party systems.
-- Do not include real API keys, personal data, or live malware behavior.
-- For OSINT-style elements, use fictional personas and organizer-controlled assets.
-- For malware-themed elements, use inert samples or simulated traffic.
+| Request | Action |
+| --- | --- |
+| "I need a web challenge about X" | Read web-design.md, generate one spec with full metadata |
+| "Generate 10 pwn challenges" | Read pwn-design.md, produce a matrix, ask to expand slice |
+| "Convert this CVE to a CTF" | Read cve-advisory-design.md, produce a spec with references |
+| "Check these challenges" | Run quality-gate.md checklist, report gaps |
+| "Package for CTFd" | Read delivery-format.md, produce zip structure |
 
-## Challenge
+## Safety Guardrails
 
-$ARGUMENTS
+Never design challenges that:
+
+- Attack real third-party systems, domains, or services
+- Require player access to production infrastructure
+- Embed real credentials, API keys, or secrets
+- Include live malware or exploit payloads
+- Target specific real-world organizations
+- Require social engineering against real people
+
+Always design challenges that:
+
+- Run in isolated, disposable containers or offline environments
+- Use synthetic data, fictional organizations, and seeded credentials
+- Have documented reset and health-check procedures
+- Include a reference solve that works without external dependencies
+- Can be validated by another organizer without special knowledge

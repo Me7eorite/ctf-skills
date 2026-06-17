@@ -10,6 +10,7 @@ import {
   softPill,
 } from "../ui/format.js";
 import { setView } from "../router.js";
+import { showDesignTasksForRequest } from "./design-tasks.js";
 import { showRunsForRequest } from "./research-runs.js";
 
 const REQUEST_STATUSES = ["draft", "researching", "researched", "failed"];
@@ -25,7 +26,6 @@ const state = {
   flags: {},
   filter: { category: "", status: "" },
   detailPoll: { timer: null, loading: false },
-  expandedDesigns: {},
 };
 
 async function ensureRequests() {
@@ -97,12 +97,8 @@ function isDetailViewActive() {
 function detailNeedsActivePolling() {
   const latestStatus = state.detail?.latest_run?.status;
   const requestStatus = state.detail?.request?.status;
-  const hasRunningDesign = (state.detail?.design_tasks || []).some((task) =>
-    (task.attempts || []).some((attempt) => attempt.status === "running")
-  );
   return (
     state.worker?.running ||
-    hasRunningDesign ||
     latestStatus === "queued" ||
     latestStatus === "running" ||
     requestStatus === "researching"
@@ -189,41 +185,10 @@ async function generateDesignTasks() {
     await postJson(`/api/research/requests/${state.detailId}/design-tasks/generate`, {});
     showToast("Design tasks generated");
     await reloadDetail();
+    showDesignTasksForRequest(state.detailId);
     window.lucide?.createIcons();
   } catch (err) {
     showToast(err.message, true);
-  }
-}
-
-async function transitionDesignTask(taskId, action) {
-  try {
-    await postJson(`/api/design-tasks/${taskId}/${action}`, {});
-    showToast(`Task ${action}d`);
-    await reloadDetail();
-    window.lucide?.createIcons();
-  } catch (err) {
-    showToast(err.message, true);
-  }
-}
-
-async function designTaskNow(taskId) {
-  if (!taskId) return;
-  state.flags.designing = { ...(state.flags.designing || {}), [taskId]: true };
-  render(state.data);
-  window.lucide?.createIcons();
-  try {
-    const result = await postJson(`/api/design-tasks/${taskId}/design`, {});
-    const failed = result.attempt_status === "failed";
-    showToast(result.error || (failed ? "Design attempt failed" : "Design completed"), failed);
-    state.expandedDesigns[taskId] = true;
-    await refreshDetail({ startPolling: true });
-    window.lucide?.createIcons();
-  } catch (err) {
-    showToast(err.message, true);
-  } finally {
-    state.flags.designing = { ...(state.flags.designing || {}), [taskId]: false };
-    render(state.data);
-    window.lucide?.createIcons();
   }
 }
 
@@ -340,7 +305,7 @@ function renderDetail(root) {
     return;
   }
 
-  const { request, latest_run: latest, runs = [], sources = [], findings_by_kind = {}, design_tasks = [] } = state.detail;
+  const { request, latest_run: latest, runs = [], sources = [], findings_by_kind = {}, design_tasks_summary = null } = state.detail;
   const worker = state.worker || {};
   const workerRunning = !!worker.running;
   const available = worker.available !== false;
@@ -408,7 +373,7 @@ function renderDetail(root) {
       ${runs.length ? renderRunsTable(runs) : `<div class="empty card-body">No runs yet</div>`}
     </section>
 
-    ${renderDesignTasks(design_tasks, request)}
+    ${renderDesignTasksSummary(design_tasks_summary, request)}
     ${renderFindings(findings_by_kind)}
     ${renderSources(sources)}
   `;
@@ -445,13 +410,11 @@ function renderRunsTable(runs) {
   `;
 }
 
-function renderDesignTasks(designTasks, request) {
-  const tasks = designTasks || [];
-  const counts = tasks.reduce((acc, task) => {
-    acc[task.status] = (acc[task.status] || 0) + 1;
-    return acc;
-  }, {});
+function renderDesignTasksSummary(summary, request) {
+  const total = summary?.total || 0;
+  const counts = summary?.by_status || {};
   const summaryEntries = Object.entries(counts)
+    .filter(([, n]) => n > 0)
     .map(([status, n]) => `${escapeHtml(status)}=${n}`)
     .join(", ");
   const canGenerate = (request?.status === "researched");
@@ -463,171 +426,18 @@ function renderDesignTasks(designTasks, request) {
           <div class="card-subtitle">${summaryEntries || "No tasks yet"}</div>
         </div>
         <div class="btn-group">
+          <button class="btn btn-secondary btn-sm" id="design-tasks-view"${total ? "" : " disabled"}>
+            <i data-lucide="list"></i> View design tasks
+          </button>
           <button class="btn btn-primary btn-sm" id="design-tasks-generate"${canGenerate ? "" : " disabled"}>
             <i data-lucide="wand"></i> Generate design tasks
           </button>
-          <span class="pill">${tasks.length}</span>
+          <span class="pill">${total}</span>
         </div>
       </div>
-      ${tasks.length ? renderDesignTasksTable(tasks) : `<div class="empty card-body">No design tasks yet — run "Generate design tasks" once the research run completes.</div>`}
+      <div class="empty card-body">${total ? "Open the dedicated Design Tasks view to inspect rows, attempts, and latest designs." : "No design tasks yet. Generate tasks once the research run completes."}</div>
     </section>
   `;
-}
-
-function renderDesignTasksTable(tasks) {
-  return `
-    <div class="table-container">
-      <table class="table">
-        <thead>
-          <tr>
-            <th>#</th>
-            <th>Challenge ID</th>
-            <th>Title</th>
-            <th>Difficulty</th>
-            <th>Primary technique</th>
-            <th>Evidence</th>
-            <th>Status</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${tasks.map(task => `
-            <tr data-design-task-id="${escapeHtml(task.id)}">
-              <td class="table-cell-id">${task.task_no}</td>
-              <td class="mono">${escapeHtml(task.challenge_id)}</td>
-              <td><div class="truncate" style="max-width: 280px;">${escapeHtml(task.title)}</div></td>
-              <td>${escapeHtml(task.difficulty)}</td>
-              <td><div class="truncate" style="max-width: 220px;">${escapeHtml(task.primary_technique)}</div></td>
-              <td style="text-align: right;">${(task.finding_ids || []).length}</td>
-              <td>${escapeHtml(task.status)}</td>
-              <td>
-                <div class="btn-group design-task-actions">
-                  <button class="btn btn-secondary btn-sm design-task-toggle" title="Design details">
-                    <i data-lucide="${state.expandedDesigns[task.id] === false ? "chevron-right" : "chevron-down"}"></i>
-                  </button>
-                  <button class="btn btn-secondary btn-sm design-task-queue"${task.status === "draft" ? "" : " disabled"}>Queue</button>
-                  <button class="btn btn-ghost btn-sm design-task-archive"${(task.status === "draft" || task.status === "queued") ? "" : " disabled"}>Archive</button>
-                </div>
-              </td>
-            </tr>
-            ${state.expandedDesigns[task.id] === false ? "" : `
-              <tr class="design-panel-row" data-design-task-panel="${escapeHtml(task.id)}">
-                <td colspan="8">${renderDesignPanel(task)}</td>
-              </tr>
-            `}
-          `).join("")}
-        </tbody>
-      </table>
-    </div>
-  `;
-}
-
-function renderDesignPanel(task) {
-  const attempts = task.attempts || [];
-  const latestAttempt = attempts.length ? attempts[attempts.length - 1] : null;
-  const latestDesign = task.latest_design || null;
-  const isDesigning = !!state.flags.designing?.[task.id];
-  return `
-    <div class="design-panel">
-      <div class="design-panel-header">
-        <div class="design-panel-title">
-          <span class="design-panel-label">Designs</span>
-          ${latestAttempt ? statusIndicator(latestAttempt.status) : softPill("No attempts")}
-          ${latestDesign ? qualityGatePill(latestDesign.quality_gate_passed) : ""}
-        </div>
-        <div class="btn-group design-panel-controls">
-          <button class="btn btn-primary btn-sm design-task-run${isDesigning ? " btn-loading" : ""}"${task.status === "queued" && !isDesigning ? "" : " disabled"}>
-            <i data-lucide="sparkles"></i> Design now
-          </button>
-          ${latestAttempt?.prompt_artifact_url ? `
-            <a class="btn btn-secondary btn-sm" href="${escapeHtml(latestAttempt.prompt_artifact_url)}" target="_blank" rel="noopener">
-              <i data-lucide="file-text"></i> View prompt
-            </a>
-          ` : ""}
-          ${latestAttempt?.log_artifact_url ? `
-            <a class="btn btn-secondary btn-sm" href="${escapeHtml(latestAttempt.log_artifact_url)}" target="_blank" rel="noopener">
-              <i data-lucide="terminal"></i> Hermes log
-            </a>
-          ` : ""}
-        </div>
-      </div>
-      <div class="design-panel-grid">
-        <div class="design-panel-section">
-          <div class="design-panel-section-title">Attempts</div>
-          ${attempts.length ? renderDesignAttempts(attempts) : `<div class="empty design-empty">No design attempts yet</div>`}
-        </div>
-        <div class="design-panel-section">
-          <div class="design-panel-section-title">Latest Design</div>
-          ${latestDesign ? renderLatestDesign(latestDesign) : `<div class="empty design-empty">No draft design yet</div>`}
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-function renderDesignAttempts(attempts) {
-  return `
-    <div class="design-attempts">
-      ${attempts.map((attempt) => `
-        <div class="design-attempt-row">
-          <div class="design-attempt-index">#${attempt.attempt}</div>
-          <div class="design-attempt-main">
-            <div class="design-attempt-top">
-              ${statusIndicator(attempt.status)}
-              <span class="design-time">${escapeHtml(formatDateTime(attempt.started_at))}</span>
-              <span class="design-time">${escapeHtml(formatDateTime(attempt.finished_at))}</span>
-            </div>
-            ${attempt.last_error ? `<div class="design-error">${escapeHtml(attempt.last_error)}</div>` : ""}
-          </div>
-          <div class="design-attempt-links">
-            ${attempt.prompt_artifact_url ? `<a href="${escapeHtml(attempt.prompt_artifact_url)}" target="_blank" rel="noopener">Prompt</a>` : ""}
-            ${attempt.log_artifact_url ? `<a href="${escapeHtml(attempt.log_artifact_url)}" target="_blank" rel="noopener">Log</a>` : ""}
-          </div>
-        </div>
-      `).join("")}
-    </div>
-  `;
-}
-
-function renderLatestDesign(design) {
-  return `
-    <div class="design-summary">
-      <div class="design-summary-line">
-        <span>${escapeHtml(design.summary || "-")}</span>
-      </div>
-      <div class="design-summary-meta">
-        <span>${escapeHtml(design.flag_format || "-")}</span>
-        ${qualityGatePill(design.quality_gate_passed)}
-      </div>
-      <details class="design-json" open>
-        <summary>Payload</summary>
-        ${renderJsonTree(design.payload)}
-      </details>
-    </div>
-  `;
-}
-
-function renderJsonTree(value) {
-  if (Array.isArray(value)) {
-    return `<ol class="json-tree json-list">${value.map((item) => `<li>${renderJsonTree(item)}</li>`).join("")}</ol>`;
-  }
-  if (value && typeof value === "object") {
-    return `
-      <dl class="json-tree">
-        ${Object.entries(value).map(([key, item]) => `
-          <div class="json-pair">
-            <dt>${escapeHtml(key)}</dt>
-            <dd>${renderJsonTree(item)}</dd>
-          </div>
-        `).join("")}
-      </dl>
-    `;
-  }
-  return `<span class="json-value">${escapeHtml(JSON.stringify(value))}</span>`;
-}
-
-function qualityGatePill(passed) {
-  return softPill(passed ? "Quality passed" : "Quality failed", passed ? "text-emerald-700 bg-emerald-50" : "text-rose-700 bg-rose-50");
 }
 
 function renderFindings(findingsByKind) {
@@ -680,6 +490,16 @@ function renderSources(sources) {
 }
 
 export function bind() {
+  document.addEventListener("ctf:open-research-request", (event) => {
+    const requestId = event.detail?.requestId;
+    if (!requestId) return;
+    state.detailId = requestId;
+    state.detail = null;
+    setView("research-requests");
+    render(state.data);
+    window.lucide?.createIcons();
+  });
+
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden && isDetailViewActive()) {
       scheduleDetailPoll(ACTIVE_POLL_MS);
@@ -737,35 +557,8 @@ export function bind() {
       generateDesignTasks();
       return;
     }
-    const toggleBtn = e.target.closest(".design-task-toggle");
-    if (toggleBtn) {
-      const row = toggleBtn.closest("[data-design-task-id]");
-      if (row) {
-        const taskId = row.dataset.designTaskId;
-        state.expandedDesigns[taskId] = state.expandedDesigns[taskId] === false;
-        render(state.data);
-        window.lucide?.createIcons();
-      }
-      return;
-    }
-    const designNowBtn = e.target.closest(".design-task-run");
-    if (designNowBtn) {
-      const row = designNowBtn.closest("[data-design-task-panel]") ||
-        designNowBtn.closest("[data-design-task-id]");
-      const taskId = row?.dataset.designTaskPanel || row?.dataset.designTaskId;
-      if (taskId) designTaskNow(taskId);
-      return;
-    }
-    const queueBtn = e.target.closest(".design-task-queue");
-    if (queueBtn) {
-      const row = queueBtn.closest("[data-design-task-id]");
-      if (row) transitionDesignTask(row.dataset.designTaskId, "queue");
-      return;
-    }
-    const archiveBtn = e.target.closest(".design-task-archive");
-    if (archiveBtn) {
-      const row = archiveBtn.closest("[data-design-task-id]");
-      if (row) transitionDesignTask(row.dataset.designTaskId, "archive");
+    if (e.target.closest("#design-tasks-view")) {
+      showDesignTasksForRequest(state.detailId);
       return;
     }
 

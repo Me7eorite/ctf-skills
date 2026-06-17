@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse, Response
 
 from core.paths import ProjectPaths
 from web.dashboard import DashboardService
+from web.design_task_endpoints import register_design_task_read_endpoints
 from web.research_endpoints import register_research_endpoints
 from web.research_worker_manager import ResearchWorkerManager
 
@@ -116,6 +117,7 @@ def create_app(service: DashboardService) -> FastAPI:
     # over the wildcard.
     worker_manager = ResearchWorkerManager(service.paths)
     register_research_endpoints(app, worker_manager=worker_manager)
+    register_design_task_read_endpoints(app)
 
     # Static catch-all stays last so API routes win.
     @app.get("/{request_path:path}")

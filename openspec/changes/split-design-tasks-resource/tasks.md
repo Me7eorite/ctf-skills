@@ -55,10 +55,10 @@
   list and detail. Register routes `#/design-tasks` and
   `#/design-tasks/:id` in `router.js`.
 - [ ] 4.2 Implement list mode: filters for `generation_request_id` (from
-  query param), `status`, `category`; table rows show `task_no`,
-  `challenge_id`, `title`, `difficulty`, `primary_technique`, `status`,
-  evidence count; per-row `Queue`/`Archive`/`Design` actions; toolbar
-  shows active filters.
+  query param), `status`, `category`; table rows show a clickable shortened
+  `generation_request_id`, `task_no`, `challenge_id`, `title`, `difficulty`,
+  `primary_technique`, `status`, evidence count; per-row
+  `Queue`/`Archive`/`Design` actions; toolbar shows active filters.
 - [ ] 4.3 Implement detail mode: full task fields + attempts table +
   latest_design panel; same action buttons as list rows with
   status-driven enable/disable; "back to list (filtered)" navigation.

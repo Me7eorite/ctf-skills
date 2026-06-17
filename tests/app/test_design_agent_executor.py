@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import os
+import sys
+
 from core.paths import ProjectPaths
 from hermes import design as hermes_design
 from hermes import process as hermes_process
-from hermes.process import HERMES_TIMEOUT_RETURNCODE, HermesProcessResult
+from hermes.process import HERMES_TIMEOUT_RETURNCODE, HermesProcessResult, invoke_capture
 from services.design_agent_executor import (
     DesignChallengeExecutor,
     last_error_for_exit_code,
@@ -107,3 +110,28 @@ def test_nonzero_exit_code_maps_to_hermes_error():
 
 def test_success_exit_code_has_no_error():
     assert last_error_for_exit_code(0) is None
+
+
+def test_invoke_capture_replaces_invalid_output_bytes(tmp_path):
+    log_path = tmp_path / "hermes.log"
+    script = (
+        "import sys; "
+        "sys.stdout.buffer.write(b'\\x8a\\n'); "
+        "sys.stderr.buffer.write(b'\\x8a\\n')"
+    )
+
+    result = invoke_capture(
+        "prompt",
+        arguments=[sys.executable, "-c", script],
+        log_path=log_path,
+        cwd=tmp_path,
+        environment=os.environ.copy(),
+        timeout=5,
+    )
+
+    assert result.returncode == 0
+    assert "\ufffd" in result.stdout
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "--- stdout ---" in log_text
+    assert "--- stderr ---" in log_text
+    assert "\ufffd" in log_text

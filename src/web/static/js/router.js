@@ -42,6 +42,7 @@ const titles = {
   "seeds": { title: "种子配置", group: "待删除" },
   "research-submit": { title: "新建需求", group: "研究" },
   "research-requests": { title: "需求管理", group: "研究" },
+  "design-tasks": { title: "Design Tasks", group: "研究" },
   "research-runs": { title: "运行记录", group: "研究" },
   "research-logs": { title: "运行日志", group: "研究" },
 };

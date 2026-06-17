@@ -1,0 +1,118 @@
+{
+  "event": {
+    "name": "SQL injection bypass test",
+    "theme": "Web security fundamentals",
+    "audience": "intermediate university or club CTF players",
+    "flag_format": "flag{...}",
+    "platform": "CTFd",
+    "scoring": "static"
+  },
+  "challenges": [
+    {
+      "id": "web-0001",
+      "title": "SQL injection bypass test — task 1",
+      "category": "web",
+      "difficulty": "easy",
+      "points": 100,
+      "estimated_solve_time": "15-30 minutes",
+      "deployment": "docker",
+      "authoring_effort": "low",
+      "port": 9001,
+      "primary_technique": "Authentication bypass with OR 1=1",
+      "secondary_technique": null,
+      "learning_objective": "Reproduce Authentication bypass with OR 1=1 on a web target derived from research run 1.",
+      "player_prompt": "A simple login portal awaits. The developers claim their authentication is 'unbreakable.' Prove them wrong and retrieve the flag.\n\nhttp://localhost:9001",
+      "intended_path": [
+        "Access the login page at port 9001 and observe the login form",
+        "Test basic SQL injection payloads in the username field: admin' --, admin' OR '1'='1",
+        "Discover that the username field is vulnerable to boolean-based SQL injection",
+        "Use the payload ' OR '1'='1' -- to bypass authentication",
+        "The injected SQL query becomes: SELECT * FROM users WHERE username='' OR '1'='1' --' AND password='...'",
+        "Login succeeds, revealing the flag in the welcome page or admin panel"
+      ],
+      "artifacts": {
+        "provided": [
+          "Web application running on port 9001",
+          "No source code provided (black-box testing)"
+        ],
+        "source": "PHP login application with MySQL backend",
+        "seeded_data": "Database with users table containing admin and flag entries"
+      },
+      "flag_plan": {
+        "format": "flag{...}",
+        "location": "Displayed on the admin welcome page after successful authentication bypass",
+        "generation_rule": "static",
+        "example": "flag{sql1_1nj3ct10n_byp4ss3d}"
+      },
+      "validation": {
+        "reference_solve": "exp.py",
+        "solve_command": "python3 exp.py http://localhost:9001",
+        "expected_result": "Flag is extracted from the response after successful SQL injection bypass",
+        "regression_checks": [
+          "Verify the application still starts after reset",
+          "Verify the flag is not accessible without injection",
+          "Verify valid credentials still work normally",
+          "Verify common bypass payloads work reliably"
+        ]
+      },
+      "hints": [
+        {
+          "level": 1,
+          "content": "Try entering special characters in the username field. What happens to the SQL query?",
+          "cost": 20
+        },
+        {
+          "level": 2,
+          "content": "The username field is directly concatenated into a SQL query. Can you make the WHERE clause always true?",
+          "cost": 40
+        },
+        {
+          "level": 3,
+          "content": "Use a payload like: ' OR '1'='1' -- to close the string and inject a true condition",
+          "cost": 60
+        }
+      ],
+      "anti_frustration_checks": [
+        "Removed: complex WAF rules that require advanced bypass techniques",
+        "Documented: the vulnerable parameter is 'username', no need to fuzz for other fields",
+        "Pinned: PHP 7.4 and MySQL 5.7 for consistent behavior",
+        "Stabilized: database reset on container restart ensures consistent state"
+      ],
+      "deployment_config": {
+        "docker_image": "sqli-basic-001",
+        "container_name": "sqli-basic-001",
+        "internal_port": 8080,
+        "host_port": 9001,
+        "runtime_user": "www-data",
+        "runtime_directory": "/var/www/html",
+        "writable_paths": [
+          "/var/www/html/sessions"
+        ],
+        "capabilities": "none",
+        "privileged": false,
+        "volumes": [],
+        "environment": {
+          "FLAG": "${FLAG}"
+        },
+        "health_check": "curl -f http://localhost:8080/ || exit 1"
+      },
+      "delivery": {
+        "exp_package": "工具/js-web-sqli_basic_001exp.zip",
+        "docker_config_package": "题库资源/deploy/js-web-sqli_basic_001.zip",
+        "attachment_package": null,
+        "pdf_report": "题库资源/deploy/report/js-web-sqli_basic_001.pdf",
+        "docker_tar": "虚拟机资源/docker-tar/sqli-basic-001[9001]-20260617.tar",
+        "overview_row": "web-0001, SQL injection bypass test — task 1, A simple login portal awaits. The developers claim their authentication is 'unbreakable.' Prove them wrong and retrieve the flag., web, easy, SQL injection, 100, flag{...}, active",
+        "image_inventory_row": "SQL injection bypass test — task 1, sqli-basic-001:latest, 9001, php:7.4-apache, docker-compose up -d"
+      },
+      "security": {
+        "synthetic_target": true,
+        "organizer_owned": true,
+        "fictional_credentials": true,
+        "isolated_deployment": true,
+        "no_production_targets": true,
+        "no_real_malware": true
+      }
+    }
+  ]
+}

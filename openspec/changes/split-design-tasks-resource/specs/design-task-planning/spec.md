@@ -150,8 +150,9 @@ The dashboard SHALL expose `Design Tasks` as a top-level navigation entry,
 independent of the research request detail page. The view SHALL provide:
 (a) a list mode that lists tasks across all requests with filters for
 `generation_request_id`, `status`, and `category`; and (b) a detail mode that
-shows a single task with its attempts, latest_design, and the per-task action
-buttons (`Queue`, `Archive`, `Design`). The dashboard SHALL NOT render the
+shows a single task with its clickable parent `generation_request_id`, attempts,
+latest_design, and the per-task action buttons (`Queue`, `Archive`, `Design`).
+The dashboard SHALL NOT render the
 complete design tasks table inside the research request detail page; only the
 summary card defined in *Request detail exposes design tasks* SHALL appear
 there.
@@ -169,6 +170,13 @@ there.
 - **WHEN** the design tasks list view opens
 - **THEN** the list is pre-filtered to that `generation_request_id`
 - **AND** the active filter is visible in the toolbar
+
+#### Scenario: List view makes parent request navigable
+
+- **GIVEN** the design tasks list contains rows from multiple generation requests
+- **WHEN** the dashboard renders the list
+- **THEN** each row shows a shortened parent `generation_request_id`
+- **AND** clicking it opens the corresponding research request detail page
 
 #### Scenario: Detail view shows attempts and latest design
 

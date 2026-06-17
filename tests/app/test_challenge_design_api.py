@@ -16,7 +16,6 @@ from fastapi.testclient import TestClient
 from core.paths import ProjectPaths
 from domain.challenge_designs import ChallengeDesign, DesignAttempt
 from domain.design_tasks import DesignTask
-from domain.research import GenerationRequest
 from services.challenge_design_service import (
     ChallengeDesignConflictError,
     ChallengeDesignNotFoundError,
@@ -49,6 +48,19 @@ def _app_client(*, service_factory=None, challenge_repo=None, design_repo=None, 
         )
         default_design_repo = SimpleNamespace(
             list_design_tasks=lambda _request_id: [],
+            list_tasks=lambda **_kw: [],
+            summarize_for_request=lambda _request_id: {
+                "total": 0,
+                "by_status": {
+                    "draft": 0,
+                    "queued": 0,
+                    "designing": 0,
+                    "designed": 0,
+                    "failed": 0,
+                    "archived": 0,
+                },
+            },
+            get_with_history=lambda _task_id: None,
             set_design_task_status=lambda _task_id, _status: None,
         )
         default_research_repo = SimpleNamespace()
@@ -255,25 +267,12 @@ class DesignEndpointTests(unittest.TestCase):
         self.assertEqual(second.json()["attempt_id"], str(second_attempt))
 
 
-class RequestDetailDesignAttemptTests(unittest.TestCase):
-    def test_request_detail_includes_attempts_and_latest_design(self):
+class DesignTaskDetailAttemptTests(unittest.TestCase):
+    def test_design_task_detail_includes_attempts_and_latest_design(self):
         request_id = uuid4()
         task_id = uuid4()
         run_id = uuid4()
         now = datetime(2026, 6, 1, tzinfo=timezone.utc)
-        request = GenerationRequest(
-            id=request_id,
-            category="web",
-            topic="SQLi",
-            target_count=1,
-            difficulty_distribution=MappingProxyType({"medium": 1}),
-            runtime_constraints=MappingProxyType({}),
-            seed_urls=(),
-            max_attempts=2,
-            status="researched",
-            created_at=now,
-            updated_at=now,
-        )
         task = DesignTask(
             id=task_id,
             generation_request_id=request_id,
@@ -296,38 +295,26 @@ class RequestDetailDesignAttemptTests(unittest.TestCase):
             updated_at=now,
         )
         attempt = _attempt(task_id)
-        research_repo = SimpleNamespace(
-            get_generation_request=lambda _id: request,
-            list_runs=lambda **_kw: [],
-            get_latest_run_for_request=lambda _id: None,
-            list_sources=lambda _id: [],
-            list_findings=lambda _id: [],
-        )
+        design = _design(task_id, attempt.id)
         design_repo = SimpleNamespace(
-            list_design_tasks=lambda _id: [task],
+            list_design_tasks=lambda _id: [],
+            list_tasks=lambda **_kw: [],
+            summarize_for_request=lambda _id: {"total": 0, "by_status": {}},
+            get_with_history=lambda _id: (task, [attempt], design),
             set_design_task_status=lambda _id, _status: None,
         )
-        challenge_repo = SimpleNamespace(
-            get_attempt=lambda _id: None,
-            list_attempts=lambda _id: [attempt],
-            latest_design=lambda _id: _design(task_id, attempt.id),
-        )
 
-        with _app_client(
-            research_repo=research_repo,
-            design_repo=design_repo,
-            challenge_repo=challenge_repo,
-        ) as (client, _paths):
-            resp = client.get(f"/api/research/requests/{request_id}")
+        with _app_client(design_repo=design_repo) as (client, _paths):
+            resp = client.get(f"/api/design-tasks/{task_id}")
 
         self.assertEqual(resp.status_code, 200)
-        task_payload = resp.json()["design_tasks"][0]
+        task_payload = resp.json()
         self.assertEqual(task_payload["attempts"][0]["id"], str(attempt.id))
         self.assertEqual(
             task_payload["attempts"][0]["prompt_artifact_url"],
             f"/api/design-attempts/{attempt.id}/artifact?kind=prompt",
         )
-        self.assertIsNotNone(task_payload["latest_design"])
+        self.assertEqual(task_payload["latest_design"]["id"], str(design.id))
 
 
 class DesignArtifactEndpointTests(unittest.TestCase):

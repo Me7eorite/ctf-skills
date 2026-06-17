@@ -141,6 +141,30 @@ def test_generate_creates_target_count_drafts(session_factory: SessionFactory):
     assert all(t.finding_ids for t in tasks)
 
 
+def test_generated_challenge_ids_are_distinct_across_requests(
+    session_factory: SessionFactory,
+):
+    first_request, _ = _seed(
+        session_factory,
+        target_count=1,
+        distribution={"easy": 1},
+    )
+    second_request, _ = _seed(
+        session_factory,
+        target_count=1,
+        distribution={"easy": 1},
+    )
+    service = DesignTaskPlanningService(session_factory)
+
+    first = service.generate_for_request(first_request.id)
+    second = service.generate_for_request(second_request.id)
+
+    assert first[0].task_no == second[0].task_no == 1
+    assert first[0].challenge_id == f"web-{first_request.id.hex[:8]}-0001"
+    assert second[0].challenge_id == f"web-{second_request.id.hex[:8]}-0001"
+    assert first[0].challenge_id != second[0].challenge_id
+
+
 def test_generate_rejected_when_no_completed_run(session_factory: SessionFactory):
     request, _ = _seed(session_factory, finished=False)
     service = DesignTaskPlanningService(session_factory)

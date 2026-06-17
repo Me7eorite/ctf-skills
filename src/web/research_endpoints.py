@@ -355,11 +355,7 @@ def _require_distribution(payload: dict[str, Any]) -> dict[str, int]:
 def _register_request_detail(app: FastAPI) -> None:
     @app.get("/api/research/requests/{request_id}")
     def get_request_detail(request_id: str) -> JSONResponse:
-        from persistence.repositories import (
-            ChallengeDesignRepository,
-            DesignTaskRepository,
-            ResearchRepository,
-        )
+        from persistence.repositories import DesignTaskRepository, ResearchRepository
         from persistence.session import transaction
 
         try:
@@ -382,16 +378,9 @@ def _register_request_detail(app: FastAPI) -> None:
             latest = repo.get_latest_run_for_request(request_uuid)
             sources = repo.list_sources(latest.id) if latest else []
             findings = repo.list_findings(latest.id) if latest else []
-            design_tasks = DesignTaskRepository(session).list_design_tasks(request_uuid)
-            design_repo = ChallengeDesignRepository(session)
-            attempts_by_task = {
-                task.id: design_repo.list_attempts(task.id)
-                for task in design_tasks
-            }
-            latest_design_by_task = {
-                task.id: design_repo.latest_design(task.id)
-                for task in design_tasks
-            }
+            design_tasks_summary = DesignTaskRepository(
+                session
+            ).summarize_for_request(request_uuid)
 
         # Spec 10.2: finding list "grouped by kind".
         findings_by_kind: dict[str, list[dict[str, Any]]] = {}
@@ -409,14 +398,7 @@ def _register_request_detail(app: FastAPI) -> None:
                 "runs": [_run_dict(r, category=request.category) for r in runs],
                 "sources": [_source_dict(s) for s in sources],
                 "findings_by_kind": findings_by_kind,
-                "design_tasks": [
-                    _design_task_dict(
-                        t,
-                        attempts=attempts_by_task.get(t.id, []),
-                        latest_design=latest_design_by_task.get(t.id),
-                    )
-                    for t in design_tasks
-                ],
+                "design_tasks_summary": design_tasks_summary,
             }
         )
 
@@ -703,7 +685,8 @@ def _register_design_task_endpoints(app: FastAPI) -> None:
         return JSONResponse(
             {
                 "request_id": str(request_uuid),
-                "design_tasks": [_design_task_dict(t) for t in tasks],
+                "design_task_ids": [str(t.id) for t in tasks],
+                "total": len(tasks),
             },
             status_code=HTTPStatus.CREATED,
         )

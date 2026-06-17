@@ -168,7 +168,7 @@ def _plan_candidates(
         finding = findings[index % len(findings)]
         candidate: dict[str, Any] = {
             "task_no": task_no,
-            "challenge_id": f"{category}-{task_no:04d}",
+            "challenge_id": _challenge_id(category, request.id, task_no),
             "title": _title(request.topic, finding, task_no),
             "category": category,
             "difficulty": difficulty,
@@ -194,6 +194,10 @@ def _plan_candidates(
 def _title(topic: str, finding: research_dto.ResearchFinding, task_no: int) -> str:
     base = topic.strip() or finding.label
     return f"{base} — task {task_no}"
+
+
+def _challenge_id(category: str, request_id: UUID, task_no: int) -> str:
+    return f"{category}-{request_id.hex[:8]}-{task_no:04d}"
 
 
 def _port_for(category: str, task_no: int) -> int | None:

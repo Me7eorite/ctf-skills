@@ -13,6 +13,7 @@ import * as researchSubmit from "./views/research-submit.js";
 import * as researchRequests from "./views/research-requests.js";
 import * as researchRuns from "./views/research-runs.js";
 import * as researchLogs from "./views/research-logs.js";
+import * as designTasks from "./views/design-tasks.js";
 
 const views = {
   overview,
@@ -25,6 +26,7 @@ const views = {
   "research-requests": researchRequests,
   "research-runs": researchRuns,
   "research-logs": researchLogs,
+  "design-tasks": designTasks,
 };
 
 registerViews({
@@ -38,6 +40,7 @@ registerViews({
   "research-requests": researchRequests.render,
   "research-runs": researchRuns.render,
   "research-logs": researchLogs.render,
+  "design-tasks": designTasks.render,
 });
 
 async function loadState() {
@@ -124,5 +127,6 @@ researchSubmit.bind?.(loadState);
 researchRequests.bind?.(loadState);
 researchRuns.bind?.(loadState);
 researchLogs.bind?.(loadState);
+designTasks.bind?.(loadState);
 
 loadState();

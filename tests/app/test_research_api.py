@@ -54,11 +54,22 @@ def _client(stub_repo, *, scalar=None, scalars=None, design_repo=None) -> TestCl
     def _ctx():
         yield fake_session
 
-    # Default design-task repo stub: an empty list_design_tasks so the
-    # request-detail endpoint can return `design_tasks: []` without each
+    # Default design-task repo stub: an empty summary so the
+    # request-detail endpoint can return `design_tasks_summary` without each
     # legacy test having to wire its own stub.
     default_design_repo = SimpleNamespace(
         list_design_tasks=lambda _request_id: [],
+        summarize_for_request=lambda _request_id: {
+            "total": 0,
+            "by_status": {
+                "draft": 0,
+                "queued": 0,
+                "designing": 0,
+                "designed": 0,
+                "failed": 0,
+                "archived": 0,
+            },
+        },
         set_design_task_status=lambda _task_id, _status: None,
     )
     design_repo_stub = design_repo if design_repo is not None else default_design_repo

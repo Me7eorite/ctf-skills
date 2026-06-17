@@ -20,6 +20,7 @@ from uuid import UUID, uuid4
 from fastapi.testclient import TestClient
 
 from core.paths import ProjectPaths
+from domain.challenge_designs import ChallengeDesign, DesignAttempt
 from domain.design_task_validators import DesignTaskValidationError
 from domain.design_tasks import DesignTask
 from web.dashboard import DashboardService
@@ -57,6 +58,42 @@ def _make_design_task(
     )
 
 
+def _make_attempt(task_id: UUID, attempt_no: int = 1) -> DesignAttempt:
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    return DesignAttempt(
+        id=uuid4(),
+        design_task_id=task_id,
+        attempt=attempt_no,
+        status="completed",
+        claimed_by="tester",
+        claim_token=uuid4(),
+        started_at=now,
+        finished_at=now,
+        profile_name_used="default",
+        prompt_path="work/design/prompts/prompt.md",
+        hermes_log_path="work/design/logs/log.txt",
+        last_error=None,
+        created_at=now,
+    )
+
+
+def _make_design(task_id: UUID, attempt_id: UUID) -> ChallengeDesign:
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    return ChallengeDesign(
+        id=uuid4(),
+        design_task_id=task_id,
+        design_attempt_id=attempt_id,
+        payload={"challenge": {"title": "Drill"}},
+        summary="draft challenge",
+        flag_format="flag{...}",
+        validation_notes="ok",
+        quality_gate_passed=True,
+        status="draft",
+        created_at=now,
+        updated_at=now,
+    )
+
+
 @contextlib.contextmanager
 def _app_client(
     *,
@@ -84,6 +121,19 @@ def _app_client(
         default_research_repo = SimpleNamespace()
         default_design_repo = SimpleNamespace(
             list_design_tasks=lambda _request_id: [],
+            list_tasks=lambda **_kw: [],
+            summarize_for_request=lambda _request_id: {
+                "total": 0,
+                "by_status": {
+                    "draft": 0,
+                    "queued": 0,
+                    "designing": 0,
+                    "designed": 0,
+                    "failed": 0,
+                    "archived": 0,
+                },
+            },
+            get_with_history=lambda _task_id: None,
             set_design_task_status=lambda _task_id, _status: None,
         )
         default_challenge_design_repo = SimpleNamespace(
@@ -140,13 +190,10 @@ class GenerateDesignTasksTests(unittest.TestCase):
             self.assertEqual(resp.status_code, 201)
             payload = resp.json()
             self.assertEqual(payload["request_id"], str(request_id))
-            self.assertEqual(len(payload["design_tasks"]), 2)
-            self.assertEqual(
-                [t["task_no"] for t in payload["design_tasks"]], [1, 2]
-            )
-            self.assertEqual(
-                {t["status"] for t in payload["design_tasks"]}, {"draft"}
-            )
+            self.assertEqual(payload["design_task_ids"], [str(t.id) for t in tasks])
+            self.assertEqual(payload["total"], 2)
+            self.assertNotIn("design_tasks", payload)
+            self.assertEqual(len(payload["design_task_ids"]), 2)
 
     def test_unknown_request_returns_404(self):
         def _missing(_id):
@@ -208,6 +255,9 @@ class QueueAndArchiveTests(unittest.TestCase):
 
         repo = SimpleNamespace(
             list_design_tasks=lambda _id: [],
+            list_tasks=lambda **_kw: [],
+            summarize_for_request=lambda _id: {"total": 0, "by_status": {}},
+            get_with_history=lambda _id: None,
             set_design_task_status=_set,
         )
         with _app_client(design_repo=repo) as client:
@@ -221,6 +271,9 @@ class QueueAndArchiveTests(unittest.TestCase):
 
         repo = SimpleNamespace(
             list_design_tasks=lambda _id: [],
+            list_tasks=lambda **_kw: [],
+            summarize_for_request=lambda _id: {"total": 0, "by_status": {}},
+            get_with_history=lambda _id: None,
             set_design_task_status=lambda _id, _status: archived,
         )
         with _app_client(design_repo=repo) as client:
@@ -236,6 +289,9 @@ class QueueAndArchiveTests(unittest.TestCase):
 
         repo = SimpleNamespace(
             list_design_tasks=lambda _id: [],
+            list_tasks=lambda **_kw: [],
+            summarize_for_request=lambda _id: {"total": 0, "by_status": {}},
+            get_with_history=lambda _id: None,
             set_design_task_status=_missing,
         )
         with _app_client(design_repo=repo) as client:
@@ -250,6 +306,9 @@ class QueueAndArchiveTests(unittest.TestCase):
 
         repo = SimpleNamespace(
             list_design_tasks=lambda _id: [],
+            list_tasks=lambda **_kw: [],
+            summarize_for_request=lambda _id: {"total": 0, "by_status": {}},
+            get_with_history=lambda _id: None,
             set_design_task_status=_reject,
         )
         with _app_client(design_repo=repo) as client:
@@ -263,12 +322,11 @@ class QueueAndArchiveTests(unittest.TestCase):
             self.assertEqual(resp.status_code, 404)
 
 
-class RequestDetailIncludesDesignTasksTests(unittest.TestCase):
-    def test_request_detail_includes_design_tasks_field(self):
+class RequestDetailDesignTaskSummaryTests(unittest.TestCase):
+    def test_request_detail_includes_design_tasks_summary_only(self):
         from domain.research import GenerationRequest
 
         request_id = uuid4()
-        run_id = uuid4()
         now = datetime(2026, 6, 1, tzinfo=timezone.utc)
         request = GenerationRequest(
             id=request_id,
@@ -290,12 +348,22 @@ class RequestDetailIncludesDesignTasksTests(unittest.TestCase):
             list_sources=lambda _id: [],
             list_findings=lambda _id: [],
         )
-        design_tasks = [
-            _make_design_task(request_id=request_id, run_id=run_id, task_no=1),
-            _make_design_task(request_id=request_id, run_id=run_id, task_no=2),
-        ]
+        summary = {
+            "total": 2,
+            "by_status": {
+                "draft": 1,
+                "queued": 1,
+                "designing": 0,
+                "designed": 0,
+                "failed": 0,
+                "archived": 0,
+            },
+        }
         design_repo = SimpleNamespace(
-            list_design_tasks=lambda _id: design_tasks,
+            list_design_tasks=lambda _id: [],
+            list_tasks=lambda **_kw: [],
+            summarize_for_request=lambda _id: summary,
+            get_with_history=lambda _id: None,
             set_design_task_status=lambda _id, _status: None,
         )
         with _app_client(
@@ -304,7 +372,74 @@ class RequestDetailIncludesDesignTasksTests(unittest.TestCase):
             resp = client.get(f"/api/research/requests/{request_id}")
             self.assertEqual(resp.status_code, 200)
             payload = resp.json()
-            self.assertEqual(len(payload["design_tasks"]), 2)
-            self.assertEqual(
-                [t["task_no"] for t in payload["design_tasks"]], [1, 2]
+            self.assertNotIn("design_tasks", payload)
+            self.assertEqual(payload["design_tasks_summary"], summary)
+
+
+class DesignTaskReadEndpointTests(unittest.TestCase):
+    def test_list_filters_and_returns_lightweight_rows(self):
+        request_id = uuid4()
+        task = _make_design_task(request_id=request_id, status="queued")
+        calls = []
+
+        def _list_tasks(**kwargs):
+            calls.append(kwargs)
+            return [task]
+
+        repo = SimpleNamespace(
+            list_design_tasks=lambda _id: [],
+            list_tasks=_list_tasks,
+            summarize_for_request=lambda _id: {"total": 0, "by_status": {}},
+            get_with_history=lambda _id: None,
+            set_design_task_status=lambda _id, _status: None,
+        )
+        with _app_client(design_repo=repo) as client:
+            resp = client.get(
+                "/api/design-tasks"
+                f"?generation_request_id={request_id}&status=queued&category=web"
             )
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.json()
+            self.assertEqual(len(payload), 1)
+            self.assertEqual(payload[0]["id"], str(task.id))
+            self.assertNotIn("attempts", payload[0])
+            self.assertNotIn("latest_design", payload[0])
+            self.assertEqual(calls[0]["generation_request_id"], request_id)
+            self.assertEqual(calls[0]["status"], "queued")
+            self.assertEqual(calls[0]["category"], "web")
+
+    def test_list_rejects_unknown_status(self):
+        with _app_client() as client:
+            resp = client.get("/api/design-tasks?status=nonsense")
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn("allowed", resp.json()["detail"])
+
+    def test_list_rejects_malformed_request_id(self):
+        with _app_client() as client:
+            resp = client.get("/api/design-tasks?generation_request_id=nope")
+            self.assertEqual(resp.status_code, 400)
+
+    def test_detail_returns_attempts_and_latest_design(self):
+        task = _make_design_task()
+        attempt = _make_attempt(task.id)
+        design = _make_design(task.id, attempt.id)
+
+        repo = SimpleNamespace(
+            list_design_tasks=lambda _id: [],
+            list_tasks=lambda **_kw: [],
+            summarize_for_request=lambda _id: {"total": 0, "by_status": {}},
+            get_with_history=lambda _id: (task, [attempt], design),
+            set_design_task_status=lambda _id, _status: None,
+        )
+        with _app_client(design_repo=repo) as client:
+            resp = client.get(f"/api/design-tasks/{task.id}")
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.json()
+            self.assertEqual(payload["id"], str(task.id))
+            self.assertEqual(payload["attempts"][0]["attempt"], 1)
+            self.assertEqual(payload["latest_design"]["id"], str(design.id))
+
+    def test_detail_unknown_or_malformed_returns_404(self):
+        with _app_client() as client:
+            self.assertEqual(client.get(f"/api/design-tasks/{uuid4()}").status_code, 404)
+            self.assertEqual(client.get("/api/design-tasks/not-a-uuid").status_code, 404)
