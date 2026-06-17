@@ -190,27 +190,28 @@
 
 ## 8. Dashboard
 
-- [ ] 8.1 Add collapsible Designs sub-panel under each Design Task row
+- [x] 8.1 Add collapsible Designs sub-panel under each Design Task row
   in the request detail page.
-- [ ] 8.2 Header: latest attempt status pill + "Design now" button
+- [x] 8.2 Header: latest attempt status pill + "Design now" button
   enabled only when task status is `queued`.
-- [ ] 8.3 Attempts list: numbered rows with start/end, status,
+- [x] 8.3 Attempts list: numbered rows with start/end, status,
   link to the Hermes log via the bounded design-artifact endpoint.
-- [ ] 8.4 Design payload: collapsible JSON tree of
+- [x] 8.4 Design payload: collapsible JSON tree of
   `latest_design.payload` plus quality-gate badge.
-- [ ] 8.5 No prompt body shown inline - only a "View prompt" link
+- [x] 8.5 No prompt body shown inline - only a "View prompt" link
   served by the bounded design-artifact endpoint for the attempt.
-- [ ] 8.6 Auto-refresh the panel while any attempt is `running`.
+- [x] 8.6 Auto-refresh the panel while any attempt is `running`.
 
 ## 9. Validation
 
-- [ ] 9.1 Run `uv run ruff check`.
-- [ ] 9.2 Run the focused app tests:
+- [x] 9.1 Run `uv run ruff check`.
+- [x] 9.2 Run the focused app tests:
   research API, design-task planning, design prompt, design executor,
   challenge-design service, challenge-design API.
 - [ ] 9.3 Run `openspec validate add-structured-challenge-designs
   --strict`.
-- [ ] 9.4 Manual smoke test:
+  - Blocked locally: `openspec` is not installed or available on PATH.
+- [x] 9.4 Manual smoke test:
   - submit a request
   - fake-complete its research run + findings (same flow used in
     add-design-task-planning's smoke)

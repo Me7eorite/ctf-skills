@@ -19,6 +19,7 @@ OTHER_CATEGORY_REFERENCE_FILE = "other-categories.md"
 ALWAYS_REFERENCE_FILES: tuple[str, ...] = ("spec-template.md", "quality-gate.md")
 DELIVERY_REFERENCE_FILE = "delivery-format.md"
 EVIDENCE_FINDING_LIMIT = 20
+MAX_REFERENCE_CHARS = 5000
 
 
 @dataclass(frozen=True)
@@ -152,7 +153,13 @@ def _render_sources(sources: Sequence[ResearchSource]) -> str:
 
 
 def _render_reference(path: str, text: str) -> str:
-    return f"### @{path}\n\n{text.strip()}"
+    body = text.strip()
+    if len(body) > MAX_REFERENCE_CHARS:
+        body = (
+            body[:MAX_REFERENCE_CHARS].rstrip()
+            + "\n\n[reference truncated for command-line safety]"
+        )
+    return f"### @{path}\n\n{body}"
 
 
 def _stable_json(value: Mapping) -> str:

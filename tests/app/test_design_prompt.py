@@ -11,6 +11,7 @@ from domain.design_tasks import DesignTask
 from domain.research import GenerationRequest, ResearchFinding, ResearchSource
 from services.design_prompt import (
     EVIDENCE_FINDING_LIMIT,
+    MAX_REFERENCE_CHARS,
     build_design_prompt,
     load_design_prompt_context,
 )
@@ -172,3 +173,15 @@ def test_prompt_includes_always_on_references_and_contract(tmp_path):
     assert "@skills/design-challenges/references/quality-gate.md" in prompt
     assert "Return exactly one JSON object" in prompt
     assert "`challenges` array with exactly one entry" in prompt
+
+
+def test_long_references_are_truncated_for_command_line_safety(tmp_path):
+    paths = _paths(tmp_path)
+    paths.design_skill.write_text("A" * (MAX_REFERENCE_CHARS + 100), encoding="utf-8")
+    context = load_design_prompt_context(paths)
+
+    prompt = build_design_prompt(context, _task(), _request(), [], [])
+
+    assert "reference truncated for command-line safety" in prompt
+    assert "A" * MAX_REFERENCE_CHARS in prompt
+    assert "A" * (MAX_REFERENCE_CHARS + 1) not in prompt

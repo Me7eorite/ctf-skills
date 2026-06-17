@@ -25,6 +25,7 @@ const state = {
   flags: {},
   filter: { category: "", status: "" },
   detailPoll: { timer: null, loading: false },
+  expandedDesigns: {},
 };
 
 async function ensureRequests() {
@@ -96,8 +97,12 @@ function isDetailViewActive() {
 function detailNeedsActivePolling() {
   const latestStatus = state.detail?.latest_run?.status;
   const requestStatus = state.detail?.request?.status;
+  const hasRunningDesign = (state.detail?.design_tasks || []).some((task) =>
+    (task.attempts || []).some((attempt) => attempt.status === "running")
+  );
   return (
     state.worker?.running ||
+    hasRunningDesign ||
     latestStatus === "queued" ||
     latestStatus === "running" ||
     requestStatus === "researching"
@@ -198,6 +203,27 @@ async function transitionDesignTask(taskId, action) {
     window.lucide?.createIcons();
   } catch (err) {
     showToast(err.message, true);
+  }
+}
+
+async function designTaskNow(taskId) {
+  if (!taskId) return;
+  state.flags.designing = { ...(state.flags.designing || {}), [taskId]: true };
+  render(state.data);
+  window.lucide?.createIcons();
+  try {
+    const result = await postJson(`/api/design-tasks/${taskId}/design`, {});
+    const failed = result.attempt_status === "failed";
+    showToast(result.error || (failed ? "Design attempt failed" : "Design completed"), failed);
+    state.expandedDesigns[taskId] = true;
+    await refreshDetail({ startPolling: true });
+    window.lucide?.createIcons();
+  } catch (err) {
+    showToast(err.message, true);
+  } finally {
+    state.flags.designing = { ...(state.flags.designing || {}), [taskId]: false };
+    render(state.data);
+    window.lucide?.createIcons();
   }
 }
 
@@ -475,15 +501,133 @@ function renderDesignTasksTable(tasks) {
               <td style="text-align: right;">${(task.finding_ids || []).length}</td>
               <td>${escapeHtml(task.status)}</td>
               <td>
-                <button class="btn btn-secondary btn-sm design-task-queue"${task.status === "draft" ? "" : " disabled"}>Queue</button>
-                <button class="btn btn-ghost btn-sm design-task-archive"${(task.status === "draft" || task.status === "queued") ? "" : " disabled"}>Archive</button>
+                <div class="btn-group design-task-actions">
+                  <button class="btn btn-secondary btn-sm design-task-toggle" title="Design details">
+                    <i data-lucide="${state.expandedDesigns[task.id] === false ? "chevron-right" : "chevron-down"}"></i>
+                  </button>
+                  <button class="btn btn-secondary btn-sm design-task-queue"${task.status === "draft" ? "" : " disabled"}>Queue</button>
+                  <button class="btn btn-ghost btn-sm design-task-archive"${(task.status === "draft" || task.status === "queued") ? "" : " disabled"}>Archive</button>
+                </div>
               </td>
             </tr>
+            ${state.expandedDesigns[task.id] === false ? "" : `
+              <tr class="design-panel-row" data-design-task-panel="${escapeHtml(task.id)}">
+                <td colspan="8">${renderDesignPanel(task)}</td>
+              </tr>
+            `}
           `).join("")}
         </tbody>
       </table>
     </div>
   `;
+}
+
+function renderDesignPanel(task) {
+  const attempts = task.attempts || [];
+  const latestAttempt = attempts.length ? attempts[attempts.length - 1] : null;
+  const latestDesign = task.latest_design || null;
+  const isDesigning = !!state.flags.designing?.[task.id];
+  return `
+    <div class="design-panel">
+      <div class="design-panel-header">
+        <div class="design-panel-title">
+          <span class="design-panel-label">Designs</span>
+          ${latestAttempt ? statusIndicator(latestAttempt.status) : softPill("No attempts")}
+          ${latestDesign ? qualityGatePill(latestDesign.quality_gate_passed) : ""}
+        </div>
+        <div class="btn-group design-panel-controls">
+          <button class="btn btn-primary btn-sm design-task-run${isDesigning ? " btn-loading" : ""}"${task.status === "queued" && !isDesigning ? "" : " disabled"}>
+            <i data-lucide="sparkles"></i> Design now
+          </button>
+          ${latestAttempt?.prompt_artifact_url ? `
+            <a class="btn btn-secondary btn-sm" href="${escapeHtml(latestAttempt.prompt_artifact_url)}" target="_blank" rel="noopener">
+              <i data-lucide="file-text"></i> View prompt
+            </a>
+          ` : ""}
+          ${latestAttempt?.log_artifact_url ? `
+            <a class="btn btn-secondary btn-sm" href="${escapeHtml(latestAttempt.log_artifact_url)}" target="_blank" rel="noopener">
+              <i data-lucide="terminal"></i> Hermes log
+            </a>
+          ` : ""}
+        </div>
+      </div>
+      <div class="design-panel-grid">
+        <div class="design-panel-section">
+          <div class="design-panel-section-title">Attempts</div>
+          ${attempts.length ? renderDesignAttempts(attempts) : `<div class="empty design-empty">No design attempts yet</div>`}
+        </div>
+        <div class="design-panel-section">
+          <div class="design-panel-section-title">Latest Design</div>
+          ${latestDesign ? renderLatestDesign(latestDesign) : `<div class="empty design-empty">No draft design yet</div>`}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderDesignAttempts(attempts) {
+  return `
+    <div class="design-attempts">
+      ${attempts.map((attempt) => `
+        <div class="design-attempt-row">
+          <div class="design-attempt-index">#${attempt.attempt}</div>
+          <div class="design-attempt-main">
+            <div class="design-attempt-top">
+              ${statusIndicator(attempt.status)}
+              <span class="design-time">${escapeHtml(formatDateTime(attempt.started_at))}</span>
+              <span class="design-time">${escapeHtml(formatDateTime(attempt.finished_at))}</span>
+            </div>
+            ${attempt.last_error ? `<div class="design-error">${escapeHtml(attempt.last_error)}</div>` : ""}
+          </div>
+          <div class="design-attempt-links">
+            ${attempt.prompt_artifact_url ? `<a href="${escapeHtml(attempt.prompt_artifact_url)}" target="_blank" rel="noopener">Prompt</a>` : ""}
+            ${attempt.log_artifact_url ? `<a href="${escapeHtml(attempt.log_artifact_url)}" target="_blank" rel="noopener">Log</a>` : ""}
+          </div>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderLatestDesign(design) {
+  return `
+    <div class="design-summary">
+      <div class="design-summary-line">
+        <span>${escapeHtml(design.summary || "-")}</span>
+      </div>
+      <div class="design-summary-meta">
+        <span>${escapeHtml(design.flag_format || "-")}</span>
+        ${qualityGatePill(design.quality_gate_passed)}
+      </div>
+      <details class="design-json" open>
+        <summary>Payload</summary>
+        ${renderJsonTree(design.payload)}
+      </details>
+    </div>
+  `;
+}
+
+function renderJsonTree(value) {
+  if (Array.isArray(value)) {
+    return `<ol class="json-tree json-list">${value.map((item) => `<li>${renderJsonTree(item)}</li>`).join("")}</ol>`;
+  }
+  if (value && typeof value === "object") {
+    return `
+      <dl class="json-tree">
+        ${Object.entries(value).map(([key, item]) => `
+          <div class="json-pair">
+            <dt>${escapeHtml(key)}</dt>
+            <dd>${renderJsonTree(item)}</dd>
+          </div>
+        `).join("")}
+      </dl>
+    `;
+  }
+  return `<span class="json-value">${escapeHtml(JSON.stringify(value))}</span>`;
+}
+
+function qualityGatePill(passed) {
+  return softPill(passed ? "Quality passed" : "Quality failed", passed ? "text-emerald-700 bg-emerald-50" : "text-rose-700 bg-rose-50");
 }
 
 function renderFindings(findingsByKind) {
@@ -591,6 +735,25 @@ export function bind() {
     }
     if (e.target.closest("#design-tasks-generate")) {
       generateDesignTasks();
+      return;
+    }
+    const toggleBtn = e.target.closest(".design-task-toggle");
+    if (toggleBtn) {
+      const row = toggleBtn.closest("[data-design-task-id]");
+      if (row) {
+        const taskId = row.dataset.designTaskId;
+        state.expandedDesigns[taskId] = state.expandedDesigns[taskId] === false;
+        render(state.data);
+        window.lucide?.createIcons();
+      }
+      return;
+    }
+    const designNowBtn = e.target.closest(".design-task-run");
+    if (designNowBtn) {
+      const row = designNowBtn.closest("[data-design-task-panel]") ||
+        designNowBtn.closest("[data-design-task-id]");
+      const taskId = row?.dataset.designTaskPanel || row?.dataset.designTaskId;
+      if (taskId) designTaskNow(taskId);
       return;
     }
     const queueBtn = e.target.closest(".design-task-queue");
