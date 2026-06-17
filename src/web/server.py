@@ -23,6 +23,7 @@ def create_app(service: DashboardService) -> FastAPI:
         redoc_url=None,
         openapi_url=None,
     )
+    app.state.project_paths = service.paths
 
     @app.get("/api/state")
     def get_state() -> JSONResponse:

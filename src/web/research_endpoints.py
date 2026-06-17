@@ -11,12 +11,14 @@ from __future__ import annotations
 
 from datetime import datetime
 from http import HTTPStatus
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
+from domain import challenge_designs as challenge_dto
 from domain import design_tasks as design_dto
 from domain import research as dto
 from domain.design_task_validators import DesignTaskValidationError
@@ -353,7 +355,11 @@ def _require_distribution(payload: dict[str, Any]) -> dict[str, int]:
 def _register_request_detail(app: FastAPI) -> None:
     @app.get("/api/research/requests/{request_id}")
     def get_request_detail(request_id: str) -> JSONResponse:
-        from persistence.repositories import DesignTaskRepository, ResearchRepository
+        from persistence.repositories import (
+            ChallengeDesignRepository,
+            DesignTaskRepository,
+            ResearchRepository,
+        )
         from persistence.session import transaction
 
         try:
@@ -377,6 +383,15 @@ def _register_request_detail(app: FastAPI) -> None:
             sources = repo.list_sources(latest.id) if latest else []
             findings = repo.list_findings(latest.id) if latest else []
             design_tasks = DesignTaskRepository(session).list_design_tasks(request_uuid)
+            design_repo = ChallengeDesignRepository(session)
+            attempts_by_task = {
+                task.id: design_repo.list_attempts(task.id)
+                for task in design_tasks
+            }
+            latest_design_by_task = {
+                task.id: design_repo.latest_design(task.id)
+                for task in design_tasks
+            }
 
         # Spec 10.2: finding list "grouped by kind".
         findings_by_kind: dict[str, list[dict[str, Any]]] = {}
@@ -394,7 +409,14 @@ def _register_request_detail(app: FastAPI) -> None:
                 "runs": [_run_dict(r, category=request.category) for r in runs],
                 "sources": [_source_dict(s) for s in sources],
                 "findings_by_kind": findings_by_kind,
-                "design_tasks": [_design_task_dict(t) for t in design_tasks],
+                "design_tasks": [
+                    _design_task_dict(
+                        t,
+                        attempts=attempts_by_task.get(t.id, []),
+                        latest_design=latest_design_by_task.get(t.id),
+                    )
+                    for t in design_tasks
+                ],
             }
         )
 
@@ -694,6 +716,87 @@ def _register_design_task_endpoints(app: FastAPI) -> None:
     def archive_design_task(task_id: str) -> JSONResponse:
         return _transition_design_task(task_id, "archived")
 
+    @app.post("/api/design-tasks/{task_id}/design")
+    def design_challenge(task_id: str) -> JSONResponse:
+        from services import (
+            ChallengeDesignConflictError,
+            ChallengeDesignNotFoundError,
+            ChallengeDesignService,
+        )
+
+        try:
+            task_uuid = UUID(task_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND,
+                detail="design task not found",
+            ) from exc
+
+        try:
+            result = ChallengeDesignService(
+                paths=_project_paths(app),
+            ).design_for_task(task_uuid, caller="dashboard")
+        except ChallengeDesignNotFoundError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except ChallengeDesignConflictError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail=str(exc),
+            ) from exc
+
+        return JSONResponse(_design_result_dict(result))
+
+    @app.get("/api/design-attempts/{attempt_id}/artifact")
+    def get_design_attempt_artifact(
+        attempt_id: str,
+        kind: str = Query(...),
+    ) -> Response:
+        from persistence.repositories import ChallengeDesignRepository
+        from persistence.session import transaction
+
+        if kind not in {"prompt", "log"}:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail="kind must be 'prompt' or 'log'",
+            )
+        try:
+            attempt_uuid = UUID(attempt_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND,
+                detail="design attempt not found",
+            ) from exc
+
+        with transaction() as session:
+            attempt = ChallengeDesignRepository(session).get_attempt(attempt_uuid)
+        if attempt is None:
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND,
+                detail="design attempt not found",
+            )
+
+        stored_path = attempt.prompt_path if kind == "prompt" else attempt.hermes_log_path
+        if not stored_path:
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND,
+                detail=f"{kind} artifact not found",
+            )
+
+        paths = _project_paths(app)
+        allowed_root = paths.design_prompts if kind == "prompt" else paths.design_logs
+        artifact = _resolve_design_artifact(paths.root, allowed_root, stored_path)
+        try:
+            content = artifact.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND,
+                detail=f"{kind} artifact not found",
+            ) from exc
+        return Response(content=content, media_type="text/plain; charset=utf-8")
+
 
 def _transition_design_task(task_id: str, target_status: str) -> JSONResponse:
     from persistence.repositories import DesignTaskRepository
@@ -723,8 +826,19 @@ def _transition_design_task(task_id: str, target_status: str) -> JSONResponse:
     return JSONResponse(_design_task_dict(updated))
 
 
-def _design_task_dict(task: design_dto.DesignTask) -> dict[str, Any]:
-    return {
+def _project_paths(app: FastAPI):
+    from core.paths import ProjectPaths
+
+    return getattr(app.state, "project_paths", None) or ProjectPaths.discover()
+
+
+def _design_task_dict(
+    task: design_dto.DesignTask,
+    *,
+    attempts: list[challenge_dto.DesignAttempt] | None = None,
+    latest_design: challenge_dto.ChallengeDesign | None = None,
+) -> dict[str, Any]:
+    row = {
         "id": str(task.id),
         "generation_request_id": str(task.generation_request_id),
         "research_run_id": str(task.research_run_id),
@@ -745,3 +859,79 @@ def _design_task_dict(task: design_dto.DesignTask) -> dict[str, Any]:
         "created_at": _isofmt(task.created_at),
         "updated_at": _isofmt(task.updated_at),
     }
+    if attempts is not None:
+        row["attempts"] = [_attempt_summary_dict(attempt) for attempt in attempts]
+    if latest_design is not None or attempts is not None:
+        row["latest_design"] = _challenge_design_dict(latest_design)
+    return row
+
+
+def _attempt_summary_dict(attempt: challenge_dto.DesignAttempt) -> dict[str, Any]:
+    return {
+        "id": str(attempt.id),
+        "attempt": attempt.attempt,
+        "status": attempt.status,
+        "started_at": _isofmt(attempt.started_at),
+        "finished_at": _isofmt(attempt.finished_at),
+        "last_error": attempt.last_error,
+        "prompt_artifact_url": (
+            f"/api/design-attempts/{attempt.id}/artifact?kind=prompt"
+            if attempt.prompt_path
+            else None
+        ),
+        "log_artifact_url": (
+            f"/api/design-attempts/{attempt.id}/artifact?kind=log"
+            if attempt.hermes_log_path
+            else None
+        ),
+    }
+
+
+def _challenge_design_dict(
+    design: challenge_dto.ChallengeDesign | None,
+) -> dict[str, Any] | None:
+    if design is None:
+        return None
+    return {
+        "id": str(design.id),
+        "design_task_id": str(design.design_task_id),
+        "design_attempt_id": str(design.design_attempt_id),
+        "payload": dict(design.payload),
+        "summary": design.summary,
+        "flag_format": design.flag_format,
+        "validation_notes": design.validation_notes,
+        "quality_gate_passed": design.quality_gate_passed,
+        "status": design.status,
+        "created_at": _isofmt(design.created_at),
+        "updated_at": _isofmt(design.updated_at),
+    }
+
+
+def _design_result_dict(result) -> dict[str, Any]:
+    return {
+        "design_task_id": str(result.design_task_id),
+        "attempt_id": str(result.attempt_id),
+        "design_task_status": result.design_task_status,
+        "attempt_status": result.attempt_status,
+        "challenge_design": _challenge_design_dict(result.challenge_design),
+        "error": result.error,
+    }
+
+
+def _resolve_design_artifact(root: Path, allowed_root: Path, stored_path: str) -> Path:
+    raw = Path(stored_path)
+    if raw.is_absolute():
+        raise HTTPException(
+            status_code=HTTPStatus.FORBIDDEN,
+            detail="absolute artifact paths are forbidden",
+        )
+    candidate = (root / raw).resolve()
+    allowed = allowed_root.resolve()
+    try:
+        candidate.relative_to(allowed)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=HTTPStatus.FORBIDDEN,
+            detail="artifact path is outside the allowed design artifact root",
+        ) from exc
+    return candidate

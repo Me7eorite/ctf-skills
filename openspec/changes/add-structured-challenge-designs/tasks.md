@@ -146,16 +146,16 @@
 
 ## 7. HTTP API
 
-- [ ] 7.1 Add `POST /api/design-tasks/{id}/design` returning
+- [x] 7.1 Add `POST /api/design-tasks/{id}/design` returning
   `{design_task_id, attempt_id, design_task_status, attempt_status,
   challenge_design|null, error|null}`.
-- [ ] 7.2 Translate the typed errors:
+- [x] 7.2 Translate the typed errors:
   - task not found -> 404
   - not queued / concurrent -> 409
   - validation/timeout/Hermes error -> 200 with
     `attempt_status='failed'`, current `design_task_status`,
     and `error=<reason>`
-- [ ] 7.3 Extend `GET /api/research/requests/{id}` so each
+- [x] 7.3 Extend `GET /api/research/requests/{id}` so each
   `design_tasks[]` entry has:
   - `attempts: AttemptSummaryDict[]` ordered oldest-first
     (id, attempt, status, started_at, finished_at, last_error,
@@ -166,7 +166,7 @@
     same shape with `kind=log` when `hermes_log_path` is set,
     otherwise null.
   - `latest_design: ChallengeDesignDict | null`
-- [ ] 7.4 Add `GET /api/design-attempts/{id}/artifact?kind={prompt|log}`
+- [x] 7.4 Add `GET /api/design-attempts/{id}/artifact?kind={prompt|log}`
   serving the stored prompt or Hermes log for one attempt. Stored
   paths are project-relative. Resolve against the project root,
   canonicalize the candidate and allowed root, require the candidate
@@ -174,7 +174,7 @@
   reject absolute paths, traversal, symlink escapes, or prefix-only
   checks with 403; unknown `kind` with 400; missing rows/paths with
   404.
-- [ ] 7.5 API tests for:
+- [x] 7.5 API tests for:
   - success returns `design_task_status='designed'`,
     `attempt_status='completed'`, `challenge_design` populated, and
     no `retry_available` key

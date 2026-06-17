@@ -86,6 +86,10 @@ def _app_client(
             list_design_tasks=lambda _request_id: [],
             set_design_task_status=lambda _task_id, _status: None,
         )
+        default_challenge_design_repo = SimpleNamespace(
+            list_attempts=lambda _task_id: [],
+            latest_design=lambda _task_id: None,
+        )
         default_planning_service = SimpleNamespace(
             generate_for_request=lambda _request_id: [],
         )
@@ -98,6 +102,10 @@ def _app_client(
             patch(
                 "persistence.repositories.DesignTaskRepository",
                 return_value=design_repo or default_design_repo,
+            ),
+            patch(
+                "persistence.repositories.ChallengeDesignRepository",
+                return_value=default_challenge_design_repo,
             ),
             patch(
                 "services.DesignTaskPlanningService",

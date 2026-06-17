@@ -62,6 +62,10 @@ def _client(stub_repo, *, scalar=None, scalars=None, design_repo=None) -> TestCl
         set_design_task_status=lambda _task_id, _status: None,
     )
     design_repo_stub = design_repo if design_repo is not None else default_design_repo
+    default_challenge_design_repo = SimpleNamespace(
+        list_attempts=lambda _task_id: [],
+        latest_design=lambda _task_id: None,
+    )
 
     client = TestClient(app)
     client._patches = [  # type: ignore[attr-defined]
@@ -72,6 +76,10 @@ def _client(stub_repo, *, scalar=None, scalars=None, design_repo=None) -> TestCl
         patch(
             "persistence.repositories.DesignTaskRepository",
             return_value=design_repo_stub,
+        ),
+        patch(
+            "persistence.repositories.ChallengeDesignRepository",
+            return_value=default_challenge_design_repo,
         ),
     ]
     for p in client._patches:  # type: ignore[attr-defined]
