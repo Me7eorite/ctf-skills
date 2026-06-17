@@ -7,6 +7,7 @@ import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 from typing import Any
 
 from domain.design_tasks import DesignTask
@@ -14,6 +15,25 @@ from domain.research import DIFFICULTY_LABELS
 
 DEFAULT_FLAG_FORMAT = "flag{...}"
 MAX_SUMMARY_CHARS = 280
+COMMON_ARTIFACTS: tuple[str, ...] = (
+    "README.md",
+    "metadata.json",
+    "validate.sh",
+    "writenup/wp.md",
+    "writenup/exp.py",
+)
+CONTAINER_ARTIFACTS: tuple[str, ...] = (
+    "deploy/Dockerfile",
+    "deploy/docker-compose.yml",
+    "deploy/src/app.py",
+    "deploy/_files/start.sh",
+)
+KNOWN_ARTIFACT_PREFIXES: tuple[str, ...] = (
+    "deploy/",
+    "writenup/",
+    "attachments/",
+    "dist/",
+)
 
 REQUIRED_CHALLENGE_TEXT_FIELDS: tuple[str, ...] = (
     "id",
@@ -147,12 +167,16 @@ def validate_design_payload(
 
     artifacts = challenge.get("artifacts")
     if not isinstance(artifacts, list) or not artifacts:
-        raise ChallengeDesignValidationError("artifacts must be a non-empty array")
+        raise ChallengeDesignValidationError("artifacts must normalize to paths")
     for artifact in artifacts:
         if not isinstance(artifact, str) or not artifact.strip():
             raise ChallengeDesignValidationError("artifacts must contain non-empty strings")
         if _is_absolute_or_url_path(artifact):
             raise ChallengeDesignValidationError("artifacts must be relative paths")
+        if not _is_artifact_path_like(artifact):
+            raise ChallengeDesignValidationError(
+                "artifacts must be local challenge-relative file paths"
+            )
 
     hints = challenge.get("hints")
     if not isinstance(hints, list) or len(hints) != 3:
@@ -172,6 +196,13 @@ def validate_design_payload(
         port = challenge.get("port")
         if port != parent_task.port:
             raise ChallengeDesignValidationError("port must equal parent design task port")
+        _require_artifacts(
+            artifacts,
+            (*COMMON_ARTIFACTS, *CONTAINER_ARTIFACTS),
+            "web/pwn artifacts",
+        )
+    else:
+        _require_artifacts(artifacts, COMMON_ARTIFACTS, "artifacts")
 
     summary = _make_summary(challenge)
     return ValidatedDesignPayload(
@@ -246,6 +277,9 @@ def _normalize_skill_fields(challenge: Any) -> Any:
     - reply nests under ``flag_plan.location``; validator expects ``flag_location``
     - reply emits ``validation`` as an object with ``reference_solve`` /
       ``expected_result`` / ``regression_checks``; validator expects a string
+    - reply may emit ``artifacts`` as a richer object or delivery tree;
+      validator persists local challenge-directory relative paths
+    - reply may emit hint objects; validator stores plain hint strings
 
     Normalize here so existing flat-shape fixtures stay unchanged (each
     branch checks ``if X not in out`` / ``isinstance(..., dict)`` and is a
@@ -286,7 +320,152 @@ def _normalize_skill_fields(challenge: Any) -> Any:
         if parts:
             out["validation"] = "\n".join(parts)
 
+    out["artifacts"] = _normalize_artifacts(out)
+    out["hints"] = _normalize_hints(out.get("hints"))
+
     return out
+
+
+def _normalize_artifacts(challenge: Mapping[str, Any]) -> list[str]:
+    category = str(challenge.get("category") or "").lower()
+    paths: list[str] = []
+
+    def add(value: Any, *, base: str | None = None) -> None:
+        if not isinstance(value, str):
+            return
+        if _is_absolute_or_url_path(value):
+            paths.append(value.strip().replace("\\", "/"))
+            return
+        candidate = _normalize_artifact_path(value, base=base)
+        if candidate is not None:
+            paths.append(candidate)
+
+    artifacts = challenge.get("artifacts")
+    if isinstance(artifacts, list):
+        for item in artifacts:
+            add(item)
+    elif isinstance(artifacts, Mapping):
+        _collect_artifact_mapping(artifacts, add)
+
+    for key in ("delivery_format", "delivery_files"):
+        delivery = challenge.get(key)
+        if isinstance(delivery, Mapping):
+            deploy_tree = delivery.get("deploy_tree")
+            if isinstance(deploy_tree, Mapping):
+                _collect_deploy_tree(deploy_tree, add)
+            elif isinstance(deploy_tree, str):
+                for part in re.split(r"[,;]", deploy_tree):
+                    add(part)
+
+    defaults = [*COMMON_ARTIFACTS]
+    if category in {"web", "pwn"} or _deployment_mentions_docker(challenge):
+        defaults.extend(CONTAINER_ARTIFACTS)
+    paths.extend(defaults)
+    return _dedupe(paths)
+
+
+def _collect_artifact_mapping(artifacts: Mapping[str, Any], add) -> None:
+    files = artifacts.get("files")
+    if isinstance(files, list):
+        for item in files:
+            add(item, base="deploy/src")
+    for key in ("source_code", "static_files", "docker_config"):
+        add(artifacts.get(key))
+    deploy_tree = artifacts.get("deploy_tree")
+    if isinstance(deploy_tree, Mapping):
+        _collect_deploy_tree(deploy_tree, add)
+
+
+def _collect_deploy_tree(deploy_tree: Mapping[str, Any], add) -> None:
+    for key, value in deploy_tree.items():
+        normalized_key = str(key).strip().strip("/")
+        if normalized_key in {"src", "deploy/src"}:
+            if isinstance(value, list):
+                for item in value:
+                    add(item, base="deploy/src")
+            else:
+                add("app.py", base="deploy/src")
+        elif normalized_key in {"_files", "deploy/_files"}:
+            if isinstance(value, list):
+                for item in value:
+                    add(item, base="deploy/_files")
+            else:
+                add("start.sh", base="deploy/_files")
+        elif normalized_key in {"dockerfile", "Dockerfile", "deploy/Dockerfile"}:
+            add("deploy/Dockerfile")
+        elif normalized_key in {
+            "docker_compose",
+            "docker-compose.yml",
+            "deploy/docker-compose.yml",
+        }:
+            add("deploy/docker-compose.yml")
+        else:
+            add(normalized_key)
+
+
+def _normalize_artifact_path(value: str, *, base: str | None = None) -> str | None:
+    candidate = value.strip().replace("\\", "/")
+    if not candidate or _is_absolute_or_url_path(candidate):
+        return None
+    legacy_map = {
+        "writeup/wp.md": "writenup/wp.md",
+        "solve/solve.py": "writenup/exp.py",
+        "solve.py": "writenup/exp.py",
+        "exp.py": "writenup/exp.py",
+        "wp.md": "writenup/wp.md",
+    }
+    if candidate in legacy_map:
+        return legacy_map[candidate]
+    if candidate.endswith("/"):
+        return None
+    if base and not any(
+        candidate.startswith(prefix) for prefix in (*KNOWN_ARTIFACT_PREFIXES, "README.md")
+    ):
+        candidate = f"{base.rstrip('/')}/{candidate.lstrip('/')}"
+    if _is_artifact_path_like(candidate):
+        return candidate
+    return None
+
+
+def _normalize_hints(value: Any) -> Any:
+    if not isinstance(value, list):
+        return value
+    hints: list[str] = []
+    for item in value:
+        if isinstance(item, str):
+            hints.append(item)
+        elif isinstance(item, Mapping):
+            content = item.get("content") or item.get("hint") or item.get("text")
+            if isinstance(content, str):
+                hints.append(content)
+    return hints
+
+
+def _deployment_mentions_docker(challenge: Mapping[str, Any]) -> bool:
+    deployment = challenge.get("deployment")
+    return isinstance(deployment, str) and "docker" in deployment.lower()
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in values:
+        if value not in seen:
+            out.append(value)
+            seen.add(value)
+    return out
+
+
+def _require_artifacts(
+    artifacts: list[str],
+    required: tuple[str, ...],
+    label: str,
+) -> None:
+    missing = [path for path in required if path not in artifacts]
+    if missing:
+        raise ChallengeDesignValidationError(
+            f"{label} must include: {', '.join(missing)}"
+        )
 
 
 def _strip_json_fences(text: str) -> str:
@@ -345,6 +524,19 @@ def _is_absolute_or_url_path(value: str) -> bool:
         or stripped.startswith("\\")
         or bool(re.match(r"^[A-Za-z]:[\\/]", stripped))
     )
+
+
+def _is_artifact_path_like(value: str) -> bool:
+    stripped = value.strip().replace("\\", "/")
+    if not stripped or _is_absolute_or_url_path(stripped):
+        return False
+    if any(char in stripped for char in "\r\n\t"):
+        return False
+    if stripped in COMMON_ARTIFACTS or stripped in CONTAINER_ARTIFACTS:
+        return True
+    if stripped.startswith(KNOWN_ARTIFACT_PREFIXES):
+        return bool(PurePosixPath(stripped).suffix)
+    return stripped in {"README.md", "metadata.json", "validate.sh"}
 
 
 def _single_challenge(payload: Mapping[str, Any]) -> Mapping[str, Any]:

@@ -96,7 +96,17 @@ When the user requests machine-readable output or the pipeline requires JSON, re
       "port": 8080,
       "player_prompt": "string",
       "intended_path": ["step1", "step2", "step3"],
-      "artifacts": ["file1", "file2"],
+      "artifacts": [
+        "README.md",
+        "metadata.json",
+        "validate.sh",
+        "deploy/Dockerfile",
+        "deploy/docker-compose.yml",
+        "deploy/src/app.py",
+        "deploy/_files/start.sh",
+        "writenup/wp.md",
+        "writenup/exp.py"
+      ],
       "flag_plan": {
         "format": "flag{...}",
         "location": "string",

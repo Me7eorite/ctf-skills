@@ -161,7 +161,7 @@ class Packer:
         _write_tools_zip(challenge_dir, tools_zip)
 
         pdf_path = directories["report"] / f"{stem}.pdf"
-        _render_pdf(challenge_dir / "writeup" / "wp.md", pdf_path, self.warnings)
+        _render_pdf(challenge_dir / "writenup" / "wp.md", pdf_path, self.warnings)
 
         deploy_zip = None
         if _is_containerized(metadata):

@@ -30,9 +30,14 @@ When the user asks for deliverable-ready output, package plans, handoff manifest
 
 ### Artifacts
 
-- <files or services to provide>
-- <source, binary, traffic, or seeded data>
-- <Docker/service notes if needed>
+- `README.md`
+- `metadata.json`
+- `validate.sh`
+- `writenup/wp.md`
+- `writenup/exp.py`
+- Containerized challenges: `deploy/src/...`, `deploy/_files/start.sh`,
+  `deploy/Dockerfile`, `deploy/docker-compose.yml`
+- Player attachments when needed: `attachments/...` or `dist/...`
 
 ### Delivery Format
 

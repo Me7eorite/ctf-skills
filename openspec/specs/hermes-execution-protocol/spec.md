@@ -78,8 +78,8 @@ Build requires `metadata.build_status == "passed"` and a non-empty
 `metadata.build_command`; Web/Pwn also require a non-empty
 `metadata.docker_image` that exists locally; Reverse also requires a safe
 `dist/` artifact path and matching SHA-256. Validate resume requires
-`validate.sh`, `solve/solve.py`, `metadata.solve_status == "passed"`, and a
-historical validate/passed event. Document requires both `writeup/wp.md` and
+`validate.sh`, `writenup/exp.py`, `metadata.solve_status == "passed"`, and a
+historical validate/passed event. Document requires both `writenup/wp.md` and
 `README.md` to exceed 500 bytes and contain at least two Markdown `## `
 headings each.
 
@@ -159,7 +159,7 @@ later overwrites the dashboard snapshot with `validate/running` when invoking
 
 ### Requirement: Runner owns validate execution and validate events
 
-Hermes SHALL generate `validate.sh` and `solve/solve.py` but SHALL NOT execute
+Hermes SHALL generate `validate.sh` and `writenup/exp.py` but SHALL NOT execute
 validation or write validate progress events. For non-dry-run execution,
 `HermesRunner` SHALL verify design, implement, build, and document prerequisites
 and validate files after Hermes returns. If prerequisites are incomplete, the
@@ -188,7 +188,7 @@ historical validations from freshly executed ones.
 
 #### Scenario: Validate gate blocks missing prerequisites
 
-- **WHEN** design, implement, build, document, `validate.sh`, or `solve/solve.py`
+- **WHEN** design, implement, build, document, `validate.sh`, or `writenup/exp.py`
   evidence is incomplete
 - **THEN** the runner writes validate/failed, includes missing items in the
   message/report, and does not call `validate_challenge`

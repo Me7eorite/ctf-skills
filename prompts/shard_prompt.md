@@ -47,7 +47,7 @@ Example:
 
 **Do not write `validate` stage progress events yourself.** The runner owns
 all `validate/*` events and writes them after invoking the host-side
-validator. Generate `validate.sh` and `solve/solve.py` as part of Stage 4 but
+validator. Generate `validate.sh` and `writenup/exp.py` as part of Stage 4 but
 do not execute them.
 
 Do not report `passed` until the corresponding work or command has actually
@@ -151,7 +151,7 @@ Container rules for Web and Pwn:
   devices/networking, or unnecessary writable system mounts unless the
   intended challenge mechanism strictly requires one. Minimize any exception
   and document the technical reason in `metadata.json`, validation notes, and
-  `writeup/wp.md`.
+  `writenup/wp.md`.
 - If Debian/Ubuntu `apt` access is slow or unavailable in the target build
   network, the Dockerfile may switch to an organizer-approved mirror before
   `apt-get update`. Preserve the base distribution release/codename, combine
@@ -206,7 +206,7 @@ progress events.** The host runner will execute `validate.sh` after you
 return, observe its exit code and recovered flag, and write the authoritative
 `validate/passed` or `validate/failed` event.
 
-- Write `solve/solve.py` as a real reference exploit/solver.
+- Write `writenup/exp.py` as a real reference exploit/solver.
 - Write `validate.sh` as the single reproducible validation entrypoint.
 - Web/Pwn exploits must connect to the running service using `CHAL_HOST` and
   `CHAL_PORT`; no offline flag fallback is allowed.
@@ -222,7 +222,7 @@ docker image inspect "$IMAGE" >/dev/null 2>&1 || docker build -t "$IMAGE" .
 ```
 
 After that gate, `validate.sh` must start the service, wait for
-health/readiness, run `solve/solve.py`, and always clean up with a shell trap.
+health/readiness, run `writenup/exp.py`, and always clean up with a shell trap.
 Forced rebuilds are an operator concern (`docker rmi` outside the script);
 `validate.sh` itself does not need a force flag. For Re, `validate.sh` must
 build the artifact when needed and run the solver against `dist/`. Its last
@@ -241,9 +241,9 @@ and exploit. Include build, run, solve, and expected-result commands.
 challenge.yml
 README.md
 metadata.json
-solve/solve.py
+writenup/exp.py
 validate.sh
-writeup/wp.md
+writenup/wp.md
 ```
 
 Web/Pwn service challenge:

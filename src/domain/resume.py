@@ -257,7 +257,7 @@ def validate_resume_evidence(
 ) -> bool:
     if not (challenge_dir / "validate.sh").is_file():
         return False
-    if not (challenge_dir / "solve" / "solve.py").is_file():
+    if not (challenge_dir / "writenup" / "exp.py").is_file():
         return False
     metadata = _read_metadata(challenge_dir)
     if metadata is None or metadata.get("solve_status") != "passed":
@@ -269,7 +269,7 @@ def validate_resume_evidence(
 
 
 def document_evidence(challenge_dir: Path) -> bool:
-    for relative in ("writeup/wp.md", "README.md"):
+    for relative in ("writenup/wp.md", "README.md"):
         path = challenge_dir / relative
         if not path.is_file():
             return False

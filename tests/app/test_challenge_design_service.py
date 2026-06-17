@@ -206,9 +206,19 @@ def _valid_stdout() -> str:
                     "primary_technique": "boolean blind sqli",
                     "learning_objective": "Extract data through conditional responses.",
                     "prompt": "Recover the admin note.",
-                    "artifacts": ["deploy/Dockerfile", "deploy/src/app.py"],
+                    "artifacts": [
+                        "README.md",
+                        "metadata.json",
+                        "validate.sh",
+                        "deploy/Dockerfile",
+                        "deploy/docker-compose.yml",
+                        "deploy/src/app.py",
+                        "deploy/_files/start.sh",
+                        "writenup/wp.md",
+                        "writenup/exp.py",
+                    ],
                     "flag_location": "FLAG environment variable",
-                    "validation": "Run solve.py against the compose service.",
+                    "validation": "Run exp.py against the compose service.",
                     "hints": [
                         "Observe redirects.",
                         "Boolean conditions change the response.",
@@ -277,7 +287,8 @@ def test_schema_invalid_requeues_when_retry_remains(
     assert result.design_task_status == "queued"
     assert result.attempt_status == "failed"
     assert result.challenge_design is None
-    assert "event must be an object" in result.error
+    assert "event" in result.error
+    assert "challenges" in result.error
     with session_factory() as session:
         assert DesignTaskRepository(session).get_design_task(task_id).status == "queued"
         attempts = ChallengeDesignRepository(session).list_attempts(task_id)
@@ -297,7 +308,8 @@ def test_exhausted_retry_marks_task_failed(
 
     assert result.design_task_status == "failed"
     assert result.attempt_status == "failed"
-    assert "event must be an object" in result.error
+    assert "event" in result.error
+    assert "challenges" in result.error
 
 
 def test_timeout_path_records_timeout(

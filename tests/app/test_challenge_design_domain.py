@@ -55,9 +55,19 @@ def _payload(**challenge_overrides):
         "primary_technique": "JWT kid path traversal",
         "learning_objective": "Inspect token key selection boundaries",
         "prompt": "Recover the admin note from the service.",
-        "artifacts": ["deploy/Dockerfile", "deploy/src/app.py"],
+        "artifacts": [
+            "README.md",
+            "metadata.json",
+            "validate.sh",
+            "deploy/Dockerfile",
+            "deploy/docker-compose.yml",
+            "deploy/src/app.py",
+            "deploy/_files/start.sh",
+            "writenup/wp.md",
+            "writenup/exp.py",
+        ],
         "flag_location": "FLAG environment variable",
-        "validation": "Run solve.py against the local compose service.",
+        "validation": "Run exp.py against the local compose service.",
         "hints": [
             "Inspect the JWT header.",
             "The key id influences verification.",
@@ -127,15 +137,15 @@ def test_validate_design_payload_accepts_skill_md_shape():
                     "generation": "static",
                 },
                 "validation": {
-                    "reference_solve": "Run solve.py against the local compose service.",
+                    "reference_solve": "Run exp.py against the local compose service.",
                     "expected_result": "Flag printed to stdout.",
-                    "regression_checks": ["solve.py exits 0"],
+                    "regression_checks": ["exp.py exits 0"],
                 },
-                "artifacts": ["deploy/Dockerfile", "deploy/src/app.py"],
+                "artifacts": ["writeup/wp.md", "solve/solve.py"],
                 "hints": [
-                    "Inspect the JWT header.",
-                    "The key id influences verification.",
-                    "Control the key lookup before signing a token.",
+                    {"stage": 1, "content": "Inspect the JWT header."},
+                    {"stage": 2, "content": "The key id influences verification."},
+                    {"stage": 3, "content": "Control the key lookup before signing a token."},
                 ],
             }
         ],
@@ -148,9 +158,11 @@ def test_validate_design_payload_accepts_skill_md_shape():
         == "Recover the admin note from the service."
     )
     assert validated.challenge["flag_location"] == "FLAG environment variable"
-    assert "Run solve.py" in validated.validation_notes
+    assert "Run exp.py" in validated.validation_notes
     assert "Flag printed to stdout." in validated.validation_notes
-    assert "solve.py exits 0" in validated.validation_notes
+    assert "exp.py exits 0" in validated.validation_notes
+    assert "writenup/wp.md" in validated.challenge["artifacts"]
+    assert "writenup/exp.py" in validated.challenge["artifacts"]
 
 
 def test_validate_design_payload_skill_md_normalization_does_not_clobber_flat_fields():
@@ -185,9 +197,76 @@ def test_validate_design_payload_accepts_and_generates_summary():
     result = validate_design_payload(_payload(), _parent_task())
 
     assert result.flag_format == "flag{...}"
-    assert result.validation_notes.startswith("Run solve.py")
+    assert result.validation_notes.startswith("Run exp.py")
     assert "Key Confusion" in result.summary
     assert len(result.summary) <= 280
+
+
+def test_validate_design_payload_normalizes_object_artifacts_from_logs():
+    payload = _payload(
+        artifacts={
+            "files": ["index.html", "login.php"],
+            "services": "HTTP service on port 8080",
+            "docker_notes": "Single-service container",
+        },
+        delivery_format={
+            "deploy_tree": {
+                "src": ["app.py"],
+                "_files": ["start.sh"],
+                "dockerfile": "Dockerfile",
+                "docker_compose": "docker-compose.yml",
+            }
+        },
+        hints=[
+            {"stage": 1, "content": "Look at the token header."},
+            {"stage": 2, "content": "Control the key lookup."},
+            {"stage": 3, "content": "Sign a forged token."},
+        ],
+    )
+
+    result = validate_design_payload(payload, _parent_task())
+
+    assert result.challenge["artifacts"] == [
+        "deploy/src/index.html",
+        "deploy/src/login.php",
+        "deploy/src/app.py",
+        "deploy/_files/start.sh",
+        "deploy/Dockerfile",
+        "deploy/docker-compose.yml",
+        "README.md",
+        "metadata.json",
+        "validate.sh",
+        "writenup/wp.md",
+        "writenup/exp.py",
+    ]
+    assert result.challenge["hints"] == [
+        "Look at the token header.",
+        "Control the key lookup.",
+        "Sign a forged token.",
+    ]
+
+
+def test_validate_design_payload_ignores_prose_artifacts_but_adds_required_paths():
+    payload = _payload(
+        artifacts=[
+            "Docker container running a PHP web application",
+            "Web application accessible on port 8080",
+        ]
+    )
+
+    result = validate_design_payload(payload, _parent_task())
+
+    assert result.challenge["artifacts"] == [
+        "README.md",
+        "metadata.json",
+        "validate.sh",
+        "writenup/wp.md",
+        "writenup/exp.py",
+        "deploy/Dockerfile",
+        "deploy/docker-compose.yml",
+        "deploy/src/app.py",
+        "deploy/_files/start.sh",
+    ]
 
 
 def test_validate_design_payload_fills_default_flag_format_without_mutating_input():

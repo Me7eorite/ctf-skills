@@ -61,12 +61,10 @@ def _make_web_challenge_dir(
     (deploy / "Dockerfile").write_text("FROM alpine\n", encoding="utf-8")
     (deploy / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
     (directory / "validate.sh").write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
-    solve_dir = directory / "solve"
-    solve_dir.mkdir(parents=True, exist_ok=True)
-    (solve_dir / "solve.py").write_text("print('solve')\n", encoding="utf-8")
-    writeup_dir = directory / "writeup"
-    writeup_dir.mkdir(parents=True, exist_ok=True)
-    (writeup_dir / "wp.md").write_text(
+    writenup_dir = directory / "writenup"
+    writenup_dir.mkdir(parents=True, exist_ok=True)
+    (writenup_dir / "exp.py").write_text("print('solve')\n", encoding="utf-8")
+    (writenup_dir / "wp.md").write_text(
         "# title\n\n## Background\n\n" + ("x" * 600) + "\n\n## Solution\n\nmore\n",
         encoding="utf-8",
     )
@@ -121,10 +119,9 @@ def _make_re_challenge_dir(
         json.dumps(metadata), encoding="utf-8"
     )
     (directory / "validate.sh").write_text("#!/bin/bash\n", encoding="utf-8")
-    (directory / "solve").mkdir(parents=True, exist_ok=True)
-    (directory / "solve" / "solve.py").write_text("pass\n", encoding="utf-8")
-    (directory / "writeup").mkdir(parents=True, exist_ok=True)
-    (directory / "writeup" / "wp.md").write_text(
+    (directory / "writenup").mkdir(parents=True, exist_ok=True)
+    (directory / "writenup" / "exp.py").write_text("pass\n", encoding="utf-8")
+    (directory / "writenup" / "wp.md").write_text(
         "# t\n\n## A\n\n" + ("x" * 600) + "\n\n## B\nmore\n",
         encoding="utf-8",
     )
@@ -494,8 +491,8 @@ class DocumentEvidenceTests(unittest.TestCase):
     def test_too_small_fails(self):
         with TemporaryDirectory() as tmp:
             challenge_dir = Path(tmp) / "c"
-            (challenge_dir / "writeup").mkdir(parents=True)
-            (challenge_dir / "writeup" / "wp.md").write_text(
+            (challenge_dir / "writenup").mkdir(parents=True)
+            (challenge_dir / "writenup" / "wp.md").write_text(
                 "## a\n## b\n", encoding="utf-8"
             )
             (challenge_dir / "README.md").write_text(
@@ -506,9 +503,9 @@ class DocumentEvidenceTests(unittest.TestCase):
     def test_too_few_headings_fails(self):
         with TemporaryDirectory() as tmp:
             challenge_dir = Path(tmp) / "c"
-            (challenge_dir / "writeup").mkdir(parents=True)
+            (challenge_dir / "writenup").mkdir(parents=True)
             big = "x" * 600
-            (challenge_dir / "writeup" / "wp.md").write_text(
+            (challenge_dir / "writenup" / "wp.md").write_text(
                 f"## only\n{big}\n", encoding="utf-8"
             )
             (challenge_dir / "README.md").write_text(
@@ -519,9 +516,9 @@ class DocumentEvidenceTests(unittest.TestCase):
     def test_meets_thresholds_passes(self):
         with TemporaryDirectory() as tmp:
             challenge_dir = Path(tmp) / "c"
-            (challenge_dir / "writeup").mkdir(parents=True)
+            (challenge_dir / "writenup").mkdir(parents=True)
             big = "x" * 600
-            (challenge_dir / "writeup" / "wp.md").write_text(
+            (challenge_dir / "writenup" / "wp.md").write_text(
                 f"## a\n## b\n{big}\n", encoding="utf-8"
             )
             (challenge_dir / "README.md").write_text(

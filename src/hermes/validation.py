@@ -135,8 +135,8 @@ def validate_gate(
         return "document evidence incomplete"
     if not (plan.directory / "validate.sh").is_file():
         return "validate.sh missing"
-    if not (plan.directory / "solve" / "solve.py").is_file():
-        return "solve/solve.py missing"
+    if not (plan.directory / "writenup" / "exp.py").is_file():
+        return "writenup/exp.py missing"
     return None
 
 

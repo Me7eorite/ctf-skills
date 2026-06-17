@@ -39,13 +39,12 @@ class PackingTests(unittest.TestCase):
         with_attachment: bool = True,
     ) -> Path:
         challenge = self.paths.challenges / category / f"{challenge_id}-demo"
-        (challenge / "writeup").mkdir(parents=True)
-        (challenge / "writeup" / "wp.md").write_text(
+        (challenge / "writenup").mkdir(parents=True)
+        (challenge / "writenup" / "wp.md").write_text(
             "# 题目分析\n\n这是中文题解。\n\n```python\nprint('flag')\n```\n",
             encoding="utf-8",
         )
-        (challenge / "solve").mkdir()
-        (challenge / "solve" / "solve.py").write_text(
+        (challenge / "writenup" / "exp.py").write_text(
             "print('flag{demo}')\n", encoding="utf-8"
         )
         if with_attachment:
@@ -186,7 +185,7 @@ class PackingTests(unittest.TestCase):
 
     def test_non_chinese_writeup_produces_warning(self):
         challenge = self._challenge("re-0001", "re")
-        (challenge / "writeup" / "wp.md").write_text(
+        (challenge / "writenup" / "wp.md").write_text(
             "# Analysis\n\nEnglish only.\n", encoding="utf-8"
         )
 

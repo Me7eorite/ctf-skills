@@ -97,10 +97,9 @@ def _make_web_challenge(
     (deploy / "Dockerfile").write_text("FROM alpine\n", encoding="utf-8")
     (deploy / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
     (directory / "validate.sh").write_text("#!/bin/bash\necho flag{x}\n", encoding="utf-8")
-    (directory / "solve").mkdir(parents=True, exist_ok=True)
-    (directory / "solve" / "solve.py").write_text("pass\n", encoding="utf-8")
-    (directory / "writeup").mkdir(parents=True, exist_ok=True)
-    (directory / "writeup" / "wp.md").write_text(
+    (directory / "writenup").mkdir(parents=True, exist_ok=True)
+    (directory / "writenup" / "exp.py").write_text("pass\n", encoding="utf-8")
+    (directory / "writenup" / "wp.md").write_text(
         "# title\n\n## A\n\n" + ("x" * 600) + "\n\n## B\nmore\n",
         encoding="utf-8",
     )

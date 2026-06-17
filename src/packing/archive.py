@@ -10,26 +10,23 @@ from packing.errors import PackingError
 
 
 def _write_tools_zip(challenge_dir: Path, destination: Path) -> None:
-    writeup = challenge_dir / "writeup" / "wp.md"
-    solve = challenge_dir / "solve"
+    writenup = challenge_dir / "writenup"
+    writeup = writenup / "wp.md"
+    exp = writenup / "exp.py"
     if not writeup.is_file():
-        raise PackingError(f"{challenge_dir.name}: missing writeup/wp.md")
-    if not solve.is_dir():
-        raise PackingError(f"{challenge_dir.name}: missing solve directory")
+        raise PackingError(f"{challenge_dir.name}: missing writenup/wp.md")
+    if not exp.is_file():
+        raise PackingError(f"{challenge_dir.name}: missing writenup/exp.py")
 
-    members = [(writeup, Path("wp.md"))]
-    solver_files = [
+    members = [(writeup, Path("wp.md")), (exp, Path("exp.py"))]
+    extra_files = [
         path
-        for path in sorted(solve.rglob("*"))
+        for path in sorted(writenup.rglob("*"))
         if path.is_file() and not path.is_symlink()
+        and path.name not in {"wp.md", "exp.py"}
     ]
-    if not solver_files:
-        raise PackingError(f"{challenge_dir.name}: solve directory is empty")
-    for path in solver_files:
-        relative = path.relative_to(solve)
-        if relative == Path("solve.py"):
-            relative = Path("exp.py")
-        members.append((path, relative))
+    for path in extra_files:
+        members.append((path, path.relative_to(writenup)))
     _write_zip(destination, members)
 
 

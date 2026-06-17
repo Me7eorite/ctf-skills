@@ -29,8 +29,8 @@ the metadata ID when present.
 
 #### Scenario: reverse challenge is packed
 
-- **WHEN** a passed `re` challenge contains `writeup/wp.md`,
-  `solve/solve.py`, and `dist/checker`
+- **WHEN** a passed `re` challenge contains `writenup/wp.md`,
+  `writenup/exp.py`, and `dist/checker`
 - **THEN** the tools archive contains `wp.md` and `exp.py`, the enclosure
   contains `checker`, and all output names start with `js-reverse-`
 
@@ -48,13 +48,13 @@ the metadata ID when present.
 
 ### Requirement: Writeups are rendered to PDF
 
-The packer SHALL render the exact UTF-8 contents of `writeup/wp.md` into a
+The packer SHALL render the exact UTF-8 contents of `writenup/wp.md` into a
 non-empty PDF. It SHALL warn, but not fail, when the source contains no CJK
 code point.
 
 #### Scenario: Chinese writeup renders
 
-- **WHEN** `writeup/wp.md` contains Chinese Markdown
+- **WHEN** `writenup/wp.md` contains Chinese Markdown
 - **THEN** the report path contains a valid PDF beginning with `%PDF`
 
 ### Requirement: Inventories match emitted content
