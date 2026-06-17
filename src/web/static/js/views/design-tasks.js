@@ -1,5 +1,6 @@
 import { api, postJson } from "../api.js";
 import { setView } from "../router.js";
+import { initIcons } from "../ui/icons.js";
 import { showToast } from "../ui/toast.js";
 import {
   escapeHtml,
@@ -43,7 +44,7 @@ async function ensureList() {
     state.flags.list = { loading: false, error: err.message };
   }
   render(state.data);
-  window.lucide?.createIcons();
+  initIcons();
 }
 
 async function ensureDetail(id) {
@@ -56,7 +57,7 @@ async function ensureDetail(id) {
     state.flags.detail = { loading: false, error: err.message };
   }
   render(state.data);
-  window.lucide?.createIcons();
+  initIcons();
 }
 
 function buildListUrl() {
@@ -108,7 +109,7 @@ async function poll() {
       state.list = await api(buildListUrl());
     }
     render(state.data);
-    window.lucide?.createIcons();
+    initIcons();
   } catch (err) {
     showToast(err.message, true);
   } finally {
@@ -145,7 +146,7 @@ async function designTaskNow(taskId) {
   if (!taskId) return;
   state.flags.designing = { ...(state.flags.designing || {}), [taskId]: true };
   render(state.data);
-  window.lucide?.createIcons();
+  initIcons();
   try {
     const result = await postJson(`/api/design-tasks/${taskId}/design`, {});
     const failed = result.attempt_status === "failed";
@@ -157,7 +158,7 @@ async function designTaskNow(taskId) {
   } finally {
     state.flags.designing = { ...(state.flags.designing || {}), [taskId]: false };
     render(state.data);
-    window.lucide?.createIcons();
+    initIcons();
   }
 }
 
@@ -174,6 +175,11 @@ export function render(data) {
   } else {
     renderList(root);
   }
+
+  // 确保每次 render 后图标都会被初始化
+  // 使用 rAF 确保 DOM 已更新（handle 缓存路径下 ensureList/ensureDetail 跳过 initIcons 的情况）
+  requestAnimationFrame(() => initIcons());
+
   schedulePoll(needsActivePolling() ? ACTIVE_POLL_MS : SETTLED_POLL_MS);
 }
 
@@ -198,7 +204,7 @@ function renderList(root) {
         </div>
         <span class="pill">${rows.length} rows</span>
       </div>
-      <div class="filter-bar">
+      <div class="filter-bar filter-bar-vertical-sm">
         <label class="filter-item">Request
           <input id="dt-filter-request" class="filter-input" value="${escapeHtml(state.filters.generation_request_id)}" placeholder="generation_request_id">
         </label>
@@ -222,7 +228,7 @@ function renderList(root) {
 function renderTable(rows) {
   return `
     <div class="table-container">
-      <table class="table">
+      <table class="table table-dt-sm">
         <thead>
           <tr>
             <th>Request</th>
@@ -253,12 +259,12 @@ function renderTable(rows) {
               <td>${escapeHtml(task.status)}</td>
               <td>
                 <div class="btn-group design-task-actions">
-                  <button class="btn btn-secondary btn-sm dt-open-detail" title="Details">
+                  <button class="btn btn-secondary btn-xs dt-open-detail" title="详情">
                     <i data-lucide="panel-right-open"></i>
                   </button>
-                  <button class="btn btn-secondary btn-sm dt-queue"${task.status === "draft" ? "" : " disabled"}>Queue</button>
-                  <button class="btn btn-ghost btn-sm dt-archive"${(task.status === "draft" || task.status === "queued") ? "" : " disabled"}>Archive</button>
-                  <button class="btn btn-primary btn-sm dt-design"${task.status === "queued" && !state.flags.designing?.[task.id] ? "" : " disabled"}>Design</button>
+                  <button class="btn btn-secondary btn-xs dt-queue" title="入队"${task.status === "draft" ? "" : " disabled"}>入队</button>
+                  <button class="btn btn-ghost btn-xs dt-archive" title="归档"${(task.status === "draft" || task.status === "queued") ? "" : " disabled"}>归档</button>
+                  <button class="btn btn-primary btn-xs dt-design" title="执行设计"${task.status === "queued" && !state.flags.designing?.[task.id] ? "" : " disabled"}>执行</button>
                 </div>
               </td>
             </tr>
@@ -342,7 +348,7 @@ function renderDetail(root) {
 function renderAttempts(attempts) {
   return `
     <div class="table-container">
-      <table class="table">
+      <table class="table table-attempts-sm">
         <thead><tr><th>#</th><th>Status</th><th>Started</th><th>Finished</th><th>Error</th><th>Artifacts</th></tr></thead>
         <tbody>
           ${attempts.map((attempt) => `

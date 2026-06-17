@@ -1,4 +1,5 @@
 import { appState } from "./state.js";
+import { initIcons } from "./ui/icons.js";
 
 export function setView(view) {
   if (!titles[view]) view = "overview";
@@ -16,13 +17,16 @@ export function setView(view) {
   document.querySelector("#breadcrumb").textContent = titleInfo.title;
   document.querySelector("#breadcrumbGroup").textContent = titleInfo.group;
 
+  const sidebarNav = document.querySelector("#sidebarNav");
   if (window.innerWidth < 1024) {
-    document.querySelector("#sidebarNav")?.classList.add("hidden");
+    sidebarNav?.classList.add("hidden");
+  } else {
+    sidebarNav?.classList.remove("hidden");
   }
 
   const renderer = viewRenderers[view];
   if (renderer && appState.data) renderer(appState.data);
-  window.lucide?.createIcons();
+  initIcons();
 }
 
 export function jumpTo(target) {

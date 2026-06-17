@@ -1,4 +1,5 @@
 import { appState } from "../state.js";
+import { initIcons } from "../ui/icons.js";
 import { escapeHtml, categoryLabel, categoryTone, statusIndicator, softPill } from "../ui/format.js";
 
 function rowsHtml(rows) {
@@ -73,14 +74,14 @@ export function bind(reload) {
     if (!button) return;
     appState.category = button.dataset.category;
     render(appState.data);
-    window.lucide?.createIcons();
+    initIcons();
   });
 
   document.addEventListener("input", (event) => {
     if (event.target?.id !== "challengeSearch") return;
     appState.search = event.target.value;
     render(appState.data);
-    window.lucide?.createIcons();
+    initIcons();
     document.querySelector("#challengeSearch")?.focus();
   });
 }

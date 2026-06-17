@@ -1,4 +1,5 @@
 import { api, postJson } from "../api.js";
+import { initIcons } from "../ui/icons.js";
 import { showToast } from "../ui/toast.js";
 import { escapeHtml } from "../ui/format.js";
 
@@ -33,7 +34,7 @@ async function ensureCategories() {
     state.flags.categories = { loading: false, error: err.message };
   }
   render(state.data);
-  window.lucide?.createIcons();
+  initIcons();
 }
 
 export function render(data) {
@@ -272,7 +273,7 @@ export function render(data) {
     </div>
   `;
 
-  window.lucide?.createIcons();
+  initIcons();
 }
 
 async function handleSubmit() {
@@ -284,7 +285,7 @@ async function handleSubmit() {
   f.lastResult = null;
   f.lastError = null;
   render(state.data);
-  window.lucide?.createIcons();
+  initIcons();
 
   try {
     const result = await postJson("/api/research/requests", {
@@ -302,7 +303,7 @@ async function handleSubmit() {
   } finally {
     f.submitting = false;
     render(state.data);
-    window.lucide?.createIcons();
+    initIcons();
   }
 }
 
@@ -320,7 +321,7 @@ function resetForm() {
   };
   state.showAdvanced = false;
   render(state.data);
-  window.lucide?.createIcons();
+  initIcons();
 }
 
 export function bind() {
@@ -338,7 +339,7 @@ export function bind() {
     if (e.target.closest("#advanced-toggle")) {
       state.showAdvanced = !state.showAdvanced;
       render(state.data);
-      window.lucide?.createIcons();
+      initIcons();
     }
   });
 
@@ -348,7 +349,7 @@ export function bind() {
     } else if (e.target.dataset?.difficulty) {
       state.form.distribution[e.target.dataset.difficulty] = Number(e.target.value) || 0;
       render(state.data);
-      window.lucide?.createIcons();
+      initIcons();
     }
   });
 

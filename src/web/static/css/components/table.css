@@ -99,3 +99,83 @@
 .table-striped tbody tr:nth-child(even):hover {
   background: var(--ink-100);
 }
+
+/* Actions 列防止按钮被表格压缩 */
+.table .btn-group {
+  width: max-content;
+}
+
+/* Design Tasks Actions 列：确保不折行 */
+.table .design-task-actions {
+  display: inline-flex;
+}
+
+.table-no-head thead {
+  display: none;
+}
+
+/* --- 响应式：小屏隐藏次要列 --- */
+
+@media (max-width: 639px) {
+  .table-responsive-sm {
+    min-width: unset;
+  }
+
+  /* 默认隐藏所有列的第 1 个 th/td（Request 列） */
+  .table-responsive-sm th:first-child,
+  .table-responsive-sm td:first-child {
+    display: none;
+  }
+
+  .table-responsive-sm th,
+  .table-responsive-sm td {
+    padding: var(--space-sm) var(--space-xs);
+    font-size: var(--font-sm);
+  }
+}
+
+/* Design Tasks 专用：9 列表格 → 小屏保留核心 5 列 */
+@media (max-width: 639px) {
+  .table-dt-sm {
+    min-width: unset;
+  }
+
+  /* 隐藏: Request(1) + Task(2) + Title(4) + Evidence(7) + Status(8) */
+  .table-dt-sm th:nth-child(1),
+  .table-dt-sm td:nth-child(1),
+  .table-dt-sm th:nth-child(2),
+  .table-dt-sm td:nth-child(2),
+  .table-dt-sm th:nth-child(4),
+  .table-dt-sm td:nth-child(4),
+  .table-dt-sm th:nth-child(7),
+  .table-dt-sm td:nth-child(7),
+  .table-dt-sm th:nth-child(8),
+  .table-dt-sm td:nth-child(8) {
+    display: none;
+  }
+  .table-dt-sm td {
+    padding: var(--space-sm) var(--space-xs);
+    font-size: var(--font-sm);
+  }
+}
+
+/* Design Tasks 详情页 Attempts 表格：小屏精简 */
+@media (max-width: 639px) {
+  .table-attempts-sm {
+    min-width: unset;
+  }
+
+  /* 隐藏 Started(3) + Finished(4) */
+  .table-attempts-sm th:nth-child(3),
+  .table-attempts-sm td:nth-child(3),
+  .table-attempts-sm th:nth-child(4),
+  .table-attempts-sm td:nth-child(4) {
+    display: none;
+  }
+
+  .table-attempts-sm th,
+  .table-attempts-sm td {
+    padding: var(--space-sm) var(--space-xs);
+    font-size: var(--font-sm);
+  }
+}

@@ -1,6 +1,7 @@
 import { appState, scheduleRefresh } from "./state.js";
 import { api, postJson } from "./api.js";
 import { showToast } from "./ui/toast.js";
+import { initIcons } from "./ui/icons.js";
 import { registerViews, setView, jumpTo } from "./router.js";
 
 import * as overview from "./views/overview.js";
@@ -63,7 +64,7 @@ function renderAll() {
   for (const view of Object.values(views)) view.render?.(appState.data);
   renderProcess();
   setView(appState.view);
-  window.lucide?.createIcons();
+  initIcons();
 }
 
 function renderProcess() {

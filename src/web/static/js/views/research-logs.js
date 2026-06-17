@@ -1,4 +1,5 @@
 import { api } from "../api.js";
+import { initIcons } from "../ui/icons.js";
 import { showToast } from "../ui/toast.js";
 import { escapeHtml, formatDateTime } from "../ui/format.js";
 
@@ -26,7 +27,7 @@ async function loadLogs() {
 async function refreshLogs() {
   await loadLogs();
   render();
-  window.lucide?.createIcons();
+  initIcons();
 }
 
 async function loadLog(name) {

@@ -1,4 +1,5 @@
 import { api, postJson } from "../api.js";
+import { initIcons } from "../ui/icons.js";
 import { showToast } from "../ui/toast.js";
 import {
   escapeHtml,
@@ -79,7 +80,7 @@ async function fetchDetail(id) {
     state.detail = await api(`/api/research/requests/${id}`);
     state.flags.detail = { loading: false };
     render(state.data);
-    window.lucide?.createIcons();
+    initIcons();
   } catch (err) {
     showToast(err.message, true);
     state.flags.detail = { loading: false };
@@ -149,7 +150,7 @@ async function pollDetail() {
     state.worker = worker;
     state.requests = null;
     render(state.data);
-    window.lucide?.createIcons();
+    initIcons();
   } catch (err) {
     showToast(err.message, true);
   } finally {
@@ -186,7 +187,7 @@ async function generateDesignTasks() {
     showToast("Design tasks generated");
     await reloadDetail();
     showDesignTasksForRequest(state.detailId);
-    window.lucide?.createIcons();
+    initIcons();
   } catch (err) {
     showToast(err.message, true);
   }
@@ -497,7 +498,7 @@ export function bind() {
     state.detail = null;
     setView("research-requests");
     render(state.data);
-    window.lucide?.createIcons();
+    initIcons();
   });
 
   document.addEventListener("visibilitychange", () => {
@@ -515,7 +516,7 @@ export function bind() {
       state.detail = null;
       clearDetailPoll();
       render(state.data);
-      window.lucide?.createIcons();
+      initIcons();
       return;
     }
     if (e.target.closest("#detail-run-once")) {
@@ -536,7 +537,7 @@ export function bind() {
       refreshDetail({ startPolling: true }).finally(() => {
         state.flags.detail = { ...(state.flags.detail || {}), refreshing: false };
         render(state.data);
-        window.lucide?.createIcons();
+        initIcons();
       });
       return;
     }
@@ -567,7 +568,7 @@ export function bind() {
       state.detailId = row.dataset.id;
       state.detail = null;
       render(state.data);
-      window.lucide?.createIcons();
+      initIcons();
     }
   });
 

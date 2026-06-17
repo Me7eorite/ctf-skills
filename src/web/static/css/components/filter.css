@@ -128,3 +128,31 @@
     justify-content: space-between;
   }
 }
+
+/* --- 响应式：小屏 filter-bar 竖排 + 全宽 --- */
+
+@media (max-width: 639px) {
+  .filter-bar-vertical-sm {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-sm);
+    padding: var(--space-sm) var(--space-md);
+  }
+
+  .filter-bar-vertical-sm .filter-item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+
+  .filter-bar-vertical-sm .filter-input,
+  .filter-bar-vertical-sm .filter-select {
+    width: 100%;
+    min-width: unset;
+  }
+
+  .filter-bar-vertical-sm .filter-clear {
+    margin-left: 0;
+    align-self: flex-start;
+  }
+}
