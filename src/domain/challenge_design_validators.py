@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
+from urllib.parse import urlsplit
 
 from domain.design_tasks import DesignTask
 from domain.research import DIFFICULTY_LABELS
@@ -77,6 +78,16 @@ REQUIRED_CHALLENGE_TEXT_FIELDS: tuple[str, ...] = (
 )
 
 URL_RE = re.compile(r"https?://", re.IGNORECASE)
+HTTP_URL_RE = re.compile(r"https?://[^\s\"'<>`)\]}]+", re.IGNORECASE)
+LOCAL_HTTP_HOSTS: frozenset[str] = frozenset(
+    {
+        "localhost",
+        "127.0.0.1",
+        "0.0.0.0",
+        "::1",
+        "host.docker.internal",
+    }
+)
 
 
 class ChallengeDesignValidationError(ValueError):
@@ -216,8 +227,8 @@ def validate_design_payload(
             raise ChallengeDesignValidationError("hints must contain non-empty strings")
 
     validation = challenge["validation"]
-    if URL_RE.search(validation):
-        raise ChallengeDesignValidationError("validation must not contain HTTP URLs")
+    if _contains_external_http_url(validation):
+        raise ChallengeDesignValidationError("validation must not contain external HTTP URLs")
 
     if parent_task.category in {"web", "pwn"}:
         deployment = challenge["deployment"].lower()
@@ -601,6 +612,19 @@ def _is_absolute_or_url_path(value: str) -> bool:
         or stripped.startswith("\\")
         or bool(re.match(r"^[A-Za-z]:[\\/]", stripped))
     )
+
+
+def _contains_external_http_url(value: str) -> bool:
+    for match in HTTP_URL_RE.finditer(value):
+        raw_url = match.group(0).rstrip(".,;:")
+        try:
+            parsed = urlsplit(raw_url)
+        except ValueError:
+            return True
+        host = (parsed.hostname or "").lower()
+        if host not in LOCAL_HTTP_HOSTS and not host.startswith("127."):
+            return True
+    return False
 
 
 def _is_artifact_path_like(value: str) -> bool:

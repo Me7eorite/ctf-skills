@@ -375,8 +375,17 @@ def test_validate_design_payload_rejects_url_artifact():
         validate_design_payload(_payload(artifacts=["https://example.test/app.zip"]), _parent_task())
 
 
-def test_validate_design_payload_rejects_validation_url():
-    with pytest.raises(ChallengeDesignValidationError, match="HTTP URLs"):
+def test_validate_design_payload_accepts_local_validation_url():
+    result = validate_design_payload(
+        _payload(validation="Run exp.py against http://127.0.0.1:8080/health."),
+        _parent_task(),
+    )
+
+    assert "127.0.0.1:8080" in result.validation_notes
+
+
+def test_validate_design_payload_rejects_external_validation_url():
+    with pytest.raises(ChallengeDesignValidationError, match="external HTTP URLs"):
         validate_design_payload(
             _payload(validation="Open https://example.test and solve it"),
             _parent_task(),
