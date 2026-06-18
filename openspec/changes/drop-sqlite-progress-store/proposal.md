@@ -20,8 +20,22 @@ normal relational foundation for a later build-attempt correlation change.
   (fail-loud) by default. It no longer silently falls back to a temp-dir SQLite
   store. The Hermes prompt uses best-effort mode for agent progress updates so
   database outages do not make the model-run subprocess fail the shard.
-- Introduce a `ProgressStore` protocol in `core/state.py` (6 query methods +
-  `record` + `record_batch`) plus a `ProgressEventInput` DTO for batch writes.
+- Introduce a `ProgressStore` protocol in `core/state.py` with seven methods
+  (writes: `record`, `record_batch`, `reset_snapshots`; reads:
+  `events_for_shard`, `events_for_challenge`, `latest_claim_event`,
+  `dashboard`) plus a `ProgressEventInput` DTO that mirrors `record`'s
+  keyword arguments (`shard`, `stage`, `status`, `challenge_id=""`,
+  `worker=None`, `message=None`) for batch writes.
+- **BREAKING (dashboard read model)**: snapshot upsert semantics change.
+  Today's SQLite upsert always overwrites `(stage, status)` with the newest
+  event and keeps `percent = MAX(old, new)`, which produces visibly
+  inconsistent rows like `(stage=validate, status=running, percent=96)`
+  after `(document, passed)`. The new rule keeps the snapshot at the
+  higher-derived-percent `(stage, status)` while still refreshing
+  `updated_at`, `worker`, and `message`. The dashboard will therefore show
+  `(document, passed)` in that example instead of `(validate, running)`,
+  and stage/status no longer "jump backward" between progress and a later
+  late-arriving event.
 - Add `InMemoryProgressStore` in `core/state.py` for tests and offline tooling.
 - Add `PostgresProgressStore` in `persistence/repositories/progress.py`
   backed by two new tables, `progress_events` and `progress_snapshots`.
@@ -69,8 +83,14 @@ normal relational foundation for a later build-attempt correlation change.
 - **Code**: rewrite `src/core/state.py`; add
   `src/persistence/models/progress.py` and
   `src/persistence/repositories/progress.py`; thread `ProgressStore` through
-  `HermesRunner`, `DashboardService`, and every `cli.py` handler that today
-  builds `StateStore(paths)`.
+  `HermesRunner` (constructor signature change), `DashboardService`, and
+  both `StateStore(paths)` construction sites in `cli.py` (the `progress`
+  and `durations` handlers); rename the `state: StateStore` parameter to
+  `progress: ProgressStore` in `src/hermes/progress.py`,
+  `src/hermes/validation.py`, `src/domain/resume.py`, and
+  `src/domain/metrics.py`; update `src/hermes/prompt.py` so the rendered
+  `{progress_command}` includes `--best-effort`; update
+  `prompts/shard_prompt.md` to drop the "SQLite event store" wording.
 - **Database**: new Alembic revision `0005_progress_events` creating
   `progress_events` and `progress_snapshots`. No data migration.
 - **Filesystem**: `work/state.sqlite3` and its WAL/SHM siblings are deleted on

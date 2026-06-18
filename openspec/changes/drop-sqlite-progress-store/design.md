@@ -150,9 +150,12 @@ is negligible.
 
 `HermesRunner` currently constructs `StateStore(paths)` internally. We
 change the constructor to `HermesRunner(paths, progress: ProgressStore)`.
-The composition root (`cli.py` for the `run` subcommand, `web/server.py`
-for the dashboard-triggered worker action) is the only place that knows
-about `PostgresProgressStore`.
+The only direct `HermesRunner(...)` construction site is `cli.py`'s `run`
+handler; the dashboard's "start worker" button does not construct a runner
+in-process — it spawns a `challenge-factory run --worker dashboard-01 …`
+subprocess, which itself goes through `cli.main()` to build a new
+`PostgresProgressStore`. `web/server.py` only injects the store into
+`DashboardService` for the read model.
 
 The `hermes` package may not import `persistence` (dependency direction).
 Injection preserves that boundary; `HermesRunner` only sees the
@@ -219,7 +222,7 @@ Removes any frontend change. A later cleanup can drop the field.
 | Test ergonomics: many tests built around `StateStore(paths)` need a rewrite | `InMemoryProgressStore` implements the full protocol; mechanical search-and-replace; a single conftest fixture (`progress_store`) makes the migration linear |
 | Snapshot no-regression rule moved from SQL to Python; potential lock contention | `SELECT ... FOR UPDATE` on `(shard, challenge_id)` is per-row; no two workers normally update the same challenge concurrently |
 | Frontend depends on `storage.fallback` field | Shape preserved; values are constants; no UI change |
-| Composition-root churn: every `StateStore(paths)` call site changes | Mostly in `cli.py` (8 call sites) and `web/server.py` (factory at startup); changes are mechanical and covered by `test_dependency_direction.py` |
+| Composition-root churn: every `StateStore(paths)` call site changes | Two constructions in `cli.py` (`progress` and `durations` handlers), one in `web/dashboard.DashboardService`, one in `hermes.runner.HermesRunner.__init__`; plus `state: StateStore` parameters in `hermes/progress.py`, `hermes/validation.py`, `domain/resume.py`, `domain/metrics.py`. All edits mechanical and covered by `test_dependency_direction.py` plus the `rg "StateStore"` grep in tasks 4.7–4.8 |
 | Hidden imports inside service handlers (`from core.state import StateStore`) | Add a single grep step in tasks.md so the implementer audits the full repository |
 
 ## Migration Plan

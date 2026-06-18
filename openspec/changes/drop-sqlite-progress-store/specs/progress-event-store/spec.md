@@ -16,6 +16,22 @@ The system SHALL define a core-owned `ProgressEventInput` DTO in
 `persistence.models.progress.ProgressEvent` ORM class as the protocol input
 type.
 
+`ProgressEventInput` SHALL expose exactly these fields, matching the keyword
+arguments of `record`:
+
+| Field | Type | Default |
+| --- | --- | --- |
+| `shard` | `str` | required |
+| `stage` | `str` (one of `STAGES`) | required |
+| `status` | `str` (one of `STATUSES`) | required |
+| `challenge_id` | `str` | `""` (shard-level event when empty) |
+| `worker` | `str \| None` | `None` |
+| `message` | `str \| None` | `None` |
+
+The DTO SHALL NOT carry a `percent` or `created_at` field; percent is derived
+by `_percent(stage, status)` at write time and `created_at` is set
+server-side by PostgreSQL or by the in-memory clock helper.
+
 The protocol SHALL expose exactly these methods:
 
 - `record(*, shard, stage, status, challenge_id="", worker="", message="") -> dict`
@@ -260,9 +276,11 @@ start from scratch when it cannot query historical progress.
 `/api/state` SHALL keep its current top-level shape, including the
 `storage` object with keys `path`, `fallback`, and `warning`. After
 this change the values SHALL be drawn from the PostgreSQL connection
-URL: `path` is the redacted `DATABASE_URL` (password masked),
-`fallback` is always `false`, and `warning` is the empty string. The
-frontend SHALL NOT be modified.
+URL: `path` is the redacted `DATABASE_URL` (password replaced with `***`
+when present; URLs without a password — e.g. credentials sourced from
+`~/.pgpass` or environment-side auth — pass through unchanged with no
+`:***` injected), `fallback` is always `false`, and `warning` is the
+empty string. The frontend SHALL NOT be modified.
 
 #### Scenario: Storage field is permanent PostgreSQL metadata
 

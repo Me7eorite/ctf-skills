@@ -22,17 +22,21 @@
 - [ ] 3.5 Implement read APIs (`events_for_shard`, `events_for_challenge`, `latest_claim_event`) with the documented id-window semantics; ensure ordering by ascending id; `events_for_challenge` rejects empty challenge_id.
 - [ ] 3.6 Implement `reset_snapshots(shard)` (DELETE from progress_snapshots WHERE shard = :shard).
 - [ ] 3.7 Implement `dashboard(event_limit)` returning the same JSON shape today's StateStore produces; `storage.path` is the redacted DATABASE_URL, `storage.fallback = False`, `storage.warning = ""`.
-- [ ] 3.8 Add `tests/app/test_progress_postgres_repository.py` (`@pytest.mark.postgres`) covering insert+upsert, no-regression on real PG, record_batch atomic rollback, fail-loud on closed engine, UTC timestamp string serialization, `events_for_*` ordering and windows, snapshot reset preserving events.
+- [ ] 3.8 Add `tests/app/test_progress_postgres_repository.py` (`@pytest.mark.postgres`) covering insert+upsert, no-regression on real PG, record_batch atomic rollback, fail-loud behavior when the underlying engine raises `sqlalchemy.exc.OperationalError` (raises `PersistenceConnectionError`), UTC timestamp string serialization, `events_for_*` ordering and windows, snapshot reset preserving events.
 
 ## 4. Composition root — inject ProgressStore everywhere
 
 - [ ] 4.1 Add `src/persistence/__init__.py` factory export `make_postgres_progress_store() -> ProgressStore` (creates a `PostgresProgressStore` bound to the default `SessionFactory`).
 - [ ] 4.2 Update `HermesRunner.__init__` to accept `progress: ProgressStore`; remove its internal `StateStore(paths)` construction; pass `progress` through `process_one` everywhere a `StateStore` method is called.
+- [ ] 4.2a Update `src/hermes/progress.py`: change the `state: StateStore` parameter on every helper (e.g. `record_final`) to `progress: ProgressStore`; remove the `from core.state import StateStore` import.
+- [ ] 4.2b Update `src/hermes/validation.py`: change every `state: StateStore` parameter (e.g. on `run_validation`, `record_per_challenge_complete`, `validate_gate`) to `progress: ProgressStore`; remove the `from core.state import StateStore` import.
 - [ ] 4.3 Update `DashboardService.__init__` to accept `progress: ProgressStore`; replace internal SQLite usage; update `state()` to call `progress.dashboard(...)`.
 - [ ] 4.4 In `src/cli.py`: replace every `StateStore(paths)` call with the injected/created `progress` instance. Use `make_postgres_progress_store()` at handler entry; the `progress` CLI subcommand becomes a thin wrapper around `progress.record(...)`; the `run` subcommand passes the instance to `HermesRunner`.
-- [ ] 4.5 In `src/web/server.py`: build the `PostgresProgressStore` once at `serve(...)` startup; pass it to `DashboardService` and any background `HermesRunner` started by the dashboard actions.
-- [ ] 4.6 Update `domain/resume.py` and `domain/metrics.py` to accept a `ProgressStore` (or callable) instead of a `StateStore`; both already use only protocol-shaped methods.
-- [ ] 4.7 Update `tests/app/conftest.py` to expose a `progress_store` fixture returning `InMemoryProgressStore()`; refactor every test that built `StateStore(paths)` to use the fixture (mechanical search-and-replace).
+- [ ] 4.5 In `src/web/server.py`: build the `PostgresProgressStore` once at `serve(...)` startup and pass it to `DashboardService`. Do NOT inject it into the dashboard's background worker — the dashboard's `TaskManager.start("worker")` spawns a `challenge-factory run --worker dashboard-01 …` subprocess, which constructs its own `ProgressStore` through `cli.main()`. The two stores share the same PostgreSQL backend, so coordination is at the database level, not in-process.
+- [ ] 4.6 Update `domain/resume.py` and `domain/metrics.py` to accept a `ProgressStore` parameter (renamed from `state: StateStore` to `progress: ProgressStore`); both already use only protocol-shaped methods (`latest_claim_event`, `events_for_challenge`). Do NOT introduce a callable-based alternative interface.
+- [ ] 4.7 Update `tests/app/conftest.py` to expose a `progress_store` fixture returning `InMemoryProgressStore()`; refactor every test that built `StateStore(paths)` to use the fixture (`tests/app/test_metrics.py`, `test_resume.py`, `test_runner_resume.py` — mechanical search-and-replace).
+- [ ] 4.7a Delete `tests/app/test_state.py` (covers SQLite initialization and temp-dir fallback behavior that no longer exists); migrate any non-SQLite-specific scenarios into `test_progress_in_memory.py`.
+- [ ] 4.7b Delete `tests/app/test_state_queries.py`; migrate its event-window and `latest_claim_event` cases into `test_progress_in_memory.py` and (PG-marked) `test_progress_postgres_repository.py` so both implementations of the protocol cover them.
 - [ ] 4.8 Grep the repo (`rg "StateStore"`) and confirm zero matches under `src/` and `tests/`.
 
 ## 5. CLI — progress subcommand fail-loud by default
@@ -48,6 +52,7 @@
 - [ ] 6.2 Confirm shard queue file transitions (`pending` / `running` / `done` / `failed`) do not depend on `progress.record` success; add a unit test that simulates a raising `ProgressStore` (e.g., a `RaisingProgressStore` test double) and asserts the shard still moves to `done/` on success.
 - [ ] 6.3 Use `progress.record_batch(...)` for the resume carry-forward events block in `process_one` so the prefix events ship atomically.
 - [ ] 6.4 Update `hermes.prompt.render_prompt(...)` so the injected `{progress_command}` includes `--best-effort`; add/adjust prompt rendering tests to assert the flag is present.
+- [ ] 6.4a In `prompts/shard_prompt.md`, replace "The dashboard is backed by a SQLite event store" (line ~26) with language that matches the new backend (e.g. "The dashboard reads progress from PostgreSQL via the `{progress_command}` helper"); audit the rest of the file for any other SQLite reference.
 - [ ] 6.5 Add a runner test proving resume-read failures are not swallowed: if `latest_claim_event` / `events_for_*` raises before prompt rendering, the runner surfaces the error and does not invoke Hermes with an empty resume plan.
 
 ## 7. Dashboard frontend contract preserved
@@ -67,7 +72,7 @@
 ## 9. Dependency direction guardrail
 
 - [ ] 9.1 In `tests/app/test_dependency_direction.py`, add a scenario asserting `src/hermes/` does not import `persistence.repositories.progress` or any other `persistence.*` module after the refactor.
-- [ ] 9.2 Add a scenario asserting `core.state` no longer exports `StateStore` (the class) and DOES export `ProgressStore`, `ProgressEventInput`, `InMemoryProgressStore`, `STAGES`, `STATUSES`, `_percent`.
+- [ ] 9.2 Add a scenario asserting `core.state` no longer exports `StateStore` (the class) and DOES export `ProgressStore`, `ProgressEventInput`, `InMemoryProgressStore`, `STAGES`, `STATUSES`. `_percent` stays private (underscore-prefixed) and is consumed only by the two store implementations inside `core/state.py` and `persistence/repositories/progress.py`.
 
 ## 10. End-to-end verification
 

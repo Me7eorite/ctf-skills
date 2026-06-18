@@ -67,7 +67,11 @@ percent, where the percent is computed by `_percent(stage, status)` in
 `core/state.py`. The implementation SHALL NOT persist `percent` as a column.
 When a newer event has a lower derived percent than the current snapshot, the
 upsert SHALL keep the snapshot's `stage` and `status` and update only
-`updated_at`, `worker`, and `message`.
+`updated_at`, `worker`, and `message`. This is a deliberate behavior change
+from the pre-existing SQLite upsert, which always overwrote `(stage, status)`
+to the newest event and only constrained `percent`. The dashboard now displays
+the `(stage, status)` of the highest-progress event seen in the window rather
+than the last-arriving event.
 
 #### Scenario: Lower-progress event does not reduce displayed percent
 
