@@ -33,7 +33,7 @@ The unique compound key `(design_task_id, attempt_no)` SHALL hold.
   and `status = 'failed'`
 - **WHEN** the operator retries it
 - **THEN** a new row is inserted with `attempt_no = 4`,
-  `status = 'queued'`, and the same `shard_basename`
+  `status = 'queued'`, and a fresh attempt-specific `shard_basename`
 
 ### Requirement: Only one build attempt per design task may be active
 
@@ -64,18 +64,18 @@ index on `build_attempts (design_task_id)` filtered by
 
 `build_attempts.status` SHALL follow the transitions:
 
-- `queued -> running`: the reconciler observed the shard moved from
-  `work/shards/pending/` to `work/shards/running/`, OR the
-  `progress_events` table contains a `(stage='queued', status='running')`
-  event for the row's `shard_basename`.
-- `queued -> lost` or `running -> lost`: the shard file is not present
-  under any of `pending/`, `running/`, `done/`, `failed/`.
+- `queued -> running`: the reconciler observed an attributed generated
+  shard with matching top-level `build_attempt_id` move from
+  `work/shards/pending/` to `work/shards/running/`.
+- `queued -> lost` or `running -> lost`: the generated shard with
+  matching top-level `build_attempt_id` is not present under any of
+  `pending/`, `running/`, `done/`, `failed/`.
 - `running -> succeeded`: the shard moved to `done/`,
-  `work/challenges/<challenge_id>-<slug>/metadata.json` exists, and
+  `work/challenges/<category>/<challenge_id>-<slug>/metadata.json` exists, and
   its `solve_status == 'passed'`.
 - `running -> failed`: the shard moved to `failed/`, OR moved to
-  `done/` but the artifact directory is missing or `solve_status`
-  is not `passed`.
+  `done/` and the artifact directory exists but `solve_status` is not
+  `passed`.
 - `done/` shard whose artifact directory is missing SHALL result in
   `status = 'lost'` (not `failed`), because the artifact was produced
   and then removed externally.
@@ -92,7 +92,8 @@ no transitions out except by creating a new attempt with
 - **WHEN** the reconciler observes
   `work/shards/running/web-0001.hermes-02.json`
   for a row whose `shard_basename = 'web-0001.json'` and
-  `status = 'queued'`
+  `status = 'queued'`, and the shard payload's top-level
+  `build_attempt_id` equals that row's `id`
 - **THEN** the row's `status` becomes `running`,
   `worker` becomes `'hermes-02'`, and `started_at` is set
 
@@ -100,11 +101,11 @@ no transitions out except by creating a new attempt with
 
 - **WHEN** the reconciler observes
   `work/shards/done/web-0001.json` and
-  `work/challenges/web-0001-flag-leak/metadata.json` exists with
+  `work/challenges/web/web-0001-flag-leak/metadata.json` exists with
   `solve_status = 'passed'`
 - **THEN** the row's `status` becomes `succeeded`,
   `resulting_challenge_dir` becomes
-  `'work/challenges/web-0001-flag-leak'`, and `finished_at` is set
+  `'work/challenges/web/web-0001-flag-leak'`, and `finished_at` is set
 
 #### Scenario: Done shard with missing artifact dir marks lost
 
@@ -115,10 +116,11 @@ no transitions out except by creating a new attempt with
 
 #### Scenario: Shard vanishing from disk marks running attempts lost
 
-- **GIVEN** a row with `status = 'running'` and
-  `shard_basename = 'web-0001.json'`
-- **WHEN** the shard file is absent from `pending/`, `running/`,
-  `done/`, and `failed/` for a full reconciler tick
+- **GIVEN** a row with `status = 'running'`,
+  `shard_basename = 'web-0001.json'`, and `id = A`
+- **WHEN** no shard payload with top-level `build_attempt_id = A` is
+  present under `pending/`, `running/`, `done/`, or `failed/` for a
+  full reconciler tick
 - **THEN** the row's `status` becomes `lost` immediately on the next
   tick with no grace period
 
@@ -146,11 +148,13 @@ within a single transaction:
 A design task in any other status SHALL be rejected with a
 validation error and SHALL NOT advance.
 
-`retry` SHALL require that the named `build_attempts` row is in a
-terminal status. It SHALL create a new attempt for the same design
-task following the same flow, then return the new attempt id. It
-SHALL NOT touch `work/challenges/<id>-<slug>/`; the runner's resume
-protocol carries forward already-passed stages.
+`retry` SHALL require that the named `build_attempts` row is in
+`failed` or `lost`. It SHALL create a new attempt for the same design
+task following the same flow with a fresh attempt-specific
+`shard_basename`, then return the new attempt id. It SHALL NOT touch
+`work/challenges/<category>/<id>-<slug>/`; the runner's resume
+protocol carries forward already-passed stages by inspecting artifact
+evidence for the same challenge id.
 
 #### Scenario: Submit batch rejects ineligible tasks
 
@@ -171,9 +175,10 @@ protocol carries forward already-passed stages.
 #### Scenario: Retry preserves existing artifacts
 
 - **GIVEN** build attempt #1 for design task T finished `failed` and
-  `work/challenges/<challenge_id>-<slug>/` exists with partial output
+  `work/challenges/<category>/<challenge_id>-<slug>/` exists with partial output
 - **WHEN** `retry(attempt_1.id)` is invoked
 - **THEN** a new `attempt_no = 2` row is inserted
+- **AND** the new row has a different `shard_basename` from attempt #1
 - **AND** the existing artifact directory is not deleted or modified
 - **AND** the rewritten shard file lands in `work/shards/pending/`
 
@@ -181,26 +186,34 @@ protocol carries forward already-passed stages.
 
 The system SHALL provide `services.BuildReconciler` running as a
 daemon thread launched by `web.server.serve(...)`. It SHALL poll
-`work/shards/{running,done,failed}/` on a fixed interval read from
+`work/shards/{pending,running,done,failed}/` on a fixed interval read from
 `BUILD_RECONCILER_POLL_SECONDS` (default 5; non-positive or
 non-integer values SHALL fall back to the default and emit a
 warning).
 
 Each tick SHALL:
 
-1. Match shards under `work/shards/running/` (filename
-   `<basename>.<worker>.json`) against the highest-`attempt_no`
-   `build_attempts` row with that `shard_basename` and a non-terminal
-   status; promote `queued` to `running`, set `worker` and
-   `started_at`.
-2. For shards under `work/shards/done/`, inspect the corresponding
-   `work/challenges/<challenge_id>-<slug>/metadata.json`; choose
-   `succeeded` / `failed` / `lost` per "build_attempts five-state
-   machine".
-3. For shards under `work/shards/failed/`, transition the matching
-   row to `failed`, summarizing the cause from the shard report.
-4. For non-terminal rows whose `shard_basename` is absent from all
-   four queue directories, set `status = 'lost'`.
+1. Match shards under `work/shards/running/` by reading the shard
+   JSON payload's top-level `build_attempt_id`. If the field is absent
+   or does not name a non-terminal `build_attempts` row, ignore the
+   shard. For a valid row, verify the row's `shard_basename` equals
+   the original pending basename represented by the running filename
+   `<basename>.<worker>.json`; then promote `queued` to `running`, set
+   `worker` and `started_at`.
+2. For shards under `work/shards/done/`, first attribute the shard by
+   payload `build_attempt_id` using the same ignore/verify rules, then
+   inspect the corresponding
+   `work/challenges/<category>/<challenge_id>-<slug>/metadata.json`;
+   choose `succeeded` / `failed` / `lost` per "build_attempts
+   five-state machine".
+3. For shards under `work/shards/failed/`, first attribute the shard
+   by payload `build_attempt_id` using the same ignore/verify rules,
+   then transition the matching non-terminal row to `failed`,
+   summarizing the cause from the shard report.
+4. For non-terminal rows whose generated shard with matching
+   top-level `build_attempt_id` is absent from all four queue
+   directories, set `status = 'lost'`. A basename-colliding shard
+   without the matching `build_attempt_id` does not count as present.
 5. Roll the parent `design_tasks.status` forward based on the
    highest-`attempt_no` row: `succeeded` -> `built`,
    `failed`/`lost` -> `build_failed`.
@@ -262,7 +275,9 @@ flag_location, validation, hints, prompt, etc.).
 Existing hand-written matrix shards that omit `build_attempt_id`,
 `design_task_id`, and `design` SHALL continue to be valid input to
 the runner. The reconciler SHALL ignore shards that lack
-`build_attempt_id`.
+`build_attempt_id`; build attribution SHALL be driven by the payload's
+`build_attempt_id`, with `shard_basename` used only as a consistency
+check and for progress-event lookup.
 
 #### Scenario: Generated shard carries traceability ids
 
@@ -281,6 +296,14 @@ the runner. The reconciler SHALL ignore shards that lack
 - **AND** the reconciler never tries to attribute its outcome to a
   `build_attempts` row
 
+#### Scenario: Basename collision without build_attempt_id is ignored
+
+- **GIVEN** a hand-written shard has the same filename as a
+  `build_attempts.shard_basename` but no top-level `build_attempt_id`
+- **WHEN** that shard appears under `running/`, `done/`, or `failed/`
+- **THEN** the reconciler ignores it
+- **AND** no `build_attempts` row changes status because of that shard
+
 ### Requirement: HTTP API exposes build orchestration
 
 The dashboard backend SHALL register the following endpoints in
@@ -292,7 +315,7 @@ catch-all in `web/server.py`:
   `{"build_attempt_ids": [UUID, ...]}` ordered by input.
 - `POST /api/design-tasks/{id}/build` with empty body; returns
   `201` with body `{"build_attempt_id": UUID}`.
-- `GET /api/build-attempts?status=&worker=&design_task_id=&limit=`;
+- `GET /api/build-attempts?status=&worker=&design_task_id=&generation_request_id=&category=&limit=`;
   returns `200` with a JSON array of "folded" rows (one per design
   task, exposing only its highest-`attempt_no` row) joined with the
   parent design task title/category and the latest derived percent
@@ -312,8 +335,8 @@ malformed `limit` values with `400`. Both knobs are read at module
 import time from the environment, falling back to defaults on
 missing or invalid values with a warning.
 
-Unknown filter values (e.g.
-`?status=invalid`) SHALL be rejected with `400`.
+Unknown filter values (e.g. `?status=invalid` or `?category=crypto`)
+and malformed UUID filters SHALL be rejected with `400`.
 
 #### Scenario: Batch submit returns ordered ids
 

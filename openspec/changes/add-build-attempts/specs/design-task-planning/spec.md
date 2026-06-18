@@ -112,7 +112,7 @@ there.
 - **WHEN** the dashboard renders the list
 - **THEN** the checkbox column and per-row `构建` button are enabled
   only on rows whose status is `designed` or `build_failed`
-- **AND** `building`, `built`, and `built_failed` rows show a
+- **AND** `building`, `built`, and `build_failed` rows show a
   read-only badge linking to the corresponding build-attempts row
   in the "构建任务" view
 

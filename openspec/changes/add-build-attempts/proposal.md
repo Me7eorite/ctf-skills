@@ -2,7 +2,7 @@
 
 Today's pipeline stops at `design_tasks.status = designed`: the validated
 structured design exists in PostgreSQL, but turning it into a buildable
-challenge under `work/challenges/<id>-<slug>/` is still a manual
+challenge under `work/challenges/<category>/<id>-<slug>/` is still a manual
 matrix-write-then-CLI-invoke step. Operators have no UI affordance to
 "select a designed task and build it," and there is no audit trail linking
 the resulting shard execution back to the design it came from.
@@ -16,7 +16,7 @@ file-system state back into PostgreSQL.
 
 - Add `build_attempts` as the PostgreSQL-side editorial unit. One row per
   "submit this design for building" action. Each row carries the
-  `design_task_id`, an attempt number, status, the shard basename it
+  `design_task_id`, an attempt number, status, the attempt-specific shard basename it
   rendered, the worker that claimed it, the resulting challenge directory
   on success, and an error summary on failure.
 - Add a five-state machine for `build_attempts.status`: `queued`,
@@ -34,7 +34,7 @@ file-system state back into PostgreSQL.
   `build_attempts (design_task_id) WHERE status IN ('queued','running')`
   prevents the same design task from having two active builds.
 - Add a `BuildReconciler` daemon thread launched from `web/server.py`.
-  It polls `work/shards/{running,done,failed}/` on a configurable
+  It polls `work/shards/{pending,running,done,failed}/` on a configurable
   interval (`BUILD_RECONCILER_POLL_SECONDS`, default 5), updates
   `build_attempts.status`, populates `worker` / `started_at` /
   `finished_at` / `resulting_challenge_dir`, and rolls the parent
@@ -59,8 +59,9 @@ file-system state back into PostgreSQL.
   validated `challenge_designs.payload` content. Hand-written matrix
   shards that omit these continue to run unchanged; the reconciler
   ignores shards that lack the build_attempt_id.
-- Retry is incremental: the new attempt re-emits the same shard
-  basename but does **not** clear `work/challenges/<id>-<slug>/`. The
+- Retry is incremental: the new attempt emits a fresh attempt-specific
+  shard basename but does **not** clear
+  `work/challenges/<category>/<id>-<slug>/`. The
   runner's existing resume protocol re-evaluates evidence and only
   re-executes the stages that did not pass. Retries therefore reuse
   Hermes tokens spent on the already-passing stages.

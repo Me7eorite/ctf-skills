@@ -56,7 +56,7 @@ operators can ignore for hand-written matrix shards.
 
 - No worker pool or PG-driven scheduling. Workers are still operator-
   started.
-- No automated cleanup of `work/challenges/<id>-<slug>/`. Operator-
+- No automated cleanup of `work/challenges/<category>/<id>-<slug>/`. Operator-
   initiated deletes are detected as `lost`, not auto-deleted.
 - No delivery-bundle download UI. That is a separate change
   (`add-delivery-bundles`).
@@ -159,12 +159,14 @@ queue directories.
 
 ### Decision 5: Retry uses the existing runner resume protocol
 
-When `retry` is called, the orchestration service emits the same
-`shard_basename` again to `work/shards/pending/` without touching
-`work/challenges/<id>-<slug>/`. The runner's resume planner — already
-specified by the hermes-execution-protocol capability — inspects
-evidence, skips passing stages with carry-forward events, and only
-re-runs failed stages.
+When `retry` is called, the orchestration service emits a fresh
+attempt-specific `shard_basename` to `work/shards/pending/` without
+touching `work/challenges/<category>/<id>-<slug>/`. The runner's
+resume planner, already specified by the hermes-execution-protocol
+capability, keys reuse from the challenge id and artifact directory
+rather than from the shard filename: it inspects evidence, skips
+passing stages with carry-forward events, and only re-runs failed
+stages.
 
 **Rationale:** This reuses an existing, well-tested mechanism. Hermes
 token cost stays close to the marginal cost of the failed stage, which
@@ -172,8 +174,12 @@ matters for budget-conscious operators. No new code in the runner.
 
 **Alternatives considered:**
 
-- *Wipe `work/challenges/<id>-<slug>/` on retry.* Trivial to
+- *Wipe `work/challenges/<category>/<id>-<slug>/` on retry.* Trivial to
   implement, but burns tokens regenerating already-passing artifacts.
+- *Reuse the same shard basename on every retry.* This looks simpler,
+  but terminal shard files in `done/` or `failed/` can be matched to
+  the new non-terminal attempt, and progress events from multiple
+  attempts share one shard key. Rejected.
 - *Selective wipe (only failed stage dirs).* The resume protocol
   already does this via evidence checks; manual selection would
   duplicate logic and risk drift.
@@ -184,7 +190,10 @@ The shard JSON envelope grows two optional top-level fields
 (`build_attempt_id`, `design_task_id`) and each challenges entry grows
 a `design` sub-object. Existing hand-written matrix shards keep
 working because the runner ignores extra fields and the reconciler
-treats shards lacking `build_attempt_id` as un-attributed.
+treats shards lacking `build_attempt_id` as un-attributed. The
+reconciler attributes generated shards by the payload's
+`build_attempt_id`, not by filename alone, so a hand-written shard with
+the same basename cannot move a `build_attempts` row.
 
 The `design` sub-object carries the validated
 `challenge_designs.payload` content (deployment, artifacts, flag
@@ -201,6 +210,9 @@ based.
   build time would require a DB round-trip from the runner, which
   currently has no persistence dependency. Inlining keeps the
   decoupling intact at the cost of duplicating data into the shard.
+- *Attribute reconciler rows by basename only.* That would contradict
+  the "ignore hand-written shards" requirement and allow a manual shard
+  with a colliding filename to update `build_attempts`. Rejected.
 
 ### Decision 7: Build view follows the Design Tasks page template, not a special toolbar
 

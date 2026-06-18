@@ -26,26 +26,26 @@
 - [ ] 4.1 Add `src/services/build_orchestration_service.py` with `BuildOrchestrationService` exposing `submit_batch(ids) -> list[UUID]`, `submit_single(id) -> UUID`, `retry(attempt_id) -> UUID`, `render_shard_payload(design_task, latest_design) -> dict`.
 - [ ] 4.2 `submit_batch` opens one short transaction via `SessionFactory`. For each task: validate current status is `designed` or `build_failed`, compute next `attempt_no`, insert `build_attempts(queued)`, render shard JSON, atomically write to `work/shards/pending/<shard_basename>` via temp-file + rename, set `design_tasks.status = 'building'`. If any single step fails the whole batch rolls back and no shard files survive (clean up partial writes).
 - [ ] 4.3 `submit_single` is a thin wrapper around `submit_batch([id])` so behavior stays identical for one or many.
-- [ ] 4.4 `retry`: enforce that the source attempt is in a terminal status (`failed` or `lost`). Insert a new attempt with `attempt_no + 1`, write the shard file (overwriting any residual), update design_task to `building`. The existing `work/challenges/<id>-<slug>/` is NOT touched.
+- [ ] 4.4 `retry`: enforce that the source attempt is in `failed` or `lost`. Insert a new attempt with `attempt_no + 1`, compute a fresh attempt-specific `shard_basename`, write the shard file, and update design_task to `building`. The existing `work/challenges/<category>/<id>-<slug>/` is NOT touched.
 - [ ] 4.5 `render_shard_payload`: produce `{"build_attempt_id": ..., "design_task_id": ..., "challenges": [matrix_fields + "design": challenge_designs.payload]}`. The matrix-fields mapping must match `matrix.example.jsonl` keys for the `challenge.category`; new design-only fields go under `challenges[].design`, never inline with matrix keys.
 - [ ] 4.6 Re-export `BuildOrchestrationService` from `src/services/__init__.py`.
 - [ ] 4.7 Add `tests/app/test_build_orchestration_service.py` (in-memory PG via `pytest-postgresql`) covering: happy path single submit, batch submit ordering, ineligible-status rejection, partial-unique-index conflict propagation as `BuildValidationError`, retry on failed and on lost, atomic rollback when shard write fails.
 
 ## 5. Service layer — BuildReconciler
 
-- [ ] 5.1 Add `src/services/build_reconciler.py` with a `BuildReconciler` class and module-level constants `DEFAULT_POLL_INTERVAL_SECONDS = 5` and `POLL_INTERVAL_SECONDS = int(os.environ.get("BUILD_RECONCILER_POLL_SECONDS", str(DEFAULT_POLL_INTERVAL_SECONDS)) or DEFAULT_POLL_INTERVAL_SECONDS)`. On invalid env value, fall back to the default and log a warning once.
-- [ ] 5.2 `BuildReconciler.tick(session)` performs the five steps from the build-orchestration spec (`Reconciler mirrors filesystem state` requirement) in order, in one short transaction.
+- [ ] 5.1 Add `src/services/build_reconciler.py` with a `BuildReconciler` class and module-level constants `DEFAULT_POLL_INTERVAL_SECONDS = 5` and `POLL_INTERVAL_SECONDS` parsed from `BUILD_RECONCILER_POLL_SECONDS`. On missing, non-integer, or non-positive env value, fall back to the default and log a warning once.
+- [ ] 5.2 `BuildReconciler.tick(session)` performs the five steps from the build-orchestration spec (`Reconciler mirrors filesystem state` requirement) in order, in one short transaction. Shards in `running/`, `done/`, and `failed/` MUST be attributed by top-level `build_attempt_id`; shards without it are ignored even if their filename matches a `shard_basename`.
 - [ ] 5.3 `BuildReconciler.run_forever()` opens a fresh session per tick (so a long-lived transaction never holds locks), catches all exceptions including `PersistenceConnectionError`, logs a warning, and sleeps `POLL_INTERVAL_SECONDS` before retrying. The thread exits only when the daemon flag flips at shutdown.
 - [ ] 5.4 Add a helper `BuildReconciler.tick_once_sync()` that opens a session and runs a single tick. This is used by `/api/state` to refresh state on demand.
 - [ ] 5.5 Update `src/web/server.py` `serve(...)` to construct one `BuildReconciler`, start `Thread(target=run_forever, daemon=True)`, and call `tick_once_sync()` inside the `/api/state` handler before serialization.
-- [ ] 5.6 Add `tests/app/test_build_reconciler.py` covering each transition (queued→running on running/ shard, running→succeeded on done/ + artifact passed, →failed on done/ + artifact not passed, →lost on done/ + artifact missing, →lost on shard vanished, design_task rollup), invalid env value warning, and a tick that survives a forced PG error.
+- [ ] 5.6 Add `tests/app/test_build_reconciler.py` covering each transition (queued→running on running/ shard, running→succeeded on done/ + artifact passed, →failed on done/ + artifact not passed, →lost on done/ + artifact missing, →lost on shard vanished, design_task rollup), ignoring a basename-colliding shard that lacks `build_attempt_id`, invalid env value warning, and a tick that survives a forced PG error.
 
 ## 6. HTTP API
 
 - [ ] 6.1 Add `src/web/build_attempts_endpoints.py` exporting `register_build_attempts_endpoints(app)`. Read `BUILD_ATTEMPTS_LIST_DEFAULT_LIMIT` and `BUILD_ATTEMPTS_LIST_MAX_LIMIT` from env at module import with the documented fallbacks and a one-time warning on invalid values.
 - [ ] 6.2 Implement `POST /api/design-tasks/build` taking `{"design_task_ids": [...]}`, returning `201 {"build_attempt_ids": [...]}` in the same order; reject malformed UUIDs with `400`; surface ineligible-status as `409` with explanatory message; partial-unique-index conflict as `409`.
 - [ ] 6.3 Implement `POST /api/design-tasks/{id}/build` returning `201 {"build_attempt_id": UUID}` or `409` on conflicts.
-- [ ] 6.4 Implement `GET /api/build-attempts?status=&worker=&design_task_id=&category=&limit=`. Validate `status` against the five values, `category` against the supported categories, `design_task_id` as UUID. Folded shape (one row per design task) with title/category/percent joined in. Apply default and max limits; set `X-Limit-Capped` header when capped.
+- [ ] 6.4 Implement `GET /api/build-attempts?status=&worker=&design_task_id=&generation_request_id=&category=&limit=`. Validate `status` against the five values, `category` against the supported categories, and UUID filters. Folded shape (one row per design task) with title/category/percent joined in. Apply default and max limits; set `X-Limit-Capped` header when capped.
 - [ ] 6.5 Implement `GET /api/build-attempts/{id}` returning the attempt itself + sibling attempts ordered by `attempt_no` ascending + progress events for the shard (with `carry-forward:` events preserved) + resulting_challenge_dir.
 - [ ] 6.6 Implement `POST /api/build-attempts/{id}/retry` returning `201 {"build_attempt_id": UUID}` for the new attempt.
 - [ ] 6.7 Register these endpoints in `src/web/server.py` BEFORE the static catch-all route.
@@ -53,7 +53,7 @@
 
 ## 7. Shard JSON shape + runner contract
 
-- [ ] 7.1 Confirm (in code) that `core.queue.split_matrix` and `core.queue.split_challenges` treat the `{"challenges": [...]}` envelope as canonical and tolerate the new optional top-level `build_attempt_id` and `design_task_id`. Add a test in `tests/app/test_queue.py` or `tests/app/test_core_queue.py` (whichever exists) asserting an envelope with the new fields round-trips through split unchanged.
+- [ ] 7.1 Confirm (in code) that `core.queue.split_matrix` and `core.queue.split_challenges` continue to accept existing JSONL matrix rows and preserve unknown per-challenge fields such as `design` inside each `challenges[]` entry. Add a test in `tests/app/test_shards.py` asserting a row with `design` survives split output unchanged. The orchestration service writes the generated `{"build_attempt_id": ..., "design_task_id": ..., "challenges": [...]}` envelope directly and does not route generated shards through `split_matrix`.
 - [ ] 7.2 Update `src/hermes/prompt.py` rendering (or the prompt template) so a single new sentence references the `design` sub-object for challenges that include it. Existing matrix-only shards must still render without `design` present.
 - [ ] 7.3 Update `prompts/shard_prompt.md` with one sentence: when each challenge carries a `design` sub-object, Hermes SHALL use it as authoritative for deployment / artifacts / flag location / validation steps / hints / operator-facing prompt copy.
 - [ ] 7.4 Add a prompt-rendering test verifying the new sentence appears when the shard contains a `design` field and is absent when it doesn't.
@@ -102,6 +102,6 @@
 - [ ] 13.2 `uv run pytest --ignore=tests/skills` passes with `TEST_DATABASE_URL` unset (all in-memory paths green).
 - [ ] 13.3 With `TEST_DATABASE_URL` set, `uv run pytest -m postgres` covers the new alembic, repository, and reconciler PG tests.
 - [ ] 13.4 Manual smoke: in a clean checkout, `uv run challenge-factory serve`, navigate to `#/build-attempts` → empty state renders, navigate to `#/design-tasks`, select a designed task, click `构建已选` → row moves to `building`, navigate to `#/build-attempts` → see the queued attempt, start a worker via `▶ 启动 Worker`, wait for completion, observe transition through `running` and into `succeeded`.
-- [ ] 13.5 Manual smoke: rename `work/challenges/<id>-<slug>/` and observe the next reconciler tick (or trigger `⟳ 刷新`) flipping the attempt to `lost`.
+- [ ] 13.5 Manual smoke: rename `work/challenges/<category>/<id>-<slug>/` and observe the next reconciler tick (or trigger `⟳ 刷新`) flipping the attempt to `lost`.
 - [ ] 13.6 Confirm the global header on `#/overview`, `#/research-requests`, `#/design-tasks`, etc., no longer contains the four removed elements.
 - [ ] 13.7 `BUILD_RECONCILER_POLL_SECONDS=12 uv run challenge-factory serve` logs the parsed interval; setting it to `0` or `abc` logs the fallback warning and uses 5.
