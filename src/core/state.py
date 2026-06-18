@@ -218,12 +218,15 @@ class InMemoryProgressStore:
         if current is None:
             self._snapshots[key] = _snapshot_from_event(event, timestamp)
             return
+        # Always refresh observation fields; keep (stage, status, percent) of
+        # the higher-derived-percent event so the dashboard never shows
+        # stage/status from a late-arriving lower-progress event.
         current["worker"] = event["worker"]
         current["message"] = event["message"]
-        current["stage"] = event["stage"]
-        current["status"] = event["status"]
         current["updated_at"] = timestamp
         if int(event["percent"]) >= int(current["percent"]):
+            current["stage"] = event["stage"]
+            current["status"] = event["status"]
             current["percent"] = event["percent"]
 
 

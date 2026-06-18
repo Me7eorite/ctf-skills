@@ -105,21 +105,35 @@ queries snapshots directly; resume planning queries events.
 - *Materialized view over events.* Same coupling problem plus refresh
   scheduling. Not worth it at this scale.
 
-### Decision 3: Drop the `percent` column; compute in Python
+### Decision 3: Keep the `percent` column as a denormalized cache
 
-The current SQLite schema stores `percent` as an integer. The value is
-deterministic from `(stage, status)` via `_percent(stage, status)` in
-`core/state.py`. We remove the column. Both `PostgresProgressStore` and
-`InMemoryProgressStore` call `_percent` at write time when populating
-the API response dict and when comparing snapshots for the no-regression
-rule.
+We keep the `percent INTEGER NOT NULL` column on both `progress_events`
+and `progress_snapshots`, populated at write time from
+`_percent(stage, status)`. The formula still lives only in
+`core/state.py`; `persistence/repositories/progress.py` imports it
+(`from core.state import _percent`) instead of duplicating it.
 
-**Rationale:** the SQLite era stored a copy because SQLite cannot
-inexpensively call back into Python during a query. PostgreSQL can use a
-view, but doing so duplicates the formula in SQL and Python. The
-dashboard and the runner already touch Python before exposing percent to
-the frontend, so application-side computation is both simpler and
-safer.
+**Rationale:** earlier draft dropped the column to avoid storing a
+derived value. Implementation review surfaced three reasons to keep it:
+
+1. **Dashboard JS already reads `percent` from the JSON response.** Keeping
+   the column means every row return path is one straight read, no
+   per-row Python recomputation in `_event_dict` / `_snapshot_dict`.
+2. **Resume and metrics logic sort and filter by percent.** Querying or
+   ordering by percent in SQL becomes a column scan instead of a
+   `CASE` expression that has to mirror `_percent`.
+3. **The risk we feared (formula drift) is contained by a single import:**
+   the PG repository imports `_percent` from `core.state` and the
+   "single source of truth" property is preserved without dropping the
+   column.
+
+**Alternatives considered:**
+
+- *Drop column, recompute in Python on each return.* Cleaner schema but
+  more code per read path and harder to ORDER BY percent in PG queries.
+- *Drop column, materialize percent as a `GENERATED ALWAYS AS (...)
+  STORED` PG column with the formula in SQL.* Two sources of truth —
+  exactly what we want to avoid.
 
 ### Decision 4: Snapshot no-regression enforced in service code
 

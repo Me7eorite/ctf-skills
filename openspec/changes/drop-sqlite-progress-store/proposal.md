@@ -39,8 +39,10 @@ normal relational foundation for a later build-attempt correlation change.
 - Add `InMemoryProgressStore` in `core/state.py` for tests and offline tooling.
 - Add `PostgresProgressStore` in `persistence/repositories/progress.py`
   backed by two new tables, `progress_events` and `progress_snapshots`.
-- Drop the `percent` column. The percent is derived from `(stage, status)`
-  via the existing `_percent` function, which stays the only source of truth.
+- Keep the `percent` column on both tables as a denormalized cache of
+  `_percent(stage, status)` written at insert/upsert time. The function
+  `_percent` in `core/state.py` remains the only source of truth for the
+  formula and is imported (not duplicated) by `persistence/repositories/progress.py`.
   The "progress never regresses per `(shard, challenge_id)`" rule is enforced
   in the service layer (Python compares old vs. new derived percent before
   overwriting the snapshot row).
@@ -51,8 +53,11 @@ normal relational foundation for a later build-attempt correlation change.
   (`{path, fallback, warning}`), but the values are now permanent
   PostgreSQL metadata so the frontend needs no changes.
 - Schema details: `progress_events` uses `BIGSERIAL` ids, `TIMESTAMPTZ` server
-  clock, nullable `worker` / `message`, and `CHECK` constraints on `stage` /
-  `status` matching the current Python validators. Store methods serialize
+  clock, `worker` and `message` as `TEXT NOT NULL DEFAULT ''` (matching the
+  empty-string contract the dashboard JS already expects — no nullables on the
+  observation fields), `percent` as `INTEGER NOT NULL` (denormalized cache of
+  `_percent(stage, status)`), and `CHECK` constraints on `stage` / `status`
+  matching the current Python validators. Store methods serialize
   `created_at` / `updated_at` in returned dictionaries as UTC
   `YYYY-MM-DDTHH:MM:SSZ` strings so metrics and API consumers keep the same
   contract.

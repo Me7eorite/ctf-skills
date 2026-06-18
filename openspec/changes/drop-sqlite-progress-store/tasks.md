@@ -1,8 +1,8 @@
 ## 1. Database schema
 
-- [ ] 1.1 Create Alembic revision `0005_progress_events` that creates `progress_events` (BIGSERIAL id, TEXT shard, TEXT challenge_id default '', nullable worker, TEXT stage with CHECK in the 7-stage list, TEXT status with CHECK in the 4-status list, nullable message, TIMESTAMPTZ created_at default now()).
-- [ ] 1.2 Add indexes `progress_events_shard_id_idx (shard, id)` and `progress_events_shard_challenge_id_idx (shard, challenge_id, id)` in the same revision.
-- [ ] 1.3 In the same revision, create `progress_snapshots` (TEXT shard, TEXT challenge_id default '', nullable worker, TEXT stage, TEXT status, nullable message, TIMESTAMPTZ updated_at default now(), PRIMARY KEY (shard, challenge_id)).
+- [ ] 1.1 Create Alembic revision `0005_progress_events` that creates `progress_events` (BIGSERIAL id, TEXT shard NOT NULL, TEXT challenge_id NOT NULL default '', TEXT worker NOT NULL default '', TEXT stage with CHECK in the 7-stage list, TEXT status with CHECK in the 4-status list, INTEGER percent NOT NULL (denormalized cache of `_percent(stage, status)`), TEXT message NOT NULL default '', TIMESTAMPTZ created_at default now()).
+- [ ] 1.2 Add indexes `ix_progress_events_shard_id (shard, id)`, `ix_progress_events_challenge_id (shard, challenge_id, id)`, and the partial index `ix_progress_events_claims (shard, id) WHERE challenge_id = '' AND stage = 'queued' AND status = 'running'` in the same revision.
+- [ ] 1.3 In the same revision, create `progress_snapshots` (TEXT shard, TEXT challenge_id default '', TEXT worker NOT NULL default '', TEXT stage NOT NULL, TEXT status NOT NULL, INTEGER percent NOT NULL, TEXT message NOT NULL default '', TIMESTAMPTZ updated_at default now(), PRIMARY KEY (shard, challenge_id)).
 - [ ] 1.4 Implement `downgrade()` to drop both tables; verify `alembic downgrade -1` then `alembic upgrade head` is clean on an empty database.
 - [ ] 1.5 Add `tests/app/test_progress_alembic.py` (mark `@pytest.mark.postgres`) asserting the new revision applies cleanly, the CHECK constraints reject unknown stage/status values, and the snapshot primary key rejects duplicates.
 
@@ -16,8 +16,8 @@
 ## 3. persistence — ORM and Postgres implementation
 
 - [ ] 3.1 Add `src/persistence/models/progress.py` declaring `ProgressEvent` and `ProgressSnapshot` SQLAlchemy mappings against the new tables; re-export from `persistence.models.__init__`.
-- [ ] 3.2 Add `src/persistence/repositories/progress.py` with `PostgresProgressStore` implementing `ProgressStore`; each public method opens a short transaction via the project's `SessionFactory`.
-- [ ] 3.3 Implement `record(...)`: insert one event, then upsert snapshot — SELECT FOR UPDATE the existing snapshot row, compare `_percent(old)` vs `_percent(new)`, write either the full new row or keep stage/status and update only updated_at/worker/message.
+- [ ] 3.2 Add `src/persistence/repositories/progress.py` with `PostgresProgressStore` implementing `ProgressStore`; each public method opens a short transaction via the project's `SessionFactory`. Import `_percent` from `core.state` (single source of truth); do NOT redefine the formula in the repository.
+- [ ] 3.3 Implement `record(...)`: insert one event with `percent=_percent(stage, status)` (imported from `core.state`), then upsert snapshot — SELECT FOR UPDATE the existing snapshot row, always refresh `updated_at`/`worker`/`message`, and overwrite `(stage, status, percent)` only when the new event's `percent >= snapshot.percent`.
 - [ ] 3.4 Implement `record_batch(events: Sequence[ProgressEventInput])`: single transaction, raises on the first invalid event with full rollback; reuse the snapshot upsert path per (shard, challenge_id).
 - [ ] 3.5 Implement read APIs (`events_for_shard`, `events_for_challenge`, `latest_claim_event`) with the documented id-window semantics; ensure ordering by ascending id; `events_for_challenge` rejects empty challenge_id.
 - [ ] 3.6 Implement `reset_snapshots(shard)` (DELETE from progress_snapshots WHERE shard = :shard).

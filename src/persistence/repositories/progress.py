@@ -10,7 +10,13 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from core.state import STAGES, STATUSES, ProgressEventInput, ProgressStore
+from core.state import (
+    STAGES,
+    STATUSES,
+    ProgressEventInput,
+    ProgressStore,
+    _percent,
+)
 from persistence.models.progress import ProgressEvent, ProgressSnapshot
 from persistence.session import SessionFactory, transaction
 
@@ -191,12 +197,15 @@ class PostgresProgressStore(ProgressStore):
             )
             session.add(snapshot)
         else:
+            # Always refresh observation fields; keep (stage, status, percent)
+            # of the higher-derived-percent event so the dashboard never shows
+            # stage/status from a late-arriving lower-progress event.
             snapshot.worker = event.worker
-            snapshot.stage = event.stage
-            snapshot.status = event.status
             snapshot.message = event.message
             snapshot.updated_at = now
             if event.percent >= snapshot.percent:
+                snapshot.stage = event.stage
+                snapshot.status = event.status
                 snapshot.percent = event.percent
         session.flush()
         session.refresh(snapshot)
@@ -223,17 +232,6 @@ def _prepare_event(event: ProgressEventInput) -> ProgressEventInput:
 
 def _normalize_shard(shard: str) -> str:
     return Path(shard).name
-
-
-def _percent(stage: str, status: str) -> int:
-    index = STAGES.index(stage)
-    if status == "pending":
-        return max(0, index * 16 - 8)
-    if status == "running":
-        return min(95, index * 16 + 5)
-    if status == "failed":
-        return min(99, index * 16 + 8)
-    return 100 if stage == "complete" else min(96, (index + 1) * 16)
 
 
 def _event_result(event: ProgressEvent, *, updated_at: datetime) -> dict:

@@ -25,12 +25,12 @@ arguments of `record`:
 | `stage` | `str` (one of `STAGES`) | required |
 | `status` | `str` (one of `STATUSES`) | required |
 | `challenge_id` | `str` | `""` (shard-level event when empty) |
-| `worker` | `str \| None` | `None` |
-| `message` | `str \| None` | `None` |
+| `worker` | `str` | `""` |
+| `message` | `str` | `""` |
 
 The DTO SHALL NOT carry a `percent` or `created_at` field; percent is derived
-by `_percent(stage, status)` at write time and `created_at` is set
-server-side by PostgreSQL or by the in-memory clock helper.
+by `_percent(stage, status)` at write time and stored in the row, and
+`created_at` is set server-side by PostgreSQL or by the in-memory clock helper.
 
 The protocol SHALL expose exactly these methods:
 
@@ -129,22 +129,28 @@ following column set:
 | `id` | `BIGSERIAL` | PRIMARY KEY |
 | `shard` | `TEXT` | NOT NULL |
 | `challenge_id` | `TEXT` | NOT NULL DEFAULT `''` |
-| `worker` | `TEXT` | nullable |
+| `worker` | `TEXT` | NOT NULL DEFAULT `''` |
 | `stage` | `TEXT` | NOT NULL, CHECK in (`queued`, `design`, `implement`, `build`, `validate`, `document`, `complete`) |
 | `status` | `TEXT` | NOT NULL, CHECK in (`pending`, `running`, `passed`, `failed`) |
-| `message` | `TEXT` | nullable |
+| `percent` | `INTEGER` | NOT NULL (denormalized cache of `_percent(stage, status)`) |
+| `message` | `TEXT` | NOT NULL DEFAULT `''` |
 | `created_at` | `TIMESTAMPTZ` | NOT NULL DEFAULT `now()` |
 
-The table SHALL NOT include a `percent` column. The derived percent is
-computed from `(stage, status)` by `_percent` in `core/state.py`, which
-remains the single source of truth for the formula.
+The `percent` column SHALL be populated at insert time by calling
+`_percent(stage, status)` from `core/state.py`. PostgreSQL SHALL NOT compute
+the percent itself (no `GENERATED ALWAYS AS (...) STORED` and no SQL `CASE`
+expression). The Python function `_percent` remains the single source of
+truth for the formula and SHALL be imported (not duplicated) by
+`persistence/repositories/progress.py`.
 
 All `ProgressStore` methods that return event or snapshot dictionaries SHALL
 serialize `created_at` and `updated_at` values as UTC
 `YYYY-MM-DDTHH:MM:SSZ` strings, even though PostgreSQL stores them as
 `TIMESTAMPTZ`.
 
-Two indexes SHALL exist: `(shard, id)` and `(shard, challenge_id, id)`.
+Two ordinary indexes SHALL exist: `(shard, id)` and `(shard, challenge_id, id)`.
+A third partial index `(shard, id) WHERE challenge_id = '' AND stage = 'queued'
+AND status = 'running'` MAY exist to accelerate `latest_claim_event` lookups.
 
 #### Scenario: Invalid stage is rejected at the database
 
@@ -162,21 +168,31 @@ Two indexes SHALL exist: `(shard, id)` and `(shard, challenge_id, id)`.
 ### Requirement: progress_snapshots is the dashboard read model
 
 The system SHALL provide a PostgreSQL table `progress_snapshots` keyed by
-`(shard, challenge_id)` and updated through `INSERT ... ON CONFLICT DO
-UPDATE`. Columns mirror `progress_events` except `id` and `created_at`
-are replaced by `updated_at TIMESTAMPTZ NOT NULL DEFAULT now()`.
+`(shard, challenge_id)` and updated through the read-then-write upsert flow
+described below. Columns mirror `progress_events` (including the
+`percent INTEGER NOT NULL` denormalized cache and `worker` / `message`
+`TEXT NOT NULL DEFAULT ''`) except that `id` and `created_at` are replaced
+by `updated_at TIMESTAMPTZ NOT NULL DEFAULT now()`.
 
 The dashboard SHALL query `progress_snapshots` directly for the
 per-`(shard, challenge_id)` latest-state read model and SHALL NOT
 recompute snapshots from `progress_events` on each request.
 
 The "progress never regresses" rule SHALL be enforced in `PostgresProgressStore`
-service code (and mirrored in `InMemoryProgressStore`): before performing the
-upsert, the implementation computes `new_percent = _percent(new_stage, new_status)`
-and `old_percent = _percent(existing_stage, existing_status)` for the existing
-snapshot row (if any); if `new_percent < old_percent` the upsert still updates
-`updated_at`, `worker`, and `message` but does NOT overwrite `stage` and
-`status`.
+service code (and mirrored in `InMemoryProgressStore`). For each upsert:
+
+1. SELECT the existing snapshot row for `(shard, challenge_id)` (FOR UPDATE in
+   the PG implementation).
+2. Always refresh `updated_at`, `worker`, and `message` to the new event's
+   values.
+3. If the new event's stored `percent` (= `_percent(new_stage, new_status)`)
+   is **greater than or equal to** the existing snapshot's `percent`,
+   overwrite `(stage, status, percent)` with the new event's values.
+4. If the new event's stored `percent` is **less than** the existing
+   snapshot's `percent`, keep the snapshot's existing `(stage, status, percent)`.
+
+The result is that the dashboard never shows `(stage, status)` from a
+late-arriving lower-progress event for the same `(shard, challenge_id)` pair.
 
 #### Scenario: Snapshot upsert preserves higher progress
 

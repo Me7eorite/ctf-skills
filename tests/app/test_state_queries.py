@@ -211,8 +211,11 @@ class SnapshotMonotonicityTests(unittest.TestCase):
                 for snapshot in store.dashboard()["snapshots"]
                 if snapshot["challenge_id"] == "c"
             )
-            self.assertEqual(updated["stage"], "validate")
-            self.assertEqual(updated["status"], "running")
+            # New semantics: snapshot keeps the higher-derived-percent
+            # (stage, status) so the dashboard never jumps backward to a
+            # late-arriving lower-progress event.
+            self.assertEqual(updated["stage"], "document")
+            self.assertEqual(updated["status"], "passed")
             self.assertGreaterEqual(updated["percent"], high["percent"])
 
 
