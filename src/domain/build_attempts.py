@@ -32,3 +32,15 @@ class BuildAttempt:
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
+
+
+@dataclass(frozen=True)
+class BuildAttemptListItem(BuildAttempt):
+    """构建列表的折叠行：每个设计任务只暴露最新尝试。"""
+
+    generation_request_id: UUID
+    challenge_id: str
+    title: str
+    category: str
+    difficulty: str
+    percent: int

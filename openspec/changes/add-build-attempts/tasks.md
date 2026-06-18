@@ -16,10 +16,10 @@
 
 ## 3. Persistence — ORM and repository
 
-- [ ] 3.1 Add `src/persistence/models/build_attempts.py` with the `BuildAttempt` SQLAlchemy mapping mirroring revision `0006`. Re-export from `persistence/models/__init__.py`.
-- [ ] 3.2 Add `src/persistence/repositories/build_attempts.py` with `BuildAttemptsRepository`. Methods: `create_attempt(...)`, `get(id)`, `latest_for_design_task(design_task_id)`, `list_attempts(generation_request_id?, status?, worker?, category?, limit?)` returning the folded "one row per design task" shape used by the list endpoint, `list_for_design_task(design_task_id)` ordered by `attempt_no`, `update_to_running(...)`, `update_to_terminal(...)`, `update_artifact_status(...)`. Each method takes a Session and does not open transactions of its own.
-- [ ] 3.3 The folded list SQL MUST use a window function or a correlated `MAX(attempt_no)` subquery. It MUST select each task's highest attempt before applying status/worker/request/category filters, so filters never expose an older sibling. No per-row N+1 against `progress_snapshots` or `design_tasks`.
-- [ ] 3.4 Add `tests/app/test_build_attempts_repository.py` (`@pytest.mark.postgres`) covering: insert, attempt_no auto-increment, the partial unique index, terminal-status updates with `finished_at`, the folded list ordering and limit, and the join to `progress_snapshots` returning percent.
+- [x] 3.1 Add `src/persistence/models/build_attempts.py` with the `BuildAttempt` SQLAlchemy mapping mirroring revision `0006`. Re-export from `persistence/models/__init__.py`.
+- [x] 3.2 Add `src/persistence/repositories/build_attempts.py` with `BuildAttemptsRepository`. Methods: `create_attempt(...)`, `get(id)`, `latest_for_design_task(design_task_id)`, `list_attempts(generation_request_id?, status?, worker?, category?, limit?)` returning the folded "one row per design task" shape used by the list endpoint, `list_for_design_task(design_task_id)` ordered by `attempt_no`, `update_to_running(...)`, `update_to_terminal(...)`, `update_artifact_status(...)`. Each method takes a Session and does not open transactions of its own.
+- [x] 3.3 The folded list SQL MUST use a window function or a correlated `MAX(attempt_no)` subquery. It MUST select each task's highest attempt before applying status/worker/request/category filters, so filters never expose an older sibling. No per-row N+1 against `progress_snapshots` or `design_tasks`.
+- [x] 3.4 Add `tests/app/test_build_attempts_repository.py` (`@pytest.mark.postgres`) covering: insert, attempt_no auto-increment, the partial unique index, terminal-status updates with `finished_at`, the folded list ordering and limit, and the join to `progress_snapshots` returning percent.
 
 ## 4. Service layer — BuildOrchestrationService
 

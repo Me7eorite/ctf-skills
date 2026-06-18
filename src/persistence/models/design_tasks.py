@@ -30,7 +30,8 @@ class DesignTask(Base):
             name="ck_design_tasks_difficulty",
         ),
         sa.CheckConstraint(
-            "status in ('draft', 'queued', 'designing', 'designed', 'failed', 'archived')",
+            "status in ('draft', 'queued', 'designing', 'designed', 'failed', "
+            "'archived', 'building', 'built', 'build_failed')",
             name="ck_design_tasks_status",
         ),
         sa.UniqueConstraint(

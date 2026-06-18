@@ -1,0 +1,67 @@
+"""SQLAlchemy model for build-attempt persistence."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from uuid import UUID
+
+import sqlalchemy as sa
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from persistence.models.base import Base
+from persistence.models.design_tasks import DesignTask
+from persistence.models.research import CreatedAt, UuidPk
+
+
+class BuildAttempt(Base):
+    __tablename__ = "build_attempts"
+    __table_args__ = (
+        sa.CheckConstraint(
+            "status in ('queued', 'running', 'succeeded', 'failed', 'lost')",
+            name="ck_build_attempts_status",
+        ),
+        sa.CheckConstraint(
+            "artifact_status in ('unknown', 'present', 'missing')",
+            name="ck_build_attempts_artifact_status",
+        ),
+        sa.UniqueConstraint(
+            "design_task_id",
+            "attempt_no",
+            name="uq_build_attempts_task_attempt_no",
+        ),
+        sa.Index(
+            "one_active_build_per_task",
+            "design_task_id",
+            unique=True,
+            postgresql_where=sa.text("status IN ('queued','running')"),
+        ),
+        sa.Index(
+            "ix_build_attempts_status_created",
+            "status",
+            sa.text("created_at DESC"),
+        ),
+        sa.Index("ix_build_attempts_shard", "shard_basename"),
+    )
+
+    id: Mapped[UuidPk]
+    design_task_id: Mapped[UUID] = mapped_column(
+        sa.Uuid(),
+        sa.ForeignKey("design_tasks.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    attempt_no: Mapped[int] = mapped_column(sa.Integer(), nullable=False)
+    status: Mapped[str] = mapped_column(sa.Text(), nullable=False)
+    shard_basename: Mapped[str] = mapped_column(sa.Text(), nullable=False)
+    worker: Mapped[str | None] = mapped_column(sa.Text())
+    resulting_challenge_dir: Mapped[str | None] = mapped_column(sa.Text())
+    artifact_status: Mapped[str] = mapped_column(
+        sa.Text(),
+        nullable=False,
+        server_default=sa.text("'unknown'"),
+    )
+    error: Mapped[str | None] = mapped_column(sa.Text())
+    created_at: Mapped[CreatedAt]
+    started_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+
+    design_task: Mapped[DesignTask] = relationship()
