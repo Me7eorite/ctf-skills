@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from core.jsonio import write_json
 from core.paths import ProjectPaths
@@ -63,3 +64,24 @@ class DashboardTests(unittest.TestCase):
 
         self.assertFalse(ok)
         self.assertIn("待处理分片", message)
+
+    def test_worker_command_omits_removed_validate_flag(self):
+        write_json(
+            self.paths.shards / "pending" / "web-0001.json",
+            {"challenges": [{"id": "web-0001", "category": "web"}]},
+        )
+        with (
+            patch("web.dashboard.subprocess.Popen") as popen,
+            patch("web.dashboard.time.sleep"),
+        ):
+            popen.return_value.poll.return_value = None
+
+            ok, _message = TaskManager(self.paths).start("worker")
+
+        self.assertTrue(ok)
+        command = popen.call_args.args[0]
+        self.assertEqual(
+            command[2:],
+            ["run", "--worker", "dashboard-01", "--loop"],
+        )
+        self.assertNotIn("--validate", command)

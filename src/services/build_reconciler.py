@@ -98,17 +98,26 @@ class BuildReconciler:
         staged_ids: set[UUID],
         observations: dict[UUID, _ObservedShard],
     ) -> None:
-        rows = session.scalars(
+        # 中文注释：只锁活跃行，避免每个 tick 锁住全表历史；终态行的 artifact
+        # 状态只有 reconciler 自己会改，因此用非锁查询单独刷新即可。
+        active_rows = session.scalars(
             sa.select(build_model.BuildAttempt)
+            .where(build_model.BuildAttempt.status.in_(("queued", "running")))
             .order_by(build_model.BuildAttempt.created_at)
             .with_for_update()
         ).all()
+        terminal_rows = session.scalars(
+            sa.select(build_model.BuildAttempt)
+            .where(
+                build_model.BuildAttempt.status.in_(("succeeded", "failed", "lost")),
+                build_model.BuildAttempt.resulting_challenge_dir.is_not(None),
+            )
+        ).all()
+        for row in terminal_rows:
+            self._refresh_terminal_artifact(row)
         now = datetime.now(timezone.utc)
         staged_id_texts = {str(staged_id) for staged_id in staged_ids}
-        for row in rows:
-            if row.status in {"succeeded", "failed", "lost"}:
-                self._refresh_terminal_artifact(row)
-                continue
+        for row in active_rows:
             observed = observations.get(row.id)
             if observed is not None and (
                 str(observed.payload.get("design_task_id"))

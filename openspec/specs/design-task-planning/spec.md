@@ -79,10 +79,20 @@ same completed research run.
 ### Requirement: Design task status supports planning before execution
 
 The system SHALL model design task status with the values
-`draft|queued|designing|designed|failed|archived`. This change SHALL implement
-operator transitions `draft -> queued`, `draft -> archived`, and
-`queued -> archived`. Worker transitions involving `designing`, `designed`, and
-`failed` are reserved for a future design-agent execution change.
+`draft|queued|designing|designed|failed|archived|building|built|build_failed`.
+The planning subsystem SHALL implement operator transitions
+`draft -> queued`, `draft -> archived`, and `queued -> archived`. Worker
+transitions involving `designing`, `designed`, and `failed` are governed by
+the design-agent execution change. The new statuses `building`, `built`,
+and `build_failed` are governed by the build-orchestration capability,
+and the planning subsystem SHALL NOT permit any direct operator transition
+into or out of them via the design-task planning endpoints.
+
+The existing `failed` status keeps its design-phase meaning: a design
+attempt failed before producing a usable `challenge_designs` row. It MUST
+NOT be reused to indicate a build-phase failure; the build-orchestration
+capability uses `build_failed` for that purpose so operator diagnostics
+can distinguish design failures from build failures.
 
 #### Scenario: Draft task can be queued
 
@@ -98,12 +108,27 @@ operator transitions `draft -> queued`, `draft -> archived`, and
 
 #### Scenario: Designed task cannot be archived by the planning endpoint
 
-- **GIVEN** a design task fixture-injected with `status = "designed"` (this
-  change does not create any code path that sets `designed`; the row exists
-  only to verify the guard for the future design-worker change)
+- **GIVEN** a design task fixture-injected with `status = "designed"`
 - **WHEN** the operator calls the planning archive endpoint
 - **THEN** the operation is rejected
 - **AND** the status remains `designed`
+
+#### Scenario: Build-phase statuses are not reachable from planning endpoints
+
+- **GIVEN** a design task with `status = "designed"`
+- **WHEN** the operator invokes any of the design-task planning
+  transitions (`queue`, `archive`)
+- **THEN** the status does NOT become `building`, `built`, or
+  `build_failed`
+- **AND** moving into those statuses requires invoking the build-
+  orchestration endpoints (`POST /api/design-tasks/build` etc.)
+
+#### Scenario: Database CHECK admits the build-phase values
+
+- **WHEN** Alembic revision `0006_build_attempts` has been applied
+- **THEN** the `design_tasks.status` `CHECK` constraint admits
+  `building`, `built`, and `build_failed` in addition to the original
+  six values
 
 ### Requirement: Regeneration is repeatable only before queue release
 
@@ -285,7 +310,16 @@ independent of the research request detail page. The view SHALL provide:
 `generation_request_id`, `status`, and `category`; and (b) a detail mode that
 shows a single task with its clickable parent `generation_request_id`, attempts,
 latest_design, and the per-task action buttons (`Queue`, `Archive`, `Design`).
-The dashboard SHALL NOT render the
+When the build-orchestration capability is enabled, the list view SHALL
+additionally render a checkbox column on rows whose `status` is `designed`
+or `build_failed`, a top-of-view bulk `构建已选` button that calls
+`POST /api/design-tasks/build` with the selected ids, and a per-row
+`构建` button on the same rows that calls
+`POST /api/design-tasks/{id}/build`. After a successful submission, if every
+submitted task belongs to the same generation request, the view SHALL surface
+a toast linking to the new "构建任务" view filtered by that
+`generation_request_id`. If submitted tasks span multiple generation requests,
+the toast SHALL link to the unfiltered build-attempts view. The dashboard SHALL NOT render the
 complete design tasks table inside the research request detail page; only the
 summary card defined in *Request detail exposes design tasks* SHALL appear
 there.
@@ -319,6 +353,36 @@ there.
 - **AND** it shows `latest_design` (or "no design yet")
 - **AND** it shows `Queue` / `Archive` / `Design` action buttons subject to
   the current status's allowed transitions
+
+#### Scenario: Build controls appear only on eligible rows
+
+- **GIVEN** the list contains tasks in statuses
+  `{draft, queued, designing, designed, failed, archived, building,
+  built, build_failed}`
+- **WHEN** the dashboard renders the list
+- **THEN** the checkbox column and per-row `构建` button are enabled
+  only on rows whose status is `designed` or `build_failed`
+- **AND** `building` and `built` rows show a read-only badge linking to the
+  corresponding build-attempts row in the "构建任务" view
+- **AND** `build_failed` rows show the same linked badge while retaining their
+  checkbox and `构建` action
+
+#### Scenario: Bulk build button invokes the orchestration endpoint
+
+- **GIVEN** the operator has selected two `designed` rows A and B from the
+  same generation request
+- **WHEN** the operator clicks `构建已选`
+- **THEN** the frontend issues a single
+  `POST /api/design-tasks/build` request with both ids
+- **AND** on success the toast offers a link to
+  `#/build-attempts?generation_request_id={current request id}`
+
+#### Scenario: Cross-request bulk build links to unfiltered build view
+
+- **GIVEN** selected eligible tasks belong to different generation requests
+- **WHEN** the bulk build succeeds
+- **THEN** the toast links to `#/build-attempts` without a
+  `generation_request_id` filter
 
 ### Requirement: Polling for design tasks is independent of research detail
 

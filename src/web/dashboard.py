@@ -47,7 +47,6 @@ class TaskManager:
                 "--worker",
                 "dashboard-01",
                 "--loop",
-                "--validate",
             ],
             "validate": [
                 sys.executable,
