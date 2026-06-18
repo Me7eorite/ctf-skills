@@ -73,7 +73,7 @@ def render_prompt(
         "{shard_name}": progress_shard_name,
         "{progress_command}": (
             f'"{sys.executable}" "{cli_script_path}" progress '
-            f'--shard "{progress_shard_name}" --worker "{worker}"'
+            f'--shard "{progress_shard_name}" --worker "{worker}" --best-effort'
         ),
         "{resume_plan}": _render_resume_plan_section(resume_plan),
     }

@@ -2,11 +2,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import core.state as state_module
 from core.paths import ProjectPaths
-from core.state import StateStore
+from core.state import STAGES, STATUSES, InMemoryProgressStore, ProgressEventInput, ProgressStore
 
 
-class StateStoreTests(unittest.TestCase):
+class ProgressStoreTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -15,7 +16,7 @@ class StateStoreTests(unittest.TestCase):
             repository=Path(self.temp.name),
         )
         self.paths.initialize()
-        self.store = StateStore(self.paths)
+        self.store = InMemoryProgressStore()
 
     def test_record_appends_events_and_updates_snapshot(self):
         self.store.record(
@@ -52,14 +53,16 @@ class StateStoreTests(unittest.TestCase):
                 status="running",
             )
 
-    def test_falls_back_when_work_path_is_not_a_directory(self):
-        blocked_root = Path(self.temp.name) / "blocked"
-        blocked_root.mkdir()
-        (blocked_root / "work").write_text("not a directory", encoding="utf-8")
-        paths = ProjectPaths(root=blocked_root, repository=Path(self.temp.name))
+    def test_dashboard_declares_memory_backend(self):
+        progress = self.store.dashboard()
 
-        store = StateStore(paths)
-        progress = store.dashboard()
+        self.assertEqual(progress["storage"]["backend"], "memory")
+        self.assertFalse(progress["storage"]["fallback"])
 
-        self.assertTrue(progress["storage"]["fallback"])
-        self.assertIn("fallback database", progress["storage"]["warning"])
+    def test_core_state_exports_progress_contract(self):
+        self.assertFalse(hasattr(state_module, "State" + "Store"))
+        self.assertIsNotNone(ProgressStore)
+        self.assertIsNotNone(ProgressEventInput)
+        self.assertIsNotNone(InMemoryProgressStore)
+        self.assertIn("queued", STAGES)
+        self.assertIn("running", STATUSES)

@@ -11,7 +11,7 @@ from pathlib import Path
 from core.jsonio import read_json
 from core.paths import ProjectPaths
 from core.queue import ShardQueue
-from core.state import StateStore
+from core.state import InMemoryProgressStore, ProgressStore
 from domain.seeds import SeedStore
 
 
@@ -142,11 +142,16 @@ class TaskManager:
 
 
 class DashboardService:
-    def __init__(self, paths: ProjectPaths, tasks: TaskManager | None = None):
+    def __init__(
+        self,
+        paths: ProjectPaths,
+        tasks: TaskManager | None = None,
+        progress: ProgressStore | None = None,
+    ):
         self.paths = paths
         self.queue = ShardQueue(paths)
         self.seeds = SeedStore(paths)
-        self.store = StateStore(paths)
+        self.store = progress or InMemoryProgressStore()
         self.tasks = tasks or TaskManager(paths)
 
     def state(self) -> dict:

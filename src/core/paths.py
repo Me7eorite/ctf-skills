@@ -64,10 +64,6 @@ class ProjectPaths:
         return self.work / "design" / "logs"
 
     @property
-    def state_database(self) -> Path:
-        return self.work / "state.sqlite3"
-
-    @property
     def static(self) -> Path:
         return Path(str(files("web") / "static"))
 

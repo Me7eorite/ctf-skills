@@ -3,6 +3,7 @@
 from persistence.models.base import Base
 from persistence.models.challenge_designs import ChallengeDesign, DesignAttempt
 from persistence.models.design_tasks import DesignTask
+from persistence.models.progress import ProgressEvent, ProgressSnapshot
 from persistence.models.research import (
     AgentRole,
     ChallengeCategory,
@@ -23,6 +24,8 @@ __all__ = [
     "DesignTask",
     "GenerationRequest",
     "HermesProfileBinding",
+    "ProgressEvent",
+    "ProgressSnapshot",
     "ResearchFinding",
     "ResearchFindingSource",
     "ResearchRun",

@@ -1,6 +1,8 @@
 import pytest
+from sqlalchemy import create_engine
 
-from persistence import PersistenceConfigurationError, create_engine_from_env
+from persistence import PersistenceConfigurationError, SessionFactory, create_engine_from_env
+from persistence.repositories.progress import PostgresProgressStore
 
 
 @pytest.fixture(autouse=True)
@@ -49,3 +51,14 @@ def test_valid_url_builds_postgres_engine(monkeypatch):
     )
     engine = create_engine_from_env()
     assert engine.dialect.name == "postgresql"
+
+
+def test_progress_store_redacts_database_url_password():
+    engine = create_engine(
+        "postgresql+psycopg://user:secret@example.test:5432/challenge_factory"
+    )
+    store = PostgresProgressStore(SessionFactory(engine))
+
+    assert store._redacted_url() == (  # noqa: SLF001
+        "postgresql+psycopg://user:***@example.test:5432/challenge_factory"
+    )

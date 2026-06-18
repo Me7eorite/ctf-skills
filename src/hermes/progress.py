@@ -6,11 +6,11 @@ import time
 from pathlib import Path
 
 from core.jsonio import read_json, write_json
-from core.state import StateStore
+from core.state import ProgressStore
 
 
 def record_final(
-    state: StateStore,
+    state: ProgressStore,
     shard: str,
     challenge_ids: list[str],
     worker: str,

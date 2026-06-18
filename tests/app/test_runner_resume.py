@@ -8,17 +8,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from core.state import StateStore
+from core.state import InMemoryProgressStore, ProgressStore
 from hermes.runner import HermesRunner
+from persistence import PersistenceConnectionError
 
 
 @dataclass(frozen=True)
 class _Paths:
     root: Path
-
-    @property
-    def state_database(self) -> Path:
-        return self.root / "work" / "state.sqlite3"
 
     @property
     def challenges(self) -> Path:
@@ -125,7 +122,7 @@ def _make_web_challenge(
 
 
 def _seed_passed(
-    store: StateStore,
+    store: ProgressStore,
     shard: str,
     challenge_id: str,
     stages: list[str],
@@ -190,8 +187,13 @@ class RunnerRealRunTests(unittest.TestCase):
         *,
         validator_status: str = "passed",
         image_exists_value: bool = True,
+        progress: ProgressStore | None = None,
     ) -> HermesRunner:
-        runner = HermesRunner(paths, image_exists=lambda _: image_exists_value)  # type: ignore[arg-type]
+        runner = HermesRunner(
+            paths,
+            progress=progress,
+            image_exists=lambda _: image_exists_value,
+        )  # type: ignore[arg-type]
 
         def fake_invoke(prompt: str, log: Path, dry_run: bool, *, timeout=None) -> int:
             log.parent.mkdir(parents=True, exist_ok=True)
@@ -244,10 +246,10 @@ class RunnerRealRunTests(unittest.TestCase):
             _make_web_challenge(paths, "web-0001")
             _make_shard(paths, "web-0001-0001.json", ["web-0001"])
 
-            store = StateStore(paths)  # type: ignore[arg-type]
+            store = InMemoryProgressStore()
             _seed_passed(store, "web-0001-0001.json", "web-0001", ["design", "implement"])
 
-            runner = self._make_runner_with_fake_invoke(paths)
+            runner = self._make_runner_with_fake_invoke(paths, progress=store)
             runner.process_one("worker-02", dry_run=False)
 
             # Examine events written AFTER the new claim event.
@@ -305,7 +307,7 @@ class RunnerRealRunTests(unittest.TestCase):
             _make_web_challenge(paths, "web-0001")
             _make_shard(paths, "web-0001-0001.json", ["web-0001"])
 
-            store = StateStore(paths)  # type: ignore[arg-type]
+            store = InMemoryProgressStore()
             _seed_passed(
                 store,
                 "web-0001-0001.json",
@@ -313,7 +315,7 @@ class RunnerRealRunTests(unittest.TestCase):
                 ["design", "implement", "build", "validate", "document"],
             )
 
-            runner = self._make_runner_with_fake_invoke(paths)
+            runner = self._make_runner_with_fake_invoke(paths, progress=store)
             invocation_count = {"validator": 0}
 
             def assert_not_called(challenge_id: str) -> dict:
@@ -354,7 +356,7 @@ class RunnerRealRunTests(unittest.TestCase):
             _make_web_challenge(paths, "web-0001")
             _make_shard(paths, "web-0001-0001.json", ["web-0001"])
 
-            store = StateStore(paths)  # type: ignore[arg-type]
+            store = InMemoryProgressStore()
             _seed_passed(
                 store,
                 "web-0001-0001.json",
@@ -362,7 +364,7 @@ class RunnerRealRunTests(unittest.TestCase):
                 ["design", "implement", "build"],
             )
 
-            runner = self._make_runner_with_fake_invoke(paths)
+            runner = self._make_runner_with_fake_invoke(paths, progress=store)
             runner.process_one("worker-04", dry_run=False)
 
             latest_claim = runner.state.latest_claim_event("web-0001-0001.json")
@@ -390,6 +392,69 @@ class RunnerRealRunTests(unittest.TestCase):
             failed_path = paths.shards / "failed"
             files = sorted(p.name for p in failed_path.glob("*.json"))
             self.assertTrue(any("web-0001-0001" in name for name in files))
+
+    def test_progress_write_failure_does_not_block_successful_shard(self):
+        class RaisingWriteProgressStore(InMemoryProgressStore):
+            def record(self, **kwargs):
+                raise PersistenceConnectionError("db down")
+
+            def record_batch(self, events):
+                raise PersistenceConnectionError("db down")
+
+        with TemporaryDirectory() as tmp:
+            paths = _Paths(root=Path(tmp))
+            paths.initialize()
+            _copy_real_prompt(paths)
+            _make_web_challenge(paths, "web-0001")
+            _make_shard(paths, "web-0001-0001.json", ["web-0001"])
+
+            runner = HermesRunner(
+                paths,
+                progress=RaisingWriteProgressStore(),
+                progress_write_exceptions=(PersistenceConnectionError,),
+                image_exists=lambda _: True,
+            )  # type: ignore[arg-type]
+            runner._invoke = lambda prompt, log, dry_run, *, timeout=None: 0  # type: ignore[assignment]
+            runner.validator.validate_challenge = lambda cid: {  # type: ignore[assignment]
+                "challenge_id": cid,
+                "status": "passed",
+                "elapsed": 0.0,
+            }
+
+            outcome = runner.process_one("worker-05", dry_run=False)
+
+            self.assertEqual(outcome["status"], "done")
+            files = sorted(p.name for p in (paths.shards / "done").glob("*.json"))
+            self.assertTrue(any("web-0001-0001" in name for name in files))
+
+    def test_resume_read_failure_surfaces_before_hermes_invocation(self):
+        class RaisingReadProgressStore(InMemoryProgressStore):
+            def latest_claim_event(self, shard, *, before_id=None):
+                raise PersistenceConnectionError("db down")
+
+        with TemporaryDirectory() as tmp:
+            paths = _Paths(root=Path(tmp))
+            paths.initialize()
+            _copy_real_prompt(paths)
+            _make_web_challenge(paths, "web-0001")
+            _make_shard(paths, "web-0001-0001.json", ["web-0001"])
+            runner = HermesRunner(
+                paths,
+                progress=RaisingReadProgressStore(),
+                progress_write_exceptions=(PersistenceConnectionError,),
+                image_exists=lambda _: True,
+            )  # type: ignore[arg-type]
+            called = {"invoke": False}
+
+            def fake_invoke(prompt: str, log: Path, dry_run: bool, *, timeout=None) -> int:
+                called["invoke"] = True
+                return 0
+
+            runner._invoke = fake_invoke  # type: ignore[assignment]
+
+            with self.assertRaises(PersistenceConnectionError):
+                runner.process_one("worker-06", dry_run=False)
+            self.assertFalse(called["invoke"])
 
 
 class ShardNameNormalizationTests(unittest.TestCase):

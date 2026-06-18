@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from core.state import StateStore
+from core.state import InMemoryProgressStore, ProgressStore
 from domain.resume import (
     ShardResumePlan,
     carry_forward_message,
@@ -25,16 +25,12 @@ class _Paths:
     root: Path
 
     @property
-    def state_database(self) -> Path:
-        return self.root / "state.sqlite3"
-
-    @property
     def challenges(self) -> Path:
         return self.root / "challenges"
 
 
-def _make_store(tmp: Path) -> StateStore:
-    return StateStore(_Paths(root=tmp))  # type: ignore[arg-type]
+def _make_store(tmp: Path) -> ProgressStore:
+    return InMemoryProgressStore()
 
 
 def _make_paths(tmp: Path) -> _Paths:
@@ -133,7 +129,7 @@ def _make_re_challenge_dir(
 
 
 def _seed_passed_events(
-    store: StateStore,
+    store: ProgressStore,
     shard: str,
     challenge_id: str,
     stages: list[str],

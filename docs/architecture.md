@@ -33,7 +33,7 @@ core         -> stdlib / third-party only
 | `src/core/paths.py` | Defines every project path through `ProjectPaths` |
 | `src/core/jsonio.py` | Reads and writes JSON/JSONL files |
 | `src/core/queue.py` | Splits matrices and transitions shard queue state |
-| `src/core/state.py` | Stores progress events and latest snapshots in SQLite |
+| `src/core/state.py` | Defines the `ProgressStore` protocol and the in-memory test double |
 | `src/domain/seeds.py` | Validates and persists generation seed inputs |
 | `src/domain/validation.py` | Checks artifacts and runs `validate.sh` |
 | `src/domain/reports.py` | Aggregates per-shard reports |
@@ -58,7 +58,7 @@ matrix
   -> split into category shards
   -> atomically claim one shard
   -> render skill-aware Hermes prompt
-  -> publish per-challenge stage events to SQLite
+  -> publish per-challenge stage events to PostgreSQL
   -> generate and build challenges
   -> run artifact and EXP validation
   -> move shard to done or failed
@@ -82,9 +82,9 @@ work/
 ```
 
 The shard directory is the source of truth for queue state. Workers never
-modify one shared queue document. `work/state.sqlite3` is a query-oriented
-event store for frontend synchronization; losing it does not lose generated
-artifacts or queue ownership.
+modify one shared queue document. Progress events and latest dashboard
+snapshots live in PostgreSQL; generated artifacts and queue ownership remain
+on disk under `work/`.
 
 ## Future Growth
 

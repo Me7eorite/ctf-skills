@@ -13,7 +13,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from core.state import StateStore
+from core.state import ProgressStore
 
 STAGE_ORDER: tuple[str, ...] = (
     "design",
@@ -50,7 +50,7 @@ def _first_running_event(
 
 
 def duration_breakdown(
-    state: StateStore, challenge_id: str, shard: str
+    state: ProgressStore, challenge_id: str, shard: str
 ) -> dict[str, float | None]:
     """Return durations for the five stages in the latest claim window.
 

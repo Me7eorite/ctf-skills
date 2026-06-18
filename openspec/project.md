@@ -6,7 +6,7 @@ sensible design decisions for this project.
 
 ## What this project is
 
-Challenge Factory is a file-backed queue + SQLite-observed control plane that
+Challenge Factory is a file-backed queue + PostgreSQL-observed control plane that
 drives the **hermes agent** to generate synthetic Web / Pwn / Reverse
 Engineering CTF challenges. It:
 
@@ -15,7 +15,8 @@ Engineering CTF challenges. It:
 2. Lets one or more workers atomically claim shards, render a prompt, and run
    `hermes chat` in a subprocess to author the challenges.
 3. Records per-stage progress events (queued → design → implement → build →
-   validate → document → complete) into `work/state.sqlite3`.
+   validate → document → complete) into PostgreSQL `progress_events` and
+   `progress_snapshots`.
 4. Validates each generated challenge by running `validate.sh` and checking
    that the recovered flag matches `metadata.json`.
 5. Exposes a FastAPI dashboard at `http://127.0.0.1:4173` showing queue state,
@@ -31,14 +32,13 @@ The challenge artifacts produced must conform to `docs/delivery-formats/ctf-v2/`
 - **FastAPI + uvicorn** for the dashboard HTTP layer (`src/web/server.py`,
   registered via `web.research_endpoints` / `web.design_task_endpoints`).
 - **PostgreSQL + SQLAlchemy 2.x + Alembic** for the relational store
-  (`src/persistence/`), holding research requests, runs, design tasks, and
-  challenge designs. Connection is configured by `DATABASE_URL`; missing or
-  unreachable PG is a hard failure for any code path that actually touches a
-  repository (no silent fallback).
-- **SQLite** (WAL mode) for the append-only progress event store
-  (`src/core/state.py`), with a temp-dir fallback when `work/` is not
-  writable. Coexists with PostgreSQL: SQLite owns per-stage progress events,
-  PG owns research/design domain rows.
+  (`src/persistence/`), holding research requests, runs, design tasks,
+  challenge designs, and append-only progress events via
+  `progress_events` / `progress_snapshots`. Connection is configured by
+  `DATABASE_URL`; missing or unreachable PG is a hard failure for code paths
+  that read persisted progress or domain repositories. Agent-side progress
+  writes may use `--best-effort`, which warns and skips the write without
+  creating any fallback store.
 - **subprocess + atomic file renames** for the shard queue
   (`src/core/queue.py`), no external broker.
 - **Hand-rolled CSS** under `src/web/static/css/` using a token + component
@@ -71,7 +71,8 @@ live under `tests/skills/`. `pyproject.toml` configures pytest with
 - **Don't put dependencies in a second compose service.** The shard prompt and
   `validation.py` both assume a single-service `docker-compose.yml`; DBs /
   caches / queues belong in the base image or `_files/start.sh`.
-- **Progress percent is computed from `(stage, status)` in `core/state.py`.**
+- **Progress percent is computed from `(stage, status)` in `core/state.py` and
+  reused by `persistence/repositories/progress.py`.**
   `failed/complete` is intentionally capped at 99 so a UI "stuck at 99" is a
   fingerprint for `complete + failed`, not a literal progress reading. Don't
   change this formula without checking `_percent` callers.
@@ -85,11 +86,12 @@ live under `tests/skills/`. `pyproject.toml` configures pytest with
 - **`progress` CLI subcommand is part of the hermes contract.** The shard
   prompt instructs the agent to call it before/after every stage. Don't
   rename it without updating `prompts/shard_prompt.md`.
-- **CLI must boot without a database.** `init`, `split`, `claim`, `run`,
-  `validate`, `progress`, `merge-reports`, `durations`, `pack`, `serve`
-  do not touch PG. Only the `research` and `profile` subcommand groups query
-  PostgreSQL, and only when the user actually enters them. Don't reintroduce
-  a top-level PG lookup at `main()` or at argparse-build time.
+- **CLI argparse must boot without a database.** `init`, `split`, `claim`,
+  `validate`, `merge-reports`, and `pack` do not touch PG. `run`,
+  `progress`, `durations`, and `serve` construct a PostgreSQL-backed
+  `ProgressStore` only in their command handlers. `research` and `profile`
+  query PostgreSQL only when the user actually enters those groups. Don't
+  reintroduce a top-level PG lookup at `main()` or at argparse-build time.
 - **DB-backed category codes are authoritative for research.**
   `challenge_categories.code` drives `research submit --category` choices;
   `core.queue.SUPPORTED_CATEGORIES` is the legacy hardcoded set for the shard

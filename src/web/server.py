@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
 from core.paths import ProjectPaths
+from persistence import make_postgres_progress_store
 from web.dashboard import DashboardService
 from web.design_task_endpoints import register_design_task_read_endpoints
 from web.research_endpoints import register_research_endpoints
@@ -150,7 +151,7 @@ def serve(paths: ProjectPaths, host: str, port: int) -> None:
     import uvicorn
 
     paths.initialize()
-    service = DashboardService(paths)
+    service = DashboardService(paths, progress=make_postgres_progress_store())
     app = create_app(service)
     print(f"Challenge Factory dashboard: http://{host}:{port}")
     uvicorn.run(app, host=host, port=port, log_level="info", access_log=False)

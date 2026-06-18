@@ -8,7 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from core.state import StateStore
+from core.state import InMemoryProgressStore, ProgressStore
 from domain.metrics import duration_breakdown
 
 
@@ -16,13 +16,9 @@ from domain.metrics import duration_breakdown
 class _Paths:
     root: Path
 
-    @property
-    def state_database(self) -> Path:
-        return self.root / "state.sqlite3"
 
-
-def _make_store(tmp: Path) -> StateStore:
-    return StateStore(_Paths(root=tmp))  # type: ignore[arg-type]
+def _make_store(tmp: Path) -> ProgressStore:
+    return InMemoryProgressStore()
 
 
 def _utc_at(offset_seconds: int) -> str:

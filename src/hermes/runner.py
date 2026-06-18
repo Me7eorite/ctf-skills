@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Callable
 from pathlib import Path
@@ -10,7 +11,7 @@ from typing import Any
 from core.docker import image_exists as default_image_exists
 from core.paths import ProjectPaths
 from core.queue import ShardQueue
-from core.state import StateStore
+from core.state import InMemoryProgressStore, ProgressEventInput, ProgressStore
 from domain.resume import (
     ChallengeResumePlan,
     ShardResumePlan,
@@ -50,6 +51,51 @@ def _carry_forward_pending_message(stage: str) -> str:
     return f"Waiting for {stage} stage execution"
 
 
+_LOGGER = logging.getLogger(__name__)
+
+
+class _BestEffortProgressStore:
+    def __init__(
+        self,
+        store: ProgressStore,
+        suppress_exceptions: tuple[type[Exception], ...],
+    ) -> None:
+        self._store = store
+        self._suppress_exceptions = suppress_exceptions
+
+    def record(self, **kwargs: Any) -> dict:
+        try:
+            return self._store.record(**kwargs)
+        except Exception as exc:
+            if not self._suppress_exceptions or not isinstance(
+                exc, self._suppress_exceptions
+            ):
+                raise
+            _LOGGER.warning("progress write skipped: %s", exc)
+            return {
+                "event_id": None,
+                "shard": kwargs.get("shard", ""),
+                "challenge_id": kwargs.get("challenge_id", ""),
+                "worker": kwargs.get("worker", ""),
+                "stage": kwargs.get("stage", ""),
+                "status": kwargs.get("status", ""),
+                "percent": 0,
+                "message": kwargs.get("message", ""),
+                "updated_at": "",
+            }
+
+    def record_batch(self, events: list[ProgressEventInput]) -> list[dict]:
+        try:
+            return self._store.record_batch(events)
+        except Exception as exc:
+            if not self._suppress_exceptions or not isinstance(
+                exc, self._suppress_exceptions
+            ):
+                raise
+            _LOGGER.warning("progress batch write skipped: %s", exc)
+            return []
+
+
 class HermesRunner:
     """Owns shard execution, resume planning, and validate-stage event writes."""
 
@@ -57,11 +103,17 @@ class HermesRunner:
         self,
         paths: ProjectPaths,
         *,
+        progress: ProgressStore | None = None,
+        progress_write_exceptions: tuple[type[Exception], ...] = (),
         image_exists: Callable[[str], bool] | None = None,
     ):
         self.paths = paths
         self.queue = ShardQueue(paths)
-        self.state = StateStore(paths)
+        self.state = progress or InMemoryProgressStore()
+        self._progress = _BestEffortProgressStore(
+            self.state,
+            progress_write_exceptions,
+        )
         self.validator = ChallengeValidator(paths)
         self._image_exists = image_exists or default_image_exists
 
@@ -208,7 +260,7 @@ class HermesRunner:
         self.state.reset_snapshots(original_shard_name)
 
         # 3. Write the current claim event.
-        self.state.record(
+        self._progress.record(
             shard=original_shard_name,
             worker=worker,
             stage="queued",
@@ -220,17 +272,21 @@ class HermesRunner:
         plan_by_id: dict[str, ChallengeResumePlan] = {
             cp.challenge_id: cp for cp in plan.challenges
         }
+        carry_forward_events: list[ProgressEventInput] = []
         for cp in plan.challenges:
             for stage in cp.skipped_stages:
                 source_id = cp.stage_sources.get(stage, 0)
-                self.state.record(
-                    shard=original_shard_name,
-                    challenge_id=cp.challenge_id,
-                    worker=worker,
-                    stage=stage,
-                    status="passed",
-                    message=carry_forward_message(stage, source_id),
+                carry_forward_events.append(
+                    ProgressEventInput(
+                        shard=original_shard_name,
+                        challenge_id=cp.challenge_id,
+                        worker=worker,
+                        stage=stage,
+                        status="passed",
+                        message=carry_forward_message(stage, source_id),
+                    )
                 )
+        self._progress.record_batch(carry_forward_events)
 
         # 5. Full-skip short circuit: no Hermes invocation needed.
         if plan.all_challenges_fully_skipped:
@@ -241,7 +297,7 @@ class HermesRunner:
         # 6. First-pending stage event per challenge.
         for cp in plan.challenges:
             if cp.first_pending_stage is not None:
-                self.state.record(
+                self._progress.record(
                     shard=original_shard_name,
                     challenge_id=cp.challenge_id,
                     worker=worker,
@@ -307,7 +363,7 @@ class HermesRunner:
             self._record_per_challenge_complete(
                 original_shard_name, worker, per_results
             )
-            self.state.record(
+            self._progress.record(
                 shard=original_shard_name,
                 worker=worker,
                 stage="complete",
@@ -322,7 +378,7 @@ class HermesRunner:
         self._record_per_challenge_complete(
             original_shard_name, worker, per_results
         )
-        self.state.record(
+        self._progress.record(
             shard=original_shard_name,
             worker=worker,
             stage="complete",
@@ -357,7 +413,7 @@ class HermesRunner:
             report, per_results, shard=shard, worker=worker, runner_status="passed"
         )
         for challenge_id in challenge_ids:
-            self.state.record(
+            self._progress.record(
                 shard=original_shard_name,
                 challenge_id=challenge_id,
                 worker=worker,
@@ -365,7 +421,7 @@ class HermesRunner:
                 status="passed",
                 message="carry-forward: all stages already complete",
             )
-        self.state.record(
+        self._progress.record(
             shard=original_shard_name,
             worker=worker,
             stage="complete",
@@ -415,7 +471,7 @@ class HermesRunner:
         plan_by_id: dict[str, ChallengeResumePlan],
     ) -> list[dict[str, Any]]:
         return run_validation(
-            state=self.state,
+            state=self._progress,
             validator=self.validator,
             paths=self.paths,
             image_exists=self._image_exists,
@@ -441,7 +497,7 @@ class HermesRunner:
         per_results: list[dict[str, Any]],
     ) -> None:
         record_per_challenge_complete(
-            self.state,
+            self._progress,
             original_shard_name,
             worker,
             per_results,
@@ -458,7 +514,7 @@ class HermesRunner:
         returncode: int,
     ) -> None:
         for challenge_id in challenge_ids:
-            self.state.record(
+            self._progress.record(
                 shard=original_shard_name,
                 challenge_id=challenge_id,
                 worker=worker,
@@ -466,7 +522,7 @@ class HermesRunner:
                 status="failed",
                 message=message,
             )
-        self.state.record(
+        self._progress.record(
             shard=original_shard_name,
             worker=worker,
             stage="complete",

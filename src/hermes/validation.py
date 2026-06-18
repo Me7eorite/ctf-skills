@@ -6,7 +6,7 @@ from collections.abc import Callable
 from typing import Any
 
 from core.paths import ProjectPaths
-from core.state import StateStore
+from core.state import ProgressStore
 from domain.resume import (
     ChallengeResumePlan,
     build_evidence,
@@ -20,7 +20,7 @@ from domain.validation import ChallengeValidator
 
 def run_validation(
     *,
-    state: StateStore,
+    state: ProgressStore,
     validator: ChallengeValidator,
     paths: ProjectPaths,
     image_exists: Callable[[str], bool],
@@ -141,7 +141,7 @@ def validate_gate(
 
 
 def record_per_challenge_complete(
-    state: StateStore,
+    state: ProgressStore,
     original_shard_name: str,
     worker: str,
     per_results: list[dict[str, Any]],

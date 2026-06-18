@@ -4,6 +4,7 @@ from pathlib import Path
 
 from core.jsonio import write_json
 from core.paths import ProjectPaths
+from core.state import InMemoryProgressStore
 from web.dashboard import DashboardService, TaskManager
 
 
@@ -46,6 +47,16 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(state["seeds"], [])
         self.assertEqual(state["progress"]["snapshots"], [])
         self.assertFalse(state["progress"]["storage"]["fallback"])
+
+    def test_state_preserves_progress_storage_contract(self):
+        progress = InMemoryProgressStore()
+        progress.record(shard="x.json", stage="queued", status="running")
+
+        state = DashboardService(self.paths, progress=progress).state()
+
+        self.assertEqual(state["progress"]["storage"]["backend"], "memory")
+        self.assertFalse(state["progress"]["storage"]["fallback"])
+        self.assertEqual(state["progress"]["storage"]["warning"], "")
 
     def test_worker_rejects_empty_pending_queue(self):
         ok, message = TaskManager(self.paths).start("worker")

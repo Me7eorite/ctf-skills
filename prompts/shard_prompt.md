@@ -23,9 +23,9 @@ Read only the category references needed by the current shard:
 
 # Mandatory Progress Reporting
 
-The dashboard is backed by a SQLite event store. Report progress before and
-after **four** authoring stages for every challenge: `design`, `implement`,
-`build`, and `document`. Use this exact command prefix:
+The dashboard reads progress from PostgreSQL via the helper below. Report
+progress before and after **four** authoring stages for every challenge:
+`design`, `implement`, `build`, and `document`. Use this exact command prefix:
 
 ```text
 {progress_command}
@@ -77,8 +77,8 @@ Write challenge directories under:
 # 0. Resume Check
 
 The host has pre-computed a resume plan for every challenge in this shard.
-Follow the plan literally. **Do not query SQLite or attempt to infer which
-stages are already complete on your own.** Stages listed under
+Follow the plan literally. **Do not query the progress database or attempt to
+infer which stages are already complete on your own.** Stages listed under
 `skip_stages` for a challenge already passed evidence verification in the
 previous run and have been carry-forwarded by the runner; do not regenerate or
 modify the artifacts those stages own. Resume work for each challenge at the

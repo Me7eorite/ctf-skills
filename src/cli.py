@@ -15,7 +15,7 @@ from uuid import UUID
 
 from core.paths import ProjectPaths
 from core.queue import SUPPORTED_CATEGORIES, ShardQueue, split_matrix
-from core.state import STAGES, STATUSES, StateStore
+from core.state import STAGES, STATUSES
 from domain.metrics import duration_breakdown
 from domain.reports import merge_reports
 from domain.research import DIFFICULTY_LABELS, GenerationRequestStatus
@@ -24,6 +24,11 @@ from domain.validation import ChallengeValidator
 from hermes import HermesRunner
 from hermes.runner import DEFAULT_HERMES_TIMEOUT
 from packing import Packer, PackerOptions
+from persistence import (
+    PersistenceConfigurationError,
+    PersistenceConnectionError,
+    make_postgres_progress_store,
+)
 from web.server import serve
 
 SHARD_BASENAME_RE = re.compile(r"^[a-z0-9_-]+\.json$")
@@ -96,6 +101,7 @@ def parser() -> argparse.ArgumentParser:
     progress.add_argument("--stage", choices=STAGES, required=True)
     progress.add_argument("--status", choices=sorted(STATUSES), required=True)
     progress.add_argument("--message", default="")
+    progress.add_argument("--best-effort", action="store_true")
 
     commands.add_parser("merge-reports", help="merge shard reports")
 
@@ -765,7 +771,14 @@ def main() -> None:
             sys.exit(2)
         effective_timeout, source = _resolve_run_timeout(args.timeout)
         print(f"effective_timeout={effective_timeout} source={source}", flush=True)
-        result = HermesRunner(paths).run(
+        result = HermesRunner(
+            paths,
+            progress=make_postgres_progress_store(),
+            progress_write_exceptions=(
+                PersistenceConfigurationError,
+                PersistenceConnectionError,
+            ),
+        ).run(
             args.worker,
             loop=args.loop,
             dry_run=args.dry_run,
@@ -793,14 +806,24 @@ def main() -> None:
         return
 
     if args.command == "progress":
-        event = StateStore(paths).record(
-            shard=args.shard,
-            challenge_id=args.challenge,
-            worker=args.worker,
-            stage=args.stage,
-            status=args.status,
-            message=args.message,
-        )
+        try:
+            event = make_postgres_progress_store().record(
+                shard=args.shard,
+                challenge_id=args.challenge,
+                worker=args.worker,
+                stage=args.stage,
+                status=args.status,
+                message=args.message,
+            )
+        except (PersistenceConfigurationError, PersistenceConnectionError) as exc:
+            if args.best_effort:
+                print(f"warning: progress write skipped: {exc}", file=sys.stderr)
+                return
+            print(
+                f"error: {exc.__class__.__name__}: {exc}",
+                file=sys.stderr,
+            )
+            sys.exit(2)
         print(json.dumps(event, ensure_ascii=False))
         return
 
@@ -816,7 +839,7 @@ def main() -> None:
                 file=sys.stderr,
             )
             sys.exit(2)
-        state = StateStore(paths)
+        state = make_postgres_progress_store()
         breakdown = duration_breakdown(state, args.challenge, args.shard)
         print(json.dumps(breakdown, ensure_ascii=False))
         return

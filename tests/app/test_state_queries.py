@@ -1,4 +1,4 @@
-"""Tests for the resume-safe StateStore query and snapshot APIs."""
+"""Tests for the resume-safe ProgressStore query and snapshot APIs."""
 
 from __future__ import annotations
 
@@ -7,23 +7,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from core.state import StateStore
+from core.state import InMemoryProgressStore, ProgressStore
 
 
 @dataclass(frozen=True)
 class _Paths:
     root: Path
 
-    @property
-    def state_database(self) -> Path:
-        return self.root / "state.sqlite3"
+
+def make_store(tmp: Path) -> ProgressStore:
+    return InMemoryProgressStore()
 
 
-def make_store(tmp: Path) -> StateStore:
-    return StateStore(_Paths(root=tmp))  # type: ignore[arg-type]
-
-
-class StateStoreQueryTests(unittest.TestCase):
+class ProgressStoreQueryTests(unittest.TestCase):
     def test_record_returns_event_id(self):
         with TemporaryDirectory() as tmp:
             store = make_store(Path(tmp))

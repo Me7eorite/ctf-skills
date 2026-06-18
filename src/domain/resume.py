@@ -3,7 +3,7 @@
 Computes a structured resume plan for a claimed shard before the runner
 writes its own queued event. The plan combines:
 
-- the previous claim window's challenge events (from StateStore)
+- the previous claim window's challenge events (from ProgressStore)
 - deterministic file/image/SHA-256 evidence on disk
 
 The runner consumes the plan to carry forward verified stage prefixes and
@@ -24,7 +24,7 @@ from typing import Any
 
 from core.docker import image_exists as default_image_exists
 from core.paths import ProjectPaths
-from core.state import StateStore
+from core.state import ProgressStore
 
 STAGE_ORDER: tuple[str, ...] = (
     "design",
@@ -331,7 +331,7 @@ def _category_from_dir(challenge_dir: Path, paths: ProjectPaths) -> str:
 
 def compute_resume_plan(
     *,
-    state: StateStore,
+    state: ProgressStore,
     paths: ProjectPaths,
     shard: str,
     challenge_ids: list[str],

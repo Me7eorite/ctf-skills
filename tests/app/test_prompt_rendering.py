@@ -81,6 +81,7 @@ class RenderPromptTests(unittest.TestCase):
 
             matches = PROGRESS_SHARD_RE.findall(rendered)
             self.assertTrue(matches, "no progress command shard arg found")
+            self.assertIn("--best-effort", rendered)
             for shard_name in matches:
                 self.assertNotIn(".worker-", shard_name)
                 self.assertRegex(shard_name, r"^[a-z0-9_-]+\.json$")

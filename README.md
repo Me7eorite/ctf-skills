@@ -1,6 +1,6 @@
 # CTF Challenge Factory
 
-Challenge Factory is a file-backed queue and SQLite-observed control plane for
+Challenge Factory is a file-backed queue and PostgreSQL-observed control plane for
 generating synthetic Web, Pwn, and Reverse Engineering challenges with Hermes,
 backed by PostgreSQL for the research and design planning subsystems.
 
@@ -14,7 +14,7 @@ hand-rolled token-CSS dashboard.
 ctf-skills/
 ├── src/
 │   ├── cli.py              # command composition root (argparse)
-│   ├── core/               # paths, JSON I/O, SQLite progress state, shard queue
+│   ├── core/               # paths, JSON I/O, progress contracts, shard queue
 │   ├── domain/             # DTOs, seeds, validation, report aggregation
 │   ├── hermes/             # prompt rendering and Hermes subprocess execution
 │   ├── packing/            # delivery bundle packing subsystem
@@ -94,11 +94,12 @@ files enter the normal pending queue and can be processed by **启动 Worker**.
 Hermes reports `design`, `implement`, `build`, `validate`, and `document`
 events through the local `progress` command. Runner-owned claim, failure, and
 completion events provide a fallback even when an agent exits unexpectedly.
-The append-only events and latest snapshots are stored in
-`work/state.sqlite3`; shard directories remain the queue source of truth.
-If `work/` is not writable, the server and workers use the same deterministic
-database under the operating-system temporary directory and show a warning in
-the progress view.
+The append-only events and latest snapshots are stored in PostgreSQL; shard
+directories remain the queue source of truth. After pulling the progress-store
+migration, run `uv run alembic upgrade head` and then
+`uv run python tools/scripts/cleanup_sqlite_state.py` to remove legacy local
+SQLite state files. Historical progress events are not migrated or
+reconstructed.
 
 Workers only claim `pending` shards. The shard view provides a requeue action
 for failed shards and for orphaned `running` shards when no local task is

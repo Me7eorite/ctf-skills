@@ -1,9 +1,9 @@
 # Persistence
 
 Challenge Factory uses PostgreSQL for structured metadata that grows over time
-(research, planning, evaluation, versioned challenge specs). The legacy event
-log at `work/state.sqlite3` is unchanged and out of scope for the persistence
-layer described here.
+(research, planning, evaluation, versioned challenge specs). Runner progress
+events and dashboard snapshots are also PostgreSQL-backed; the former
+`work/state.sqlite3` event log has been removed.
 
 ## Required environment variable
 
@@ -86,6 +86,17 @@ name. It does **not** mirror Hermes profile contents such as `SOUL.md`,
 `config.yaml`, skills, sessions, memory, cron, or Hermes-owned state. Those
 remain under Hermes' profile directory and outside this project's persistence
 boundary.
+
+Revision `0005_progress_events` adds the runtime progress schema:
+
+- `progress_events`: append-only shard and challenge progress events used for
+  resume planning, metrics, and operator audit trails.
+- `progress_snapshots`: one latest dashboard row per `(shard, challenge_id)`.
+  It is a read model derived from events, not an ownership ledger.
+
+No runtime path falls back to SQLite. The best-effort progress CLI mode only
+suppresses write failures for agent-side status reporting; read paths still
+fail loudly when PostgreSQL is unavailable.
 
 ## Day-to-day commands
 
