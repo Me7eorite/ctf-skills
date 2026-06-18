@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from core.jsonio import write_json
 from core.paths import ProjectPaths
 from web.dashboard import DashboardService, TaskManager
 from web.server import create_app
@@ -101,6 +102,35 @@ class WebserverTests(unittest.TestCase):
             response = client.post("/api/shards/failed/missing.json/requeue")
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.json()["ok"], False)
+
+    def test_shard_requeue_rejects_attributed_build_attempt(self):
+        shard = self.paths.shards / "failed" / "web-0001.json"
+        write_json(
+            shard,
+            {
+                "build_attempt_id": "11111111-1111-1111-1111-111111111111",
+                "challenges": [{"id": "web-0001", "category": "web"}],
+            },
+        )
+        with self._client() as client:
+            response = client.post("/api/shards/failed/web-0001.json/requeue")
+
+        self.assertEqual(response.status_code, 409)
+        payload = response.json()
+        self.assertEqual(payload["build_attempt_id"], "11111111-1111-1111-1111-111111111111")
+        self.assertIn("/api/build-attempts/11111111-1111-1111-1111-111111111111/retry", payload["retry_url"])
+        self.assertTrue(shard.exists())
+
+    def test_shard_requeue_keeps_unattributed_behavior(self):
+        shard = self.paths.shards / "failed" / "web-0001.json"
+        write_json(shard, {"challenges": [{"id": "web-0001", "category": "web"}]})
+
+        with self._client() as client:
+            response = client.post("/api/shards/failed/web-0001.json/requeue")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(shard.exists())
+        self.assertTrue((self.paths.shards / "pending" / "web-0001.json").exists())
 
     def test_seed_crud_and_enqueue(self):
         seed = {

@@ -6,7 +6,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -87,17 +87,15 @@ class BuildReconciler:
 
     def tick(self, session: Session) -> None:
         """Run staging recovery, then reconcile rows in the caller transaction."""
-        scan_started_at = datetime.now(timezone.utc)
         staged_ids = self.orchestration.recover_staging()
         observations = self._scan_attributed_shards()
-        self._reconcile(session, staged_ids, observations, scan_started_at)
+        self._reconcile(session, staged_ids, observations)
 
     def _reconcile(
         self,
         session: Session,
         staged_ids: set[UUID],
         observations: dict[UUID, _ObservedShard],
-        scan_started_at: datetime,
     ) -> None:
         rows = session.scalars(
             sa.select(build_model.BuildAttempt)
@@ -117,7 +115,11 @@ class BuildReconciler:
             ):
                 observed = None
             if observed is None:
-                if row.id not in staged_ids and _as_utc(row.created_at) < scan_started_at:
+                if (
+                    row.id not in staged_ids
+                    and _as_utc(row.created_at) <= now + timedelta(seconds=30)
+                    and not self._payload_present_for_row(row)
+                ):
                     self._finish(
                         session,
                         row,
@@ -193,11 +195,10 @@ class BuildReconciler:
 
     def tick_once_sync(self) -> None:
         """Open one short transaction and run a single reconciliation tick."""
-        scan_started_at = datetime.now(timezone.utc)
         staged_ids = self.orchestration.recover_staging()
         observations = self._scan_attributed_shards()
         with transaction(factory=self.session_factory) as session:
-            self._reconcile(session, staged_ids, observations, scan_started_at)
+            self._reconcile(session, staged_ids, observations)
 
     def run_forever(self) -> None:
         """Keep reconciling with a fresh session per tick until stopped."""
@@ -240,6 +241,34 @@ class BuildReconciler:
                 if current is None or priority[state] > priority[current.state]:
                     observations[attempt_id] = observed
         return observations
+
+    def _payload_present_for_row(self, row: build_model.BuildAttempt) -> bool:
+        staged = self.paths.build_attempt_staging / f"{row.id}.json"
+        if staged.is_file() and _payload_matches_row(read_json(staged, None), row):
+            return True
+        for state in ("pending", "done", "failed"):
+            path = self.paths.shards / state / row.shard_basename
+            if path.is_file() and _payload_matches_row(read_json(path, None), row):
+                return True
+        expected = Path(row.shard_basename)
+        for path in (self.paths.shards / "running").glob(
+            f"{expected.stem}.*{expected.suffix}"
+        ):
+            if path.name.endswith(".claim.json"):
+                continue
+            payload = read_json(path, None)
+            if not _payload_matches_row(payload, row):
+                continue
+            observed = _ObservedShard(
+                state="running",
+                path=path,
+                payload=payload,
+                worker=None,
+                claimed_at=None,
+            )
+            if self._basename_matches(row.shard_basename, observed):
+                return True
+        return False
 
     def _latest_claim(self, session: Session, shard: str) -> ProgressEvent | None:
         return session.scalars(
@@ -375,3 +404,11 @@ def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _payload_matches_row(payload: Any, row: build_model.BuildAttempt) -> bool:
+    return bool(
+        isinstance(payload, dict)
+        and str(payload.get("build_attempt_id")) == str(row.id)
+        and str(payload.get("design_task_id")) == str(row.design_task_id)
+    )

@@ -1,4 +1,3 @@
-import { api } from "../api.js";
 import { showToast } from "../ui/toast.js";
 import { escapeHtml, dotTone } from "../ui/format.js";
 
@@ -65,10 +64,17 @@ export function bind(reload) {
     const button = event.target.closest(".requeue-shard");
     if (!button) return;
     try {
-      const result = await api(
+      const response = await fetch(
         `/api/shards/${button.dataset.state}/${encodeURIComponent(button.dataset.name)}/requeue`,
         { method: "POST" }
       );
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = result.retry_url
+          ? `${result.message} ${result.retry_url}`
+          : (result.message || result.detail || `请求失败 (${response.status})`);
+        throw new Error(message);
+      }
       showToast(result.message);
       await reload();
     } catch (error) {

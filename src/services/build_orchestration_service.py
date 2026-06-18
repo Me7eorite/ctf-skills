@@ -370,8 +370,16 @@ class BuildOrchestrationService:
         destination = self.paths.shards / "pending" / shard_basename
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.exists():
-            staged.unlink(missing_ok=True)
-            return
+            payload = read_json(destination, None)
+            if (
+                isinstance(payload, Mapping)
+                and str(payload.get("build_attempt_id")) == staged.stem
+            ):
+                staged.unlink(missing_ok=True)
+                return
+            raise FileExistsError(
+                f"pending shard {destination.name} already exists for another attempt"
+            )
         staged.replace(destination)
 
     def _remove_old_orphan(self, staged: Path, now: float) -> None:

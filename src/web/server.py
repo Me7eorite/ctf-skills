@@ -11,9 +11,11 @@ from threading import Thread
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
+from core.jsonio import read_json
 from core.paths import ProjectPaths
 from persistence import make_postgres_progress_store
 from services.build_reconciler import BuildReconciler
+from web.build_attempts_endpoints import register_build_attempts_endpoints
 from web.dashboard import DashboardService
 from web.design_task_endpoints import register_design_task_read_endpoints
 from web.research_endpoints import register_research_endpoints
@@ -116,6 +118,9 @@ def create_app(
             raise HTTPException(
                 status_code=HTTPStatus.NOT_FOUND, detail="not found"
             )
+        conflict = _attributed_shard_conflict(service, state, name)
+        if conflict is not None:
+            return conflict
         try:
             destination = service.requeue_shard(name, state)
         except (FileNotFoundError, RuntimeError):
@@ -133,6 +138,7 @@ def create_app(
     worker_manager = ResearchWorkerManager(service.paths)
     register_research_endpoints(app, worker_manager=worker_manager)
     register_design_task_read_endpoints(app)
+    register_build_attempts_endpoints(app)
 
     # Static catch-all stays last so API routes win.
     @app.get("/{request_path:path}")
@@ -158,6 +164,37 @@ def _action_response(ok: bool, message: str) -> JSONResponse:
     return JSONResponse(
         {"ok": ok, "message": message},
         status_code=HTTPStatus.ACCEPTED if ok else HTTPStatus.CONFLICT,
+    )
+
+
+def _attributed_shard_conflict(
+    service: DashboardService,
+    state: str,
+    name: str,
+) -> JSONResponse | None:
+    source = service.paths.shards / state / Path(name).name
+    try:
+        source.resolve().relative_to((service.paths.shards / state).resolve())
+    except ValueError:
+        raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="forbidden")
+    payload = read_json(source, None)
+    if not isinstance(payload, dict):
+        return None
+    build_attempt_id = payload.get("build_attempt_id")
+    if not isinstance(build_attempt_id, str) or not build_attempt_id:
+        return None
+    retry_url = f"/api/build-attempts/{build_attempt_id}/retry"
+    return JSONResponse(
+        {
+            "ok": False,
+            "message": (
+                "This shard is linked to a build attempt; use the build-attempt "
+                "retry action instead."
+            ),
+            "build_attempt_id": build_attempt_id,
+            "retry_url": retry_url,
+        },
+        status_code=HTTPStatus.CONFLICT,
     )
 
 

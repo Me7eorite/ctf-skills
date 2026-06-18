@@ -329,6 +329,33 @@ def test_postcommit_publication_failure_recovers_idempotently(
     assert pending.exists()
 
 
+def test_publish_keeps_staging_when_pending_collision_is_mismatched(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    service = _service(tmp_path, session_factory)
+    service.paths.initialize()
+    attempt_id = uuid4()
+    staged = service.paths.build_attempt_staging / f"{attempt_id}.json"
+    shard_basename = f"{attempt_id}.json"
+    pending = service.paths.shards / "pending" / shard_basename
+    write_json(
+        staged,
+        {"build_attempt_id": str(attempt_id), "design_task_id": str(uuid4())},
+    )
+    write_json(pending, {"challenges": [{"id": "manual", "category": "web"}]})
+
+    with pytest.raises(FileExistsError, match="another attempt"):
+        service._publish(staged, shard_basename)
+
+    assert staged.exists()
+    assert read_json(pending, {})["challenges"][0]["id"] == "manual"
+
+    write_json(pending, {"build_attempt_id": str(attempt_id)})
+    service._publish(staged, shard_basename)
+    assert not staged.exists()
+
+
 def test_recovery_keeps_young_orphan_and_removes_old_orphan(
     tmp_path: Path,
     session_factory: SessionFactory,
