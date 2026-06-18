@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from core.docker import image_exists as default_image_exists
+from core.jsonio import read_json
 from core.paths import ProjectPaths
 from core.queue import ShardQueue
 from core.state import InMemoryProgressStore, ProgressEventInput, ProgressStore
@@ -242,6 +243,7 @@ class HermesRunner:
 
         # 获取分片元数据
         original_shard_name = self.queue.original_name(shard)
+        resume_source_shard_name = _resume_source_shard_name(shard, original_shard_name)
         report = self.paths.reports / f"{shard.stem}.report.json"
         log = self.paths.logs / f"{shard.stem}.log"
         challenge_ids = self.queue.challenge_ids(shard)
@@ -249,13 +251,20 @@ class HermesRunner:
         if dry_run:
             # 模拟执行：只计算计划和渲染 prompt，不执行 Hermes
             return self._process_dry_run(
-                shard, original_shard_name, worker, report, log, challenge_ids
+                shard,
+                original_shard_name,
+                resume_source_shard_name,
+                worker,
+                report,
+                log,
+                challenge_ids,
             )
 
         # 真实执行：完整 7 阶段管线
         return self._process_real(
             shard,
             original_shard_name,
+            resume_source_shard_name,
             worker,
             report,
             log,
@@ -271,6 +280,7 @@ class HermesRunner:
         self,
         shard: Path,
         original_shard_name: str,
+        resume_source_shard_name: str,
         worker: str,
         report: Path,
         log: Path,
@@ -285,7 +295,7 @@ class HermesRunner:
             plan = compute_resume_plan(
                 state=self.state,
                 paths=self.paths,
-                shard=original_shard_name,
+                shard=resume_source_shard_name,
                 challenge_ids=challenge_ids,
                 image_exists=self._image_exists,
             )
@@ -316,6 +326,7 @@ class HermesRunner:
         self,
         shard: Path,
         original_shard_name: str,
+        resume_source_shard_name: str,
         worker: str,
         report: Path,
         log: Path,
@@ -342,7 +353,7 @@ class HermesRunner:
         plan = compute_resume_plan(
             state=self.state,
             paths=self.paths,
-            shard=original_shard_name,
+            shard=resume_source_shard_name,
             challenge_ids=challenge_ids,
             image_exists=self._image_exists,
         )
@@ -687,3 +698,18 @@ def _category_of(challenge_dir: Path, paths: ProjectPaths) -> str:
     except ValueError:
         return ""
     return relative.parts[0] if relative.parts else ""
+
+
+def _resume_source_shard_name(shard: Path, current_original_name: str) -> str:
+    payload = read_json(shard, {})
+    if not isinstance(payload, dict):
+        return current_original_name
+    value = payload.get("resume_from_shard_basename")
+    if value is None:
+        return current_original_name
+    if not isinstance(value, str):
+        raise ValueError("resume_from_shard_basename must be a shard basename")
+    source = Path(value)
+    if source.name != value or source.suffix != ".json" or not source.stem:
+        raise ValueError("resume_from_shard_basename must be a safe .json basename")
+    return value

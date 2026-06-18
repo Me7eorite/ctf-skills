@@ -94,6 +94,9 @@
           <button class="sidebar-nav-item" data-target="shards">
             <i data-lucide="layers-3"></i>任务列表
           </button>
+          <button class="sidebar-nav-item" data-target="build-attempts">
+            <i data-lucide="hammer"></i>Build Attempts
+          </button>
           <button class="sidebar-nav-item" data-target="logs">
             <i data-lucide="terminal"></i>系统日志
           </button>
@@ -128,20 +131,6 @@
           </div>
           <h1 id="pageTitle" class="header-title">生产概览</h1>
         </div>
-        <div class="header-right">
-          <span id="updatedAt" class="header-sync-time hidden">同步中</span>
-          <button id="refreshButton" class="header-icon-button" title="刷新">
-            <i id="refreshIcon" data-lucide="refresh-cw"></i>
-          </button>
-          <button id="validateButton" class="header-action-button secondary hidden sm:flex">
-            <i data-lucide="shield-check"></i>
-            <span>重新验证</span>
-          </button>
-          <button id="workerButton" class="header-action-button primary hidden sm:flex">
-            <i data-lucide="play"></i>
-            <span>启动 Worker</span>
-          </button>
-        </div>
       </header>
 
       <div class="layout-content" id="mainContent">
@@ -149,6 +138,7 @@
         <section data-view="progress" class="view"></section>
         <section data-view="challenges" class="view"></section>
         <section data-view="shards" class="view"></section>
+        <section data-view="build-attempts" class="view"></section>
         <section data-view="logs" class="view"></section>
         <section data-view="seeds" class="view"></section>
         <section data-view="research-submit" class="view"></section>
@@ -158,18 +148,6 @@
         <section data-view="research-logs" class="view"></section>
       </div>
     </main>
-  </div>
-
-  <!-- Mobile bottom bar -->
-  <div class="layout-mobile-bar">
-    <button id="mobileValidateButton" class="btn btn-secondary btn-block">
-      <i data-lucide="shield-check"></i>
-      <span>重新验证</span>
-    </button>
-    <button id="mobileWorkerButton" class="btn btn-primary btn-block">
-      <i data-lucide="play"></i>
-      <span>启动 Worker</span>
-    </button>
   </div>
 
   <div id="toast" class="toast hidden"></div>

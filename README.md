@@ -32,7 +32,7 @@
 
 **Challenge Factory** 是一个自动化 CTF（Capture The Flag）题目生成工厂。它的核心工作流是：
 
-> **研究 (Research)** → AI 搜集选题资料 → **设计 (Design)** → AI 生成题目代码/文档 → **打包 (Pack)** → 输出可部署的比赛题目包
+> **研究 (Research)** → AI 搜集选题资料 → **设计 (Design)** → **构建 (Build)** → AI 生成题目代码/文档 → **打包 (Pack)** → 输出可部署的比赛题目包
 
 整个流程由 AI 模型驱动（通过 Hermes 子进程调用），配合 PostgreSQL 持久化和文件队列，支持多 Worker 并行执行。
 
@@ -480,6 +480,7 @@ class Packer:
 | `/api/seeds` | GET | 列出所有种子 |
 | `/api/research/...` | 多项 | Research 流程相关接口 |
 | `/api/design-tasks/...` | 多项 | 设计任务相关接口 |
+| `/api/build-attempts/...` | 多项 | 构建尝试列表、详情、重试接口 |
 
 #### `web/dashboard.py` — 看板服务
 
@@ -555,6 +556,27 @@ queued → design → implement → build → validate → document → complete
 **关键是 validate 阶段**: 这是唯一不使用 Hermes AI 的阶段，而是由 Python 原生的 `ChallengeValidator` 执行确定性检查（参考解题、文件完整性、架构匹配等），保证题目质量。
 
 **断点恢复 (resume)**: 如果 validate 阶段失败后重新执行，resume 机制自动跳过 design/implement/build，直接从 validate 继续。
+
+### Build 构建编排步骤
+
+Design Tasks 产生并通过质量门后，任务进入 `designed` 状态。此时可以在 Dashboard 的 **构建任务** view 中观察和控制构建，或在 Design Tasks view 里选择一个或多个 `designed` / `build_failed` 任务点击构建。批量提交使用：
+
+```http
+POST /api/design-tasks/build
+Content-Type: application/json
+
+{"design_task_ids": ["<uuid>", "..."]}
+```
+
+单个任务也可以调用 `POST /api/design-tasks/{id}/build`。服务会创建 `build_attempts` 行、写入带 `build_attempt_id` 的 shard 文件，并把设计任务置为 `building`。Worker 仍然通过文件队列认领 shard；`BuildReconciler` 负责把文件队列、`progress_events`、产物目录和 `build_attempts` 状态对齐。构建完成后，任务会进入 `built` 或 `build_failed`，失败或丢失的 latest attempt 可在构建详情页重试。
+
+相关配置默认值：
+
+| 环境变量 | 默认值 | 用途 |
+| --- | --- | --- |
+| `BUILD_RECONCILER_POLL_SECONDS` | `5` | 后台 `BuildReconciler` 轮询间隔；缺失、非整数或非正数时回退为 5 |
+| `BUILD_ATTEMPTS_LIST_DEFAULT_LIMIT` | `100` | `/api/build-attempts` 未指定 `limit` 时的返回上限 |
+| `BUILD_ATTEMPTS_LIST_MAX_LIMIT` | `500` | `/api/build-attempts` 允许的最大 `limit`，超过时返回该上限并设置 `X-Limit-Capped` |
 
 ---
 
@@ -707,6 +729,8 @@ challenge-factory profile add --name my-profile
 | `ResearchAgentExecutor` | `services/research_agent_executor.py` | 执行单个 research run |
 | `ResearchWorker` | `services/research_worker.py` | 持续运行的 Worker 进程 |
 | `DesignAgentExecutor` | `services/design_agent_executor.py` | 执行单个 design run |
+| `BuildOrchestrationService` | `services/build_orchestration_service.py` | 将已完成设计的任务提交为 shard 构建任务 |
+| `BuildReconciler` | `services/build_reconciler.py` | 对齐 `build_attempts` 与文件队列、进度事件、产物目录状态 |
 | `Packer` | `packing/packer.py` | 题目打包主类 |
 | `ChallengeValidator` | `domain/validation.py` | 题目质量校验 |
 | `SeedStore` | `domain/seeds.py` | 种子管理 |
@@ -719,6 +743,7 @@ challenge-factory profile add --name my-profile
 | `ResearchRepository` | `persistence/repositories/research.py` | Research 数据的 CRUD |
 | `ChallengeDesignRepository` | `persistence/repositories/challenge_designs.py` | 题目设计数据的 CRUD |
 | `DesignTaskRepository` | `persistence/repositories/design_tasks.py` | 设计任务数据的 CRUD |
+| `BuildAttemptsRepository` | `persistence/repositories/build_attempts.py` | 构建尝试的创建、查询、重试与状态折叠 |
 | `PostgresProgressStore` | `persistence/repositories/progress.py` | 进度事件的 PostgreSQL 存储 |
 | `InMemoryProgressStore` | `core/state.py` | 进度事件的内存存储（测试用） |
 | `transaction()` | `persistence/session.py` | 短事务上下文管理器 |

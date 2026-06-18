@@ -203,6 +203,42 @@ class RenderPromptTests(unittest.TestCase):
                 rendered,
             )
 
+    def test_design_context_instruction_is_conditional(self):
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            paths = _seed_paths(tmp_path)
+            plain_shard = tmp_path / "plain.json"
+            plain_shard.write_text(
+                '{"challenges": [{"id": "web-0001", "category": "web"}]}',
+                encoding="utf-8",
+            )
+            designed_shard = tmp_path / "designed.json"
+            designed_shard.write_text(
+                (
+                    '{"challenges": [{"id": "web-0001", "category": "web", '
+                    '"design": {"flag_location": "env"}}]}'
+                ),
+                encoding="utf-8",
+            )
+
+            plain = render_prompt(
+                paths,  # type: ignore[arg-type]
+                plain_shard,
+                tmp_path / "plain-report.json",
+                worker="dry-01",
+                original_shard_name="plain.json",
+            )
+            designed = render_prompt(
+                paths,  # type: ignore[arg-type]
+                designed_shard,
+                tmp_path / "designed-report.json",
+                worker="dry-01",
+                original_shard_name="designed.json",
+            )
+
+            self.assertNotIn("authoritative for deployment", plain)
+            self.assertIn("authoritative for deployment", designed)
+
 
 if __name__ == "__main__":
     unittest.main()

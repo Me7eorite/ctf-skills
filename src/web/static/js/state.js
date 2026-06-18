@@ -5,6 +5,20 @@ export const appState = {
   search: "",
   editingSeedId: null,
   timer: null,
+  buildAttempts: {
+    list: null,
+    detail: null,
+    detailId: null,
+    filters: {
+      status: "",
+      worker: "",
+      category: "",
+      design_task_id: "",
+      generation_request_id: "",
+    },
+    flags: {},
+    poll: { timer: null, loading: false },
+  },
 };
 
 export function isActive(data) {

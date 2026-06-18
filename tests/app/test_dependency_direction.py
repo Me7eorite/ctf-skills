@@ -61,6 +61,16 @@ def all_imported_modules(node: ast.AST) -> list[tuple[str, int, str]]:
     return []
 
 
+def imported_module_roots_for(relative: str) -> set[str]:
+    path = SRC / relative
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    roots: set[str] = set()
+    for node in ast.walk(tree):
+        for target, _line, _statement in imported_roots(node):
+            roots.add(target)
+    return roots
+
+
 def find_violations(owner: str, tree: ast.AST, file_label: str) -> list[str]:
     """Collect dependency-direction violations from an AST.
 
@@ -143,6 +153,20 @@ class DependencyDirectionTests(unittest.TestCase):
              "violates services -> web"],
             violations,
         )
+
+    def test_build_orchestration_service_does_not_import_web(self):
+        roots = imported_module_roots_for("services/build_orchestration_service.py")
+        self.assertNotIn("web", roots)
+
+    def test_build_reconciler_does_not_import_web(self):
+        roots = imported_module_roots_for("services/build_reconciler.py")
+        self.assertNotIn("web", roots)
+
+    def test_build_attempts_endpoint_uses_services_and_persistence_not_hermes(self):
+        roots = imported_module_roots_for("web/build_attempts_endpoints.py")
+        self.assertIn("services", roots)
+        self.assertIn("persistence", roots)
+        self.assertNotIn("hermes", roots)
 
     def test_rejects_domain_importing_services(self):
         # 中文注释：domain 是纯数据 + 校验，不允许反向引用 services 编排层。

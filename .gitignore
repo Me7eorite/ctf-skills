@@ -10,6 +10,7 @@ __pycache__/
 *.pyo
 *.egg-info/
 .pytest_cache/
+.pytest-basetemp/
 .venv/
 venv/
 .uv-cache/

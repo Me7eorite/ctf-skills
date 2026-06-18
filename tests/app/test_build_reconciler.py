@@ -390,7 +390,10 @@ def test_mismatched_design_task_attribution_is_ignored(
 
 def test_poll_interval_configuration(monkeypatch: pytest.MonkeyPatch, caplog):
     monkeypatch.setenv("BUILD_RECONCILER_POLL_SECONDS", "12")
-    assert _poll_interval_from_env() == 12
+    with caplog.at_level("WARNING"):
+        assert _poll_interval_from_env() == 12
+    assert "BUILD_RECONCILER_POLL_SECONDS=12" in caplog.text
+    caplog.clear()
     monkeypatch.setenv("BUILD_RECONCILER_POLL_SECONDS", "0")
     with caplog.at_level("WARNING"):
         assert _poll_interval_from_env() == DEFAULT_POLL_INTERVAL_SECONDS

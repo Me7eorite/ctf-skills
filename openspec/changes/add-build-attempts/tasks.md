@@ -55,56 +55,56 @@
 
 ## 7. Shard JSON shape + runner contract
 
-- [ ] 7.1 Confirm (in code) that `core.queue.split_matrix` and `core.queue.split_challenges` continue to accept existing JSONL matrix rows and preserve unknown per-challenge fields such as `design` inside each `challenges[]` entry. Add a test in `tests/app/test_shards.py` asserting a row with `design` survives split output unchanged. The orchestration service writes the generated `{"build_attempt_id": ..., "design_task_id": ..., "resume_from_shard_basename": ..., "challenges": [...]}` envelope directly (omitting the resume field initially) and does not route generated shards through `split_matrix`.
-- [ ] 7.2 Update `src/hermes/prompt.py` rendering (or the prompt template) so a single new sentence references the `design` sub-object for challenges that include it. Existing matrix-only shards must still render without `design` present.
-- [ ] 7.3 Update `prompts/shard_prompt.md` with one sentence: when each challenge carries a `design` sub-object, Hermes SHALL use it as authoritative for deployment / artifacts / flag location / validation steps / hints / operator-facing prompt copy.
-- [ ] 7.4 Add a prompt-rendering test verifying the new sentence appears when the shard contains a `design` field and is absent when it doesn't.
-- [ ] 7.5 Extend `HermesRunner` resume planning to validate optional `resume_from_shard_basename`, read historical claim/challenge events from that source, and keep every current progress write under the current original basename. Add tests for retry source reads, current-key writes, omitted-field compatibility, and unsafe-path rejection.
+- [x] 7.1 Confirm (in code) that `core.queue.split_matrix` and `core.queue.split_challenges` continue to accept existing JSONL matrix rows and preserve unknown per-challenge fields such as `design` inside each `challenges[]` entry. Add a test in `tests/app/test_shards.py` asserting a row with `design` survives split output unchanged. The orchestration service writes the generated `{"build_attempt_id": ..., "design_task_id": ..., "resume_from_shard_basename": ..., "challenges": [...]}` envelope directly (omitting the resume field initially) and does not route generated shards through `split_matrix`.
+- [x] 7.2 Update `src/hermes/prompt.py` rendering (or the prompt template) so a single new sentence references the `design` sub-object for challenges that include it. Existing matrix-only shards must still render without `design` present.
+- [x] 7.3 Update `prompts/shard_prompt.md` with one sentence: when each challenge carries a `design` sub-object, Hermes SHALL use it as authoritative for deployment / artifacts / flag location / validation steps / hints / operator-facing prompt copy.
+- [x] 7.4 Add a prompt-rendering test verifying the new sentence appears when the shard contains a `design` field and is absent when it doesn't.
+- [x] 7.5 Extend `HermesRunner` resume planning to validate optional `resume_from_shard_basename`, read historical claim/challenge events from that source, and keep every current progress write under the current original basename. Add tests for retry source reads, current-key writes, omitted-field compatibility, and unsafe-path rejection.
 
 ## 8. Design-task UI changes
 
-- [ ] 8.1 In `src/web/static/js/views/design-tasks.js`, add a checkbox column on rows whose `status` is `designed` or `build_failed`. Track selection in a view-local set; clear on filter change.
-- [ ] 8.2 Add a `构建已选` button to the top of the list view; enable only when at least one checkbox is selected. On success, link to the request-filtered build view only when all selected tasks share one generation request; otherwise link to unfiltered `#/build-attempts`.
-- [ ] 8.3 Add a per-row `构建` button alongside existing per-row actions on the same two eligible statuses. On click, POST to `/api/design-tasks/{id}/build`; same toast on success.
-- [ ] 8.4 For rows in `building`/`built`, replace actions with a linked build-attempt badge. For `build_failed`, show the linked badge while retaining checkbox and `构建` actions.
+- [x] 8.1 In `src/web/static/js/views/design-tasks.js`, add a checkbox column on rows whose `status` is `designed` or `build_failed`. Track selection in a view-local set; clear on filter change.
+- [x] 8.2 Add a `构建已选` button to the top of the list view; enable only when at least one checkbox is selected. On success, link to the request-filtered build view only when all selected tasks share one generation request; otherwise link to unfiltered `#/build-attempts`.
+- [x] 8.3 Add a per-row `构建` button alongside existing per-row actions on the same two eligible statuses. On click, POST to `/api/design-tasks/{id}/build`; same toast on success.
+- [x] 8.4 For rows in `building`/`built`, replace actions with a linked build-attempt badge. For `build_failed`, show the linked badge while retaining checkbox and `构建` actions.
 
 ## 9. 构建任务 view (new)
 
-- [ ] 9.1 Add `src/web/static/js/views/build-attempts.js` modelled on `design-tasks.js`: list mode + detail mode, filters for status/worker/category/design task/generation request, five action buttons on the right, and polling cadence 2.5s active / 12s settled. Parse `generation_request_id` from the route into a visible editable filter.
-- [ ] 9.2 List view columns: 题目, 分类, 难度, 状态, 产物状态, 进度, worker, 尝试, 创建时间, 操作 (`详情`, plus `重试` only for `failed` or `lost`).
-- [ ] 9.3 The `⟳ 刷新` button fetches `/api/state` first (forces a reconciler tick) then refetches `/api/build-attempts` with current filters.
-- [ ] 9.4 `▶ 启动 Worker` issues `POST /api/actions/worker`; show toast and update local task-state slice (do not poll global state). `☑ 重新验证` issues `POST /api/actions/validate` similarly.
-- [ ] 9.5 Detail view sections: basic info (status, artifact_status, attempt_no, started_at, finished_at, worker), 关联设计 (link to `#/design-tasks/{id}`), 关联 shard 路径, 产物目录 (`resulting_challenge_dir` rendered as a plain code span when set), 历史 attempts table ordered by `attempt_no` showing per-attempt status / artifact_status / worker / timestamps with a clickable row to switch detail to that attempt, progress events list highlighting `carry-forward:` lines.
-- [ ] 9.6 Add the sidebar entry "构建任务" under a new group (or the "题目管理" group). Register route `#/build-attempts` and `#/build-attempts/:id` in `src/web/static/js/router.js`.
-- [ ] 9.7 Add a `state.buildAttempts` slice in `src/web/static/js/state.js` with its own list/detail/filters/flags subfields, polling tracked separately from `state.designTasks`.
+- [x] 9.1 Add `src/web/static/js/views/build-attempts.js` modelled on `design-tasks.js`: list mode + detail mode, filters for status/worker/category/design task/generation request, five action buttons on the right, and polling cadence 2.5s active / 12s settled. Parse `generation_request_id` from the route into a visible editable filter.
+- [x] 9.2 List view columns: 题目, 分类, 难度, 状态, 产物状态, 进度, worker, 尝试, 创建时间, 操作 (`详情`, plus `重试` only for `failed` or `lost`).
+- [x] 9.3 The `⟳ 刷新` button fetches `/api/state` first (forces a reconciler tick) then refetches `/api/build-attempts` with current filters.
+- [x] 9.4 `▶ 启动 Worker` issues `POST /api/actions/worker`; show toast and update local task-state slice (do not poll global state). `☑ 重新验证` issues `POST /api/actions/validate` similarly.
+- [x] 9.5 Detail view sections: basic info (status, artifact_status, attempt_no, started_at, finished_at, worker), 关联设计 (link to `#/design-tasks/{id}`), 关联 shard 路径, 产物目录 (`resulting_challenge_dir` rendered as a plain code span when set), 历史 attempts table ordered by `attempt_no` showing per-attempt status / artifact_status / worker / timestamps with a clickable row to switch detail to that attempt, progress events list highlighting `carry-forward:` lines.
+- [x] 9.6 Add the sidebar entry "构建任务" under a new group (or the "题目管理" group). Register route `#/build-attempts` and `#/build-attempts/:id` in `src/web/static/js/router.js`.
+- [x] 9.7 Add a `state.buildAttempts` slice in `src/web/static/js/state.js` with its own list/detail/filters/flags subfields, polling tracked separately from `state.designTasks`.
 
 ## 10. Global header cleanup
 
-- [ ] 10.1 In `src/web/static/index.html`, remove `#updatedAt`, `#refreshButton`, `#validateButton`, `#workerButton` from `<header class="layout-header"> .header-right`. Leave the `<header>` element itself for breadcrumb/title.
-- [ ] 10.2 Remove the entire `<div class="layout-mobile-bar">` block (`#mobileValidateButton`, `#mobileWorkerButton`).
-- [ ] 10.3 In `src/web/static/js/main.js`, remove event bindings for those removed DOM ids. Remove the polling code that updates `#updatedAt`.
-- [ ] 10.4 Audit `src/web/static/js/views/*.js` for any leftover references to `#workerButton` / `#validateButton` / `#refreshButton` / `#updatedAt` and delete.
-- [ ] 10.5 Audit `src/web/static/css/` for layout selectors that targeted these removed buttons and remove orphan rules.
+- [x] 10.1 In `src/web/static/index.html`, remove `#updatedAt`, `#refreshButton`, `#validateButton`, `#workerButton` from `<header class="layout-header"> .header-right`. Leave the `<header>` element itself for breadcrumb/title.
+- [x] 10.2 Remove the entire `<div class="layout-mobile-bar">` block (`#mobileValidateButton`, `#mobileWorkerButton`).
+- [x] 10.3 In `src/web/static/js/main.js`, remove event bindings for those removed DOM ids. Remove the polling code that updates `#updatedAt`.
+- [x] 10.4 Audit `src/web/static/js/views/*.js` for any leftover references to `#workerButton` / `#validateButton` / `#refreshButton` / `#updatedAt` and delete.
+- [x] 10.5 Audit `src/web/static/css/` for layout selectors that targeted these removed buttons and remove orphan rules.
 
 ## 11. Docs
 
-- [ ] 11.1 Update `README.md`'s pipeline section: add a `build` step after `design` describing the `构建任务` view, the `POST /api/design-tasks/build` action, and the env knob list with defaults.
-- [ ] 11.2 Update `docs/architecture.md` package table: one new row for `src/services/build_orchestration_service.py` and one for `src/services/build_reconciler.py`. Update the runtime-state diagram caption to mention `build_attempts` as a PG-side row that mirrors filesystem queue state.
-- [ ] 11.3 Update `openspec/project.md` pipeline diagram with the build orchestration + reconciliation step. Add the three new env knobs to a "Configuration knobs" subsection.
-- [ ] 11.4 Note in `docs/persistence.md` (or whatever upgrade doc currently exists) that running `alembic upgrade head` is the only operator step; no data migration is required.
+- [x] 11.1 Update `README.md`'s pipeline section: add a `build` step after `design` describing the `构建任务` view, the `POST /api/design-tasks/build` action, and the env knob list with defaults.
+- [x] 11.2 Update `docs/architecture.md` package table: one new row for `src/services/build_orchestration_service.py` and one for `src/services/build_reconciler.py`. Update the runtime-state diagram caption to mention `build_attempts` as a PG-side row that mirrors filesystem queue state.
+- [x] 11.3 Update `openspec/project.md` pipeline diagram with the build orchestration + reconciliation step. Add the three new env knobs to a "Configuration knobs" subsection.
+- [x] 11.4 Note in `docs/persistence.md` (or whatever upgrade doc currently exists) that running `alembic upgrade head` is the only operator step; no data migration is required.
 
 ## 12. Dependency direction guardrail
 
-- [ ] 12.1 Extend `tests/app/test_dependency_direction.py` with a scenario asserting `services/build_orchestration_service.py` does not import `web.*`.
-- [ ] 12.2 Add a scenario asserting `services/build_reconciler.py` does not import `web.*` either.
-- [ ] 12.3 Add a scenario asserting `web/build_attempts_endpoints.py` imports `services`/`persistence` but not `hermes` (it has no business reaching into the runner).
+- [x] 12.1 Extend `tests/app/test_dependency_direction.py` with a scenario asserting `services/build_orchestration_service.py` does not import `web.*`.
+- [x] 12.2 Add a scenario asserting `services/build_reconciler.py` does not import `web.*` either.
+- [x] 12.3 Add a scenario asserting `web/build_attempts_endpoints.py` imports `services`/`persistence` but not `hermes` (it has no business reaching into the runner).
 
 ## 13. End-to-end verification
 
-- [ ] 13.1 `uv run alembic upgrade head` succeeds on a database that already has revision `0005_progress_events` applied; `alembic downgrade -1` followed by `alembic upgrade head` is clean.
-- [ ] 13.2 `uv run pytest --ignore=tests/skills` passes with `TEST_DATABASE_URL` unset (all in-memory paths green).
-- [ ] 13.3 With `TEST_DATABASE_URL` set, `uv run pytest -m postgres` covers the new alembic, repository, and reconciler PG tests.
-- [ ] 13.4 Manual smoke: in a clean checkout, `uv run challenge-factory serve`, navigate to `#/build-attempts` → empty state renders, navigate to `#/design-tasks`, select a designed task, click `构建已选` → row moves to `building`, navigate to `#/build-attempts` → see the queued attempt, start a worker via `▶ 启动 Worker`, wait for completion, observe transition through `running` and into `succeeded`.
-- [ ] 13.5 Manual smoke: after success, rename the artifact directory and observe `artifact_status` become `missing` while attempt remains `succeeded` and task remains `built`; restore it and observe availability return to `present`.
-- [ ] 13.6 Confirm the global header on `#/overview`, `#/research-requests`, `#/design-tasks`, etc., no longer contains the four removed elements.
-- [ ] 13.7 `BUILD_RECONCILER_POLL_SECONDS=12 uv run challenge-factory serve` logs the parsed interval; setting it to `0` or `abc` logs the fallback warning and uses 5.
+- [x] 13.1 `uv run alembic upgrade head` succeeds on a database that already has revision `0005_progress_events` applied; `alembic downgrade -1` followed by `alembic upgrade head` is clean.
+- [x] 13.2 `uv run pytest --ignore=tests/skills` passes with `TEST_DATABASE_URL` unset (all in-memory paths green).
+- [x] 13.3 With `TEST_DATABASE_URL` set, `uv run pytest -m postgres` covers the new alembic, repository, and reconciler PG tests.
+- [x] 13.4 Manual smoke: in a clean checkout, `uv run challenge-factory serve`, navigate to `#/build-attempts` → empty state renders, navigate to `#/design-tasks`, select a designed task, click `构建已选` → row moves to `building`, navigate to `#/build-attempts` → see the queued attempt, start a worker via `▶ 启动 Worker`, wait for completion, observe transition through `running` and into `succeeded`.
+- [x] 13.5 Manual smoke: after success, rename the artifact directory and observe `artifact_status` become `missing` while attempt remains `succeeded` and task remains `built`; restore it and observe availability return to `present`.
+- [x] 13.6 Confirm the global header on `#/overview`, `#/research-requests`, `#/design-tasks`, etc., no longer contains the four removed elements.
+- [x] 13.7 `BUILD_RECONCILER_POLL_SECONDS=12 uv run challenge-factory serve` logs the parsed interval; setting it to `0` or `abc` logs the fallback warning and uses 5.

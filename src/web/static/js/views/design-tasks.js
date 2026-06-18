@@ -11,7 +11,17 @@ import {
 
 const ACTIVE_POLL_MS = 2500;
 const SETTLED_POLL_MS = 12000;
-const STATUSES = ["draft", "queued", "designing", "designed", "failed", "archived"];
+const STATUSES = [
+  "draft",
+  "queued",
+  "designing",
+  "designed",
+  "failed",
+  "archived",
+  "building",
+  "built",
+  "build_failed",
+];
 
 const state = {
   data: null,
@@ -19,6 +29,7 @@ const state = {
   detail: null,
   detailId: null,
   filters: { generation_request_id: "", status: "", category: "" },
+  selected: new Set(),
   flags: {},
   poll: { timer: null, loading: false },
 };
@@ -28,7 +39,15 @@ export function showDesignTasksForRequest(requestId) {
     ...state.filters,
     generation_request_id: requestId || "",
   };
+  state.selected.clear();
   state.detailId = null;
+  state.detail = null;
+  state.list = null;
+  setView("design-tasks");
+}
+
+export function showDesignTaskDetail(taskId) {
+  state.detailId = taskId || null;
   state.detail = null;
   state.list = null;
   setView("design-tasks");
@@ -39,6 +58,7 @@ async function ensureList() {
   state.flags.list = { loading: true, error: null };
   try {
     state.list = await api(buildListUrl());
+    pruneSelection();
     state.flags.list = { loading: false, error: null };
   } catch (err) {
     state.flags.list = { loading: false, error: err.message };
@@ -85,7 +105,11 @@ function clearPoll() {
 
 function needsActivePolling() {
   const rows = state.detail ? [state.detail] : (state.list || []);
-  return rows.some((task) => task.status === "queued" || task.status === "designing");
+  return rows.some((task) => (
+    task.status === "queued"
+    || task.status === "designing"
+    || task.status === "building"
+  ));
 }
 
 function schedulePoll(delay = SETTLED_POLL_MS) {
@@ -107,6 +131,7 @@ async function poll() {
       state.detail = await api(`/api/design-tasks/${state.detailId}`);
     } else {
       state.list = await api(buildListUrl());
+      pruneSelection();
     }
     render(state.data);
     initIcons();
@@ -162,6 +187,57 @@ async function designTaskNow(taskId) {
   }
 }
 
+async function buildTaskNow(taskId) {
+  if (!taskId) return;
+  state.flags.building = { ...(state.flags.building || {}), [taskId]: true };
+  render(state.data);
+  initIcons();
+  try {
+    const result = await postJson(`/api/design-tasks/${taskId}/build`, {});
+    state.selected.delete(taskId);
+    showToast(`Build queued ${shortId(result.build_attempt_id)}`);
+    if (state.detailId) {
+      await reloadDetail();
+    } else {
+      await reloadList();
+    }
+  } catch (err) {
+    showToast(err.message, true);
+  } finally {
+    state.flags.building = { ...(state.flags.building || {}), [taskId]: false };
+    render(state.data);
+    initIcons();
+  }
+}
+
+async function buildSelectedTasks() {
+  const ids = [...state.selected];
+  if (!ids.length) return;
+  state.flags.bulkBuild = true;
+  render(state.data);
+  initIcons();
+  try {
+    const selectedTasks = ids
+      .map((id) => (state.list || []).find((task) => task.id === id))
+      .filter(Boolean);
+    const requestIds = new Set(selectedTasks.map((task) => task.generation_request_id));
+    const result = await postJson("/api/design-tasks/build", { design_task_ids: ids });
+    state.selected.clear();
+    showToast(`${result.build_attempt_ids.length} build attempt(s) queued`);
+    await reloadList();
+    const suffix = requestIds.size === 1
+      ? `?generation_request_id=${encodeURIComponent([...requestIds][0])}`
+      : "";
+    window.location.hash = `#/build-attempts${suffix}`;
+  } catch (err) {
+    showToast(err.message, true);
+  } finally {
+    state.flags.bulkBuild = false;
+    render(state.data);
+    initIcons();
+  }
+}
+
 export function render(data) {
   state.data = data;
   const root = document.querySelector('[data-view="design-tasks"]');
@@ -176,10 +252,7 @@ export function render(data) {
     renderList(root);
   }
 
-  // 确保每次 render 后图标都会被初始化
-  // 使用 rAF 确保 DOM 已更新（handle 缓存路径下 ensureList/ensureDetail 跳过 initIcons 的情况）
   requestAnimationFrame(() => initIcons());
-
   schedulePoll(needsActivePolling() ? ACTIVE_POLL_MS : SETTLED_POLL_MS);
 }
 
@@ -202,7 +275,12 @@ function renderList(root) {
           <div class="card-title">Design Tasks</div>
           <div class="card-subtitle">Plan, release, and inspect challenge design work.</div>
         </div>
-        <span class="pill">${rows.length} rows</span>
+        <div class="btn-group">
+          <button id="dt-build-selected" class="btn btn-primary btn-sm${state.flags.bulkBuild ? " btn-loading" : ""}"${state.selected.size ? "" : " disabled"}>
+            <i data-lucide="hammer"></i> Build selected
+          </button>
+          <span class="pill">${rows.length} rows</span>
+        </div>
       </div>
       <div class="filter-bar filter-bar-vertical-sm">
         <label class="filter-item">Request
@@ -231,6 +309,7 @@ function renderTable(rows) {
       <table class="table table-dt-sm">
         <thead>
           <tr>
+            <th style="width: 44px;"></th>
             <th>Request</th>
             <th>Task</th>
             <th>Challenge ID</th>
@@ -245,6 +324,7 @@ function renderTable(rows) {
         <tbody>
           ${rows.map((task) => `
             <tr data-design-task-id="${escapeHtml(task.id)}">
+              <td>${renderBuildCheckbox(task)}</td>
               <td>
                 <button class="btn btn-ghost btn-sm dt-open-request" title="${escapeHtml(task.generation_request_id)}">
                   ${escapeHtml(shortId(task.generation_request_id))}
@@ -257,21 +337,59 @@ function renderTable(rows) {
               <td><div class="truncate" style="max-width: 220px;">${escapeHtml(task.primary_technique)}</div></td>
               <td style="text-align: right;">${(task.finding_ids || []).length}</td>
               <td>${escapeHtml(task.status)}</td>
-              <td>
-                <div class="btn-group design-task-actions">
-                  <button class="btn btn-secondary btn-xs dt-open-detail" title="详情">
-                    <i data-lucide="panel-right-open"></i>
-                  </button>
-                  <button class="btn btn-secondary btn-xs dt-queue" title="入队"${task.status === "draft" ? "" : " disabled"}>入队</button>
-                  <button class="btn btn-ghost btn-xs dt-archive" title="归档"${(task.status === "draft" || task.status === "queued") ? "" : " disabled"}>归档</button>
-                  <button class="btn btn-primary btn-xs dt-design" title="执行设计"${task.status === "queued" && !state.flags.designing?.[task.id] ? "" : " disabled"}>执行</button>
-                </div>
-              </td>
+              <td>${renderRowActions(task)}</td>
             </tr>
           `).join("")}
         </tbody>
       </table>
     </div>
+  `;
+}
+
+function renderBuildCheckbox(task) {
+  if (!eligibleForBuild(task)) return "";
+  return `
+    <input
+      class="dt-select-build"
+      type="checkbox"
+      title="Select for build"
+      ${state.selected.has(task.id) ? " checked" : ""}
+    >
+  `;
+}
+
+function renderRowActions(task) {
+  if (task.status === "building" || task.status === "built") {
+    return `<div class="btn-group design-task-actions">${buildBadge(task)}</div>`;
+  }
+  const isBuilding = !!state.flags.building?.[task.id];
+  return `
+    <div class="btn-group design-task-actions">
+      <button class="btn btn-secondary btn-xs dt-open-detail" title="Details">
+        <i data-lucide="panel-right-open"></i>
+      </button>
+      ${buildBadge(task)}
+      <button class="btn btn-secondary btn-xs dt-queue" title="Queue"${task.status === "draft" ? "" : " disabled"}>Queue</button>
+      <button class="btn btn-ghost btn-xs dt-archive" title="Archive"${(task.status === "draft" || task.status === "queued") ? "" : " disabled"}>Archive</button>
+      <button class="btn btn-primary btn-xs dt-design" title="Design"${task.status === "queued" && !state.flags.designing?.[task.id] ? "" : " disabled"}>Design</button>
+      <button class="btn btn-primary btn-xs dt-build${isBuilding ? " btn-loading" : ""}" title="Build"${eligibleForBuild(task) && !isBuilding ? "" : " disabled"}>
+        <i data-lucide="hammer"></i>Build
+      </button>
+    </div>
+  `;
+}
+
+function buildBadge(task) {
+  if (!["building", "built", "build_failed"].includes(task.status)) return "";
+  const label = task.status === "built"
+    ? "Built"
+    : task.status === "building"
+      ? "Building"
+      : "Build failed";
+  return `
+    <button class="btn btn-secondary btn-xs dt-open-builds" title="Open build attempts">
+      <i data-lucide="hammer"></i>${escapeHtml(label)}
+    </button>
   `;
 }
 
@@ -292,6 +410,7 @@ function renderDetail(root) {
   const latestAttempt = attempts.length ? attempts[attempts.length - 1] : null;
   const latestDesign = task.latest_design || null;
   const isDesigning = !!state.flags.designing?.[task.id];
+  const isBuilding = !!state.flags.building?.[task.id];
   root.innerHTML = `
     <div style="display: flex; align-items: center; justify-content: space-between; gap: var(--space-md); flex-wrap: wrap; margin-bottom: var(--space-md);">
       <button class="btn btn-ghost" id="dt-back">
@@ -302,6 +421,10 @@ function renderDetail(root) {
         <button class="btn btn-ghost btn-sm dt-archive"${(task.status === "draft" || task.status === "queued") ? "" : " disabled"}>Archive</button>
         <button class="btn btn-primary btn-sm dt-design${isDesigning ? " btn-loading" : ""}"${task.status === "queued" && !isDesigning ? "" : " disabled"}>
           <i data-lucide="sparkles"></i> Design
+        </button>
+        ${buildBadge(task)}
+        <button class="btn btn-primary btn-sm dt-build${isBuilding ? " btn-loading" : ""}"${eligibleForBuild(task) && !isBuilding ? "" : " disabled"}>
+          <i data-lucide="hammer"></i> Build
         </button>
       </div>
     </div>
@@ -414,6 +537,17 @@ function qualityGatePill(passed) {
   );
 }
 
+function eligibleForBuild(task) {
+  return task?.status === "designed" || task?.status === "build_failed";
+}
+
+function pruneSelection() {
+  const eligibleIds = new Set((state.list || []).filter(eligibleForBuild).map((task) => task.id));
+  for (const id of [...state.selected]) {
+    if (!eligibleIds.has(id)) state.selected.delete(id);
+  }
+}
+
 function shortId(value) {
   return String(value || "").slice(0, 8);
 }
@@ -430,6 +564,7 @@ function applyFiltersFromInputs() {
     status: document.querySelector("#dt-filter-status")?.value || "",
     category: document.querySelector("#dt-filter-category")?.value.trim() || "",
   };
+  state.selected.clear();
   state.list = null;
   render(state.data);
 }
@@ -451,8 +586,13 @@ export function bind() {
     }
     if (event.target.closest("#dt-clear-filter")) {
       state.filters = { generation_request_id: "", status: "", category: "" };
+      state.selected.clear();
       state.list = null;
       render(state.data);
+      return;
+    }
+    if (event.target.closest("#dt-build-selected")) {
+      buildSelectedTasks();
       return;
     }
     if (event.target.closest("#dt-back")) {
@@ -485,12 +625,30 @@ export function bind() {
     }
     if (event.target.closest(".dt-design") && taskId) {
       designTaskNow(taskId);
+      return;
+    }
+    if (event.target.closest(".dt-build") && taskId) {
+      buildTaskNow(taskId);
+      return;
+    }
+    if (event.target.closest(".dt-open-builds") && taskId) {
+      window.location.hash = `#/build-attempts?design_task_id=${encodeURIComponent(taskId)}`;
     }
   });
 
   document.addEventListener("change", (event) => {
     const root = document.querySelector('[data-view="design-tasks"]');
     if (!root || !root.contains(event.target)) return;
-    if (event.target.id === "dt-filter-status") applyFiltersFromInputs();
+    if (event.target.id === "dt-filter-status") {
+      applyFiltersFromInputs();
+      return;
+    }
+    const checkbox = event.target.closest(".dt-select-build");
+    if (!checkbox) return;
+    const row = checkbox.closest("[data-design-task-id]");
+    const taskId = row?.dataset.designTaskId;
+    if (taskId && checkbox.checked) state.selected.add(taskId);
+    if (taskId && !checkbox.checked) state.selected.delete(taskId);
+    render(state.data);
   });
 }

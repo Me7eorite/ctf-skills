@@ -15,7 +15,7 @@ from uuid import UUID
 
 from core.paths import ProjectPaths
 from core.queue import SUPPORTED_CATEGORIES, ShardQueue, split_matrix
-from core.state import STAGES, STATUSES
+from core.state import STAGES, STATUSES, InMemoryProgressStore
 from domain.metrics import duration_breakdown
 from domain.reports import merge_reports
 from domain.research import DIFFICULTY_LABELS, GenerationRequestStatus
@@ -29,7 +29,6 @@ from persistence import (
     PersistenceConnectionError,
     make_postgres_progress_store,
 )
-from web.server import serve
 
 SHARD_BASENAME_RE = re.compile(r"^[a-z0-9_-]+\.json$")
 
@@ -276,6 +275,19 @@ def _resolve_run_timeout(cli_value: int | None) -> tuple[int, str]:
             sys.exit(2)
         return env_value, "env"
     return DEFAULT_HERMES_TIMEOUT, "default"
+
+
+def _progress_store_for_run(*, dry_run: bool):
+    if dry_run:
+        return InMemoryProgressStore()
+    return make_postgres_progress_store()
+
+
+def _progress_store_or_empty():
+    try:
+        return make_postgres_progress_store()
+    except (PersistenceConfigurationError, PersistenceConnectionError):
+        return InMemoryProgressStore()
 
 
 # ---------------------------------------------------------------------------
@@ -773,7 +785,7 @@ def main() -> None:
         print(f"effective_timeout={effective_timeout} source={source}", flush=True)
         result = HermesRunner(
             paths,
-            progress=make_postgres_progress_store(),
+            progress=_progress_store_for_run(dry_run=args.dry_run),
             progress_write_exceptions=(
                 PersistenceConfigurationError,
                 PersistenceConnectionError,
@@ -839,8 +851,13 @@ def main() -> None:
                 file=sys.stderr,
             )
             sys.exit(2)
-        state = make_postgres_progress_store()
-        breakdown = duration_breakdown(state, args.challenge, args.shard)
+        state = _progress_store_or_empty()
+        try:
+            breakdown = duration_breakdown(state, args.challenge, args.shard)
+        except (PersistenceConfigurationError, PersistenceConnectionError):
+            breakdown = duration_breakdown(
+                InMemoryProgressStore(), args.challenge, args.shard
+            )
         print(json.dumps(breakdown, ensure_ascii=False))
         return
 
@@ -859,6 +876,8 @@ def main() -> None:
         return
 
     if args.command == "serve":
+        from web.server import serve
+
         serve(paths, args.host, args.port)
         return
 

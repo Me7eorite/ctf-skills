@@ -72,8 +72,20 @@ def _copy_real_prompt(target: _Paths) -> None:
     target.design_references.mkdir(parents=True, exist_ok=True)
 
 
-def _make_shard(paths: _Paths, shard_name: str, challenge_ids: list[str]) -> Path:
-    payload = {"challenges": [{"id": cid} for cid in challenge_ids]}
+def _make_shard(
+    paths: _Paths,
+    shard_name: str,
+    challenge_ids: list[str],
+    *,
+    envelope: dict | None = None,
+    challenge_extra: dict | None = None,
+) -> Path:
+    payload = {
+        **(envelope or {}),
+        "challenges": [
+            {"id": cid, **(challenge_extra or {})} for cid in challenge_ids
+        ],
+    }
     pending = paths.shards / "pending" / shard_name
     pending.write_text(json.dumps(payload), encoding="utf-8")
     return pending
@@ -279,6 +291,79 @@ class RunnerRealRunTests(unittest.TestCase):
                     event["message"].startswith("carry-forward:"),
                     f"expected carry-forward prefix, got {event['message']!r}",
                 )
+
+    def test_retry_reads_resume_source_but_writes_current_shard_key(self):
+        with TemporaryDirectory() as tmp:
+            paths = _Paths(root=Path(tmp))
+            paths.initialize()
+            _copy_real_prompt(paths)
+            _make_web_challenge(paths, "web-0001")
+            _make_shard(
+                paths,
+                "web-current.json",
+                ["web-0001"],
+                envelope={"resume_from_shard_basename": "web-source.json"},
+            )
+
+            store = InMemoryProgressStore()
+            _seed_passed(store, "web-source.json", "web-0001", ["design", "implement"])
+
+            runner = self._make_runner_with_fake_invoke(paths, progress=store)
+            runner.process_one("worker-retry", dry_run=False)
+
+            current_events = runner.state.events_for_shard("web-current.json")
+            source_events = runner.state.events_for_shard("web-source.json")
+            self.assertTrue(current_events)
+            self.assertTrue(source_events)
+            self.assertTrue(
+                any(
+                    event["message"].startswith("carry-forward:")
+                    and event["shard"] == "web-current.json"
+                    for event in current_events
+                )
+            )
+            self.assertFalse(
+                any(event["worker"] == "worker-retry" for event in source_events)
+            )
+
+    def test_resume_source_field_is_optional_for_first_run(self):
+        with TemporaryDirectory() as tmp:
+            paths = _Paths(root=Path(tmp))
+            paths.initialize()
+            _copy_real_prompt(paths)
+            _make_web_challenge(paths, "web-0001")
+            _make_shard(paths, "web-optional.json", ["web-0001"])
+            runner = self._make_runner_with_fake_invoke(paths)
+
+            outcome = runner.process_one("worker-optional", dry_run=False)
+
+            self.assertEqual(outcome["status"], "done")
+            self.assertTrue(runner.state.events_for_shard("web-optional.json"))
+
+    def test_unsafe_resume_source_is_rejected_before_hermes_invocation(self):
+        with TemporaryDirectory() as tmp:
+            paths = _Paths(root=Path(tmp))
+            paths.initialize()
+            _copy_real_prompt(paths)
+            _make_web_challenge(paths, "web-0001")
+            _make_shard(
+                paths,
+                "web-current.json",
+                ["web-0001"],
+                envelope={"resume_from_shard_basename": "../web-source.json"},
+            )
+            runner = self._make_runner_with_fake_invoke(paths)
+            called = {"invoke": False}
+
+            def fake_invoke(prompt: str, log: Path, dry_run: bool, *, timeout=None) -> int:
+                called["invoke"] = True
+                return 0
+
+            runner._invoke = fake_invoke  # type: ignore[assignment]
+
+            with self.assertRaises(ValueError):
+                runner.process_one("worker-retry", dry_run=False)
+            self.assertFalse(called["invoke"])
 
     def test_validator_message_uses_validator_prefix(self):
         with TemporaryDirectory() as tmp:

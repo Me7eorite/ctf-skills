@@ -94,6 +94,15 @@ Revision `0005_progress_events` adds the runtime progress schema:
 - `progress_snapshots`: one latest dashboard row per `(shard, challenge_id)`.
   It is a read model derived from events, not an ownership ledger.
 
+Revision `0006_build_attempts` adds build orchestration state:
+
+- `build_attempts`: one row per submitted build attempt, linked to
+  `design_tasks`. It records attempt number, shard basename, worker ownership,
+  terminal status, artifact availability, and retry lineage.
+- The only operator step is `alembic upgrade head` (or
+  `tools/scripts/db.sh up`). No data migration is required because existing
+  design tasks start without build attempts until an operator submits them.
+
 No runtime path falls back to SQLite. The best-effort progress CLI mode only
 suppresses write failures for agent-side status reporting; read paths still
 fail loudly when PostgreSQL is unavailable.

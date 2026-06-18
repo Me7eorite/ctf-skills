@@ -6,6 +6,7 @@ import json
 import sys
 from pathlib import Path
 
+from core.jsonio import read_json
 from core.paths import ProjectPaths
 from domain.research import GenerationRequest
 from domain.resume import ShardResumePlan
@@ -62,6 +63,7 @@ def render_prompt(
     prompt_text = paths.prompt_template.read_text(encoding="utf-8")
     cli_script_path = Path(__file__).resolve().parents[1] / "cli.py"
     progress_shard_name = original_shard_name or shard.name
+    design_context_instruction = _design_context_instruction(shard)
     replacement_map = {
         "{shard_path}": str(shard.resolve()),
         "{challenge_dir}": str(paths.challenges.resolve()),
@@ -76,10 +78,25 @@ def render_prompt(
             f'--shard "{progress_shard_name}" --worker "{worker}" --best-effort'
         ),
         "{resume_plan}": _render_resume_plan_section(resume_plan),
+        "{design_context_instruction}": design_context_instruction,
     }
     for placeholder, rendered_value in replacement_map.items():
         prompt_text = prompt_text.replace(placeholder, rendered_value)
     return prompt_text
+
+
+def _design_context_instruction(shard: Path) -> str:
+    payload = read_json(shard, {})
+    challenges = payload.get("challenges") if isinstance(payload, dict) else None
+    if not isinstance(challenges, list) or not challenges:
+        return ""
+    if not all(isinstance(item, dict) and isinstance(item.get("design"), dict) for item in challenges):
+        return ""
+    return (
+        "When each challenge carries a `design` sub-object, use it as "
+        "authoritative for deployment, artifacts, flag location, validation "
+        "steps, hints, and operator-facing prompt copy."
+    )
 
 
 def _render_seed_urls(seed_urls: tuple[str, ...]) -> str:

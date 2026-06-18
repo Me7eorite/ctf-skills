@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from core.paths import ProjectPaths
-from core.queue import ShardQueue, split_matrix
+from core.queue import ShardQueue, split_challenges, split_matrix
 
 
 class ShardTests(unittest.TestCase):
@@ -33,6 +33,28 @@ class ShardTests(unittest.TestCase):
 
         self.assertEqual(len(created), 3)
         self.assertTrue(all(path.exists() for path in created))
+
+    def test_split_challenges_preserves_unknown_design_field(self):
+        design = {
+            "deployment": "docker",
+            "flag_location": "environment",
+            "hints": ["one", "two"],
+        }
+        created = split_challenges(
+            [
+                {
+                    "id": "web-0001",
+                    "category": "web",
+                    "title": "Designed",
+                    "design": design,
+                }
+            ],
+            self.paths.shards / "pending",
+            size=1,
+        )
+
+        payload = json.loads(created[0].read_text(encoding="utf-8"))
+        self.assertEqual(payload["challenges"][0]["design"], design)
 
     def test_claim_and_complete_preserve_original_name(self):
         shard = self.paths.shards / "pending" / "web-0001-0002.json"

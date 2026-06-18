@@ -45,6 +45,7 @@ def _poll_interval_from_env() -> int:
             DEFAULT_POLL_INTERVAL_SECONDS,
         )
         return DEFAULT_POLL_INTERVAL_SECONDS
+    LOG.warning("using BUILD_RECONCILER_POLL_SECONDS=%s", value)
     return value
 
 
@@ -103,6 +104,7 @@ class BuildReconciler:
             .with_for_update()
         ).all()
         now = datetime.now(timezone.utc)
+        staged_id_texts = {str(staged_id) for staged_id in staged_ids}
         for row in rows:
             if row.status in {"succeeded", "failed", "lost"}:
                 self._refresh_terminal_artifact(row)
@@ -116,7 +118,7 @@ class BuildReconciler:
                 observed = None
             if observed is None:
                 if (
-                    row.id not in staged_ids
+                    str(row.id) not in staged_id_texts
                     and _as_utc(row.created_at) <= now + timedelta(seconds=30)
                     and not self._payload_present_for_row(row)
                 ):

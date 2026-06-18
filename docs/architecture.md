@@ -43,6 +43,8 @@ core         -> stdlib / third-party only
 | `src/packing/` | Builds delivery bundle v2 artifacts, PDFs, zips, Docker tars, and workbooks |
 | `src/persistence/` | PostgreSQL engine/session, SQLAlchemy models, Alembic-backed repositories |
 | `src/services/` | Cross-subsystem orchestration with transaction boundaries (research submit/claim/execute, design task planning, challenge design execution) |
+| `src/services/build_orchestration_service.py` | Submits designed tasks into the file-backed shard queue and creates one `build_attempts` row per build submission |
+| `src/services/build_reconciler.py` | Reconciles `build_attempts` with shard queue placement, progress events, worker ownership, and artifact availability |
 | `src/web/` | Builds dashboard data, exposes FastAPI routes, serves static assets, and hosts the research/design HTTP adapters |
 
 `packing` and `hermes` expose their public APIs through package re-exports, so
@@ -82,9 +84,10 @@ work/
 ```
 
 The shard directory is the source of truth for queue state. Workers never
-modify one shared queue document. Progress events and latest dashboard
-snapshots live in PostgreSQL; generated artifacts and queue ownership remain
-on disk under `work/`.
+modify one shared queue document. Progress events, latest dashboard snapshots,
+and `build_attempts` rows live in PostgreSQL; `build_attempts` mirrors the
+filesystem queue and artifact state for operator queries, while generated
+artifacts and queue ownership remain on disk under `work/`.
 
 ## Future Growth
 

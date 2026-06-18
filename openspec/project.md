@@ -12,14 +12,18 @@ Engineering CTF challenges. It:
 
 1. Splits a JSONL matrix of requested challenges into shards under
    `work/shards/pending/`.
-2. Lets one or more workers atomically claim shards, render a prompt, and run
+2. Stores approved challenge designs as `design_tasks`, then submits selected
+   tasks into build attempts that create attributed shard files.
+3. Lets one or more workers atomically claim shards, render a prompt, and run
    `hermes chat` in a subprocess to author the challenges.
-3. Records per-stage progress events (queued → design → implement → build →
+4. Records per-stage progress events (queued → design → implement → build →
    validate → document → complete) into PostgreSQL `progress_events` and
    `progress_snapshots`.
-4. Validates each generated challenge by running `validate.sh` and checking
+5. Reconciles `build_attempts` against shard queue placement, worker progress,
+   and produced artifact directories.
+6. Validates each generated challenge by running `validate.sh` and checking
    that the recovered flag matches `metadata.json`.
-5. Exposes a FastAPI dashboard at `http://127.0.0.1:4173` showing queue state,
+7. Exposes a FastAPI dashboard at `http://127.0.0.1:4173` showing queue state,
    per-challenge pipeline, logs, and shard requeue controls.
 
 The challenge artifacts produced must conform to `docs/delivery-formats/ctf-v2/`
@@ -108,6 +112,15 @@ live under `tests/skills/`. `pyproject.toml` configures pytest with
   uv run challenge-factory run --worker dry-01 --dry-run`.
 - Dashboard: `uv run challenge-factory serve` (FastAPI on 4173).
 - Tests: `uv run pytest`.
+
+## Configuration knobs
+
+- `BUILD_RECONCILER_POLL_SECONDS=5`: interval for the background build
+  reconciler; missing, non-integer, or non-positive values fall back to 5.
+- `BUILD_ATTEMPTS_LIST_DEFAULT_LIMIT=100`: default row cap for
+  `GET /api/build-attempts` when the request omits `limit`.
+- `BUILD_ATTEMPTS_LIST_MAX_LIMIT=500`: maximum accepted build-attempt list
+  limit; larger requests are capped and return `X-Limit-Capped`.
 
 ## Areas with known churn (good change-proposal candidates)
 
