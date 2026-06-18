@@ -402,6 +402,43 @@ def _register_request_detail(app: FastAPI) -> None:
             }
         )
 
+    @app.delete("/api/research/requests/{request_id}")
+    def delete_request(
+        request_id: str,
+        delete_artifacts: bool = Query(default=False),
+    ) -> JSONResponse:
+        from services import (
+            ResourceDeletionConflictError,
+            ResourceDeletionNotFoundError,
+            ResourceDeletionService,
+        )
+
+        try:
+            request_uuid = UUID(request_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND,
+                detail="request not found",
+            ) from exc
+        try:
+            result = ResourceDeletionService(
+                paths=_project_paths(app),
+            ).delete_generation_request(
+                request_uuid,
+                delete_artifacts=delete_artifacts,
+            )
+        except ResourceDeletionNotFoundError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except ResourceDeletionConflictError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail=str(exc),
+            ) from exc
+        return JSONResponse(result.to_dict())
+
 
 # ---------------------------------------------------------------------------
 # 10.7 GET /api/research/runs?status=&claimed_by=&generation_request_id=&limit=

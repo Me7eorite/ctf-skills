@@ -45,15 +45,12 @@ class BuildAttemptsRepository:
             raise BuildAttemptPersistenceError(
                 f"design task {design_task_id} does not exist"
             )
-        latest_no = self.session.scalar(
-            sa.select(sa.func.max(model.BuildAttempt.attempt_no)).where(
-                model.BuildAttempt.design_task_id == design_task_id
-            )
-        )
+        attempt_no = int(task.next_build_attempt_no)
+        task.next_build_attempt_no = attempt_no + 1
         row = model.BuildAttempt(
             id=attempt_id or uuid4(),
             design_task_id=design_task_id,
-            attempt_no=int(latest_no or 0) + 1,
+            attempt_no=attempt_no,
             status="queued",
             shard_basename=shard_basename,
         )

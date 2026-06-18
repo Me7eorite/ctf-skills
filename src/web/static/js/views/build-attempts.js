@@ -1,7 +1,8 @@
-import { api, postJson } from "../api.js";
+import { api, del, postJson } from "../api.js";
 import { appState } from "../state.js";
 import { initIcons } from "../ui/icons.js";
 import { showToast } from "../ui/toast.js";
+import { confirmDeletion } from "../ui/delete-dialog.js";
 import {
   escapeHtml,
   formatDateTime,
@@ -164,6 +165,26 @@ async function retryAttempt(attemptId) {
   }
 }
 
+async function deleteAttempt(attemptId) {
+  const choice = await confirmDeletion({
+    title: "Delete build attempt",
+    message: "This removes the build-attempt row, queue state, and progress. Challenge artifacts are retained unless selected.",
+  });
+  if (choice === null) return;
+  try {
+    const query = choice ? "?delete_artifacts=true" : "?delete_artifacts=false";
+    const result = await del(`/api/build-attempts/${attemptId}${query}`);
+    showToast(result.warnings?.length ? result.warnings[0] : "Build attempt deleted");
+    state.detailId = null;
+    state.detail = null;
+    state.list = null;
+    window.location.hash = "#/build-attempts";
+    await ensureList();
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
 export function render(data) {
   appState.data = data;
   const root = document.querySelector('[data-view="build-attempts"]');
@@ -283,6 +304,9 @@ function renderTable(rows) {
                   ${attempt.status === "failed" || attempt.status === "lost"
                     ? `<button class="btn btn-primary btn-xs ba-retry">Retry</button>`
                     : ""}
+                  <button class="btn btn-danger btn-xs ba-delete" title="Delete">
+                    <i data-lucide="trash-2"></i>
+                  </button>
                 </div>
               </td>
             </tr>
@@ -318,6 +342,9 @@ function renderDetail(root) {
         ${attempt.status === "failed" || attempt.status === "lost"
           ? `<button class="btn btn-primary btn-sm ba-retry" data-build-attempt-id="${escapeHtml(attempt.id)}">Retry</button>`
           : ""}
+        <button class="btn btn-danger btn-sm ba-delete" data-build-attempt-id="${escapeHtml(attempt.id)}">
+          <i data-lucide="trash-2"></i>Delete
+        </button>
       </div>
     </div>
 
@@ -494,6 +521,10 @@ export function bind() {
     }
     if (event.target.closest(".ba-retry") && attemptId) {
       retryAttempt(attemptId);
+      return;
+    }
+    if (event.target.closest(".ba-delete") && attemptId) {
+      deleteAttempt(attemptId);
     }
   });
 

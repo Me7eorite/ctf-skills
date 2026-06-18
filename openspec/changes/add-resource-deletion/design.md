@@ -110,14 +110,21 @@ boundary.
 
 Files that must disappear as part of deletion are atomically renamed into a
 private deletion-quarantine directory under `work/` before the database commit.
-If validation or commit fails, they are renamed back. After a successful
-commit, quarantined files are removed.
+The service writes an atomic manifest before each rename. Manifest entries
+start as `planned` and are rewritten to `quarantined` only after the rename
+succeeds, so recovery can distinguish a process exit before mutation from a
+real quarantined file. If validation or commit fails, quarantined entries are
+renamed back. After a successful commit, quarantined files are removed.
 
 This is not a distributed transaction, but same-filesystem atomic renames give
 the required property at the worker boundary: a queued shard is either visible
 and owned by a database row, or hidden while that row is being deleted.
 Post-commit removal failures are logged and returned as cleanup warnings; the
-quarantined path remains outside all worker-scanned directories.
+quarantined path remains outside all worker-scanned directories. Recovery is
+idempotent: a `planned` entry whose source is still visible is considered not
+yet moved, and a `quarantined` entry whose destination is missing is treated as
+already restored or already purged only when the root-resource state proves
+that outcome.
 
 ### Decision 4: distinguish operational state from retained artifacts
 
@@ -186,7 +193,8 @@ without optimistic removal.
   abort/restore on a detected claim.
 - **[PostgreSQL/filesystem cannot commit atomically]** A process can die after
   one side changes. → Keep worker-invisible quarantines, use deterministic
-  deletion manifests, and perform startup/before-delete quarantine recovery.
+  deletion manifests with per-entry state, and perform startup/before-delete
+  quarantine recovery.
 - **[Artifact path is malicious or stale]** A persisted path could escape the
   project. → Resolve paths, require allowlisted ancestry, do not follow an
   escaping symlink, and report skipped paths.

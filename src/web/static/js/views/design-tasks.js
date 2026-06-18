@@ -1,7 +1,8 @@
-import { api, postJson } from "../api.js";
+import { api, del, postJson } from "../api.js";
 import { setView } from "../router.js";
 import { initIcons } from "../ui/icons.js";
 import { showToast } from "../ui/toast.js";
+import { confirmDeletion } from "../ui/delete-dialog.js";
 import {
   escapeHtml,
   formatDateTime,
@@ -238,6 +239,26 @@ async function buildSelectedTasks() {
   }
 }
 
+async function deleteDesignTask(taskId) {
+  const choice = await confirmDeletion({
+    title: "Delete design task",
+    message: "This removes the design task, design history, and build attempts. Artifacts are retained unless selected.",
+  });
+  if (choice === null) return;
+  try {
+    const query = choice ? "?delete_artifacts=true" : "?delete_artifacts=false";
+    const result = await del(`/api/design-tasks/${taskId}${query}`);
+    showToast(result.warnings?.length ? result.warnings[0] : "Design task deleted");
+    state.selected.delete(taskId);
+    state.detailId = null;
+    state.detail = null;
+    state.list = null;
+    await ensureList();
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
 export function render(data) {
   state.data = data;
   const root = document.querySelector('[data-view="design-tasks"]');
@@ -360,7 +381,17 @@ function renderBuildCheckbox(task) {
 
 function renderRowActions(task) {
   if (task.status === "building" || task.status === "built") {
-    return `<div class="btn-group design-task-actions">${buildBadge(task)}</div>`;
+    return `
+      <div class="btn-group design-task-actions">
+        <button class="btn btn-secondary btn-xs dt-open-detail" title="Details">
+          <i data-lucide="panel-right-open"></i>
+        </button>
+        ${buildBadge(task)}
+        <button class="btn btn-danger btn-xs dt-delete" title="Delete">
+          <i data-lucide="trash-2"></i>
+        </button>
+      </div>
+    `;
   }
   const isBuilding = !!state.flags.building?.[task.id];
   return `
@@ -374,6 +405,9 @@ function renderRowActions(task) {
       <button class="btn btn-primary btn-xs dt-design" title="Design"${task.status === "queued" && !state.flags.designing?.[task.id] ? "" : " disabled"}>Design</button>
       <button class="btn btn-primary btn-xs dt-build${isBuilding ? " btn-loading" : ""}" title="Build"${eligibleForBuild(task) && !isBuilding ? "" : " disabled"}>
         <i data-lucide="hammer"></i>Build
+      </button>
+      <button class="btn btn-danger btn-xs dt-delete" title="Delete">
+        <i data-lucide="trash-2"></i>
       </button>
     </div>
   `;
@@ -425,6 +459,9 @@ function renderDetail(root) {
         ${buildBadge(task)}
         <button class="btn btn-primary btn-sm dt-build${isBuilding ? " btn-loading" : ""}"${eligibleForBuild(task) && !isBuilding ? "" : " disabled"}>
           <i data-lucide="hammer"></i> Build
+        </button>
+        <button class="btn btn-danger btn-sm dt-delete">
+          <i data-lucide="trash-2"></i> Delete
         </button>
       </div>
     </div>
@@ -576,6 +613,15 @@ export function bind() {
     }
   });
 
+  document.addEventListener("ctf:open-design-task", (event) => {
+    const taskId = event.detail?.taskId;
+    if (!taskId) return;
+    state.detailId = taskId;
+    state.detail = null;
+    state.list = null;
+    setView("design-tasks");
+  });
+
   document.addEventListener("click", (event) => {
     const root = document.querySelector('[data-view="design-tasks"]');
     if (!root || !root.contains(event.target)) return;
@@ -629,6 +675,10 @@ export function bind() {
     }
     if (event.target.closest(".dt-build") && taskId) {
       buildTaskNow(taskId);
+      return;
+    }
+    if (event.target.closest(".dt-delete") && taskId) {
+      deleteDesignTask(taskId);
       return;
     }
     if (event.target.closest(".dt-open-builds") && taskId) {

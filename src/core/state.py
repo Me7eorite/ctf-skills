@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -110,6 +110,15 @@ class ProgressStore(Protocol):
 
     def reset_snapshots(self, shard: str) -> None:
         """重置指定分片的看板快照数据。用于分片重新执行前清理旧状态。"""
+        ...
+
+    def purge_shards(
+        self,
+        shards: Collection[str],
+        *,
+        transaction: object | None = None,
+    ) -> None:
+        """Remove all events and snapshots for the supplied shard basenames."""
         ...
 
     def dashboard(self, event_limit: int = 60) -> dict:
@@ -272,6 +281,23 @@ class InMemoryProgressStore:
         # 用 list() 创建副本避免在遍历中修改字典
         for key in list(self._snapshots):
             if key[0] == normalized:
+                del self._snapshots[key]
+
+    def purge_shards(
+        self,
+        shards: Collection[str],
+        *,
+        transaction: object | None = None,
+    ) -> None:
+        """Atomically remove all in-memory progress for shard basenames."""
+        normalized = {_normalize_shard(shard) for shard in shards}
+        if not normalized:
+            return
+        self._events = [
+            event for event in self._events if event["shard"] not in normalized
+        ]
+        for key in list(self._snapshots):
+            if key[0] in normalized:
                 del self._snapshots[key]
 
     def dashboard(self, event_limit: int = 60) -> dict:

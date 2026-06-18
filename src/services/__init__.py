@@ -15,6 +15,12 @@ from services.design_task_planning_service import DesignTaskPlanningService
 from services.research_agent_executor import ResearchAgentExecutor
 from services.research_job_service import ResearchAttemptError, ResearchJobService, StaleClaimError
 from services.research_worker import ResearchWorker
+from services.resource_deletion_service import (
+    DeletionResult,
+    ResourceDeletionConflictError,
+    ResourceDeletionNotFoundError,
+    ResourceDeletionService,
+)
 
 __all__ = [
     "BuildOrchestrationError",
@@ -29,5 +35,9 @@ __all__ = [
     "ResearchAttemptError",
     "ResearchJobService",
     "ResearchWorker",
+    "DeletionResult",
+    "ResourceDeletionConflictError",
+    "ResourceDeletionNotFoundError",
+    "ResourceDeletionService",
     "StaleClaimError",
 ]

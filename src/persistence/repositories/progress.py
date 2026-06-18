@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -18,7 +18,12 @@ from core.state import (
     _percent,
 )
 from persistence.models.progress import ProgressEvent, ProgressSnapshot
-from persistence.session import SessionFactory, transaction
+from persistence.session import (
+    SessionFactory,
+)
+from persistence.session import (
+    transaction as session_transaction,
+)
 
 
 class PostgresProgressStore(ProgressStore):
@@ -52,7 +57,7 @@ class PostgresProgressStore(ProgressStore):
 
     def record_batch(self, events: Sequence[ProgressEventInput]) -> list[dict]:
         prepared = [_prepare_event(event) for event in events]
-        with transaction(factory=self._factory) as session:
+        with session_transaction(factory=self._factory) as session:
             results: list[dict] = []
             for event in prepared:
                 row = ProgressEvent(
@@ -84,7 +89,7 @@ class PostgresProgressStore(ProgressStore):
         )
         if before_id is not None:
             stmt = stmt.where(ProgressEvent.id < before_id)
-        with transaction(factory=self._factory) as session:
+        with session_transaction(factory=self._factory) as session:
             return [_event_dict(row) for row in session.scalars(stmt)]
 
     def events_for_challenge(
@@ -112,7 +117,7 @@ class PostgresProgressStore(ProgressStore):
             stmt = stmt.where(ProgressEvent.id >= after_id)
         if before_id is not None:
             stmt = stmt.where(ProgressEvent.id < before_id)
-        with transaction(factory=self._factory) as session:
+        with session_transaction(factory=self._factory) as session:
             return [_event_dict(row) for row in session.scalars(stmt)]
 
     def latest_claim_event(
@@ -134,20 +139,48 @@ class PostgresProgressStore(ProgressStore):
         )
         if before_id is not None:
             stmt = stmt.where(ProgressEvent.id < before_id)
-        with transaction(factory=self._factory) as session:
+        with session_transaction(factory=self._factory) as session:
             row = session.scalar(stmt)
             return _event_dict(row) if row else None
 
     def reset_snapshots(self, shard: str) -> None:
-        with transaction(factory=self._factory) as session:
+        with session_transaction(factory=self._factory) as session:
             session.execute(
                 sa.delete(ProgressSnapshot).where(
                     ProgressSnapshot.shard == _normalize_shard(shard)
                 )
             )
 
+    def purge_shards(
+        self,
+        shards: Collection[str],
+        *,
+        transaction: object | None = None,
+    ) -> None:
+        normalized = {_normalize_shard(shard) for shard in shards}
+        if not normalized:
+            return
+
+        def purge(session: Session) -> None:
+            session.execute(
+                sa.delete(ProgressEvent).where(ProgressEvent.shard.in_(normalized))
+            )
+            session.execute(
+                sa.delete(ProgressSnapshot).where(
+                    ProgressSnapshot.shard.in_(normalized)
+                )
+            )
+
+        if transaction is not None:
+            if not isinstance(transaction, Session):
+                raise TypeError("transaction must be a SQLAlchemy Session")
+            purge(transaction)
+            return
+        with session_transaction(factory=self._factory) as session:
+            purge(session)
+
     def dashboard(self, event_limit: int = 60) -> dict:
-        with transaction(factory=self._factory) as session:
+        with session_transaction(factory=self._factory) as session:
             snapshot_rows = session.scalars(
                 sa.select(ProgressSnapshot).order_by(
                     ProgressSnapshot.updated_at.desc(),

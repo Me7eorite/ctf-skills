@@ -1,6 +1,7 @@
-import { api, postJson } from "../api.js";
+import { api, del, postJson } from "../api.js";
 import { initIcons } from "../ui/icons.js";
 import { showToast } from "../ui/toast.js";
+import { confirmDeletion } from "../ui/delete-dialog.js";
 import {
   escapeHtml,
   categoryLabel,
@@ -193,6 +194,27 @@ async function generateDesignTasks() {
   }
 }
 
+async function deleteRequest(requestId) {
+  const choice = await confirmDeletion({
+    title: "Delete request",
+    message: "This removes the request, research rows, design tasks, designs, and build attempts. Artifacts are retained unless selected.",
+  });
+  if (choice === null) return;
+  try {
+    const query = choice ? "?delete_artifacts=true" : "?delete_artifacts=false";
+    const result = await del(`/api/research/requests/${requestId}${query}`);
+    showToast(result.warnings?.length ? result.warnings[0] : "Request deleted");
+    state.detailId = null;
+    state.detail = null;
+    state.requests = null;
+    await ensureRequests();
+    render(state.data);
+    initIcons();
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
 async function runWorkerAction(action, body = {}) {
   try {
     const result = await postJson(`/api/research/worker/${action}`, body);
@@ -279,6 +301,7 @@ function renderRequestsTable(items) {
             <th>Target</th>
             <th>Status</th>
             <th>Created</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -290,6 +313,7 @@ function renderRequestsTable(items) {
               <td style="text-align: right;">${r.target_count}</td>
               <td>${requestStatusPill(r.status)}</td>
               <td class="table-cell-time">${escapeHtml(formatDateTime(r.created_at))}</td>
+              <td><button class="btn btn-danger btn-xs req-delete" title="Delete"><i data-lucide="trash-2"></i></button></td>
             </tr>
           `).join("")}
         </tbody>
@@ -334,6 +358,9 @@ function renderDetail(root) {
         </button>
         <button class="btn btn-ghost btn-sm" id="detail-open-logs">
           <i data-lucide="file-text"></i> Logs
+        </button>
+        <button class="btn btn-danger btn-sm" id="detail-delete-request">
+          <i data-lucide="trash-2"></i> Delete
         </button>
       </div>
     </div>
@@ -549,6 +576,10 @@ export function bind() {
       setView("research-logs");
       return;
     }
+    if (e.target.closest("#detail-delete-request") && state.detailId) {
+      deleteRequest(state.detailId);
+      return;
+    }
     if (e.target.closest("#req-clear-filter")) {
       state.filter = { category: "", status: "" };
       forceReloadRequests();
@@ -565,6 +596,10 @@ export function bind() {
 
     const row = e.target.closest(".table-row-clickable");
     if (row) {
+      if (e.target.closest(".req-delete")) {
+        deleteRequest(row.dataset.id);
+        return;
+      }
       state.detailId = row.dataset.id;
       state.detail = null;
       render(state.data);

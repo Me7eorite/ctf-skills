@@ -95,6 +95,11 @@ class DesignTask(Base):
         nullable=False,
         server_default=sa.text("'[]'::jsonb"),
     )
+    next_build_attempt_no: Mapped[int] = mapped_column(
+        sa.Integer(),
+        nullable=False,
+        server_default=sa.text("1"),
+    )
     status: Mapped[str] = mapped_column(
         sa.Text(),
         nullable=False,

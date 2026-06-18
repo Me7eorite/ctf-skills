@@ -185,10 +185,14 @@ back database changes and restore quarantined entries. A failure to remove a
 quarantine after a successful commit SHALL be returned as a cleanup warning,
 classified as `quarantined`, and the leftover SHALL remain outside
 worker-scanned queue directories. Each quarantine operation SHALL write an
-atomic manifest containing the root resource identity and source/destination
-paths before mutation. Startup and before-delete recovery SHALL restore entries
-when the root still exists, purge entries when the root deletion committed, and
-leave ambiguous entries quarantined with a warning rather than guessing.
+atomic manifest containing the root resource identity, source/destination
+paths, and a per-entry state before mutation. Entries SHALL be recorded as
+`planned` before the rename and rewritten as `quarantined` after the rename
+succeeds. Startup and before-delete recovery SHALL ignore `planned` entries
+whose source path is still visible and destination path is absent, restore
+`quarantined` entries when the root still exists, purge `quarantined` entries
+when the root deletion committed, and leave ambiguous entries quarantined with
+a warning rather than guessing.
 
 #### Scenario: Database commit fails after queue withdrawal
 
@@ -209,6 +213,13 @@ leave ambiguous entries quarantined with a warning rather than guessing.
 - **WHEN** the process exits after quarantine but before committing root deletion
 - **THEN** PostgreSQL rolls back and the root resource remains
 - **AND** recovery uses the manifest to restore each quarantined entry
+
+#### Scenario: Process exits after manifest write but before rename
+
+- **WHEN** the process exits after writing a `planned` manifest entry and before moving the source path
+- **THEN** PostgreSQL rolls back and the root resource remains
+- **AND** recovery observes that the source path is still visible
+- **AND** it leaves the source path in place without reporting a cleanup warning
 
 #### Scenario: Process exits after database commit
 

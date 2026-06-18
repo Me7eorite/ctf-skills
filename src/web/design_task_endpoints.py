@@ -81,6 +81,41 @@ def register_design_task_read_endpoints(app: FastAPI) -> None:
             )
         )
 
+    @app.delete("/api/design-tasks/{task_id}")
+    def delete_design_task(
+        task_id: str,
+        delete_artifacts: bool = Query(default=False),
+    ) -> JSONResponse:
+        from services import (
+            ResourceDeletionConflictError,
+            ResourceDeletionNotFoundError,
+            ResourceDeletionService,
+        )
+
+        try:
+            task_uuid = UUID(task_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND,
+                detail="design task not found",
+            ) from exc
+        try:
+            result = ResourceDeletionService(paths=_project_paths(app)).delete_design_task(
+                task_uuid,
+                delete_artifacts=delete_artifacts,
+            )
+        except ResourceDeletionNotFoundError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except ResourceDeletionConflictError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail=str(exc),
+            ) from exc
+        return JSONResponse(result.to_dict())
+
 
 def isofmt(value) -> str | None:
     return value.isoformat() if value is not None else None
@@ -159,3 +194,9 @@ def challenge_design_dict(
         "created_at": isofmt(design.created_at),
         "updated_at": isofmt(design.updated_at),
     }
+
+
+def _project_paths(app: FastAPI):
+    from core.paths import ProjectPaths
+
+    return getattr(app.state, "project_paths", None) or ProjectPaths.discover()

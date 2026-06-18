@@ -12,7 +12,7 @@
 ## 2. Filesystem and persistence orchestration
 
 - [ ] 2.1 Implement allowlisted path resolution for directly referenced paths under `work/challenges`, `work/research`, and `work/design`, including traversal, symlink escape, missing-path, unowned-path, and shared-reference classification; do not infer ownership from directory names.
-- [ ] 2.2 Implement same-filesystem deletion quarantine with an atomic manifest, rollback restore, post-commit purge, and startup/before-delete recovery based on committed root-resource existence; retain ambiguous entries with warnings.
+- [ ] 2.2 Implement same-filesystem deletion quarantine with an atomic manifest, per-entry `planned`/`quarantined` states, rollback restore, post-commit purge, and startup/before-delete recovery based on committed root-resource existence; treat visible-source `planned` entries as not yet moved and retain ambiguous entries with warnings.
 - [ ] 2.3 Implement queued-build withdrawal from staging/pending with attributed-running checks before and after withdrawal, returning a conflict when a worker wins the claim race.
 - [ ] 2.4 Implement attempt operational cleanup for shard files and claim sidecars, and call transaction-aware `ProgressStore.purge_shards` for events/snapshots in the relational deletion transaction.
 - [ ] 2.5 Implement `delete_artifacts=false` retention and explicit `delete_artifacts=true` removal for exclusively owned, path-contained research/design/challenge artifacts.
@@ -38,7 +38,7 @@
 ## 5. Verification
 
 - [ ] 5.1 Add PostgreSQL service tests for all three cascade scopes, active-state conflicts, unrelated-row isolation, progress cleanup, and parent status recomputation.
-- [ ] 5.2 Add filesystem tests for queued cancellation, worker claim race, rollback restoration, post-commit cleanup warnings, and interrupted-quarantine recovery.
+- [ ] 5.2 Add filesystem tests for queued cancellation, worker claim race, rollback restoration, post-commit cleanup warnings, interrupted-quarantine recovery, and process exit after manifest write but before rename.
 - [ ] 5.3 Add artifact-policy tests proving default retention, explicit removal, path traversal/symlink refusal, shared-reference retention, and per-path result reporting.
 - [ ] 5.4 Add API tests for default/explicit query behavior, success payloads, malformed/unknown ids, and 409 conflicts on each endpoint.
 - [ ] 5.5 Add dashboard interaction coverage for unchecked/checked/cancel confirmation paths and list/detail navigation, or document manual coverage where no DOM harness exists.

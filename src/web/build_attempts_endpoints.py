@@ -182,6 +182,37 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
             status_code=HTTPStatus.CREATED,
         )
 
+    @app.delete("/api/build-attempts/{attempt_id}")
+    def delete_build_attempt(
+        attempt_id: str,
+        delete_artifacts: bool = Query(default=False),
+    ) -> JSONResponse:
+        from services import (
+            ResourceDeletionConflictError,
+            ResourceDeletionNotFoundError,
+            ResourceDeletionService,
+        )
+
+        attempt_uuid = _parse_uuid(attempt_id, "build attempt id", not_found=True)
+        try:
+            result = ResourceDeletionService(
+                paths=_project_paths(app),
+            ).delete_build_attempt(
+                attempt_uuid,
+                delete_artifacts=delete_artifacts,
+            )
+        except ResourceDeletionNotFoundError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except ResourceDeletionConflictError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail=str(exc),
+            ) from exc
+        return JSONResponse(result.to_dict())
+
 
 def _submit_batch(app: FastAPI, task_ids: list[UUID]) -> list[UUID]:
     try:
@@ -310,4 +341,3 @@ def _project_paths(app: FastAPI):
     from core.paths import ProjectPaths
 
     return getattr(app.state, "project_paths", None) or ProjectPaths.discover()
-
