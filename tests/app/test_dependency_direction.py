@@ -154,6 +154,50 @@ class DependencyDirectionTests(unittest.TestCase):
             violations,
         )
 
+    def test_hermes_does_not_import_progress_repository(self):
+        """Spec drop-sqlite-progress-store 9.1: hermes/ must reach the progress
+        store only through the injected `ProgressStore` protocol from
+        `core.state`, never by importing `persistence.repositories.progress`
+        or any other `persistence.*` module directly."""
+        violations: list[str] = []
+        for path in sorted((SRC / "hermes").rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                for target, line, statement in all_imported_modules(node):
+                    if target == "persistence":
+                        violations.append(
+                            f"{path.relative_to(ROOT)}:{line}: {statement} "
+                            f"breaks hermes -> persistence ban"
+                        )
+        self.assertEqual([], violations)
+
+    def test_core_state_module_surface(self):
+        """Spec drop-sqlite-progress-store 9.2: `core.state` exposes the new
+        `ProgressStore` protocol and its in-memory test double, and no longer
+        exposes the legacy `StateStore` class. The private `_percent` helper
+        stays underscore-prefixed so callers don't depend on the formula
+        outside the two store implementations."""
+        import core.state as state_module
+
+        for name in (
+            "ProgressStore",
+            "ProgressEventInput",
+            "InMemoryProgressStore",
+            "STAGES",
+            "STATUSES",
+        ):
+            self.assertTrue(
+                hasattr(state_module, name),
+                f"core.state must expose {name}",
+            )
+        self.assertFalse(
+            hasattr(state_module, "StateStore"),
+            "core.state must no longer expose the legacy StateStore class",
+        )
+        # `_percent` is intentionally private but must still exist for the
+        # PostgresProgressStore import — guard against accidental rename.
+        self.assertTrue(callable(getattr(state_module, "_percent", None)))
+
     def test_named_files_avoid_forbidden_imports(self):
         """Specific files must not import forbidden modules.
 

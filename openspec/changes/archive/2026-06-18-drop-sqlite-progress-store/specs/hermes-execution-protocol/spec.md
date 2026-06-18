@@ -1,3 +1,33 @@
+## ADDED Requirements
+
+### Requirement: ProgressStore exposes resume-safe event queries
+
+The `ProgressStore` protocol SHALL expose public read APIs for complete
+event streams: `events_for_shard(shard, before_id=None)`,
+`events_for_challenge(shard, challenge_id, after_id=None,
+before_id=None)`, and `latest_claim_event(shard, before_id=None)`.
+Events MUST be returned by ascending event id, `before_id` MUST be
+exclusive, and `after_id` for challenge events MUST be inclusive.
+`events_for_challenge` MUST return only events whose `challenge_id`
+equals the parameter value and MUST exclude shard-level events that
+have an empty `challenge_id`; shard-level events are accessed
+exclusively via `events_for_shard` or `latest_claim_event`.
+`ProgressStore.record()` SHALL return the inserted event id.
+`reset_snapshots(shard)` SHALL delete only snapshots for the named
+original shard and SHALL NOT delete events.
+
+#### Scenario: Event boundaries are respected
+
+- **WHEN** query APIs are called with `after_id` and `before_id`
+- **THEN** returned events include only records inside the documented id window
+  and remain ordered by id
+
+#### Scenario: Snapshot reset preserves history
+
+- **WHEN** `reset_snapshots("web-0001-0005.json")` is called
+- **THEN** snapshots for that shard are removed and all progress events remain
+  queryable
+
 ## MODIFIED Requirements
 
 ### Requirement: Runner computes resume plans before current run events
@@ -30,34 +60,6 @@ protocol; the runner SHALL NOT import a concrete progress store implementation.
   `progress.events_for_challenge`, and `progress.latest_claim_event`
 - **AND** no read goes through a SQLite cursor, a `core.state.StateStore`
   attribute, or a `work/state.sqlite3` file path
-
-### Requirement: ProgressStore exposes resume-safe event queries
-
-The `ProgressStore` protocol SHALL expose public read APIs for complete
-event streams: `events_for_shard(shard, before_id=None)`,
-`events_for_challenge(shard, challenge_id, after_id=None,
-before_id=None)`, and `latest_claim_event(shard, before_id=None)`.
-Events MUST be returned by ascending event id, `before_id` MUST be
-exclusive, and `after_id` for challenge events MUST be inclusive.
-`events_for_challenge` MUST return only events whose `challenge_id`
-equals the parameter value and MUST exclude shard-level events that
-have an empty `challenge_id`; shard-level events are accessed
-exclusively via `events_for_shard` or `latest_claim_event`.
-`ProgressStore.record()` SHALL return the inserted event id.
-`reset_snapshots(shard)` SHALL delete only snapshots for the named
-original shard and SHALL NOT delete events.
-
-#### Scenario: Event boundaries are respected
-
-- **WHEN** query APIs are called with `after_id` and `before_id`
-- **THEN** returned events include only records inside the documented id window
-  and remain ordered by id
-
-#### Scenario: Snapshot reset preserves history
-
-- **WHEN** `reset_snapshots("web-0001-0005.json")` is called
-- **THEN** snapshots for that shard are removed and all progress events remain
-  queryable
 
 ### Requirement: Snapshot percent is monotonic within a run
 
