@@ -67,9 +67,11 @@ additionally render a checkbox column on rows whose `status` is `designed`
 or `build_failed`, a top-of-view bulk `构建已选` button that calls
 `POST /api/design-tasks/build` with the selected ids, and a per-row
 `构建` button on the same rows that calls
-`POST /api/design-tasks/{id}/build`. After a successful submission the
-view SHALL surface a toast with a link to the new "构建任务" view filtered
-by the affected `generation_request_id`. The dashboard SHALL NOT render the
+`POST /api/design-tasks/{id}/build`. After a successful submission, if every
+submitted task belongs to the same generation request, the view SHALL surface
+a toast linking to the new "构建任务" view filtered by that
+`generation_request_id`. If submitted tasks span multiple generation requests,
+the toast SHALL link to the unfiltered build-attempts view. The dashboard SHALL NOT render the
 complete design tasks table inside the research request detail page; only the
 summary card defined in *Request detail exposes design tasks* SHALL appear
 there.
@@ -112,15 +114,24 @@ there.
 - **WHEN** the dashboard renders the list
 - **THEN** the checkbox column and per-row `构建` button are enabled
   only on rows whose status is `designed` or `build_failed`
-- **AND** `building`, `built`, and `build_failed` rows show a
-  read-only badge linking to the corresponding build-attempts row
-  in the "构建任务" view
+- **AND** `building` and `built` rows show a read-only badge linking to the
+  corresponding build-attempts row in the "构建任务" view
+- **AND** `build_failed` rows show the same linked badge while retaining their
+  checkbox and `构建` action
 
 #### Scenario: Bulk build button invokes the orchestration endpoint
 
-- **GIVEN** the operator has selected two `designed` rows A and B
+- **GIVEN** the operator has selected two `designed` rows A and B from the
+  same generation request
 - **WHEN** the operator clicks `构建已选`
 - **THEN** the frontend issues a single
   `POST /api/design-tasks/build` request with both ids
 - **AND** on success the toast offers a link to
   `#/build-attempts?generation_request_id={current request id}`
+
+#### Scenario: Cross-request bulk build links to unfiltered build view
+
+- **GIVEN** selected eligible tasks belong to different generation requests
+- **WHEN** the bulk build succeeds
+- **THEN** the toast links to `#/build-attempts` without a
+  `generation_request_id` filter

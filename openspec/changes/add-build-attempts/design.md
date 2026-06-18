@@ -16,7 +16,7 @@ The next piece is connecting those two worlds. Operators today have:
   `work/shards/pending/`.
 - No UI to say "take these three designed tasks and build them," no row
   that records "design X was attempted N times and produced artifact path
-  Y," and no automated way to mark a built artifact as lost when an
+  Y," and no automated way to mark a built artifact unavailable when an
   operator manually deletes its directory.
 
 A naive approach would either:
@@ -29,9 +29,10 @@ A naive approach would either:
 
 This change instead adds a thin **editorial table** (`build_attempts`)
 plus a **one-way mirror** (the `BuildReconciler`) that watches the
-filesystem and reflects what it sees into PostgreSQL. The hermes runner
-stays oblivious. The shard file format extends with optional fields that
-operators can ignore for hand-written matrix shards.
+filesystem and reflects what it sees into PostgreSQL. The Hermes runner stays
+oblivious to PostgreSQL and `build_attempts`, but understands the optional
+resume-source field in attributed shard payloads. Hand-written matrix shards
+that omit the new fields remain unchanged.
 
 ## Goals / Non-Goals
 
@@ -43,8 +44,8 @@ operators can ignore for hand-written matrix shards.
   without coupling hermes to PG.
 - A dashboard surface (`构建任务` view) styled like the existing Design
   Tasks page, so operators can monitor and retry builds.
-- Retry that reuses the runner's existing resume protocol — no token
-  re-burn on stages whose evidence is still valid.
+- Retry that extends the runner's resume protocol with an explicit previous-
+  shard source — no token re-burn on stages whose evidence is still valid.
 - Configuration knobs (env vars) for the reconciler tick interval and
   the build-attempts list limits, so deployment can tune them without
   code changes.
@@ -57,15 +58,16 @@ operators can ignore for hand-written matrix shards.
 - No worker pool or PG-driven scheduling. Workers are still operator-
   started.
 - No automated cleanup of `work/challenges/<category>/<id>-<slug>/`. Operator-
-  initiated deletes are detected as `lost`, not auto-deleted.
+  initiated deletes are detected as `artifact_status = missing`, not
+  auto-deleted and not rewritten as a different historical build outcome.
 - No delivery-bundle download UI. That is a separate change
   (`add-delivery-bundles`).
 - No batching multiple challenges per shard. One challenge per shard
   remains the convention.
-- No state-machine changes to `progress_events`. Build orchestration
+- No schema or state-machine changes to `progress_events`. Build orchestration
   reads progress but does not write it.
-- No changes to hermes runner. The runner stays focused on shard
-  execution and resume planning.
+- Hermes runner remains focused on shard execution and resume planning; it
+  gains only a selectable previous-shard key for resume reads.
 
 ## Decisions
 
@@ -76,9 +78,9 @@ It does NOT model what the runner is doing right now. The runner's
 truth lives in shard files and `progress_events`. The reconciler
 reflects that truth into `build_attempts.status` on a fixed cadence.
 
-**Why:** This keeps the hermes execution protocol untouched and
-preserves the dependency direction matrix (`hermes` does not import
-`persistence`). It also means that even when PG is down, shards still
+**Why:** This keeps Hermes independent of PostgreSQL while making one bounded
+resume-protocol extension, and preserves the dependency direction matrix
+(`hermes` does not import `persistence`). It also means that even when PG is down, shards still
 execute and produce artifacts — `build_attempts` rows simply get
 catch-up updates on the next reconciliation.
 
@@ -91,7 +93,7 @@ catch-up updates on the next reconciliation.
   invalidate parts of the hermes execution protocol spec. Not in
   scope.
 
-### Decision 2: Five-state machine, with `lost` as a separate terminal
+### Decision 2: Build outcome and artifact availability are separate
 
 Status enum: `queued`, `running`, `succeeded`, `failed`, `lost`.
 
@@ -100,16 +102,19 @@ because they have different operator diagnostics:
 
 - `failed` says "the build attempt ran and the artifact failed
   validation" — debug the design or the prompt.
-- `lost` says "the shard or artifact vanished outside the pipeline" —
-  the file system / filesystem ownership story is broken.
+- `lost` says "the non-terminal shard vanished before an execution outcome
+  was observed" — the file queue ownership story is broken.
 
-`lost` is detected immediately (no grace period) because file-system
-moves are typically deliberate; if an operator moves a directory,
-they want to know the system noticed.
+Artifact availability is tracked separately as `unknown`, `present`, or
+`missing`. A successful attempt starts as `present`; if its directory later
+disappears, only `artifact_status` changes to `missing`. The attempt remains
+`succeeded` and its parent remains `built`, preserving the audit fact while
+still surfacing the operational problem immediately.
 
 **Alternatives considered:**
 
-- *Three states (queued, succeeded, failed) folding lost into failed.*
+- *Three states (queued, succeeded, failed) folding a vanished active shard
+  into failed.*
   Simpler schema, but loses the operator-actionable distinction.
 - *Add a grace period for `lost`.* Pushes complexity into the
   reconciler for a case that is rare in practice.
@@ -157,20 +162,21 @@ queue directories.
 - *Callback from the runner to the reconciler.* Reintroduces the
   hermes-to-persistence coupling we are explicitly avoiding.
 
-### Decision 5: Retry uses the existing runner resume protocol
+### Decision 5: Retry explicitly links to the previous shard's resume window
 
 When `retry` is called, the orchestration service emits a fresh
-attempt-specific `shard_basename` to `work/shards/pending/` without
-touching `work/challenges/<category>/<id>-<slug>/`. The runner's
-resume planner, already specified by the hermes-execution-protocol
-capability, keys reuse from the challenge id and artifact directory
-rather than from the shard filename: it inspects evidence, skips
-passing stages with carry-forward events, and only re-runs failed
-stages.
+attempt-specific `shard_basename` to `work/shards/pending/` without touching
+`work/challenges/<category>/<id>-<slug>/`. Its payload sets
+`resume_from_shard_basename` to the source attempt's basename. The runner
+uses that basename only to read the previous claim window; current claim,
+carry-forward, and execution events are written under the fresh basename.
+It then inspects evidence, skips passing stages, and re-runs failed stages.
 
-**Rationale:** This reuses an existing, well-tested mechanism. Hermes
-token cost stays close to the marginal cost of the failed stage, which
-matters for budget-conscious operators. No new code in the runner.
+**Rationale:** The current resume implementation queries historical events by
+shard basename before checking challenge evidence. An explicit source key is
+required when attempt filenames differ. This small protocol extension keeps
+Hermes token cost near the marginal failed-stage cost while isolating each
+attempt's newly written events.
 
 **Alternatives considered:**
 
@@ -184,13 +190,14 @@ matters for budget-conscious operators. No new code in the runner.
   already does this via evidence checks; manual selection would
   duplicate logic and risk drift.
 
-### Decision 6: Shard JSON adds two top-level ids + a per-challenge `design` field
+### Decision 6: Shard JSON adds traceability/resume fields + per-challenge design
 
-The shard JSON envelope grows two optional top-level fields
-(`build_attempt_id`, `design_task_id`) and each challenges entry grows
-a `design` sub-object. Existing hand-written matrix shards keep
-working because the runner ignores extra fields and the reconciler
-treats shards lacking `build_attempt_id` as un-attributed. The
+The shard JSON envelope grows three optional top-level fields
+(`build_attempt_id`, `design_task_id`, `resume_from_shard_basename`) and each
+challenges entry grows a `design` sub-object. Existing hand-written matrix shards keep
+working because they omit these fields. The runner consumes only
+`resume_from_shard_basename`; it otherwise ignores build attribution fields and
+the reconciler treats shards lacking `build_attempt_id` as un-attributed. The
 reconciler attributes generated shards by the payload's
 `build_attempt_id`, not by filename alone, so a hand-written shard with
 the same basename cannot move a `build_attempts` row.
@@ -198,9 +205,10 @@ the same basename cannot move a `build_attempts` row.
 The `design` sub-object carries the validated
 `challenge_designs.payload` content (deployment, artifacts, flag
 location, validation steps, hints, operator-facing prompt). The
-shard prompt template gains a single sentence describing it; the
-runner does not need new code, since prompt rendering is template-
-based.
+shard prompt template gains a single sentence describing it. Consuming the
+`design` sub-object needs no execution-path change beyond prompt rendering;
+the separate `resume_from_shard_basename` field does require the bounded runner
+change described in Decision 5.
 
 **Alternatives considered:**
 
@@ -256,13 +264,50 @@ environment.
 No CLI flag is added; env-vars are sufficient and avoid bloating the
 CLI surface.
 
+### Decision 9: PostgreSQL commit and queue publication use recoverable staging
+
+PostgreSQL and the filesystem cannot participate in one atomic transaction.
+`submit_batch` therefore writes every payload to a private staging directory,
+commits the attempt rows and task states in one PostgreSQL transaction, and
+only then makes a best-effort atomic rename of all staged files into `pending/`.
+The committed row is the durable acceptance point; a post-commit publication
+failure is logged and left for recovery rather than reported as a rolled-back
+submission.
+
+On server startup and before each reconciliation tick, a recovery pass scans
+queued attempts and staged files. A committed queued row with a matching staged
+payload is published; a staged payload older than one hour without a database
+row is removed. The grace interval prevents recovery from deleting a batch that
+is still inside its short database transaction.
+A committed queued row with neither a pending nor staged payload becomes
+`lost`. This guarantees crash convergence rather than claiming impossible
+cross-resource atomicity.
+
+### Decision 10: Dry-run and legacy requeue cannot mutate attributed history
+
+The file queue alone cannot distinguish a real worker claim from
+`challenge-factory run --dry-run`, because both temporarily move a shard into
+`running/`. The reconciler therefore promotes `queued -> running` only when it
+also sees the current basename's shard-level `queued/running` progress claim
+event. Dry-run writes no progress event and returns the file to `pending/`, so
+the attempt remains queued. A real run whose best-effort progress write is
+unavailable may remain visually queued during execution, but its eventual
+done/failed file still drives the correct terminal transition.
+
+The generic shard-requeue endpoint is retained only for unattributed
+hand-written shards. Requeueing a shard whose payload contains
+`build_attempt_id` would execute a terminal attempt again without a new audit
+row, so the endpoint rejects it with `409` and directs the operator to the
+build-attempt retry action.
+
 ## Risks / Trade-offs
 
 | Risk | Mitigation |
 | --- | --- |
 | Reconciler races with `cli.py` writing `progress_events` for the same shard | Reconciler only reads `progress_events`; writes touch only `build_attempts` and `design_tasks` rows; no shared write target |
 | Reconciler thread dies silently and `build_attempts` rows stale | Thread wraps each tick in try/except and logs; if it dies, the `/api/state` synchronous tick continues to serve interactive operators |
-| `lost` detection is too aggressive for operators who briefly move directories | Documented; immediate detection is an explicit decision so silent renames do not produce phantom `succeeded` rows |
+| Artifact disappearance is observed during a temporary directory move | Only `artifact_status` changes; the successful outcome stays immutable and availability returns to `present` if the directory returns |
+| Process exits between PostgreSQL commit and pending-file publication | Recoverable staging republishes the committed payload on startup or the next reconciler tick |
 | Shard JSON growth (large `design` sub-object) bloats `pending/` directory | Designs are typically a few KB; comparable to the existing matrix shard size |
 | Global header removal breaks muscle memory for existing operators | One-shot training cost; the actions are still discoverable via the build-tasks view, which is in the sidebar |
 | The new reconciler thread inside `web/server.py` complicates testing | All file-system interactions can be unit-tested by passing a temp `ProjectPaths`; the thread itself is exercised by an integration test |
@@ -320,7 +365,7 @@ artifacts is unlikely — the build-stage data are already valuable.
   The build-attempts row's `created_at` carries the equivalent signal
   for orchestration audit. Revisit if operators report missing
   visibility on "I clicked, nothing happened yet."
-- **`design_tasks.status` enum growth.** Eight values is bordering on
+- **`design_tasks.status` enum growth.** Nine values is bordering on
   too many. A future cleanup could split `status` into
   `planning_status` and `build_status` columns, but that is a
   separate change after we see how the new values are used.
