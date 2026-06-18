@@ -69,11 +69,13 @@ When a newer event has a lower derived percent than the current snapshot, the
 upsert SHALL keep the snapshot's `stage` and `status` and update only
 `updated_at`, `worker`, and `message`.
 
-#### Scenario: Validate running does not reduce displayed percent
+#### Scenario: Lower-progress event does not reduce displayed percent
 
 - **WHEN** document/passed is followed by validate/running in the same run
-- **THEN** the snapshot stage/status becomes validate/running and its derived
-  percent is not lower than the document/passed percent
+- **THEN** the validate/running event is appended to `progress_events`
+- **AND** the snapshot keeps `stage=document` and `status=passed`
+- **AND** the dashboard-visible derived percent does not fall below the
+  document/passed percent
 
 #### Scenario: Out-of-order regression is suppressed
 

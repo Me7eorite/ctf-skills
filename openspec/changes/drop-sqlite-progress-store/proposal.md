@@ -2,24 +2,26 @@
 
 `work/state.sqlite3` is the last non-PostgreSQL data store left in the control
 plane. It forces two divergent storage models (file + temp-dir SQLite fallback
-vs. fail-loud PostgreSQL), splits audit data across stores so future
-`build_attempts` joins must cross databases, and keeps the dashboard read
+vs. fail-loud PostgreSQL), splits audit data across stores so future build
+orchestration must reconcile across databases, and keeps the dashboard read
 model split between two backends. Collapsing the progress event store into
-PostgreSQL gives a single source of truth, single failure mode, and lets the
-upcoming build-orchestration change link build attempts to their own progress
-events through a normal foreign key.
+PostgreSQL gives a single source of truth, single failure mode, and creates a
+normal relational foundation for a later build-attempt correlation change.
 
 ## What Changes
 
 - **BREAKING**: `work/state.sqlite3` is removed. The OS-temp-directory
   fallback (triggered today when `work/` is not writable) goes away with it.
-  Existing progress event history is discarded on upgrade — events are
-  reconstructed from logs and shard files, not migrated row-by-row.
+  Existing progress event history is discarded on upgrade. Logs and shard files
+  remain available for manual inspection only; this change does not reconstruct
+  or migrate historical rows.
 - **BREAKING**: `progress` CLI now writes to PostgreSQL. When `DATABASE_URL`
   is missing, malformed, or unreachable, the command exits non-zero
-  (fail-loud). It no longer silently falls back to a temp-dir SQLite store.
+  (fail-loud) by default. It no longer silently falls back to a temp-dir SQLite
+  store. The Hermes prompt uses best-effort mode for agent progress updates so
+  database outages do not make the model-run subprocess fail the shard.
 - Introduce a `ProgressStore` protocol in `core/state.py` (6 query methods +
-  `record` + `record_batch`).
+  `record` + `record_batch`) plus a `ProgressEventInput` DTO for batch writes.
 - Add `InMemoryProgressStore` in `core/state.py` for tests and offline tooling.
 - Add `PostgresProgressStore` in `persistence/repositories/progress.py`
   backed by two new tables, `progress_events` and `progress_snapshots`.
@@ -36,7 +38,10 @@ events through a normal foreign key.
   PostgreSQL metadata so the frontend needs no changes.
 - Schema details: `progress_events` uses `BIGSERIAL` ids, `TIMESTAMPTZ` server
   clock, nullable `worker` / `message`, and `CHECK` constraints on `stage` /
-  `status` matching the current Python validators.
+  `status` matching the current Python validators. Store methods serialize
+  `created_at` / `updated_at` in returned dictionaries as UTC
+  `YYYY-MM-DDTHH:MM:SSZ` strings so metrics and API consumers keep the same
+  contract.
 
 ## Capabilities
 
@@ -49,8 +54,9 @@ events through a normal foreign key.
 ### Modified Capabilities
 - `hermes-execution-protocol`: replaces SQLite-specific language and the
   temp-dir fallback contract with the `ProgressStore` protocol; the
-  `progress` CLI's behavior on connection failure changes from "silent
-  fallback" to "fail-loud". Resume queries and snapshot resets continue to
+  default `progress` CLI behavior on connection failure changes from "silent
+  fallback" to "fail-loud", while Hermes prompt-injected progress commands use
+  explicit best-effort mode. Resume queries and snapshot resets continue to
   apply, but against PostgreSQL.
 - `module-architecture`: `core/state.py` no longer owns SQLite. It owns the
   `ProgressStore` protocol and the in-memory test double. The PostgreSQL
@@ -82,7 +88,8 @@ events through a normal foreign key.
 - **Dependencies**: no new runtime dependencies; SQLAlchemy and `psycopg` are
   already present from `postgres-persistence`.
 - **Operational**: workers now require PostgreSQL reachability for the
-  `progress` CLI to succeed. The shard claim, artifact build, and
-  `validate.sh` paths still work without progress writes, and the runner
-  treats `progress` write failures as warnings rather than failing the
-  shard (artifacts on disk remain the source of truth for build status).
+  default `progress` CLI to succeed. Agent-invoked progress commands generated
+  into Hermes prompts use best-effort mode and exit 0 after logging a warning
+  when PostgreSQL is unavailable. Runner-owned progress writes are also
+  warnings rather than shard failures; artifacts on disk remain the source of
+  truth for build status.

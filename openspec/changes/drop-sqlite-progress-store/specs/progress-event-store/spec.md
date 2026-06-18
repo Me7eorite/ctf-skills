@@ -6,15 +6,20 @@ The system SHALL expose a `ProgressStore` protocol in `core/state.py` that
 defines the complete contract for recording and querying shard progress
 events. All progress writes and reads inside the application — `progress`
 CLI, `HermesRunner`, `DashboardService`, resume planning, duration
-metrics — SHALL go through a `ProgressStore` instance. No call site SHALL
-import a concrete progress store implementation directly; concrete
-implementations SHALL be selected at the composition root (`cli.py`,
-`web/server.py`) and injected into consumers.
+metrics — SHALL go through a `ProgressStore` instance. Non-composition
+consumers SHALL NOT import a concrete progress store implementation directly;
+concrete implementations SHALL be selected only at the composition roots
+(`cli.py`, `web/server.py`) and injected into consumers.
+
+The system SHALL define a core-owned `ProgressEventInput` DTO in
+`core/state.py` for `record_batch` inputs. It SHALL NOT reuse the SQLAlchemy
+`persistence.models.progress.ProgressEvent` ORM class as the protocol input
+type.
 
 The protocol SHALL expose exactly these methods:
 
 - `record(*, shard, stage, status, challenge_id="", worker="", message="") -> dict`
-- `record_batch(events: Sequence[ProgressEvent]) -> list[dict]`
+- `record_batch(events: Sequence[ProgressEventInput]) -> list[dict]`
 - `events_for_shard(shard, *, before_id=None) -> list[dict]`
 - `events_for_challenge(shard, challenge_id, *, after_id=None, before_id=None) -> list[dict]`
 - `latest_claim_event(shard, *, before_id=None) -> dict | None`
@@ -30,10 +35,11 @@ The protocol SHALL expose exactly these methods:
   parameter that callers (CLI, web server) populate with a concrete
   implementation
 
-#### Scenario: Protocol covers every legacy StateStore use site
+#### Scenario: Protocol covers every legacy runtime StateStore use site
 
-- **WHEN** the codebase is grepped for the legacy class name `StateStore`
-- **THEN** no occurrence remains
+- **WHEN** `src/` and `tests/` are grepped for the legacy class name
+  `StateStore`
+- **THEN** no occurrence remains under those runtime and test directories
 - **AND** every former `StateStore` call site now calls one of the seven
   protocol methods on an injected `ProgressStore`
 
@@ -93,9 +99,9 @@ data assembly, and the `progress` CLI handler SHALL use
 - **WHEN** a snapshot exists at `(stage=document, status=passed)` and a
   caller records `(stage=design, status=running)` for the same
   `(shard, challenge_id)` pair
-- **THEN** the snapshot's stage/status update to the new values but the
-  derived percent (from `_percent(stage, status)`) recorded on disk does
-  not regress below the old derived percent
+- **THEN** the snapshot keeps `stage=document` and `status=passed`
+- **AND** the returned event still records the lower-progress design/running
+  event with its own derived percent
 
 ### Requirement: progress_events PostgreSQL schema
 
@@ -116,6 +122,11 @@ following column set:
 The table SHALL NOT include a `percent` column. The derived percent is
 computed from `(stage, status)` by `_percent` in `core/state.py`, which
 remains the single source of truth for the formula.
+
+All `ProgressStore` methods that return event or snapshot dictionaries SHALL
+serialize `created_at` and `updated_at` values as UTC
+`YYYY-MM-DDTHH:MM:SSZ` strings, even though PostgreSQL stores them as
+`TIMESTAMPTZ`.
 
 Two indexes SHALL exist: `(shard, id)` and `(shard, challenge_id, id)`.
 
@@ -168,20 +179,26 @@ snapshot row (if any); if `new_percent < old_percent` the upsert still updates
 - **THEN** the resulting snapshot has `stage=validate` and
   `status=running`
 
-### Requirement: progress CLI writes to PostgreSQL and fails loud
+### Requirement: progress CLI writes to PostgreSQL and fails loud by default
 
 The `challenge-factory progress` subcommand SHALL accept the same arguments
 as today (`--shard`, `--stage`, `--status`, `--challenge`, `--worker`,
-`--message`) and SHALL write through `PostgresProgressStore` to the PostgreSQL
-`progress_events` and `progress_snapshots` tables. The CLI MUST print the
-inserted event as a JSON object on stdout matching the existing `record`
-return shape.
+`--message`) and a new optional `--best-effort` flag. It SHALL write through
+`PostgresProgressStore` to the PostgreSQL `progress_events` and
+`progress_snapshots` tables. Successful calls MUST print the inserted event as
+a JSON object on stdout matching the existing `record` return shape.
 
 When PostgreSQL is unreachable, malformed-URL, or missing
-`DATABASE_URL`, the command SHALL exit with code 2, print a
-`PersistenceConfigurationError` or `PersistenceConnectionError`
-diagnostic on stderr, and SHALL NOT create any file under `work/` or
-the OS temp directory.
+`DATABASE_URL`, the command SHALL exit with code 2 by default, print a
+`PersistenceConfigurationError` or `PersistenceConnectionError` diagnostic on
+stderr, and SHALL NOT create any file under `work/` or the OS temp directory.
+
+When `--best-effort` is present and the failure is
+`PersistenceConfigurationError` or `PersistenceConnectionError`, the command
+SHALL print a warning to stderr, print no stdout JSON, and exit 0. Other
+exceptions still propagate as failures. The Hermes prompt renderer SHALL use
+`--best-effort` in the injected `{progress_command}` so model-side progress
+reporting cannot fail the shard solely because PostgreSQL is unavailable.
 
 #### Scenario: progress reports the inserted event
 
@@ -199,15 +216,28 @@ the OS temp directory.
 - **AND** stderr contains `PersistenceConnectionError`
 - **AND** no `work/state.sqlite3` file is created
 
+#### Scenario: prompt progress command is best effort
+
+- **WHEN** the runner renders a Hermes prompt
+- **THEN** the injected progress command includes `--best-effort`
+- **AND** if PostgreSQL is unreachable when the agent invokes that command,
+  the command exits 0, writes a warning to stderr, and creates no SQLite file
+
 ### Requirement: HermesRunner treats progress write failures as warnings
 
 `HermesRunner` SHALL NOT abort a shard claim because a `ProgressStore`
 write raised. When `progress.record` or `progress.record_batch` raises,
-the runner SHALL log the failure as a warning, continue executing the
-shard (artifacts on disk remain authoritative), and let the next
-successful write reconcile state. Shard queue file transitions
-(`pending` → `running` → `done` / `failed`) SHALL NOT depend on
-progress writes succeeding.
+the runner SHALL log `PersistenceConnectionError` as a warning, continue
+executing the shard (artifacts on disk remain authoritative), and let the next
+successful write reconcile state. Other exception types SHALL still propagate.
+Shard queue file transitions (`pending` → `running` → `done` / `failed`)
+SHALL NOT depend on progress writes succeeding.
+
+This warning behavior applies only to progress writes after the runner has
+successfully claimed a shard and computed the resume plan. Progress reads used
+for resume planning (`events_for_shard`, `events_for_challenge`,
+`latest_claim_event`) SHALL remain fail-loud; the runner MUST NOT silently
+start from scratch when it cannot query historical progress.
 
 #### Scenario: Progress write failure does not abandon shard
 
@@ -216,6 +246,14 @@ progress writes succeeding.
   `PersistenceConnectionError`
 - **THEN** the runner logs a warning, still moves the shard file from
   `running/` to `done/`, and still writes the shard report
+
+#### Scenario: Resume query failure is not swallowed
+
+- **WHEN** the runner claims a shard and `progress.latest_claim_event(...)`
+  raises `PersistenceConnectionError` while computing the resume plan
+- **THEN** the runner does not render a prompt or invoke Hermes for that shard
+- **AND** the failure is surfaced to the caller instead of being converted into
+  an empty resume plan
 
 ### Requirement: Dashboard /api/state preserves response shape
 

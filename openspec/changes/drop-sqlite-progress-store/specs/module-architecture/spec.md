@@ -4,7 +4,7 @@
 
 The system SHALL organize `src/` into the following layered packages, plus `cli.py` as composition root:
 
-- `core/` — infrastructure leaves: paths, JSON I/O, shard queue mechanism, and the storage-agnostic `ProgressStore` protocol plus its `InMemoryProgressStore` test double.
+- `core/` — infrastructure leaves: paths, JSON I/O, shard queue mechanism, and the storage-agnostic `ProgressStore` protocol plus its `ProgressEventInput` DTO and `InMemoryProgressStore` test double.
 - `domain/` — business rules: seeds, artifact validation, report aggregation, research DTOs and validators.
 - `packing/` — delivery bundle subsystem (subpackage).
 - `hermes/` — Hermes process and prompt subsystem (subpackage), including the shared subprocess plumbing reused by shard execution and the Research Agent. The runner accepts a `ProgressStore` at construction time; it does NOT import `persistence`.
@@ -23,7 +23,7 @@ The 11 legacy top-level modules (`paths.py`, `jsonio.py`, `state.py`, `shards.py
 - **THEN** `src/core/`, `src/domain/`, `src/packing/`, `src/hermes/`, `src/persistence/`, `src/services/`, `src/web/` each exist as Python packages with `__init__.py`
 - **AND** `src/cli.py` exists at the top of `src/`
 - **AND** none of the 11 legacy top-level modules exist under `src/`
-- **AND** `src/core/state.py` exports `ProgressStore` and `InMemoryProgressStore` and does NOT export `StateStore`
+- **AND** `src/core/state.py` exports `ProgressStore`, `ProgressEventInput`, and `InMemoryProgressStore` and does NOT export `StateStore`
 - **AND** `src/persistence/repositories/progress.py` and `src/persistence/models/progress.py` exist
 
 #### Scenario: Public API re-exports succeed
@@ -33,5 +33,5 @@ The 11 legacy top-level modules (`paths.py`, `jsonio.py`, `state.py`, `shards.py
 
 #### Scenario: Deep imports succeed
 
-- **WHEN** running `python -c "from core.paths import ProjectPaths; from core.jsonio import read_json, write_json; from core.queue import ShardQueue, split_matrix; from core.state import ProgressStore, InMemoryProgressStore; from domain.validation import ChallengeValidator; from domain.seeds import SeedStore; from domain.reports import merge_reports; from persistence.engine import create_engine_from_env; from persistence.session import SessionFactory; from persistence.models.research import GenerationRequest, ResearchRun; from persistence.models.progress import ProgressEvent, ProgressSnapshot; from persistence.repositories.research import ResearchRepository; from persistence.repositories.progress import PostgresProgressStore; from services.research_job_service import ResearchJobService; from services.research_agent_executor import ResearchAgentExecutor; from services.research_worker import ResearchWorker"`
+- **WHEN** running `python -c "from core.paths import ProjectPaths; from core.jsonio import read_json, write_json; from core.queue import ShardQueue, split_matrix; from core.state import ProgressStore, ProgressEventInput, InMemoryProgressStore; from domain.validation import ChallengeValidator; from domain.seeds import SeedStore; from domain.reports import merge_reports; from persistence.engine import create_engine_from_env; from persistence.session import SessionFactory; from persistence.models.research import GenerationRequest, ResearchRun; from persistence.models.progress import ProgressEvent, ProgressSnapshot; from persistence.repositories.research import ResearchRepository; from persistence.repositories.progress import PostgresProgressStore; from services.research_job_service import ResearchJobService; from services.research_agent_executor import ResearchAgentExecutor; from services.research_worker import ResearchWorker"`
 - **THEN** the command exits with status 0 and no import error

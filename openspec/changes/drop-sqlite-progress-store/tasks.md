@@ -8,21 +8,21 @@
 
 ## 2. core/state.py — protocol and in-memory double
 
-- [ ] 2.1 Replace `src/core/state.py` contents: keep `STAGES`, `STATUSES`, `utc_now`, `_percent` (unchanged formula); add `ProgressStore` typing.Protocol with the 7 methods (`record`, `record_batch`, `events_for_shard`, `events_for_challenge`, `latest_claim_event`, `reset_snapshots`, `dashboard`).
+- [ ] 2.1 Replace `src/core/state.py` contents: keep `STAGES`, `STATUSES`, `utc_now`, `_percent` (unchanged formula); add `ProgressEventInput` and `ProgressStore` typing.Protocol with the 7 methods (`record`, `record_batch`, `events_for_shard`, `events_for_challenge`, `latest_claim_event`, `reset_snapshots`, `dashboard`).
 - [ ] 2.2 Add an `InMemoryProgressStore` class implementing the full protocol against in-process dicts/lists; enforce id monotonicity, snapshot upsert with the no-regression rule (compare `_percent` on existing vs new), and `dashboard()` shape matching today's response (including `storage={path: 'memory://', fallback: False, warning: ''}`).
 - [ ] 2.3 Remove the legacy `StateStore` class entirely; remove the `tempfile.gettempdir()` fallback logic; remove the `ProjectPaths.state_database` property and all its callers under `src/`.
-- [ ] 2.4 Add `tests/app/test_progress_in_memory.py` covering record / record_batch / no-regression / events_for_shard / events_for_challenge boundaries / latest_claim_event / reset_snapshots; reuse cases from the deleted `test_state.py` where they apply.
+- [ ] 2.4 Add `tests/app/test_progress_in_memory.py` covering record / record_batch / no-regression / UTC timestamp string serialization / events_for_shard / events_for_challenge boundaries / latest_claim_event / reset_snapshots; reuse cases from the deleted `test_state.py` where they apply.
 
 ## 3. persistence — ORM and Postgres implementation
 
 - [ ] 3.1 Add `src/persistence/models/progress.py` declaring `ProgressEvent` and `ProgressSnapshot` SQLAlchemy mappings against the new tables; re-export from `persistence.models.__init__`.
 - [ ] 3.2 Add `src/persistence/repositories/progress.py` with `PostgresProgressStore` implementing `ProgressStore`; each public method opens a short transaction via the project's `SessionFactory`.
 - [ ] 3.3 Implement `record(...)`: insert one event, then upsert snapshot — SELECT FOR UPDATE the existing snapshot row, compare `_percent(old)` vs `_percent(new)`, write either the full new row or keep stage/status and update only updated_at/worker/message.
-- [ ] 3.4 Implement `record_batch(events)`: single transaction, raises on the first invalid event with full rollback; reuse the snapshot upsert path per (shard, challenge_id).
+- [ ] 3.4 Implement `record_batch(events: Sequence[ProgressEventInput])`: single transaction, raises on the first invalid event with full rollback; reuse the snapshot upsert path per (shard, challenge_id).
 - [ ] 3.5 Implement read APIs (`events_for_shard`, `events_for_challenge`, `latest_claim_event`) with the documented id-window semantics; ensure ordering by ascending id; `events_for_challenge` rejects empty challenge_id.
 - [ ] 3.6 Implement `reset_snapshots(shard)` (DELETE from progress_snapshots WHERE shard = :shard).
 - [ ] 3.7 Implement `dashboard(event_limit)` returning the same JSON shape today's StateStore produces; `storage.path` is the redacted DATABASE_URL, `storage.fallback = False`, `storage.warning = ""`.
-- [ ] 3.8 Add `tests/app/test_progress_postgres_repository.py` (`@pytest.mark.postgres`) covering insert+upsert, no-regression on real PG, record_batch atomic rollback, fail-loud on closed engine, `events_for_*` ordering and windows, snapshot reset preserving events.
+- [ ] 3.8 Add `tests/app/test_progress_postgres_repository.py` (`@pytest.mark.postgres`) covering insert+upsert, no-regression on real PG, record_batch atomic rollback, fail-loud on closed engine, UTC timestamp string serialization, `events_for_*` ordering and windows, snapshot reset preserving events.
 
 ## 4. Composition root — inject ProgressStore everywhere
 
@@ -35,17 +35,20 @@
 - [ ] 4.7 Update `tests/app/conftest.py` to expose a `progress_store` fixture returning `InMemoryProgressStore()`; refactor every test that built `StateStore(paths)` to use the fixture (mechanical search-and-replace).
 - [ ] 4.8 Grep the repo (`rg "StateStore"`) and confirm zero matches under `src/` and `tests/`.
 
-## 5. CLI — progress subcommand fail-loud
+## 5. CLI — progress subcommand fail-loud by default
 
 - [ ] 5.1 In `cli.py`'s `progress` handler, surface `PersistenceConfigurationError` and `PersistenceConnectionError`: print `error: <ExcClass>: <message>` to stderr and exit 2; do NOT fall back to any other store.
 - [ ] 5.2 Confirm the success path prints the JSON returned by `progress.record(...)` unchanged (event_id, shard, challenge_id, worker, stage, status, percent, message, updated_at).
-- [ ] 5.3 Add a CLI test (`tests/app/test_progress_cli.py` or extend existing): success path uses an in-memory store via dependency injection; the fail-loud path is covered by a PG-marked test that points DATABASE_URL at an unreachable host.
+- [ ] 5.3 Add `--best-effort` to the `progress` subcommand. On `PersistenceConfigurationError` or `PersistenceConnectionError`, best-effort mode prints a warning to stderr, prints no stdout JSON, exits 0, and still creates no SQLite file. Other exception types remain failures.
+- [ ] 5.4 Add CLI tests (`tests/app/test_progress_cli.py` or extend existing): success path uses an in-memory store via dependency injection; the fail-loud path is covered by a PG-marked test that points DATABASE_URL at an unreachable host; the best-effort path exits 0 with a warning and no stdout JSON.
 
 ## 6. HermesRunner — non-fatal progress writes
 
 - [ ] 6.1 Wrap every `progress.record(...)` and `progress.record_batch(...)` call in `HermesRunner` with a try/except; on `PersistenceConnectionError` (and only that), log a warning via the runner's existing logger and continue execution. Other exceptions propagate normally.
 - [ ] 6.2 Confirm shard queue file transitions (`pending` / `running` / `done` / `failed`) do not depend on `progress.record` success; add a unit test that simulates a raising `ProgressStore` (e.g., a `RaisingProgressStore` test double) and asserts the shard still moves to `done/` on success.
 - [ ] 6.3 Use `progress.record_batch(...)` for the resume carry-forward events block in `process_one` so the prefix events ship atomically.
+- [ ] 6.4 Update `hermes.prompt.render_prompt(...)` so the injected `{progress_command}` includes `--best-effort`; add/adjust prompt rendering tests to assert the flag is present.
+- [ ] 6.5 Add a runner test proving resume-read failures are not swallowed: if `latest_claim_event` / `events_for_*` raises before prompt rendering, the runner surfaces the error and does not invoke Hermes with an empty resume plan.
 
 ## 7. Dashboard frontend contract preserved
 
@@ -55,16 +58,16 @@
 
 ## 8. Upgrade script and docs
 
-- [ ] 8.1 Add `tools/scripts/cleanup_sqlite_state.sh` that runs `rm -f work/state.sqlite3 work/state.sqlite3-wal work/state.sqlite3-shm` and any temp-dir fallback path that may exist. Make it idempotent.
+- [ ] 8.1 Add cross-platform `tools/scripts/cleanup_sqlite_state.py` that removes `work/state.sqlite3`, `work/state.sqlite3-wal`, `work/state.sqlite3-shm`, and the deterministic temp-dir fallback path when it exists. Make it idempotent and avoid shell-only `rm`.
 - [ ] 8.2 Update `README.md`: delete the "If `work/` is not writable, the server and workers use the same deterministic database under the operating-system temporary directory" paragraph; add a one-liner saying progress lives in PostgreSQL.
 - [ ] 8.3 Update `docs/architecture.md`: in the package table, change the `src/core/state.py` row to "stores the `ProgressStore` protocol and the in-memory test double"; in the Runtime State block, drop the `work/state.sqlite3` reference and replace with "progress events live in PostgreSQL".
 - [ ] 8.4 Update `openspec/project.md` "Tech stack" entry on SQLite: change to "PostgreSQL `progress_events` + `progress_snapshots` for append-only progress event store via `core.state.ProgressStore`"; update the "Progress percent is computed from `(stage, status)` in `core/state.py`" non-obvious-conventions bullet to match the new file layout.
-- [ ] 8.5 Note the upgrade procedure in `docs/persistence.md` (or create that file if missing): "After pulling this change, run `alembic upgrade head`, then `tools/scripts/cleanup_sqlite_state.sh`. Historical progress events are not migrated."
+- [ ] 8.5 Note the upgrade procedure in `docs/persistence.md` (or create that file if missing): "After pulling this change, run `alembic upgrade head`, then `uv run python tools/scripts/cleanup_sqlite_state.py`. Historical progress events are not migrated or reconstructed."
 
 ## 9. Dependency direction guardrail
 
 - [ ] 9.1 In `tests/app/test_dependency_direction.py`, add a scenario asserting `src/hermes/` does not import `persistence.repositories.progress` or any other `persistence.*` module after the refactor.
-- [ ] 9.2 Add a scenario asserting `core.state` no longer exports `StateStore` (the class) and DOES export `ProgressStore`, `InMemoryProgressStore`, `STAGES`, `STATUSES`, `_percent`.
+- [ ] 9.2 Add a scenario asserting `core.state` no longer exports `StateStore` (the class) and DOES export `ProgressStore`, `ProgressEventInput`, `InMemoryProgressStore`, `STAGES`, `STATUSES`, `_percent`.
 
 ## 10. End-to-end verification
 
@@ -73,4 +76,5 @@
 - [ ] 10.3 With `TEST_DATABASE_URL` set, `uv run pytest -m postgres` covers the new repository tests and the fail-loud CLI test.
 - [ ] 10.4 `uv run challenge-factory init && challenge-factory split --matrix matrix.example.jsonl --size 3 && challenge-factory run --worker dry-01 --dry-run` succeeds with no `work/state.sqlite3` file created.
 - [ ] 10.5 `DATABASE_URL=postgresql+psycopg://nobody@127.0.0.1:1/none uv run challenge-factory progress --shard x.json --stage build --status running` exits 2 with `PersistenceConnectionError` on stderr.
-- [ ] 10.6 `uv run challenge-factory serve` starts, `/api/state` returns 200 with `storage.fallback=false` and a masked `storage.path`.
+- [ ] 10.6 `DATABASE_URL=postgresql+psycopg://nobody@127.0.0.1:1/none uv run challenge-factory progress --best-effort --shard x.json --stage build --status running` exits 0 with a warning on stderr, no stdout JSON, and no `work/state.sqlite3` file.
+- [ ] 10.7 `uv run challenge-factory serve` starts, `/api/state` returns 200 with `storage.fallback=false` and a masked `storage.path`.

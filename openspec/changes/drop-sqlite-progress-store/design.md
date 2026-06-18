@@ -9,18 +9,19 @@ records a warning on the dashboard.
 Since the `postgres-persistence` change landed, every other relational fact in
 the control plane (research requests / runs, design tasks, design attempts,
 challenge designs) lives in PostgreSQL with a strict "no silent fallback"
-contract. The forthcoming `add-build-attempts` change will need to join
-`build_attempts` rows to their per-stage progress events to produce reconciled
-build state for the dashboard and for the operator's "select & build" flow.
+contract. The forthcoming `add-build-attempts` change will need to correlate
+build attempts with per-stage progress events to produce reconciled build state
+for the dashboard and for the operator's "select & build" flow.
 
 Keeping the progress store on SQLite creates four concrete problems:
 
 1. Two failure models. PostgreSQL is fail-loud; SQLite silently degrades to
    temp. Operators have to internalize different recovery procedures for
    different stores.
-2. Cross-store joins. `build_attempts.id → progress_events` cannot be enforced
-   by a foreign key. The reconciler would need application-side joins across
-   two backends.
+2. Cross-store reconciliation. Future build orchestration would have to compare
+   `build_attempts` rows and progress events across two backends instead of
+   using one relational store. This change prepares that join surface; it does
+   not add a `build_attempt_id` foreign key yet.
 3. Two read models in the dashboard. `/api/state` already serves SQLite
    snapshots; future endpoints would split between SQLite and PostgreSQL.
 4. Two test harnesses. SQLite uses a temp directory; PostgreSQL tests use
@@ -43,8 +44,9 @@ workers, which is consistent with the existing `postgres-persistence` rule.
   the concrete backend.
 - Provide an `InMemoryProgressStore` so unit tests do not require
   PostgreSQL.
-- Keep the `progress` CLI's stdout/exit contract unchanged for hermes
-  agents (signed-off by the hermes-execution-protocol spec).
+- Keep the default `progress` CLI stdout/exit contract unchanged for operator
+  calls, while adding an explicit best-effort mode for the progress command
+  injected into Hermes prompts.
 - Keep dashboard `/api/state` JSON shape unchanged so the frontend
   requires no edits.
 - Preserve the "snapshot percent never regresses within a claim window"
@@ -54,8 +56,8 @@ workers, which is consistent with the existing `postgres-persistence` rule.
 
 - Migrating historical SQLite event data. Existing `work/state.sqlite3`
   is discarded on upgrade.
-- Building the `build_attempts` table or the reconciler — that is the
-  next change.
+- Building the `build_attempts` table, adding a `build_attempt_id` column, or
+  writing the reconciler — that is the next change.
 - Changing the `_percent(stage, status)` formula. The formula stays
   identical and lives only in `core/state.py`.
 - Adding new dependencies. SQLAlchemy and `psycopg` already come with
@@ -67,8 +69,9 @@ workers, which is consistent with the existing `postgres-persistence` rule.
 
 We introduce a `ProgressStore` Protocol that owns the full contract:
 `record`, `record_batch`, `events_for_shard`, `events_for_challenge`,
-`latest_claim_event`, `reset_snapshots`, `dashboard`. The protocol lives
-in `core/state.py` because `core` is the only place every consumer is
+`latest_claim_event`, `reset_snapshots`, `dashboard`. Batch writes use a
+core-owned `ProgressEventInput` DTO, not the SQLAlchemy ORM model. The protocol
+lives in `core/state.py` because `core` is the only place every consumer is
 allowed to import.
 
 **Alternatives considered:**
@@ -159,33 +162,41 @@ Injection preserves that boundary; `HermesRunner` only sees the
 
 Each `record(...)` opens its own short transaction. This keeps semantics
 simple and rollback boundaries obvious. For the runner, where a single
-`process_one` call writes 5–10 events, we add `record_batch(events) ->
-list[dict]` that submits all events in one transaction. The CLI handler
-keeps using single-event `record`.
+`process_one` call writes 5–10 events, we add
+`record_batch(events: Sequence[ProgressEventInput]) -> list[dict]` that submits
+all events in one transaction. The CLI handler keeps using single-event
+`record`.
 
 `record_batch` is atomic: any constraint violation rolls back the entire
 batch.
 
-### Decision 7: fail-loud `progress` CLI
+### Decision 7: fail-loud operator CLI, best-effort agent progress command
 
 When `DATABASE_URL` is missing/malformed or PG is unreachable, the
-`progress` CLI exits 2 with the persistence error class name on stderr.
-No fallback to a temp-dir SQLite file. This is consistent with the
-`postgres-persistence` capability's existing fail-loud contract.
+`progress` CLI exits 2 with the persistence error class name on stderr by
+default. No fallback to a temp-dir SQLite file. This is consistent with the
+`postgres-persistence` capability's existing fail-loud contract for operator
+commands.
 
-The runner, however, treats progress write failures as **warnings, not
-shard failures**. Artifacts on disk remain the source of truth for build
-status; losing one progress event does not invalidate a successful
-shard. The shard queue transition (`pending` → `running` → `done` /
-`failed`) is governed by file-system rename success, not progress
-writes.
+The progress command rendered into Hermes prompts uses `--best-effort`. In
+that mode, persistence configuration/connection failures print a warning to
+stderr and exit 0 so the model-run subprocess does not fail solely because
+the observation store is unavailable. Successful best-effort calls print the
+same JSON event as the default path.
+
+The runner also treats its own direct `progress.record(...)` and
+`progress.record_batch(...)` failures as **warnings, not shard failures**.
+Artifacts on disk remain the source of truth for build status; losing one
+progress event does not invalidate a successful shard. The shard queue
+transition (`pending` → `running` → `done` / `failed`) is governed by
+file-system rename success, not progress writes.
 
 ### Decision 8: Discard historical SQLite data
 
-Existing `work/state.sqlite3` is removed at upgrade time. The events
-inside it can be reconstructed from per-shard logs if anyone needs them,
-and the data is mostly an observation stream of past runs whose
-artifacts are already on disk. A row-by-row migration would require:
+Existing `work/state.sqlite3` is removed at upgrade time. Historical progress
+events are not migrated or automatically reconstructed. Per-shard logs and
+artifacts remain available for manual audit if an operator needs to investigate
+an old run. A row-by-row migration would require:
 (a) reading every legacy event, (b) translating the legacy `percent`
 column to nothing (we don't store it), (c) handling the temp-dir
 fallback location, (d) running before any worker can write new events.
@@ -204,7 +215,7 @@ Removes any frontend change. A later cleanup can drop the field.
 | Risk | Mitigation |
 | --- | --- |
 | Every `progress` call adds a PG round-trip; many calls during a shard | `record_batch` for the runner-side multi-event writes; expected total volume (~10⁴ events / day on a busy day) is well within PG capacity |
-| Workers now hard-require PG reachability | Matches the existing `postgres-persistence` contract; runner downgrades progress write failures to warnings so a brief PG hiccup does not lose a shard |
+| Workers now hard-require PG reachability for operator progress writes | Matches the existing `postgres-persistence` contract; the Hermes prompt uses `--best-effort`, and runner-owned progress writes downgrade connection failures to warnings so a brief PG hiccup does not lose a shard |
 | Test ergonomics: many tests built around `StateStore(paths)` need a rewrite | `InMemoryProgressStore` implements the full protocol; mechanical search-and-replace; a single conftest fixture (`progress_store`) makes the migration linear |
 | Snapshot no-regression rule moved from SQL to Python; potential lock contention | `SELECT ... FOR UPDATE` on `(shard, challenge_id)` is per-row; no two workers normally update the same challenge concurrently |
 | Frontend depends on `storage.fallback` field | Shape preserved; values are constants; no UI change |
@@ -216,23 +227,25 @@ Removes any frontend change. A later cleanup can drop the field.
 1. Land schema first: new Alembic revision `0005_progress_events` creates
    `progress_events` and `progress_snapshots`. Idempotent; no data movement.
 2. Implement `core.state.ProgressStore` protocol and `InMemoryProgressStore`
-   class. Keep the legacy `StateStore` class temporarily importable but mark
-   it as deprecated within this commit only.
-3. Implement `persistence.models.progress.{ProgressEvent, ProgressSnapshot}`
-   and `persistence.repositories.progress.PostgresProgressStore`.
+   class, and remove the legacy `StateStore` class in the same implementation
+   pass. Tests and runtime code move directly to the protocol/in-memory double.
+3. Implement `core.state.ProgressEventInput`,
+   `persistence.models.progress.{ProgressEvent, ProgressSnapshot}`, and
+   `persistence.repositories.progress.PostgresProgressStore`.
 4. Refactor `HermesRunner`, `DashboardService`, and all `cli.py` command
    handlers to receive an injected `ProgressStore`.
-5. Add a factory helper `persistence.factory.make_postgres_progress_store()`
-   (used by `cli.py` and `web/server.py`).
+5. Add and re-export a factory helper
+   `persistence.make_postgres_progress_store()` (used by `cli.py` and
+   `web/server.py`) so composition roots do not import repository internals.
 6. Update `tests/app/conftest.py` to provide a `progress_store` fixture that
    returns `InMemoryProgressStore()` by default; PG-backed tests opt in via
    `@pytest.mark.postgres`.
 7. Migrate existing tests (mechanical: `StateStore(paths) → progress_store`).
 8. Add `tests/app/test_progress_postgres_repository.py` covering schema,
    no-regression rule, `record_batch` atomicity, and fail-loud error.
-9. Remove the legacy `StateStore` class. Remove `paths.state_database`. Add
-   `tools/scripts/cleanup_sqlite_state.sh` to delete `work/state.sqlite3*`
-   on upgrade.
+9. Remove `paths.state_database`. Add a cross-platform
+   `tools/scripts/cleanup_sqlite_state.py` helper to delete
+   `work/state.sqlite3*` on upgrade.
 10. Update `README.md`, `docs/architecture.md`, `openspec/project.md` to
     reflect the PostgreSQL progress store and the removed temp-dir fallback.
 
@@ -244,9 +257,11 @@ re-source the live shard state from logs.
 ## Open Questions
 
 - **Per-event timestamp source.** We use server-side `TIMESTAMPTZ DEFAULT
-  now()` to avoid clock skew between worker hosts and the PG server. Are
-  there any audit consumers that need the *client* timestamp recorded
-  separately? (Default: no.)
+  now()` to avoid clock skew between worker hosts and the PG server. Store
+  return dictionaries serialize timestamps as UTC `YYYY-MM-DDTHH:MM:SSZ`
+  strings to preserve the existing metrics/dashboard contract. Are there any
+  audit consumers that need the *client* timestamp recorded separately?
+  (Default: no.)
 - **`progress_events` retention policy.** Today the SQLite table grew
   unbounded. PostgreSQL works fine at that volume too, but if we ever
   need cleanup, a follow-up change can add a partitioning or retention
