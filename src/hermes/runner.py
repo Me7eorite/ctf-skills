@@ -1,4 +1,14 @@
-"""Hermes prompt rendering and shard execution."""
+"""Hermes Runner —— 分片执行的完整 7 阶段管线。
+
+负责单个分片从认领到完成的完整生命周期:
+  queued → design → implement → build → validate → document → complete
+
+核心职责:
+  1. 分片认领与断点恢复规划
+  2. 进度事件写入（best-effort 模式，写入失败不中断执行）
+  3. Hermes AI 子进程调用与超时恢复
+  4. 校验编排与质量门检查
+"""
 
 from __future__ import annotations
 
@@ -48,6 +58,7 @@ __all__ = [
 
 
 def _carry_forward_pending_message(stage: str) -> str:
+    """生成断点恢复中的待处理阶段消息。"""
     return f"Waiting for {stage} stage execution"
 
 
@@ -55,6 +66,18 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class _BestEffortProgressStore:
+    """进度存储的代理包装器，支持"尽力而为"模式。
+
+    当底层进度存储抛出指定类型的异常时，记录警告日志但不中断执行。
+    这对于以下场景至关重要:
+      - 数据库暂时不可达时 Worker 仍能继续工作
+      - 非关键进度写入失败不应阻塞分片执行
+
+    参数:
+        store: 底层进度存储
+        suppress_exceptions: 不中断执行的异常类型（如 PersistenceConnectionError）
+    """
+
     def __init__(
         self,
         store: ProgressStore,
@@ -64,6 +87,10 @@ class _BestEffortProgressStore:
         self._suppress_exceptions = suppress_exceptions
 
     def record(self, **kwargs: Any) -> dict:
+        """记录单条进度事件（尽力而为）。
+
+        如果写入失败且异常在 suppress_exceptions 中，返回占位结果而不抛异常。
+        """
         try:
             return self._store.record(**kwargs)
         except Exception as exc:
@@ -85,6 +112,7 @@ class _BestEffortProgressStore:
             }
 
     def record_batch(self, events: list[ProgressEventInput]) -> list[dict]:
+        """批量记录进度事件（尽力而为）。"""
         try:
             return self._store.record_batch(events)
         except Exception as exc:
@@ -97,7 +125,17 @@ class _BestEffortProgressStore:
 
 
 class HermesRunner:
-    """Owns shard execution, resume planning, and validate-stage event writes."""
+    """分片执行的完整管线控制器。
+
+    持有分片队列、进度存储、校验器和 Docker 检查函数的引用，
+    并提供 run() / process_one() 等公有入口。
+
+    参数:
+        paths: 项目路径管理
+        progress: 可选的外部进度存储（默认内存存储，测试用）
+        progress_write_exceptions: 进度写入失败时忽略的异常类型
+        image_exists: Docker 镜像检查函数（可注入，方便测试）
+    """
 
     def __init__(
         self,
@@ -108,8 +146,11 @@ class HermesRunner:
         image_exists: Callable[[str], bool] | None = None,
     ):
         self.paths = paths
+        # 分片队列（管理 pending/running/done/failed 目录）
         self.queue = ShardQueue(paths)
+        # 进度存储（默认内存，生产环境应注入 PostgresProgressStore）
         self.state = progress or InMemoryProgressStore()
+        # 包装为 BestEffort 模式：数据库写入失败不阻断执行
         self._progress = _BestEffortProgressStore(
             self.state,
             progress_write_exceptions,
@@ -117,9 +158,9 @@ class HermesRunner:
         self.validator = ChallengeValidator(paths)
         self._image_exists = image_exists or default_image_exists
 
-    # ------------------------------------------------------------------
-    # Public entry points
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------------
+    # 公有入口方法
+    # ----------------------------------------------------------------
 
     def render_prompt(
         self,
@@ -130,6 +171,7 @@ class HermesRunner:
         original_shard_name: str | None = None,
         resume_plan: ShardResumePlan | None = None,
     ) -> str:
+        """渲染送给 Hermes 的完整 prompt（含断点恢复计划）。"""
         return render_prompt(
             self.paths,
             shard,
@@ -148,20 +190,35 @@ class HermesRunner:
         max_shards: int = 0,
         timeout: int | None = None,
     ) -> dict:
-        self.paths.initialize()
+        """批量处理待处理分片的主循环。
+
+        参数:
+            worker: Worker 标识
+            loop: True 时持续处理直到队列为空
+            dry_run: True 时只渲染 prompt 不执行 Hermes
+            max_shards: 最多处理的分片数（0 表示无限制）
+            timeout: Hermes 执行超时秒数
+
+        返回:
+            {"processed": N, "failed": N, "outcomes": [...]}
+        """
+        self.paths.initialize()  # 确保工作目录就位
         processed = 0
         failed = 0
         outcomes: list[dict] = []
+
         while True:
             outcome = self.process_one(worker, dry_run=dry_run, timeout=timeout)
             if outcome["status"] == "empty":
-                break
+                break  # 队列已空
             outcomes.append(outcome)
             processed += 1
             if outcome["status"] == "failed":
                 failed += 1
+            # 单次执行或达到上限 → 退出循环
             if not loop or (max_shards and processed >= max_shards):
                 break
+
         return {"processed": processed, "failed": failed, "outcomes": outcomes}
 
     def process_one(
@@ -171,20 +228,31 @@ class HermesRunner:
         dry_run: bool,
         timeout: int | None = None,
     ) -> dict:
+        """处理一个待处理分片。
+
+        流程:
+          1. 从 pending 队列认领一个分片
+          2. 获取分片中的题目列表
+          3. 根据 dry_run 标志分支到模拟执行或真实执行
+        """
+        # 认领分片（原子操作）
         shard = self.queue.claim(worker)
         if shard is None:
             return {"status": "empty"}
 
+        # 获取分片元数据
         original_shard_name = self.queue.original_name(shard)
         report = self.paths.reports / f"{shard.stem}.report.json"
         log = self.paths.logs / f"{shard.stem}.log"
         challenge_ids = self.queue.challenge_ids(shard)
 
         if dry_run:
+            # 模拟执行：只计算计划和渲染 prompt，不执行 Hermes
             return self._process_dry_run(
                 shard, original_shard_name, worker, report, log, challenge_ids
             )
 
+        # 真实执行：完整 7 阶段管线
         return self._process_real(
             shard,
             original_shard_name,
@@ -195,9 +263,9 @@ class HermesRunner:
             timeout=timeout,
         )
 
-    # ------------------------------------------------------------------
-    # Dry-run path: claim, plan, render, requeue. No state writes.
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------------
+    # 模拟执行路径：claim → plan → render → requeue。不写进度事件。
+    # ----------------------------------------------------------------
 
     def _process_dry_run(
         self,
@@ -208,7 +276,12 @@ class HermesRunner:
         log: Path,
         challenge_ids: list[str],
     ) -> dict:
+        """模拟执行：计算恢复计划、渲染 prompt、写入日志、退还分片。
+
+        不执行 Hermes、不写进度事件。用于预览和调试。
+        """
         try:
+            # 计算恢复计划
             plan = compute_resume_plan(
                 state=self.state,
                 paths=self.paths,
@@ -216,6 +289,7 @@ class HermesRunner:
                 challenge_ids=challenge_ids,
                 image_exists=self._image_exists,
             )
+            # 渲染 prompt
             prompt = self.render_prompt(
                 shard,
                 report,
@@ -223,18 +297,20 @@ class HermesRunner:
                 original_shard_name=original_shard_name,
                 resume_plan=plan,
             )
+            # 写入日志文件（prompt 内容）
             log.parent.mkdir(parents=True, exist_ok=True)
             log.write_text(prompt + "\n", encoding="utf-8")
             return {"status": "dry_run", "shard": original_shard_name}
         finally:
+            # 无论成功与否，都要把分片退还给 pending 队列
             try:
                 self.queue.requeue(shard.name, "running")
             except FileNotFoundError:
-                pass
+                pass  # 已被其他操作移动，忽略
 
-    # ------------------------------------------------------------------
-    # Real run path
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------------
+    # 真实执行路径: 完整 7 阶段管线
+    # ----------------------------------------------------------------
 
     def _process_real(
         self,
@@ -247,7 +323,22 @@ class HermesRunner:
         *,
         timeout: int | None,
     ) -> dict:
-        # 1. Plan from historical window (before writing this run's queued).
+        """执行完整的分片处理管线。
+
+        步骤:
+          1. 计算断点恢复计划（此时还不要写本轮的 queued 事件！）
+          2. 重置看板快照（事件保持只追加）
+          3. 写入本轮的 queued running 认领事件
+          4. 写入断点恢复携带的前向阶段事件
+          5. 如果所有题目都已完成 → 全跳捷径
+          6. 写入每个题目第一个待处理阶段的 pending 事件
+          7. 渲染 prompt 并调用 Hermes
+          8. Hermes 返回后执行 validate 校验
+          9. 合并校验结果到报告
+          10. 根据校验结果标记 shard 为 done 或 failed
+        """
+        # 步骤 1: 从历史窗口中计算恢复计划
+        # 【重要】必须在写入本轮 queued 事件之前计算！
         plan = compute_resume_plan(
             state=self.state,
             paths=self.paths,
@@ -256,10 +347,10 @@ class HermesRunner:
             image_exists=self._image_exists,
         )
 
-        # 2. Reset snapshots; events stay append-only.
+        # 步骤 2: 重置快照（事件保持追加）
         self.state.reset_snapshots(original_shard_name)
 
-        # 3. Write the current claim event.
+        # 步骤 3: 写入本轮认领事件（新的时间窗口起点）
         self._progress.record(
             shard=original_shard_name,
             worker=worker,
@@ -268,7 +359,7 @@ class HermesRunner:
             message=f"Worker claimed {len(challenge_ids)} challenge(s)",
         )
 
-        # 4. Carry-forward each skipped stage for each challenge.
+        # 步骤 4: 写入断点恢复携带的阶段事件
         plan_by_id: dict[str, ChallengeResumePlan] = {
             cp.challenge_id: cp for cp in plan.challenges
         }
@@ -288,13 +379,13 @@ class HermesRunner:
                 )
         self._progress.record_batch(carry_forward_events)
 
-        # 5. Full-skip short circuit: no Hermes invocation needed.
+        # 步骤 5: 全跳捷径 —— 所有题目都已完成，不需要调 Hermes
         if plan.all_challenges_fully_skipped:
             return self._shortcircuit_all_skipped(
                 shard, original_shard_name, worker, report, challenge_ids
             )
 
-        # 6. First-pending stage event per challenge.
+        # 步骤 6: 写入每个题目的第一个待处理阶段 pending 事件
         for cp in plan.challenges:
             if cp.first_pending_stage is not None:
                 self._progress.record(
@@ -306,7 +397,7 @@ class HermesRunner:
                     message=_carry_forward_pending_message(cp.first_pending_stage),
                 )
 
-        # 7. Render and invoke Hermes.
+        # 步骤 7: 渲染 prompt 并调用 Hermes AI
         prompt = self.render_prompt(
             shard,
             report,
@@ -317,6 +408,7 @@ class HermesRunner:
         try:
             returncode = self._invoke(prompt, log, dry_run=False, timeout=timeout)
         except KeyboardInterrupt:
+            # 被用户中断 → 记录失败并重新抛出
             self._mark_shard_failed(
                 shard,
                 original_shard_name,
@@ -324,15 +416,17 @@ class HermesRunner:
                 challenge_ids,
                 report,
                 "Runner interrupted",
-                130,
+                130,  # 标准 POSIX 返回码：被信号中断
             )
             raise
 
+        # Hermes 返回非零 → 检查是否为超时 + 超时恢复通过
         if returncode != 0:
             timed_out = returncode == HERMES_TIMEOUT_RETURNCODE
             if not timed_out or not self._timeout_recovery_complete(
                 original_shard_name, challenge_ids
             ):
+                # 非超时错误，或超时恢复失败 → 直接标记失败
                 self._mark_shard_failed(
                     shard,
                     original_shard_name,
@@ -347,19 +441,23 @@ class HermesRunner:
                     "shard": original_shard_name,
                     "returncode": returncode,
                 }
+            # 超时但恢复通过 → 继续执行后续步骤（Hermes 已生成了足够的内容）
 
+        # 步骤 8: 确保报告文件存在
         ensure_report(report, shard, worker, "completed_by_runner", returncode)
 
-        # 8. Mandatory validation per challenge (skip resume-skip).
+        # 步骤 9: 执行强制校验
         per_results = self._run_validation(
             original_shard_name, worker, challenge_ids, plan_by_id
         )
         merge_validation_into_report(report, per_results)
 
+        # 步骤 10: 根据校验结果判定最终状态
         any_failed = any(
             result.get("solve_status") == "failed" for result in per_results
         )
         if any_failed:
+            # 有题目校验失败 → 标记分片为 failed
             self._record_per_challenge_complete(
                 original_shard_name, worker, per_results
             )
@@ -374,7 +472,7 @@ class HermesRunner:
             self.queue.complete(shard, "failed")
             return {"status": "failed", "shard": original_shard_name}
 
-        # Success path.
+        # 所有题目校验通过 → 完成!
         self._record_per_challenge_complete(
             original_shard_name, worker, per_results
         )

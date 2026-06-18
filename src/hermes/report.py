@@ -1,4 +1,7 @@
-"""Report merge helpers for Hermes runner output."""
+"""Hermes 执行报告合并工具。
+
+将逐题校验结果合并到分片报告中，并处理 Hermes 生成的异常报告格式。
+"""
 
 from __future__ import annotations
 
@@ -16,20 +19,30 @@ def merge_validation_into_report(
     worker: str | None = None,
     runner_status: str | None = None,
 ) -> None:
-    """Merge per-challenge validation results into the shard report.
+    """将每个题目的校验结果合并到分片报告 JSON 文件中。
 
-    Repairs malformed Hermes-written report structures rather than dropping
-    validation outcomes. ``shard`` / ``worker`` / ``runner_status`` are only
-    used when a report file does not yet exist (for example in the all-skipped
-    short-circuit path).
+    设计思路:
+      - 读-改-写模式：读取现有报告 → 合并校验结果 → 写回
+      - 修复 Hermes 可能产生的畸形报告结构（如 challenges 不是 list）
+      - 通过 challenge_id 匹配对齐校验结果
+
+    参数:
+        report: 报告 JSON 文件路径
+        per_results: 每个题目的校验结果列表
+        shard: 分片路径（仅在报告不存在时使用）
+        worker: Worker 名称（仅在报告不存在时使用）
+        runner_status: 运行器状态（有失败则覆盖为 "failed"）
     """
+    # 读取现有报告（容错处理畸形数据）
     raw = read_json(report, {})
     if not isinstance(raw, dict):
         raw = {}
     if not isinstance(raw.get("challenges"), list):
         raw["challenges"] = []
+
     challenges_list = raw["challenges"]
 
+    # 建立 challenge_id → 条目 的索引
     by_id: dict[str, dict[str, Any]] = {}
     for entry in challenges_list:
         if isinstance(entry, dict):
@@ -37,11 +50,13 @@ def merge_validation_into_report(
             if isinstance(challenge_id, str):
                 by_id[challenge_id] = entry
 
+    # 合并校验结果
     any_failed = False
     for result in per_results:
         challenge_id = result["challenge_id"]
         target = by_id.get(challenge_id)
         if target is None:
+            # 新条目：报告中没有这个 challenge
             target = {"id": challenge_id}
             challenges_list.append(target)
         target.setdefault("id", challenge_id)
@@ -56,6 +71,7 @@ def merge_validation_into_report(
         if target["solve_status"] == "failed":
             any_failed = True
 
+    # 设置报告级别的元数据（仅在不存在时设置，不覆盖已有值）
     if shard is not None:
         raw.setdefault("shard", str(shard))
     if worker is not None:

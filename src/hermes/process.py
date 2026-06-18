@@ -19,8 +19,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 DEFAULT_HERMES_COMMAND = "hermes chat -Q --yolo -q"
-DEFAULT_HERMES_TIMEOUT = 1500
-HERMES_TIMEOUT_RETURNCODE = 124
+# -Q: 查询模式（单次问答，非交互）；--yolo: 自动批准所有工具调用；-q: 静默模式
+DEFAULT_HERMES_TIMEOUT = 1500  # 默认超时秒数（25 分钟）
+HERMES_TIMEOUT_RETURNCODE = 124  # 超时返回码（与 timeout 命令兼容）
 
 
 @dataclass(frozen=True)
@@ -126,11 +127,18 @@ def invoke(
     """把 `prompt` 作为最后一个 argv 运行 Hermes，并记录完整日志。
 
     这是旧版 `invoke_hermes` 的等价抽取版本。函数返回子进程返回码；
-    stdout/stderr 会直接写入 `log_path`。分片执行流水线会调用它。
+    stdout/stderr 会直接写入 `log_path`。
+
+    与 invoke_capture 的区别:
+      - stdout 不捕获到内存，直接写入日志文件（节省内存）
+      - stderr 合并到 stdout（stderr=subprocess.STDOUT）
+      - 不支持 cancel_event（不能外部取消）
+      - 适用于分片执行流水线（不需要解析 stdout 的场景）
     """
     log_path.parent.mkdir(parents=True, exist_ok=True)
     full_arguments = [*arguments, prompt]
     with log_path.open("w", encoding="utf-8") as output:
+        # 日志头：显示命令（prompt 用 <prompt> 占位避免泄露）
         output.write(
             f"$ {' '.join(shlex.quote(arg) for arg in full_arguments[:-1])} <prompt>\n\n"
         )
@@ -140,16 +148,16 @@ def invoke(
                 cwd=cwd,
                 env=environment,
                 text=True,
-                stdout=output,
-                stderr=subprocess.STDOUT,
+                stdout=output,           # stdout 直接写入日志文件
+                stderr=subprocess.STDOUT, # stderr 合并到 stdout
                 timeout=timeout,
-                check=False,
+                check=False,              # 不抛异常，由调用方处理返回码
             )
         except FileNotFoundError:
             output.write(
                 "Hermes command not found. Set HERMES_CMD or install Hermes.\n"
             )
-            return 127
+            return 127  # 标准 POSIX 返回码：命令未找到
         except subprocess.TimeoutExpired:
             output.write(f"\nHermes command timed out after {timeout}s.\n")
             return HERMES_TIMEOUT_RETURNCODE
@@ -191,17 +199,18 @@ def invoke_capture(
         + ("  " + "\n  ".join(env_summary_lines) + "\n" if env_summary_lines else "  (none)\n")
     )
 
+    # 启动 Hermes 子进程（使用 Popen 而非 run，以便同时捕获 stdout+stderr）
     try:
         process = subprocess.Popen(
             full_arguments,
             cwd=cwd,
             env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,     # 关闭 stdin
+            stdout=subprocess.PIPE,       # 捕获 stdout
+            stderr=subprocess.PIPE,       # 捕获 stderr（与 stdout 分开）
             text=True,
             encoding="utf-8",
-            errors="replace",
+            errors="replace",             # 编码错误用替换字符，不崩溃
         )
     except FileNotFoundError:
         log_path.write_text(
@@ -210,15 +219,21 @@ def invoke_capture(
         )
         return HermesProcessResult(returncode=127, stdout="", cancelled=False)
 
-    stdout_chunks: list[str] = []
-    stderr_chunks: list[str] = []
+    stdout_chunks: list[str] = []  # 捕获的 stdout 行
+    stderr_chunks: list[str] = []  # 捕获的 stderr 行
 
     def _drain(stream, sink):
+        """从子进程输出流中逐行读取，追加到 sink 列表。
+
+        在独立线程中运行，避免阻塞主线程的轮询循环。
+        """
         if stream is None:
             return
         for line in stream:
             sink.append(line)
 
+    # 启动两个 daemon 线程分别读取 stdout 和 stderr
+    # daemon=True 确保主线程退出时这些线程也会自动退出
     stdout_thread = threading.Thread(
         target=_drain, args=(process.stdout, stdout_chunks), daemon=True
     )
@@ -228,24 +243,25 @@ def invoke_capture(
     stdout_thread.start()
     stderr_thread.start()
 
-    cancelled = False
-    cancelled_at: str | None = None
-    timed_out = False
-    deadline = time.monotonic() + timeout
+    cancelled = False          # 是否被外部取消
+    cancelled_at: str | None = None  # 取消时刻的 ISO 时间戳
+    timed_out = False          # 是否超时
+    deadline = time.monotonic() + timeout  # 超时截止时间
     try:
+        # 轮询循环：每 0.1 秒检查一次进程是否结束/被取消/超时
         while True:
             if process.poll() is not None:
-                break
+                break  # 进程正常结束
             if cancel_event is not None and cancel_event.is_set():
                 cancelled = True
                 cancelled_at = datetime.now(tz=timezone.utc).isoformat()
-                _terminate(process)
+                _terminate(process)  # SIGTERM → 5s → SIGKILL
                 break
             if time.monotonic() > deadline:
                 timed_out = True
-                _terminate(process)
+                _terminate(process)  # SIGTERM → 5s → SIGKILL
                 break
-            time.sleep(0.1)
+            time.sleep(0.1)  # 100ms 轮询间隔
     except BaseException:
         # 中文注释：调用方被中断时也要清理 Hermes 子进程，避免后台进程继续占用租约窗口。
         _terminate(process)
@@ -269,16 +285,21 @@ def invoke_capture(
         )
         raise
 
+    # 等待 drain 线程完成（最多等 2 秒，防止永久阻塞）
     stdout_thread.join(timeout=2)
     stderr_thread.join(timeout=2)
+    # 等待子进程完全终止
     process.wait()
 
+    # 收集捕获的输出
     stdout = "".join(stdout_chunks)
     stderr = "".join(stderr_chunks)
+    # 安全获取返回码（process.returncode 在 wait() 后不应为 None，防御性编程）
     returncode = process.returncode if process.returncode is not None else 0
     if timed_out:
-        returncode = HERMES_TIMEOUT_RETURNCODE
+        returncode = HERMES_TIMEOUT_RETURNCODE  # 覆写为超时返回码
 
+    # 写入完整日志文件（命令头 + 状态 + stderr + stdout）
     log_path.write_text(
         header
         + (f"\ncancelled at {cancelled_at}\n" if cancelled else "")
