@@ -165,8 +165,7 @@ class Packer:
 
         deploy_zip = None
         if _is_containerized(metadata):
-            if metadata.get("port") in (None, ""):
-                raise PackingError(f"{challenge_id}: containerized challenge has no port")
+            _require_valid_port(metadata, challenge_id)
             deploy_zip = directories["deploy"] / f"{stem}.zip"
             deploy_dir = challenge_dir / "deploy"
             if not deploy_dir.is_dir():
@@ -203,3 +202,18 @@ class Packer:
             "docker_tar": str(tar_path) if tar_path else None,
             "image_row": image_row,
         }
+
+
+def _require_valid_port(metadata: dict[str, Any], challenge_id: str) -> int:
+    raw_port = metadata.get("port")
+    try:
+        port = int(raw_port)
+    except (TypeError, ValueError) as exc:
+        raise PackingError(
+            f"{challenge_id}: containerized challenge has invalid port"
+        ) from exc
+    if not 1 <= port <= 65535:
+        raise PackingError(
+            f"{challenge_id}: containerized challenge has invalid port"
+        )
+    return port

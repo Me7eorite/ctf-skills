@@ -127,6 +127,18 @@ class PackingTests(unittest.TestCase):
         enclosure = self.output / "题库资源" / "deploy" / "enclosure"
         self.assertEqual(list(enclosure.iterdir()), [])
 
+    def test_containerized_challenge_rejects_port_zero(self):
+        challenge = self._challenge(
+            "web-0001", "web", with_deploy=True, with_attachment=False
+        )
+        metadata_path = challenge / "metadata.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata["port"] = 0
+        metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+        with self.assertRaisesRegex(PackingError, "invalid port"):
+            self._pack()
+
     def test_pwn_enclosure_is_opt_in(self):
         self._challenge("pwn-0001", "pwn", with_deploy=True)
         self._pack()

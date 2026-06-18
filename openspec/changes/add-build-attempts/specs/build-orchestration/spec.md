@@ -167,8 +167,10 @@ the terminal update. Claim-sidecar `claimed_at` SHALL be preferred for
 ### Requirement: BuildOrchestrationService submits and retries builds
 
 The system SHALL provide `services.BuildOrchestrationService` with at least
-these public methods. Mutation methods SHALL open a short PostgreSQL
-transaction; `render_shard_payload` SHALL be a pure renderer:
+these public methods. Mutation methods SHALL keep database writes inside short
+PostgreSQL transactions; staging writes and queue publication are recoverable
+filesystem steps outside those row-transition transactions. `render_shard_payload`
+SHALL be a pure renderer:
 
 - `submit_batch(design_task_ids: list[UUID]) -> list[UUID]`
 - `submit_single(design_task_id: UUID) -> UUID`
@@ -180,11 +182,17 @@ transaction; `render_shard_payload` SHALL be a pure renderer:
 `designed` or `build_failed`. It SHALL use this recoverable publication
 protocol:
 
-1. Validate every task and render every payload into
+The staging directory SHALL be created by project path initialization and by
+the orchestration service before writing, so a fresh checkout has the same
+directory guarantees as `pending/`, `running/`, `done/`, and `failed/`.
+
+1. Validate every task, pre-allocate each `build_attempt_id` following the
+   repository's existing application-side UUID pattern, ensure
+   `work/shards/staging/build-attempts/` exists, and render every payload into
    `work/shards/staging/build-attempts/<build_attempt_id>.json`; no file is yet
    visible to workers.
-2. In one PostgreSQL transaction, insert each `build_attempts` row with
-   `status = 'queued'` and
+2. In one PostgreSQL transaction, insert each `build_attempts` row with its
+   pre-allocated id, `status = 'queued'`, and
    `attempt_no = COALESCE(max(attempt_no), 0) + 1`, and set every parent
    design task to `building`; then commit.
 3. After commit, make an immediate best-effort atomic rename of every staged
@@ -196,8 +204,9 @@ If validation, staging, or the database transaction fails, no database change
 or pending shard SHALL survive. If the process exits after commit but before
 all renames, a recovery pass SHALL publish matching committed rows on startup
 or the next reconciliation tick. Staged files older than one hour without
-committed rows SHALL be removed by recovery. Younger unattributed files SHALL
-be left alone so recovery cannot race an in-flight submission transaction.
+committed rows SHALL be removed by recovery. Younger staged payloads without a
+row SHALL be left alone so recovery cannot race an in-flight submission
+transaction.
 
 For a `designed` task, the emitted payload SHALL omit
 `resume_from_shard_basename`. For a `build_failed` task, the service SHALL
@@ -281,12 +290,14 @@ daemon thread launched by `web.server.serve(...)`. It SHALL poll
 non-integer values SHALL fall back to the default and emit a
 warning).
 
-Each tick SHALL:
+Each tick SHALL first run staging recovery as a bounded filesystem step, then
+run row reconciliation in one short PostgreSQL transaction:
 
 0. Recover staged submissions: publish staged payloads attributed to committed
    queued rows and remove staged payloads older than one hour that have no
    database row. If publication of an attributed staged payload fails, record a
-   warning and mark that row as still staged for this tick.
+   warning and treat that staged payload as present for this tick; no database
+   state change is required merely to remember that publication failed.
 1. Match shards under `work/shards/running/` by reading the shard
    JSON payload's top-level `build_attempt_id`. If the field is absent
    or does not name a non-terminal `build_attempts` row, ignore the
@@ -331,9 +342,11 @@ daemon begins polling.
 A connection failure inside a tick SHALL be logged as a warning and
 the tick SHALL be skipped; the reconciler thread SHALL NOT crash.
 
-`/api/state` SHALL synchronously invoke one reconciler tick before
-returning so the operator's immediate next view of the dashboard
-reflects newly-completed shards.
+`web.server.create_app(...)` SHALL be able to receive or read one optional
+reconciler instance (for example from `app.state.build_reconciler`).
+`/api/state` SHALL synchronously invoke one reconciler tick when that instance
+is present before returning, so the operator's immediate next view of the
+dashboard reflects newly-completed shards.
 
 #### Scenario: Reconciler interval is configurable via environment
 

@@ -267,18 +267,20 @@ CLI surface.
 ### Decision 9: PostgreSQL commit and queue publication use recoverable staging
 
 PostgreSQL and the filesystem cannot participate in one atomic transaction.
-`submit_batch` therefore writes every payload to a private staging directory,
-commits the attempt rows and task states in one PostgreSQL transaction, and
-only then makes a best-effort atomic rename of all staged files into `pending/`.
-The committed row is the durable acceptance point; a post-commit publication
-failure is logged and left for recovery rather than reported as a rolled-back
-submission.
+`submit_batch` therefore pre-allocates each attempt UUID, writes every payload
+to a private staging directory, commits the attempt rows and task states in one
+PostgreSQL transaction using those UUIDs, and only then makes a best-effort
+atomic rename of all staged files into `pending/`. The committed row is the
+durable acceptance point; a post-commit publication failure is logged and left
+for recovery rather than reported as a rolled-back submission.
 
 On server startup and before each reconciliation tick, a recovery pass scans
 queued attempts and staged files. A committed queued row with a matching staged
 payload is published; a staged payload older than one hour without a database
 row is removed. The grace interval prevents recovery from deleting a batch that
-is still inside its short database transaction.
+is still inside its short database transaction. Publication is a filesystem
+operation and is not treated as part of the row-transition transaction; a failed
+publication leaves the staged payload counted as present for that tick.
 A committed queued row with neither a pending nor staged payload becomes
 `lost`. This guarantees crash convergence rather than claiming impossible
 cross-resource atomicity.

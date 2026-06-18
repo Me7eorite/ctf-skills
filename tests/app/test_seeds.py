@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -85,6 +86,29 @@ class SeedStoreTests(unittest.TestCase):
         self.assertEqual({path.name for path in created}, {"web-0001-0001.json", "pwn-0001-0001.json"})
         payload = read_json(self.paths.shards / "pending" / "web-0001-0001.json")
         self.assertEqual(payload["challenges"][0]["runtime"], "node")
+
+    def test_enqueue_uses_normalized_seed_rows_from_file(self):
+        raw_seed = self._seed("web-0002")
+        raw_seed.update(
+            {
+                "id": " WEB-0002 ",
+                "category": " WEB ",
+                "difficulty": " EASY ",
+                "title": " Demo ",
+            }
+        )
+        self.paths.challenge_seeds.write_text(
+            json.dumps({"seeds": [raw_seed]}),
+            encoding="utf-8",
+        )
+
+        created = self.store.enqueue(size=5)
+
+        self.assertEqual([path.name for path in created], ["web-0002-0002.json"])
+        payload = read_json(created[0])
+        self.assertEqual(payload["challenges"][0]["id"], "web-0002")
+        self.assertEqual(payload["challenges"][0]["category"], "web")
+        self.assertEqual(payload["challenges"][0]["difficulty"], "easy")
 
     def test_enqueue_refuses_to_overwrite_pending_shard(self):
         self.store.save(self._seed())

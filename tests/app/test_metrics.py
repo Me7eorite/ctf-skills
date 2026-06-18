@@ -9,7 +9,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from core.state import InMemoryProgressStore, ProgressStore
-from domain.metrics import duration_breakdown
+from domain.metrics import _parse_timestamp, duration_breakdown
 
 
 @dataclass(frozen=True)
@@ -29,6 +29,9 @@ def _utc_at(offset_seconds: int) -> str:
 
 
 class DurationBreakdownTests(unittest.TestCase):
+    def test_parse_timestamp_treats_z_suffix_as_utc(self):
+        self.assertEqual(_parse_timestamp("1970-01-01T00:00:00Z"), 0.0)
+
     def test_no_history_returns_all_none(self):
         with TemporaryDirectory() as tmp:
             store = _make_store(Path(tmp))

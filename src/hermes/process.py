@@ -22,6 +22,7 @@ DEFAULT_HERMES_COMMAND = "hermes chat -Q --yolo -q"
 # -Q: 查询模式（单次问答，非交互）；--yolo: 自动批准所有工具调用；-q: 静默模式
 DEFAULT_HERMES_TIMEOUT = 1500  # 默认超时秒数（25 分钟）
 HERMES_TIMEOUT_RETURNCODE = 124  # 超时返回码（与 timeout 命令兼容）
+TERMINATION_WAIT_TIMEOUT = 10
 
 
 @dataclass(frozen=True)
@@ -267,7 +268,7 @@ def invoke_capture(
         _terminate(process)
         stdout_thread.join(timeout=2)
         stderr_thread.join(timeout=2)
-        process.wait()
+        _wait_after_terminate(process)
         stdout = "".join(stdout_chunks)
         stderr = "".join(stderr_chunks)
         log_path.write_text(
@@ -354,3 +355,10 @@ def _terminate(process: "subprocess.Popen[str]") -> None:
         process.wait(timeout=5)
     except subprocess.TimeoutExpired:
         process.kill()
+
+
+def _wait_after_terminate(process: "subprocess.Popen[str]") -> None:
+    try:
+        process.wait(timeout=TERMINATION_WAIT_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return

@@ -19,7 +19,9 @@ from unittest.mock import patch
 
 from hermes.process import (
     HERMES_TIMEOUT_RETURNCODE,
+    TERMINATION_WAIT_TIMEOUT,
     HermesProcessResult,
+    _wait_after_terminate,
     invoke_capture,
 )
 
@@ -161,6 +163,21 @@ class InvokeCaptureTests(unittest.TestCase):
 
         log_text = self.log.read_text(encoding="utf-8")
         self.assertIn("interrupted before completion", log_text)
+
+    def test_wait_after_terminate_uses_timeout(self):
+        class NeverExits:
+            timeout = None
+
+            def wait(self, timeout=None):
+                self.timeout = timeout
+                raise TimeoutError
+
+        process = NeverExits()
+
+        with patch("hermes.process.subprocess.TimeoutExpired", TimeoutError):
+            _wait_after_terminate(process)
+
+        self.assertEqual(process.timeout, TERMINATION_WAIT_TIMEOUT)
 
 
 if __name__ == "__main__":  # pragma: no cover

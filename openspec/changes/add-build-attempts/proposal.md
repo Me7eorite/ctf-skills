@@ -109,7 +109,8 @@ file-system state back into PostgreSQL.
   `src/services/build_reconciler.py`,
   `src/web/build_attempts_endpoints.py`, and
   `src/web/static/js/views/build-attempts.js`.
-  Edit `src/services/__init__.py` re-exports, `src/web/server.py`
+  Edit `src/core/paths.py` (initialize staging directory),
+  `src/services/__init__.py` re-exports, `src/web/server.py`
   (register endpoints, spawn reconciler thread), `src/web/dashboard.py`
   (drop the parts of `TaskManager`/`DashboardService` state that the
   removed header buttons consumed), `src/domain/design_tasks.py`

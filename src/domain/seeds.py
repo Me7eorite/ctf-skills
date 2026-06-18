@@ -95,9 +95,8 @@ class SeedStore:
         seeds = self.list()
         if not seeds:
             raise ValueError("请先保存至少一个题目种子")
-        # 重新校验种子，确保入队的是合法数据
-        for seed in seeds:
-            validate_seed(seed)
+        # 重新校验并使用规范化后的种子，确保外部编辑过的文件不会绕过规范化。
+        seeds = [validate_seed(seed) for seed in seeds]
         return split_challenges(
             seeds,
             self.paths.shards / "pending",

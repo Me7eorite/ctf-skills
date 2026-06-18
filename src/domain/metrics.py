@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import calendar
 import time
 from typing import Any
 
@@ -37,7 +38,7 @@ def _parse_timestamp(value: str) -> float | None:
     而非 UTC 时间。在夏令时切换日期附近可能导致 duration 计算误差。
     """
     try:
-        return time.mktime(time.strptime(value, _TIMESTAMP_FORMAT))
+        return float(calendar.timegm(time.strptime(value, _TIMESTAMP_FORMAT)))
     except (TypeError, ValueError):
         return None
 
