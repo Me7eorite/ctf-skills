@@ -2,22 +2,30 @@
 
 from __future__ import annotations
 
+import logging
 import mimetypes
 from http import HTTPStatus
 from pathlib import Path
+from threading import Thread
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
 from core.paths import ProjectPaths
 from persistence import make_postgres_progress_store
+from services.build_reconciler import BuildReconciler
 from web.dashboard import DashboardService
 from web.design_task_endpoints import register_design_task_read_endpoints
 from web.research_endpoints import register_research_endpoints
 from web.research_worker_manager import ResearchWorkerManager
 
+LOG = logging.getLogger(__name__)
 
-def create_app(service: DashboardService) -> FastAPI:
+
+def create_app(
+    service: DashboardService,
+    build_reconciler: BuildReconciler | None = None,
+) -> FastAPI:
     app = FastAPI(
         title="Challenge Factory Dashboard",
         version="0.1.0",
@@ -26,9 +34,15 @@ def create_app(service: DashboardService) -> FastAPI:
         openapi_url=None,
     )
     app.state.project_paths = service.paths
+    app.state.build_reconciler = build_reconciler
 
     @app.get("/api/state")
     def get_state() -> JSONResponse:
+        if app.state.build_reconciler is not None:
+            try:
+                app.state.build_reconciler.tick_once_sync()
+            except Exception as exc:
+                LOG.warning("synchronous build reconciliation failed: %s", exc)
         return JSONResponse(service.state())
 
     @app.get("/api/logs/{name:path}")
@@ -152,6 +166,16 @@ def serve(paths: ProjectPaths, host: str, port: int) -> None:
 
     paths.initialize()
     service = DashboardService(paths, progress=make_postgres_progress_store())
-    app = create_app(service)
+    reconciler = BuildReconciler(paths=paths)
+    try:
+        reconciler.orchestration.recover_staging()
+    except Exception as exc:
+        LOG.warning("startup build staging recovery failed: %s", exc)
+    thread = Thread(target=reconciler.run_forever, daemon=True)
+    thread.start()
+    app = create_app(service, build_reconciler=reconciler)
     print(f"Challenge Factory dashboard: http://{host}:{port}")
-    uvicorn.run(app, host=host, port=port, log_level="info", access_log=False)
+    try:
+        uvicorn.run(app, host=host, port=port, log_level="info", access_log=False)
+    finally:
+        reconciler.stop()

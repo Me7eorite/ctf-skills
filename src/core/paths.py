@@ -51,6 +51,11 @@ class ProjectPaths:
         return self.work / "shards"
 
     @property
+    def build_attempt_staging(self) -> Path:
+        """构建分片在数据库提交前的私有 staging 目录。"""
+        return self.shards / "staging" / "build-attempts"
+
+    @property
     def challenges(self) -> Path:
         """生成的题目目录，按类别（web/pwn/re）组织。"""
         return self.work / "challenges"
@@ -148,6 +153,7 @@ class ProjectPaths:
                 self.shards / state
                 for state in ("pending", "running", "done", "failed")
             ),
+            self.build_attempt_staging,
             # 三种题目类别目录
             *(self.challenges / category for category in ("web", "pwn", "re")),
             self.reports,

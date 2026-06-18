@@ -1,5 +1,10 @@
 """服务层公开导出。"""
 
+from services.build_orchestration_service import (
+    BuildOrchestrationError,
+    BuildOrchestrationService,
+)
+from services.build_reconciler import BuildReconciler
 from services.challenge_design_service import (
     ChallengeDesignConflictError,
     ChallengeDesignNotFoundError,
@@ -12,6 +17,9 @@ from services.research_job_service import ResearchAttemptError, ResearchJobServi
 from services.research_worker import ResearchWorker
 
 __all__ = [
+    "BuildOrchestrationError",
+    "BuildOrchestrationService",
+    "BuildReconciler",
     "ChallengeDesignConflictError",
     "ChallengeDesignNotFoundError",
     "ChallengeDesignService",

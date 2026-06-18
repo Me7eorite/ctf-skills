@@ -23,6 +23,14 @@ class _StubTaskManager(TaskManager):
         return {"running": False}
 
 
+class _StubBuildReconciler:
+    def __init__(self):
+        self.calls = 0
+
+    def tick_once_sync(self) -> None:
+        self.calls += 1
+
+
 class WebserverTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -44,6 +52,14 @@ class WebserverTests(unittest.TestCase):
         payload = response.json()
         self.assertIn("summary", payload)
         self.assertIn("shards", payload)
+
+    def test_state_endpoint_runs_synchronous_build_reconciliation(self):
+        reconciler = _StubBuildReconciler()
+        service = DashboardService(self.paths)
+        with TestClient(create_app(service, build_reconciler=reconciler)) as client:
+            response = client.get("/api/state")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(reconciler.calls, 1)
 
     def test_logs_endpoint_returns_404_when_missing(self):
         with self._client() as client:

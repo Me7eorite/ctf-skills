@@ -1,0 +1,387 @@
+"""PostgreSQL-backed tests for build submission and staging recovery."""
+
+from __future__ import annotations
+
+import os
+import subprocess
+from datetime import datetime, timezone
+from pathlib import Path
+from uuid import UUID, uuid4
+
+import pytest
+import sqlalchemy as sa
+from sqlalchemy import create_engine
+
+from core.jsonio import read_json, write_json
+from core.paths import ProjectPaths
+from domain.challenge_designs import ChallengeDesign
+from domain.design_tasks import DesignTask
+from persistence.models import build_attempts as build_model
+from persistence.models import challenge_designs as design_model
+from persistence.models import design_tasks as task_model
+from persistence.models import research as research_model
+from persistence.repositories import BuildAttemptsRepository
+from persistence.session import SessionFactory, transaction
+from services import BuildOrchestrationError, BuildOrchestrationService
+from services.build_orchestration_service import (
+    MATRIX_FIELDS,
+    STAGING_ORPHAN_GRACE_SECONDS,
+)
+
+ROOT = Path(__file__).resolve().parents[2]
+
+pytestmark = pytest.mark.postgres
+
+
+@pytest.fixture(scope="module")
+def session_factory() -> SessionFactory:
+    url = os.environ.get("TEST_DATABASE_URL")
+    if not url:
+        pytest.skip("TEST_DATABASE_URL not set")
+    env = os.environ.copy()
+    env["DATABASE_URL"] = url
+    subprocess.run(
+        ["uv", "run", "alembic", "upgrade", "head"],
+        cwd=ROOT,
+        env=env,
+        check=True,
+    )
+    engine = create_engine(url, pool_pre_ping=True)
+    try:
+        yield SessionFactory(engine)
+    finally:
+        engine.dispose()
+        subprocess.run(
+            ["uv", "run", "alembic", "downgrade", "base"],
+            cwd=ROOT,
+            env=env,
+            check=False,
+        )
+
+
+@pytest.fixture(autouse=True)
+def clean_database(session_factory: SessionFactory):
+    _clean_database(session_factory)
+    yield
+    _clean_database(session_factory)
+
+
+def _clean_database(session_factory: SessionFactory) -> None:
+    with session_factory() as session:
+        session.execute(sa.delete(build_model.BuildAttempt))
+        session.execute(sa.delete(design_model.ChallengeDesign))
+        session.execute(sa.delete(design_model.DesignAttempt))
+        session.execute(sa.delete(task_model.DesignTask))
+        session.execute(sa.delete(research_model.ResearchRun))
+        session.execute(sa.delete(research_model.GenerationRequest))
+        session.commit()
+
+
+def _payload(challenge_id: str, *, port: int = 8081) -> dict:
+    return {
+        "event": {"flag_format": "flag{...}"},
+        "challenges": [
+            {
+                "id": challenge_id,
+                "title": "Blind Login",
+                "category": "web",
+                "difficulty": "easy",
+                "points": 100,
+                "deployment": f"docker compose service on port {port}",
+                "port": port,
+                "primary_technique": "boolean blind sqli",
+                "learning_objective": "Extract data through boolean responses.",
+                "prompt": "Recover the admin note.",
+                "flag_location": "FLAG environment variable",
+                "validation": "Run the solver against localhost.",
+                "hints": ["one", "two", "three"],
+                "artifacts": ["README.md"],
+                "implementation_plan": {
+                    "runtime": "python:3.11-slim",
+                    "framework": "Flask",
+                },
+            }
+        ],
+    }
+
+
+def _seed_designed_task(session_factory: SessionFactory, *, task_no: int = 1) -> UUID:
+    with session_factory() as session:
+        request = research_model.GenerationRequest(
+            id=uuid4(),
+            category="web",
+            topic=f"topic-{uuid4()}",
+            target_count=1,
+            difficulty_distribution={"easy": 1},
+            status="researched",
+        )
+        run = research_model.ResearchRun(
+            id=uuid4(),
+            generation_request_id=request.id,
+            attempt=1,
+            status="completed",
+        )
+        task = task_model.DesignTask(
+            id=uuid4(),
+            generation_request_id=request.id,
+            research_run_id=run.id,
+            task_no=task_no,
+            challenge_id=f"web-{uuid4().hex[:8]}",
+            title=f"Task {task_no}",
+            category="web",
+            difficulty="easy",
+            primary_technique="boolean blind sqli",
+            learning_objective="Extract data through boolean responses.",
+            points=100,
+            port=8080 + task_no,
+            scenario="Distinct login response behavior.",
+            constraints={},
+            evidence_summary="",
+            finding_ids=[],
+            status="designed",
+        )
+        design_attempt = design_model.DesignAttempt(
+            id=uuid4(),
+            design_task_id=task.id,
+            attempt=1,
+            status="completed",
+            claim_token=uuid4(),
+            finished_at=datetime.now(timezone.utc),
+            profile_name_used="default",
+        )
+        design = design_model.ChallengeDesign(
+            id=uuid4(),
+            design_task_id=task.id,
+            design_attempt_id=design_attempt.id,
+            payload=_payload(task.challenge_id, port=task.port or 8081),
+            summary="validated design",
+            flag_format="flag{...}",
+            validation_notes="passed",
+            quality_gate_passed=True,
+            status="draft",
+        )
+        session.add_all([request, run, task, design_attempt, design])
+        session.commit()
+        return task.id
+
+
+def _service(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+) -> BuildOrchestrationService:
+    return BuildOrchestrationService(
+        paths=ProjectPaths(root=tmp_path, repository=tmp_path),
+        session_factory=session_factory,
+    )
+
+
+def test_submit_batch_preserves_order_commits_and_publishes(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    task_a = _seed_designed_task(session_factory, task_no=1)
+    task_b = _seed_designed_task(session_factory, task_no=2)
+    service = _service(tmp_path, session_factory)
+
+    attempt_ids = service.submit_batch([task_b, task_a])
+
+    assert len(attempt_ids) == 2
+    with session_factory() as session:
+        attempts = [BuildAttemptsRepository(session).get(item) for item in attempt_ids]
+        assert [item.design_task_id for item in attempts if item] == [task_b, task_a]
+        assert all(session.get(task_model.DesignTask, task).status == "building" for task in [task_a, task_b])
+    for attempt_id, task_id in zip(attempt_ids, [task_b, task_a], strict=True):
+        payload = read_json(
+            service.paths.shards / "pending" / f"{attempt_id}.json",
+            {},
+        )
+        assert payload["build_attempt_id"] == str(attempt_id)
+        assert payload["design_task_id"] == str(task_id)
+        assert "resume_from_shard_basename" not in payload
+        assert set(payload["challenges"][0]) == set(MATRIX_FIELDS["web"]) | {
+            "design"
+        }
+    assert service.paths.build_attempt_staging.is_dir()
+
+
+@pytest.mark.parametrize("category", ["web", "pwn", "re"])
+def test_render_payload_uses_exact_category_matrix_fields(
+    category: str,
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    now = datetime.now(timezone.utc)
+    task = DesignTask(
+        id=uuid4(),
+        generation_request_id=uuid4(),
+        research_run_id=uuid4(),
+        task_no=1,
+        challenge_id=f"{category}-0001",
+        title="Matrix contract",
+        category=category,
+        difficulty="easy",
+        primary_technique="test technique",
+        learning_objective="test objective",
+        points=100,
+        port=8081 if category in {"web", "pwn"} else None,
+        scenario="distinct scenario",
+        constraints={},
+        evidence_summary="",
+        finding_ids=(),
+        status="designed",
+        created_at=now,
+        updated_at=now,
+    )
+    design_payload = {
+        "event": {"flag_format": "flag{...}"},
+        "challenges": [{"deployment": "docker" if category != "re" else "download"}],
+    }
+    design = ChallengeDesign(
+        id=uuid4(),
+        design_task_id=task.id,
+        design_attempt_id=uuid4(),
+        payload=design_payload,
+        summary="summary",
+        flag_format="flag{...}",
+        validation_notes="passed",
+        quality_gate_passed=True,
+        status="draft",
+        created_at=now,
+        updated_at=now,
+    )
+
+    payload = _service(tmp_path, session_factory).render_shard_payload(
+        task,
+        design,
+        build_attempt_id=uuid4(),
+    )
+
+    assert set(payload["challenges"][0]) == set(MATRIX_FIELDS[category]) | {"design"}
+
+
+def test_ineligible_batch_is_all_or_nothing(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    eligible = _seed_designed_task(session_factory, task_no=1)
+    ineligible = _seed_designed_task(session_factory, task_no=2)
+    with session_factory() as session:
+        session.get(task_model.DesignTask, ineligible).status = "building"
+        session.commit()
+    service = _service(tmp_path, session_factory)
+
+    with pytest.raises(BuildOrchestrationError, match="expected designed"):
+        service.submit_batch([eligible, ineligible])
+
+    with session_factory() as session:
+        assert BuildAttemptsRepository(session).list_for_design_task(eligible) == []
+    assert not list((service.paths.shards / "pending").glob("*.json"))
+    assert not list(service.paths.build_attempt_staging.glob("*.json"))
+
+
+def test_precommit_failure_removes_staged_payloads(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    task_id = _seed_designed_task(session_factory)
+    service = _service(tmp_path, session_factory)
+
+    def fail_commit(*args, **kwargs):
+        raise RuntimeError("database write failed")
+
+    monkeypatch.setattr(service, "_commit", fail_commit)
+    with pytest.raises(RuntimeError, match="database write failed"):
+        service.submit_single(task_id)
+
+    assert not list(service.paths.build_attempt_staging.glob("*"))
+    assert not list((service.paths.shards / "pending").glob("*.json"))
+    with session_factory() as session:
+        assert BuildAttemptsRepository(session).list_for_design_task(task_id) == []
+        assert session.get(task_model.DesignTask, task_id).status == "designed"
+
+
+def test_postcommit_publication_failure_recovers_idempotently(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    task_id = _seed_designed_task(session_factory)
+    service = _service(tmp_path, session_factory)
+    original_publish = service._publish
+
+    def fail_publish(*args, **kwargs):
+        raise OSError("disk unavailable")
+
+    monkeypatch.setattr(service, "_publish", fail_publish)
+    attempt_id = service.submit_single(task_id)
+    staged = service.paths.build_attempt_staging / f"{attempt_id}.json"
+    assert staged.exists()
+    with session_factory() as session:
+        assert BuildAttemptsRepository(session).get(attempt_id) is not None
+
+    monkeypatch.setattr(service, "_publish", original_publish)
+    assert service.recover_staging() == {attempt_id}
+    pending = service.paths.shards / "pending" / f"{attempt_id}.json"
+    assert pending.exists()
+    assert not staged.exists()
+    assert service.recover_staging() == set()
+    assert pending.exists()
+
+
+def test_recovery_keeps_young_orphan_and_removes_old_orphan(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    service = _service(tmp_path, session_factory)
+    service.paths.initialize()
+    young = service.paths.build_attempt_staging / f"{uuid4()}.json"
+    old = service.paths.build_attempt_staging / f"{uuid4()}.json"
+    write_json(young, {})
+    write_json(old, {})
+    now = max(young.stat().st_mtime, old.stat().st_mtime)
+    os.utime(old, (now - STAGING_ORPHAN_GRACE_SECONDS - 1,) * 2)
+
+    service.recover_staging(now=now)
+
+    assert young.exists()
+    assert not old.exists()
+
+
+def test_build_failed_submit_links_resume_and_stale_retry_is_rejected(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory)
+    service = _service(tmp_path, session_factory)
+    first_id = service.submit_single(task_id)
+    with transaction(factory=session_factory) as session:
+        BuildAttemptsRepository(session).update_to_terminal(
+            first_id,
+            status="failed",
+            error="failed validation",
+        )
+        session.get(task_model.DesignTask, task_id).status = "build_failed"
+
+    second_id = service.submit_single(task_id)
+    second_payload = read_json(
+        service.paths.shards / "pending" / f"{second_id}.json",
+        {},
+    )
+    assert second_payload["resume_from_shard_basename"] == f"{first_id}.json"
+
+    with transaction(factory=session_factory) as session:
+        BuildAttemptsRepository(session).update_to_terminal(
+            second_id,
+            status="lost",
+        )
+        session.get(task_model.DesignTask, task_id).status = "build_failed"
+
+    with pytest.raises(BuildOrchestrationError, match="latest"):
+        service.retry(first_id)
+    third_id = service.retry(second_id)
+    third_payload = read_json(
+        service.paths.shards / "pending" / f"{third_id}.json",
+        {},
+    )
+    assert third_payload["resume_from_shard_basename"] == f"{second_id}.json"
