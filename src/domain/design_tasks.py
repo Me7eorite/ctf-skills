@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-# 设计任务的状态: 草稿 → 排队 → 设计中 → 已设计 → 失败 → 归档
+# 设计任务的状态：设计阶段后可进入构建阶段。
 DesignTaskStatus: tuple[str, ...] = (
     "draft",       # 草稿
     "queued",      # 排队
@@ -26,6 +26,9 @@ DesignTaskStatus: tuple[str, ...] = (
     "designed",    # 已设计
     "failed",      # 失败
     "archived",    # 归档
+    "building",    # 构建中
+    "built",       # 已构建
+    "build_failed",  # 构建失败
 )
 
 

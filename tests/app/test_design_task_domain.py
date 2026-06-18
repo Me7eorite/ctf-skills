@@ -10,6 +10,7 @@ from domain.design_task_validators import (
     validate_candidate_set,
     validate_status_transition,
 )
+from domain.design_tasks import DesignTaskStatus
 
 
 def _web_candidate(**overrides):
@@ -155,3 +156,13 @@ def test_validate_status_transition_allows_planning_paths(current, target):
 def test_validate_status_transition_rejects_other_paths(current, target):
     with pytest.raises(DesignTaskValidationError, match="not allowed"):
         validate_status_transition(current, target)
+
+
+def test_design_task_status_includes_build_phase_values():
+    assert {"building", "built", "build_failed"} <= set(DesignTaskStatus)
+
+
+@pytest.mark.parametrize("target", ["building", "built", "build_failed"])
+def test_planning_transition_rejects_direct_build_phase_targets(target):
+    with pytest.raises(DesignTaskValidationError, match="not allowed"):
+        validate_status_transition("designed", target)

@@ -9,10 +9,10 @@
 
 ## 2. Domain DTOs and validators
 
-- [ ] 2.1 Add `BuildAttemptStatus` enum to `src/domain/design_tasks.py` (or a new `src/domain/build_attempts.py`) carrying the five values. Reuse the project's existing string-enum pattern.
-- [ ] 2.2 Extend `DesignTaskStatus` enum to include `building`, `built`, `build_failed`. Keep the existing enum class so all existing imports continue to work.
-- [ ] 2.3 Add a domain DTO `BuildAttempt` (frozen dataclass): id, design_task_id, attempt_no, status, shard_basename, worker, resulting_challenge_dir, artifact_status, error, created_at, started_at, finished_at.
-- [ ] 2.4 Update `src/domain/design_task_validators.py` (if it gates `status` values) to recognize the new three; existing planning-endpoint validators MUST still reject direct transitions into those states.
+- [x] 2.1 Add `BuildAttemptStatus` enum to `src/domain/design_tasks.py` (or a new `src/domain/build_attempts.py`) carrying the five values. Reuse the project's existing string-enum pattern.
+- [x] 2.2 Extend `DesignTaskStatus` enum to include `building`, `built`, `build_failed`. Keep the existing enum class so all existing imports continue to work.
+- [x] 2.3 Add a domain DTO `BuildAttempt` (frozen dataclass): id, design_task_id, attempt_no, status, shard_basename, worker, resulting_challenge_dir, artifact_status, error, created_at, started_at, finished_at.
+- [x] 2.4 Update `src/domain/design_task_validators.py` (if it gates `status` values) to recognize the new three; existing planning-endpoint validators MUST still reject direct transitions into those states.
 
 ## 3. Persistence — ORM and repository
 
