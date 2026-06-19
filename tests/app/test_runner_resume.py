@@ -250,6 +250,44 @@ class RunnerRealRunTests(unittest.TestCase):
             self.assertIn(("complete", "passed", "web-0001"), stage_status)
             self.assertIn(("complete", "passed", ""), stage_status)
 
+    def test_first_run_validates_directory_created_by_hermes(self):
+        with TemporaryDirectory() as tmp:
+            paths = _Paths(root=Path(tmp))
+            paths.initialize()
+            _copy_real_prompt(paths)
+            _make_shard(paths, "web-0001-0001.json", ["web-0001"])
+            runner = self._make_runner_with_fake_invoke(paths)
+
+            def fake_invoke(prompt: str, log: Path, dry_run: bool, *, timeout=None) -> int:
+                log.parent.mkdir(parents=True, exist_ok=True)
+                log.write_text("fake invoke\n", encoding="utf-8")
+                _make_web_challenge(paths, "web-0001")
+                return 0
+
+            runner._invoke = fake_invoke  # type: ignore[assignment]
+
+            outcome = runner.process_one("worker-01", dry_run=False)
+            self.assertEqual(outcome["status"], "done")
+
+            events = runner.state.events_for_shard("web-0001-0001.json")
+            validate_events = [
+                event
+                for event in events
+                if event["stage"] == "validate"
+                and event["challenge_id"] == "web-0001"
+            ]
+            self.assertIn(
+                ("validate", "passed"),
+                [(event["stage"], event["status"]) for event in validate_events],
+            )
+            self.assertFalse(
+                any(
+                    event["status"] == "failed"
+                    and "missing_challenge" in event["message"]
+                    for event in validate_events
+                )
+            )
+
     def test_resume_to_build_writes_carry_forward_and_build_pending(self):
         with TemporaryDirectory() as tmp:
             paths = _Paths(root=Path(tmp))

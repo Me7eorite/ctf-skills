@@ -20,6 +20,7 @@ from domain.resume import (
     build_evidence,
     design_evidence,
     document_evidence,
+    find_challenge_directory,
     implement_evidence,
     validator_message,
 )
@@ -61,7 +62,7 @@ def run_validation(
     """
     results: list[dict[str, Any]] = []
     for challenge_id in challenge_ids:
-        plan = plan_by_id.get(challenge_id)
+        plan = _refresh_missing_directory(paths, plan_by_id.get(challenge_id))
 
         # 情况 1: 断点恢复中 validate 已完成
         if plan is not None and "validate" in plan.skipped_stages:
@@ -149,6 +150,24 @@ def run_validation(
                 }
             )
     return results
+
+
+def _refresh_missing_directory(
+    paths: ProjectPaths,
+    plan: ChallengeResumePlan | None,
+) -> ChallengeResumePlan | None:
+    if plan is None or plan.directory is not None:
+        return plan
+
+    lookup = find_challenge_directory(paths, plan.challenge_id)
+    return ChallengeResumePlan(
+        challenge_id=plan.challenge_id,
+        directory=lookup.directory,
+        lookup_status=lookup.status,
+        skipped_stages=plan.skipped_stages,
+        first_pending_stage=plan.first_pending_stage,
+        stage_sources=plan.stage_sources,
+    )
 
 
 def validate_gate(
