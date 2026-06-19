@@ -8,7 +8,7 @@ STATIC_JS = Path(__file__).parents[2] / "src" / "web" / "static" / "js"
 
 
 def test_confirmation_is_singleton_and_keyboard_accessible() -> None:
-    source = (STATIC_JS / "ui" / "delete-dialog.js").read_text()
+    source = (STATIC_JS / "ui" / "delete-dialog.js").read_text(encoding="utf-8")
 
     assert "if (activeConfirmation) return activeConfirmation" in source
     assert 'event.key === "Escape"' in source
@@ -22,7 +22,7 @@ def test_deletion_views_guard_submission_and_polling() -> None:
         "views/design-tasks.js",
         "views/build-attempts.js",
     ):
-        source = (STATIC_JS / relative).read_text()
+        source = (STATIC_JS / relative).read_text(encoding="utf-8")
         assert "if (state.flags.deleting) return" in source
         assert "state.flags.deleting = true" in source
         assert "state.flags.deleting = false" in source
@@ -33,9 +33,11 @@ def test_deletion_views_guard_submission_and_polling() -> None:
 
 
 def test_each_view_exposes_list_and_detail_delete_navigation_contract() -> None:
-    research = (STATIC_JS / "views" / "research-requests.js").read_text()
-    design = (STATIC_JS / "views" / "design-tasks.js").read_text()
-    build = (STATIC_JS / "views" / "build-attempts.js").read_text()
+    research = (STATIC_JS / "views" / "research-requests.js").read_text(
+        encoding="utf-8"
+    )
+    design = (STATIC_JS / "views" / "design-tasks.js").read_text(encoding="utf-8")
+    build = (STATIC_JS / "views" / "build-attempts.js").read_text(encoding="utf-8")
 
     assert research.count("req-delete") >= 2
     assert research.count("detail-delete-request") >= 2

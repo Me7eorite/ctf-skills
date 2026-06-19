@@ -51,7 +51,7 @@ const titles = {
   "research-submit": { title: "新建需求", group: "研究需求" },
   "research-requests": { title: "需求列表", group: "研究需求" },
   "design-tasks": { title: "题目设计", group: "研究需求" },
-  "build-attempts": { title: "题目管理", group: "题目管理" },
+  "build-attempts": { title: "构建记录", group: "题目管理" },
   "progress": { title: "实时进度", group: "运行监控" },
   "research-runs": { title: "运行记录", group: "运行监控" },
   "research-logs": { title: "研究日志", group: "运行监控" },

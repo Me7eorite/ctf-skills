@@ -4,6 +4,10 @@ from services.build_orchestration_service import (
     BuildOrchestrationError,
     BuildOrchestrationService,
 )
+from services.build_attempt_revalidation_service import (
+    BuildAttemptRevalidationError,
+    BuildAttemptRevalidationService,
+)
 from services.build_reconciler import BuildReconciler
 from services.challenge_design_service import (
     ChallengeDesignConflictError,
@@ -25,6 +29,8 @@ from services.resource_deletion_service import (
 __all__ = [
     "BuildOrchestrationError",
     "BuildOrchestrationService",
+    "BuildAttemptRevalidationError",
+    "BuildAttemptRevalidationService",
     "BuildReconciler",
     "ChallengeDesignConflictError",
     "ChallengeDesignNotFoundError",

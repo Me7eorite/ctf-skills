@@ -347,6 +347,20 @@ def test_retry_rejects_stale_sibling(
     assert "latest" in response.json()["detail"]
 
 
+def test_revalidate_endpoint_rejects_non_failed_attempt(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory)
+    with transaction(factory=session_factory) as session:
+        attempt = _create_canonical_attempt(BuildAttemptsRepository(session), task_id)
+
+    response = client.post(f"/api/build-attempts/{attempt.id}/revalidate")
+
+    assert response.status_code == 409
+    assert "expected failed" in response.json()["detail"]
+
+
 def test_validation_errors_return_400(client: TestClient):
     assert client.post("/api/design-tasks/not-a-uuid/build").status_code == 400
     assert (

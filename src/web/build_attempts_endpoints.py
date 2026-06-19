@@ -25,6 +25,10 @@ from persistence.repositories import (
     BuildAttemptsRepository,
 )
 from services import BuildOrchestrationError, BuildOrchestrationService
+from services.build_attempt_revalidation_service import (
+    BuildAttemptRevalidationError,
+    BuildAttemptRevalidationService,
+)
 
 LOG = logging.getLogger(__name__)
 DEFAULT_LIST_LIMIT = 100
@@ -133,10 +137,17 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
                 category=category,
                 limit=capped,
             )
+            summaries = _failure_summaries(
+                session,
+                [row.shard_basename for row in rows],
+            )
         headers = {}
         if capped != requested_limit:
             headers["X-Limit-Capped"] = str(capped)
-        return JSONResponse([_list_item_dict(row) for row in rows], headers=headers)
+        return JSONResponse(
+            [_list_item_dict(row, summaries=summaries) for row in rows],
+            headers=headers,
+        )
 
     @app.get("/api/build-attempts/{attempt_id}")
     def get_build_attempt(attempt_id: str) -> JSONResponse:
@@ -159,9 +170,13 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
                 .order_by(ProgressEvent.id.asc())
             ).all()
 
-        body = _attempt_dict(attempt)
+        event_payloads = [_progress_event_dict(row) for row in events]
+        body = _attempt_dict(
+            attempt,
+            failure_summary=_derive_failure_summary(event_payloads, attempt.error),
+        )
         body["sibling_attempts"] = [_attempt_dict(row) for row in siblings]
-        body["progress_events"] = [_progress_event_dict(row) for row in events]
+        body["progress_events"] = event_payloads
         return JSONResponse(body)
 
     @app.post("/api/build-attempts/worker/start")
@@ -246,6 +261,37 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
             {"build_attempt_id": str(new_id)},
             status_code=HTTPStatus.CREATED,
         )
+
+    @app.post("/api/build-attempts/{attempt_id}/revalidate")
+    def revalidate_build_attempt(attempt_id: str) -> JSONResponse:
+        attempt_uuid = _parse_uuid(attempt_id, "build attempt id", not_found=True)
+        progress = getattr(app.state, "progress_store", None)
+        if progress is None:
+            raise HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail="progress store is not configured",
+            )
+        try:
+            BuildAttemptRevalidationService(
+                paths=_project_paths(app),
+                progress=progress,
+            ).revalidate(attempt_uuid)
+        except BuildAttemptRevalidationError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail=str(exc),
+            ) from exc
+
+        from persistence.session import transaction
+
+        with transaction() as session:
+            attempt = BuildAttemptsRepository(session).get(attempt_uuid)
+            if attempt is None:
+                raise HTTPException(
+                    status_code=HTTPStatus.NOT_FOUND,
+                    detail="build attempt not found",
+                )
+            return JSONResponse(_attempt_dict(attempt))
 
     @app.delete("/api/build-attempts/{attempt_id}")
     def delete_build_attempt(
@@ -466,8 +512,12 @@ def _parse_optional_uuid(value: str | None, label: str) -> UUID | None:
     return _parse_uuid(value, label)
 
 
-def _attempt_dict(attempt: BuildAttempt) -> dict[str, Any]:
-    return {
+def _attempt_dict(
+    attempt: BuildAttempt,
+    *,
+    failure_summary: str | None = None,
+) -> dict[str, Any]:
+    payload = {
         "id": str(attempt.id),
         "design_task_id": str(attempt.design_task_id),
         "attempt_no": attempt.attempt_no,
@@ -481,10 +531,21 @@ def _attempt_dict(attempt: BuildAttempt) -> dict[str, Any]:
         "started_at": _isofmt(attempt.started_at),
         "finished_at": _isofmt(attempt.finished_at),
     }
+    if failure_summary:
+        payload["failure_summary"] = failure_summary
+    return payload
 
 
-def _list_item_dict(item: BuildAttemptListItem) -> dict[str, Any]:
-    row = _attempt_dict(item)
+def _list_item_dict(
+    item: BuildAttemptListItem,
+    *,
+    summaries: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    row = _attempt_dict(
+        item,
+        failure_summary=(summaries or {}).get(item.shard_basename)
+        or _derive_failure_summary([], item.error),
+    )
     row.update(
         {
             "generation_request_id": str(item.generation_request_id),
@@ -496,6 +557,53 @@ def _list_item_dict(item: BuildAttemptListItem) -> dict[str, Any]:
         }
     )
     return row
+
+
+def _failure_summaries(
+    session,
+    shards: list[str],
+) -> dict[str, str]:
+    if not shards:
+        return {}
+    events = session.scalars(
+        sa.select(ProgressEvent)
+        .where(ProgressEvent.shard.in_(set(shards)))
+        .order_by(ProgressEvent.shard.asc(), ProgressEvent.id.asc())
+    ).all()
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for event in events:
+        grouped.setdefault(event.shard, []).append(_progress_event_dict(event))
+    return {
+        shard: summary
+        for shard, rows in grouped.items()
+        if (summary := _derive_failure_summary(rows, None))
+    }
+
+
+def _derive_failure_summary(
+    events: list[dict[str, Any]],
+    fallback: str | None,
+) -> str | None:
+    for event in reversed(events):
+        if event.get("stage") == "validate" and event.get("status") == "failed":
+            reason = _failure_message_reason(event.get("message") or "")
+            return f"校验失败：{reason}" if reason else "校验失败"
+    for event in reversed(events):
+        if event.get("stage") == "complete" and event.get("status") == "failed":
+            reason = _failure_message_reason(event.get("message") or "")
+            return f"构建执行失败：{reason}" if reason else "构建执行失败"
+    if fallback and fallback != "shard execution failed":
+        return fallback
+    if fallback:
+        return "构建执行失败"
+    return None
+
+
+def _failure_message_reason(message: str) -> str:
+    marker = "error="
+    if marker in message:
+        return message.split(marker, 1)[1].strip(" ;,")
+    return message.strip()
 
 
 def _progress_event_dict(event: ProgressEvent) -> dict[str, Any]:

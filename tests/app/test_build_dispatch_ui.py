@@ -11,8 +11,12 @@ BUILD_ATTEMPTS_JS = ROOT / "src" / "web" / "static" / "js" / "views" / "build-at
 def test_build_attempt_actions_use_constrained_endpoints():
     source = BUILD_ATTEMPTS_JS.read_text(encoding="utf-8")
 
-    assert 'endpoint = "/api/build-attempts/worker/start"' in source
     assert "/worker/start`" in source
+    assert "/revalidate`" in source
     assert 'runAction("worker")' not in source
-    assert "Choose a category before starting a worker" in source
-    assert 'runAction("validate")' in source
+    assert 'runAction("validate")' not in source
+    assert 'id="ba-validate"' not in source
+    assert 'id="ba-worker"' in source
+    assert "重新校验" in source
+    assert "重试构建" in source
+    assert '["failed", "lost", "succeeded"].includes(attempt.status)' in source

@@ -4,9 +4,9 @@ import { initIcons } from "../ui/icons.js";
 import { showToast } from "../ui/toast.js";
 import { confirmDeletion } from "../ui/delete-dialog.js";
 import {
+  dotTone,
   escapeHtml,
   formatDateTime,
-  statusIndicator,
   softPill,
 } from "../ui/format.js";
 
@@ -131,41 +131,10 @@ async function refreshWithTick() {
   }
 }
 
-async function runAction(kind) {
-  try {
-    const result = await postJson(`/api/actions/${kind}`, {});
-    showToast(result.message);
-    appState.data = {
-      ...(appState.data || {}),
-      process: {
-        ...(appState.data?.process || {}),
-        last_action: kind,
-        last_message: result.message,
-      },
-    };
-  } catch (err) {
-    showToast(err.message, true);
-  }
-}
-
 async function startBuildWorker() {
-  let endpoint;
-  let body;
-  if (state.detailId) {
-    endpoint = `/api/build-attempts/${encodeURIComponent(state.detailId)}/worker/start`;
-    body = {};
-  } else {
-    const category = state.filters.category;
-    if (!category) {
-      showToast("Choose a category before starting a worker", true);
-      return;
-    }
-    endpoint = "/api/build-attempts/worker/start";
-    body = { category };
-  }
-
+  if (!state.detailId) return;
   try {
-    const result = await postJson(endpoint, body);
+    const result = await postJson(`/api/build-attempts/${encodeURIComponent(state.detailId)}/worker/start`, {});
     showToast(result.message);
     appState.data = {
       ...(appState.data || {}),
@@ -180,6 +149,28 @@ async function startBuildWorker() {
   }
 }
 
+async function revalidateAttempt(attemptId) {
+  if (!attemptId) return;
+  state.flags.revalidating = { ...(state.flags.revalidating || {}), [attemptId]: true };
+  render(appState.data);
+  initIcons();
+  try {
+    await postJson(`/api/build-attempts/${attemptId}/revalidate`, {});
+    showToast("重新校验通过");
+    state.detail = null;
+    state.list = null;
+    await ensureDetail(attemptId);
+  } catch (err) {
+    showToast(err.message, true);
+    state.detail = null;
+    await ensureDetail(attemptId);
+  } finally {
+    state.flags.revalidating = { ...(state.flags.revalidating || {}), [attemptId]: false };
+    render(appState.data);
+    initIcons();
+  }
+}
+
 async function retryAttempt(attemptId) {
   if (!attemptId) return;
   state.flags.retrying = { ...(state.flags.retrying || {}), [attemptId]: true };
@@ -187,7 +178,7 @@ async function retryAttempt(attemptId) {
   initIcons();
   try {
     const result = await postJson(`/api/build-attempts/${attemptId}/retry`, {});
-    showToast(`Retry queued ${shortId(result.build_attempt_id)}`);
+    showToast(`已排队重试构建 ${shortId(result.build_attempt_id)}`);
     state.detailId = result.build_attempt_id;
     state.detail = null;
     state.list = null;
@@ -208,13 +199,13 @@ async function deleteAttempt(attemptId) {
   initIcons();
   try {
     const choice = await confirmDeletion({
-      title: "Delete build attempt",
-      message: "This removes the build-attempt row, queue state, and progress. Challenge artifacts are retained unless selected.",
+      title: "删除构建运行",
+      message: "将删除构建运行记录、队列状态和进度。题目产物默认保留，除非勾选同时删除。",
     });
     if (choice === null) return;
     const query = choice ? "?delete_artifacts=true" : "?delete_artifacts=false";
     const result = await del(`/api/build-attempts/${attemptId}${query}`);
-    showToast(result.warnings?.length ? result.warnings[0] : "Build attempt deleted");
+    showToast(result.warnings?.length ? result.warnings[0] : "构建运行已删除");
     state.detailId = null;
     state.detail = null;
     state.list = null;
@@ -251,7 +242,7 @@ function renderList(root) {
   ensureList();
   const flag = state.flags.list || {};
   if (flag.loading && !state.list) {
-    root.innerHTML = `<div class="empty">Loading build attempts...</div>`;
+    root.innerHTML = `<div class="empty">正在加载构建记录...</div>`;
     return;
   }
   if (flag.error) {
@@ -263,12 +254,12 @@ function renderList(root) {
     <section class="card">
       <div class="card-header">
         <div>
-          <div class="card-title">Build Attempts</div>
-          <div class="card-subtitle">${rows.length} latest attempt row(s)</div>
+          <div class="card-title">构建记录</div>
+          <div class="card-subtitle">${rows.length} 条最新构建运行</div>
         </div>
       </div>
       ${renderFilters()}
-      ${rows.length ? renderTable(rows) : `<div class="empty card-body">No matching build attempts</div>`}
+      ${rows.length ? renderTable(rows) : `<div class="empty card-body">没有匹配的构建记录</div>`}
     </section>
   `;
 }
@@ -276,37 +267,31 @@ function renderList(root) {
 function renderFilters() {
   return `
     <div class="filter-bar filter-bar-vertical-sm">
-      <label class="filter-item">Status
+      <label class="filter-item">状态
         <select id="ba-filter-status" class="filter-select">
-          <option value=""${state.filters.status === "" ? " selected" : ""}>All</option>
-          ${STATUSES.map((status) => `<option value="${status}"${state.filters.status === status ? " selected" : ""}>${status}</option>`).join("")}
+          <option value=""${state.filters.status === "" ? " selected" : ""}>全部</option>
+          ${STATUSES.map((status) => `<option value="${status}"${state.filters.status === status ? " selected" : ""}>${buildStatusLabel(status)}</option>`).join("")}
         </select>
       </label>
       <label class="filter-item">Worker
         <input id="ba-filter-worker" class="filter-input" value="${escapeHtml(state.filters.worker)}" placeholder="worker">
       </label>
-      <label class="filter-item">Category
+      <label class="filter-item">分类
         <select id="ba-filter-category" class="filter-select">
-          <option value=""${state.filters.category === "" ? " selected" : ""}>All</option>
+          <option value=""${state.filters.category === "" ? " selected" : ""}>全部</option>
           ${CATEGORIES.map((category) => `<option value="${category}"${state.filters.category === category ? " selected" : ""}>${category}</option>`).join("")}
         </select>
       </label>
-      <label class="filter-item">Design Task
+      <label class="filter-item">设计任务
         <input id="ba-filter-design-task" class="filter-input" value="${escapeHtml(state.filters.design_task_id)}" placeholder="design_task_id">
       </label>
-      <label class="filter-item">Generation Request
+      <label class="filter-item">生成请求
         <input id="ba-filter-generation-request" class="filter-input" value="${escapeHtml(state.filters.generation_request_id)}" placeholder="generation_request_id">
       </label>
-      <button id="ba-apply-filter" class="filter-clear">Apply</button>
-      <button id="ba-clear-filter" class="filter-clear">Clear</button>
+      <button id="ba-apply-filter" class="filter-clear">应用筛选</button>
+      <button id="ba-clear-filter" class="filter-clear">清空</button>
       <button id="ba-refresh" class="btn btn-secondary btn-sm${state.flags.refreshing ? " btn-loading" : ""}">
-        <i data-lucide="refresh-cw"></i>Refresh
-      </button>
-      <button id="ba-worker" class="btn btn-primary btn-sm">
-        <i data-lucide="play"></i>Start Worker
-      </button>
-      <button id="ba-validate" class="btn btn-secondary btn-sm">
-        <i data-lucide="shield-check"></i>Validate
+        <i data-lucide="refresh-cw"></i>刷新
       </button>
     </div>
   `;
@@ -318,25 +303,28 @@ function renderTable(rows) {
       <table class="table">
         <thead>
           <tr>
-            <th>Title</th>
-            <th>Category</th>
-            <th>Difficulty</th>
-            <th>Status</th>
-            <th>Artifact</th>
-            <th>Progress</th>
+            <th>题目</th>
+            <th>分类</th>
+            <th>难度</th>
+            <th>状态</th>
+            <th>产物</th>
+            <th>进度</th>
             <th>Worker</th>
-            <th>Attempt</th>
-            <th>Created</th>
-            <th>Actions</th>
+            <th>次数</th>
+            <th>创建时间</th>
+            <th>操作</th>
           </tr>
         </thead>
         <tbody>
           ${rows.map((attempt) => `
             <tr data-build-attempt-id="${escapeHtml(attempt.id)}">
-              <td><div class="truncate" style="max-width: 260px;">${escapeHtml(attempt.title || attempt.challenge_id || attempt.id)}</div></td>
+              <td>
+                <div class="truncate" style="max-width: 260px;">${escapeHtml(attempt.title || attempt.challenge_id || attempt.id)}</div>
+                ${attempt.failure_summary ? `<div style="margin-top: 2px; color: var(--accent-red); font-size: var(--font-xs);">${escapeHtml(attempt.failure_summary)}</div>` : ""}
+              </td>
               <td>${softPill(attempt.category || "-")}</td>
               <td>${escapeHtml(attempt.difficulty || "-")}</td>
-              <td>${statusIndicator(attempt.status)}</td>
+              <td>${buildStatusIndicator(attempt.status)}</td>
               <td>${artifactPill(attempt.artifact_status)}</td>
               <td>${attempt.percent ?? "-"}</td>
               <td>${escapeHtml(attempt.worker || "-")}</td>
@@ -344,11 +332,11 @@ function renderTable(rows) {
               <td class="table-cell-time">${escapeHtml(formatDateTime(attempt.created_at))}</td>
               <td>
                 <div class="btn-group">
-                  <button class="btn btn-secondary btn-xs ba-open-detail">Details</button>
+                  <button class="btn btn-secondary btn-xs ba-open-detail">详情</button>
                   ${attempt.status === "failed" || attempt.status === "lost"
-                    ? `<button class="btn btn-primary btn-xs ba-retry">Retry</button>`
+                    ? `<button class="btn btn-primary btn-xs ba-retry">重试构建</button>`
                     : ""}
-                  <button class="btn btn-danger btn-xs ba-delete" title="Delete">
+                  <button class="btn btn-danger btn-xs ba-delete" title="删除">
                     <i data-lucide="trash-2"></i>
                   </button>
                 </div>
@@ -365,7 +353,7 @@ function renderDetail(root) {
   ensureDetail(state.detailId);
   const flag = state.flags.detail || {};
   if (flag.loading && !state.detail) {
-    root.innerHTML = `<div class="empty">Loading build attempt...</div>`;
+    root.innerHTML = `<div class="empty">正在加载构建运行...</div>`;
     return;
   }
   if (flag.error) {
@@ -377,45 +365,50 @@ function renderDetail(root) {
   root.innerHTML = `
     <div style="display: flex; align-items: center; justify-content: space-between; gap: var(--space-md); flex-wrap: wrap; margin-bottom: var(--space-md);">
       <button class="btn btn-ghost" id="ba-back">
-        <i data-lucide="arrow-left"></i> Back to list
+        <i data-lucide="arrow-left"></i> 返回列表
       </button>
       <div class="btn-group">
         <button id="ba-refresh" class="btn btn-secondary btn-sm">
-          <i data-lucide="refresh-cw"></i>Refresh
+          <i data-lucide="refresh-cw"></i>刷新
         </button>
         ${attempt.status === "queued"
-          ? `<button id="ba-worker" class="btn btn-primary btn-sm"><i data-lucide="play"></i>Start Worker</button>`
+          ? `<button id="ba-worker" class="btn btn-primary btn-sm"><i data-lucide="play"></i>运行</button>`
+          : ""}
+        ${attempt.status === "failed"
+          ? `<button class="btn btn-secondary btn-sm ba-revalidate" data-build-attempt-id="${escapeHtml(attempt.id)}"><i data-lucide="shield-check"></i>重新校验</button>`
           : ""}
         ${attempt.status === "failed" || attempt.status === "lost"
-          ? `<button class="btn btn-primary btn-sm ba-retry" data-build-attempt-id="${escapeHtml(attempt.id)}">Retry</button>`
+          ? `<button class="btn btn-primary btn-sm ba-retry" data-build-attempt-id="${escapeHtml(attempt.id)}">重试构建</button>`
           : ""}
-        <button class="btn btn-danger btn-sm ba-delete" data-build-attempt-id="${escapeHtml(attempt.id)}">
-          <i data-lucide="trash-2"></i>Delete
-        </button>
+        ${["failed", "lost", "succeeded"].includes(attempt.status)
+          ? `<button class="btn btn-danger btn-sm ba-delete" data-build-attempt-id="${escapeHtml(attempt.id)}">
+              <i data-lucide="trash-2"></i>删除
+            </button>`
+          : ""}
       </div>
     </div>
 
     <section class="card card-body" data-build-attempt-id="${escapeHtml(attempt.id)}">
       <div class="flex items-center gap-2" style="flex-wrap: wrap;">
-        ${statusIndicator(attempt.status)}
+        ${buildStatusIndicator(attempt.status)}
         ${artifactPill(attempt.artifact_status)}
-        ${softPill(`Attempt ${attempt.attempt_no}`)}
+        ${softPill(`第 ${attempt.attempt_no} 次`)}
       </div>
-      <h2 style="font-size: var(--font-lg); font-weight: 600; margin-top: var(--space-sm);">${escapeHtml(shortId(attempt.id))}</h2>
+      <h2 style="font-size: var(--font-lg); font-weight: 600; margin-top: var(--space-sm);">构建运行 #${escapeHtml(attempt.attempt_no)}</h2>
       <dl style="margin-top: var(--space-lg); display: grid; gap: var(--space-md); grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));">
-        <div><dt>design_task</dt><dd><button class="btn btn-ghost btn-sm ba-open-design-task">${escapeHtml(shortId(attempt.design_task_id))}</button></dd></div>
-        <div><dt>shard</dt><dd class="mono">${escapeHtml(attempt.shard_basename)}</dd></div>
+        <div><dt>设计任务</dt><dd><button class="btn btn-ghost btn-sm ba-open-design-task">${escapeHtml(shortId(attempt.design_task_id))}</button></dd></div>
+        <div><dt>分片</dt><dd class="mono">${escapeHtml(attempt.shard_basename)}</dd></div>
         <div><dt>worker</dt><dd>${escapeHtml(attempt.worker || "-")}</dd></div>
-        <div><dt>started</dt><dd>${escapeHtml(formatDateTime(attempt.started_at))}</dd></div>
-        <div><dt>finished</dt><dd>${escapeHtml(formatDateTime(attempt.finished_at))}</dd></div>
-        <div><dt>artifact_dir</dt><dd class="mono">${escapeHtml(attempt.resulting_challenge_dir || "-")}</dd></div>
+        <div><dt>开始时间</dt><dd>${escapeHtml(formatDateTime(attempt.started_at))}</dd></div>
+        <div><dt>完成时间</dt><dd>${escapeHtml(formatDateTime(attempt.finished_at))}</dd></div>
+        <div><dt>产物目录</dt><dd class="mono">${escapeHtml(attempt.resulting_challenge_dir || "-")}</dd></div>
       </dl>
-      ${attempt.error ? `<p style="margin-top: var(--space-md); color: var(--accent-red);">${escapeHtml(attempt.error)}</p>` : ""}
+      ${failureSummary(attempt) ? `<p style="margin-top: var(--space-md); color: var(--accent-red);">失败原因：${escapeHtml(failureSummary(attempt))}</p>` : ""}
     </section>
 
     <section class="card" style="margin-top: var(--space-lg);">
       <div class="card-header">
-        <div><div class="card-title">Attempt History</div></div>
+        <div><div class="card-title">尝试历史</div></div>
         <span class="pill">${(attempt.sibling_attempts || []).length}</span>
       </div>
       ${renderSiblingAttempts(attempt)}
@@ -423,7 +416,7 @@ function renderDetail(root) {
 
     <section class="card" style="margin-top: var(--space-lg);">
       <div class="card-header">
-        <div><div class="card-title">Progress Events</div></div>
+        <div><div class="card-title">进度事件</div></div>
         <span class="pill">${(attempt.progress_events || []).length}</span>
       </div>
       ${renderProgressEvents(attempt.progress_events || [])}
@@ -433,16 +426,16 @@ function renderDetail(root) {
 
 function renderSiblingAttempts(attempt) {
   const rows = attempt.sibling_attempts || [];
-  if (!rows.length) return `<div class="empty card-body">No attempt history</div>`;
+  if (!rows.length) return `<div class="empty card-body">没有尝试历史</div>`;
   return `
     <div class="table-container">
       <table class="table">
-        <thead><tr><th>#</th><th>Status</th><th>Artifact</th><th>Worker</th><th>Started</th><th>Finished</th></tr></thead>
+        <thead><tr><th>#</th><th>状态</th><th>产物</th><th>Worker</th><th>开始时间</th><th>完成时间</th></tr></thead>
         <tbody>
           ${rows.map((row) => `
             <tr class="ba-history-row" data-build-attempt-id="${escapeHtml(row.id)}">
               <td>${row.attempt_no}</td>
-              <td>${statusIndicator(row.status)}</td>
+              <td>${buildStatusIndicator(row.status)}</td>
               <td>${artifactPill(row.artifact_status)}</td>
               <td>${escapeHtml(row.worker || "-")}</td>
               <td class="table-cell-time">${escapeHtml(formatDateTime(row.started_at))}</td>
@@ -456,7 +449,7 @@ function renderSiblingAttempts(attempt) {
 }
 
 function renderProgressEvents(events) {
-  if (!events.length) return `<div class="empty card-body">No progress events</div>`;
+  if (!events.length) return `<div class="empty card-body">没有进度事件</div>`;
   return `
     <div class="card-body" style="display: grid; gap: var(--space-sm);">
       ${events.map((event) => `
@@ -471,7 +464,48 @@ function renderProgressEvents(events) {
 }
 
 function artifactPill(value) {
-  return softPill(value || "unknown");
+  return softPill(artifactLabel(value));
+}
+
+function buildStatusLabel(status) {
+  return {
+    queued: "待运行",
+    running: "运行中",
+    succeeded: "成功",
+    failed: "失败",
+    lost: "丢失",
+  }[status] || status || "未知";
+}
+
+function buildStatusIndicator(status) {
+  return `<span class="inline-flex items-center text-[12px] text-ink-700"><span class="dot ${dotTone(status)}"></span>${escapeHtml(buildStatusLabel(status))}</span>`;
+}
+
+function artifactLabel(value) {
+  return {
+    present: "已生成",
+    missing: "缺失",
+    unknown: "未知",
+  }[value] || "未知";
+}
+
+function failureSummary(attempt) {
+  if (attempt.failure_summary) return attempt.failure_summary;
+  const events = attempt.progress_events || [];
+  for (const event of [...events].reverse()) {
+    if (event.stage === "validate" && event.status === "failed") {
+      return `校验失败：${failureMessageReason(event.message || "") || "未知原因"}`;
+    }
+  }
+  if (attempt.error === "shard execution failed") return "构建执行失败";
+  return attempt.error || "";
+}
+
+function failureMessageReason(message) {
+  if (message.includes("error=")) {
+    return message.split("error=", 2)[1].replace(/^[\s;,]+|[\s;,]+$/g, "");
+  }
+  return message.trim();
 }
 
 function applyFiltersFromInputs() {
@@ -538,10 +572,6 @@ export function bind() {
       startBuildWorker();
       return;
     }
-    if (event.target.closest("#ba-validate")) {
-      runAction("validate");
-      return;
-    }
     if (event.target.closest("#ba-back")) {
       state.detailId = null;
       state.detail = null;
@@ -568,6 +598,10 @@ export function bind() {
     }
     if (event.target.closest(".ba-retry") && attemptId) {
       retryAttempt(attemptId);
+      return;
+    }
+    if (event.target.closest(".ba-revalidate") && attemptId) {
+      revalidateAttempt(attemptId);
       return;
     }
     if (event.target.closest(".ba-delete") && attemptId) {
