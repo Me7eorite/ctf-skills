@@ -75,6 +75,17 @@ def _clean(session_factory: SessionFactory) -> None:
         session.commit()
 
 
+def _backdate_past_grace(
+    session_factory: SessionFactory, attempt_id: UUID
+) -> None:
+    """Move the attempt's created_at outside the lost-marking grace window."""
+    with session_factory() as session:
+        session.get(build_model.BuildAttempt, attempt_id).created_at = (
+            datetime.now(timezone.utc) - timedelta(seconds=120)
+        )
+        session.commit()
+
+
 def _seed_attempt(session_factory: SessionFactory) -> tuple[UUID, UUID, str]:
     with session_factory() as session:
         request = research_model.GenerationRequest(
@@ -308,6 +319,8 @@ def test_vanished_active_shard_becomes_lost(
     task_id, attempt_id, _basename = _seed_attempt(session_factory)
     reconciler = _reconciler(tmp_path, session_factory)
 
+    _backdate_past_grace(session_factory, attempt_id)
+
     reconciler.tick_once_sync()
 
     row = _row(session_factory, attempt_id)
@@ -315,6 +328,19 @@ def test_vanished_active_shard_becomes_lost(
     assert "disappeared" in row.error
     with session_factory() as session:
         assert session.get(task_model.DesignTask, task_id).status == "build_failed"
+
+
+def test_fresh_attempt_within_grace_window_is_not_lost(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    """A brand-new row whose shard is not yet on disk stays queued."""
+    _task_id, attempt_id, _basename = _seed_attempt(session_factory)
+    reconciler = _reconciler(tmp_path, session_factory)
+
+    reconciler.tick_once_sync()
+
+    assert _row(session_factory, attempt_id).status == "queued"
 
 
 def test_attempt_committed_after_scan_boundary_is_not_false_lost(
@@ -366,6 +392,7 @@ def test_unattributed_basename_collision_is_ignored(
         reconciler.paths.shards / "done" / basename,
         {"challenges": [{"id": "web-unattributed", "category": "web"}]},
     )
+    _backdate_past_grace(session_factory, attempt_id)
 
     reconciler.tick_once_sync()
 
@@ -382,6 +409,7 @@ def test_mismatched_design_task_attribution_is_ignored(
         reconciler.paths.shards / "pending" / basename,
         _payload(uuid4(), attempt_id, _challenge_id(session_factory, task_id)),
     )
+    _backdate_past_grace(session_factory, attempt_id)
 
     reconciler.tick_once_sync()
 

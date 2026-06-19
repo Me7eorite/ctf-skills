@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -85,6 +86,7 @@ class BuildReconciler:
             session_factory=self.session_factory,
         )
         self._running = True
+        self._tick_lock = threading.Lock()
 
     def tick(self, session: Session) -> None:
         """Run staging recovery, then reconcile rows in the caller transaction."""
@@ -128,7 +130,7 @@ class BuildReconciler:
             if observed is None:
                 if (
                     str(row.id) not in staged_id_texts
-                    and _as_utc(row.created_at) <= now + timedelta(seconds=30)
+                    and _as_utc(row.created_at) <= now - timedelta(seconds=60)
                     and not self._payload_present_for_row(row)
                 ):
                     self._finish(
@@ -205,11 +207,18 @@ class BuildReconciler:
         session.flush()
 
     def tick_once_sync(self) -> None:
-        """Open one short transaction and run a single reconciliation tick."""
-        staged_ids = self.orchestration.recover_staging()
-        observations = self._scan_attributed_shards()
-        with transaction(factory=self.session_factory) as session:
-            self._reconcile(session, staged_ids, observations)
+        """Open one short transaction and run a single reconciliation tick.
+
+        Serialized by ``_tick_lock`` so the background thread and any HTTP
+        handler triggering a sync tick cannot race; concurrent callers would
+        otherwise let one tick observe the filesystem mid-publish while the
+        other commits a lost row from the stale snapshot.
+        """
+        with self._tick_lock:
+            staged_ids = self.orchestration.recover_staging()
+            observations = self._scan_attributed_shards()
+            with transaction(factory=self.session_factory) as session:
+                self._reconcile(session, staged_ids, observations)
 
     def run_forever(self) -> None:
         """Keep reconciling with a fresh session per tick until stopped."""
