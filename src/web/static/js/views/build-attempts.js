@@ -55,6 +55,10 @@ function schedulePoll(delay = SETTLED_POLL_MS) {
 
 async function poll() {
   if (!isViewActive() || document.hidden || state.poll.loading) return;
+  if (state.flags.deleting) {
+    schedulePoll(ACTIVE_POLL_MS);
+    return;
+  }
   state.poll.timer = null;
   state.poll.loading = true;
   try {
@@ -166,12 +170,16 @@ async function retryAttempt(attemptId) {
 }
 
 async function deleteAttempt(attemptId) {
-  const choice = await confirmDeletion({
-    title: "Delete build attempt",
-    message: "This removes the build-attempt row, queue state, and progress. Challenge artifacts are retained unless selected.",
-  });
-  if (choice === null) return;
+  if (state.flags.deleting) return;
+  state.flags.deleting = true;
+  render(appState.data);
+  initIcons();
   try {
+    const choice = await confirmDeletion({
+      title: "Delete build attempt",
+      message: "This removes the build-attempt row, queue state, and progress. Challenge artifacts are retained unless selected.",
+    });
+    if (choice === null) return;
     const query = choice ? "?delete_artifacts=true" : "?delete_artifacts=false";
     const result = await del(`/api/build-attempts/${attemptId}${query}`);
     showToast(result.warnings?.length ? result.warnings[0] : "Build attempt deleted");
@@ -182,6 +190,10 @@ async function deleteAttempt(attemptId) {
     await ensureList();
   } catch (err) {
     showToast(err.message, true);
+  } finally {
+    state.flags.deleting = false;
+    render(appState.data);
+    initIcons();
   }
 }
 

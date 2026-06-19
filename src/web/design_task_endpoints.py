@@ -89,8 +89,8 @@ def register_design_task_read_endpoints(app: FastAPI) -> None:
         from services import (
             ResourceDeletionConflictError,
             ResourceDeletionNotFoundError,
-            ResourceDeletionService,
         )
+        from web.resource_deletion import deletion_service
 
         try:
             task_uuid = UUID(task_id)
@@ -100,7 +100,7 @@ def register_design_task_read_endpoints(app: FastAPI) -> None:
                 detail="design task not found",
             ) from exc
         try:
-            result = ResourceDeletionService(paths=_project_paths(app)).delete_design_task(
+            result = deletion_service(app).delete_design_task(
                 task_uuid,
                 delete_artifacts=delete_artifacts,
             )

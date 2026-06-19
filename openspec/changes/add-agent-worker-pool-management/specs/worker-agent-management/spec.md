@@ -79,10 +79,11 @@ rejected before persistence.
 ### Requirement: Agent control state and health control worker-pool membership
 
 Agents SHALL support operator control states `enabled`, `disabled`, and
-`draining`. Runtime health values such as `idle`, `running`, `offline`, and
-`error` SHALL be derived from active work, heartbeat, and last-error data.
-Disabled, draining, offline, and error agents SHALL NOT claim new work.
-Draining agents MAY finish already-owned work.
+`draining`. Runtime health values SHALL include `stopped`, `idle`, `running`,
+`offline`, and `error` and SHALL be derived from supervisor/slot heartbeat,
+active work, and last-error data. A newly created agent with no started
+supervisor is `stopped`, not `offline`. Disabled, draining, offline, and error
+agents SHALL NOT claim new work. Draining agents MAY finish already-owned work.
 
 #### Scenario: Disabled agent cannot claim work
 
@@ -106,6 +107,13 @@ Draining agents MAY finish already-owned work.
 - **WHEN** the worker pool attempts to claim work for that agent
 - **THEN** no task is claimed
 - **AND** the reason identifies offline health
+
+#### Scenario: Newly created agent can be started
+
+- **GIVEN** agent `web-01` is enabled and has never started a supervisor slot
+- **WHEN** runtime health is derived
+- **THEN** health is `stopped`
+- **AND** an explicit pool start may create its slots
 
 ### Requirement: Dashboard exposes agent management
 
@@ -157,7 +165,7 @@ explicit include-deleted option for audit/debug views.
 
 ### Requirement: Hermes profile helpers are safe wrappers
 
-The backend MAY expose Hermes profile list, show, create, and delete helpers.
+The backend SHALL expose Hermes profile list, show, create, and delete helpers.
 The helpers SHALL validate profile names, pass names as subprocess arguments
 rather than shell-concatenated strings, use the configured Hermes executable
 resolution, enforce timeouts, and return structured errors. They SHALL NOT
@@ -190,7 +198,7 @@ expose or persist profile `.env` contents or secret values.
 
 ### Requirement: Agent-owned build claims are capability gated
 
-Future worker-pool build claim APIs SHALL accept a project `agent_id`, resolve
+Worker-pool build claim APIs SHALL accept a project `agent_id`, resolve
 the agent, reject agents that cannot claim new work, require the matching
 `build:<category>` capability, and then use the constrained build-dispatch
 contract from `add-category-safe-build-dispatch` for the final file-queue
@@ -213,10 +221,10 @@ SHALL NOT expose agent-owned build claim endpoints.
 - **THEN** the request is rejected as unsupported
 - **AND** no shard is moved from the file queue
 
-#### Scenario: Legacy non-agent worker remains valid
+#### Scenario: Legacy non-agent worker is excluded from pool surfaces
 
 - **GIVEN** a legacy local `challenge-factory run` execution path starts
   without an `agent_id`
 - **WHEN** it records or reconciles build execution state
 - **THEN** nullable agent audit fields remain valid
-- **AND** the legacy execution path is not forced to create an agent row
+- **AND** category-specific and pool dashboard actions do not invoke that path

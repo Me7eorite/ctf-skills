@@ -410,8 +410,8 @@ def _register_request_detail(app: FastAPI) -> None:
         from services import (
             ResourceDeletionConflictError,
             ResourceDeletionNotFoundError,
-            ResourceDeletionService,
         )
+        from web.resource_deletion import deletion_service
 
         try:
             request_uuid = UUID(request_id)
@@ -421,9 +421,7 @@ def _register_request_detail(app: FastAPI) -> None:
                 detail="request not found",
             ) from exc
         try:
-            result = ResourceDeletionService(
-                paths=_project_paths(app),
-            ).delete_generation_request(
+            result = deletion_service(app).delete_generation_request(
                 request_uuid,
                 delete_artifacts=delete_artifacts,
             )

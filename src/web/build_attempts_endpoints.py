@@ -190,14 +190,12 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
         from services import (
             ResourceDeletionConflictError,
             ResourceDeletionNotFoundError,
-            ResourceDeletionService,
         )
+        from web.resource_deletion import deletion_service
 
         attempt_uuid = _parse_uuid(attempt_id, "build attempt id", not_found=True)
         try:
-            result = ResourceDeletionService(
-                paths=_project_paths(app),
-            ).delete_build_attempt(
+            result = deletion_service(app).delete_build_attempt(
                 attempt_uuid,
                 delete_artifacts=delete_artifacts,
             )

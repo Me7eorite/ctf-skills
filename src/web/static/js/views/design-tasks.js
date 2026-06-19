@@ -125,6 +125,10 @@ function schedulePoll(delay = SETTLED_POLL_MS) {
 
 async function poll() {
   if (!isViewActive() || document.hidden || state.poll.loading) return;
+  if (state.flags.deleting) {
+    schedulePoll(ACTIVE_POLL_MS);
+    return;
+  }
   state.poll.timer = null;
   state.poll.loading = true;
   try {
@@ -240,12 +244,16 @@ async function buildSelectedTasks() {
 }
 
 async function deleteDesignTask(taskId) {
-  const choice = await confirmDeletion({
-    title: "Delete design task",
-    message: "This removes the design task, design history, and build attempts. Artifacts are retained unless selected.",
-  });
-  if (choice === null) return;
+  if (state.flags.deleting) return;
+  state.flags.deleting = true;
+  render(state.data);
+  initIcons();
   try {
+    const choice = await confirmDeletion({
+      title: "Delete design task",
+      message: "This removes the design task, design history, and build attempts. Artifacts are retained unless selected.",
+    });
+    if (choice === null) return;
     const query = choice ? "?delete_artifacts=true" : "?delete_artifacts=false";
     const result = await del(`/api/design-tasks/${taskId}${query}`);
     showToast(result.warnings?.length ? result.warnings[0] : "Design task deleted");
@@ -256,6 +264,10 @@ async function deleteDesignTask(taskId) {
     await ensureList();
   } catch (err) {
     showToast(err.message, true);
+  } finally {
+    state.flags.deleting = false;
+    render(state.data);
+    initIcons();
   }
 }
 

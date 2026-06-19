@@ -162,6 +162,11 @@ class DependencyDirectionTests(unittest.TestCase):
         roots = imported_module_roots_for("services/build_reconciler.py")
         self.assertNotIn("web", roots)
 
+    def test_resource_deletion_service_stays_below_web_and_hermes(self):
+        roots = imported_module_roots_for("services/resource_deletion_service.py")
+        self.assertNotIn("web", roots)
+        self.assertNotIn("hermes", roots)
+
     def test_build_attempts_endpoint_uses_services_and_persistence_not_hermes(self):
         roots = imported_module_roots_for("web/build_attempts_endpoints.py")
         self.assertIn("services", roots)

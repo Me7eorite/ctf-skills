@@ -26,6 +26,9 @@ the file queue can diverge.
   controls.
 - Add tests proving a Web-constrained worker cannot claim a Pwn shard when both
   are pending.
+- Define exact pending-shard and payload identity checks for DB-backed starts,
+  so a duplicate or mismatched file cannot be launched merely because its
+  filename or one attribution field happens to match.
 
 ## Capabilities
 
@@ -49,5 +52,8 @@ None. This is a correction to existing build execution semantics.
   existing shard payloads before claiming.
 - **Compatibility**: existing unconstrained `challenge-factory run --worker W`
   remains valid.
+- **Sequencing**: this is a prerequisite compatibility layer for
+  `add-agent-worker-pool-management`; that later change must preserve these
+  dispatch authorization rules when it replaces local file-queue launching.
 - **Tests**: add queue unit tests, runner/CLI tests, build-attempt API tests,
   and dashboard interaction coverage for constrained worker actions.

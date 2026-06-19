@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse, Response
 from core.jsonio import read_json
 from core.paths import ProjectPaths
 from persistence import make_postgres_progress_store
+from services import ResourceDeletionService
 from services.build_reconciler import BuildReconciler
 from web.build_attempts_endpoints import register_build_attempts_endpoints
 from web.dashboard import DashboardService
@@ -37,6 +38,7 @@ def create_app(
     )
     app.state.project_paths = service.paths
     app.state.build_reconciler = build_reconciler
+    app.state.progress_store = service.store
 
     @app.get("/api/state")
     def get_state() -> JSONResponse:
@@ -208,6 +210,11 @@ def serve(paths: ProjectPaths, host: str, port: int) -> None:
         reconciler.orchestration.recover_staging()
     except Exception as exc:
         LOG.warning("startup build staging recovery failed: %s", exc)
+    try:
+        for warning in ResourceDeletionService(paths=paths).recover_quarantine():
+            LOG.warning("startup deletion quarantine recovery: %s", warning)
+    except Exception as exc:
+        LOG.warning("startup deletion quarantine recovery failed: %s", exc)
     thread = Thread(target=reconciler.run_forever, daemon=True)
     thread.start()
     app = create_app(service, build_reconciler=reconciler)

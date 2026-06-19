@@ -1,82 +1,126 @@
-## 1. Schema and domain model
+## 1. Prerequisites and schema
 
-- [ ] 1.1 Add `agents` with id, name, description, hermes_profile_name,
-  control_state, max_concurrency, lease_seconds, heartbeat_at, last_error,
-  deleted_at, timestamps, and enabled/disabled/draining semantics.
-- [ ] 1.2 Add capability code storage/validation separate from `agents` for
-  `research`, `design`, `build:web`, `build:pwn`, and `build:re`.
-- [ ] 1.3 Add repository/domain DTOs and validators for names, profile names,
-  control-state transitions, and capability sets.
-- [ ] 1.4 Leave existing `agent_roles` and `hermes_profile_bindings` untouched;
-  do not seed or migrate research/design agents in this change.
-- [ ] 1.5 Add nullable build-attempt audit fields for agent id, agent name used,
-  and Hermes profile name used by agent-owned executions.
-- [ ] 1.6 Enforce the shared conservative name shape for agent names and Hermes
-  profile names before persistence or subprocess invocation.
+- [ ] 1.1 Confirm or incorporate `add-category-safe-build-dispatch`; do not
+  enable pool claims while exact-attempt dispatch is absent.
+- [ ] 1.2 Add `agents`, normalized capability assignments, supervisor identity,
+  agent slots, and execution rows with lease/fencing fields and constraints.
+- [ ] 1.3 Add immutable execution snapshot fields for agent/profile/category,
+  sandbox policy, manifests, timestamps, exit class, and log paths.
+- [ ] 1.4 Add nullable current/latest execution attribution to build attempts
+  without rewriting historical attempts.
+- [ ] 1.5 Define indexes and uniqueness constraints that prevent duplicate active
+  slot ownership and capacity oversubscription.
+- [ ] 1.6 Preserve existing `agent_roles` and `hermes_profile_bindings`.
 
-## 2. Hermes profile wrapper
+## 2. Agent registry and profile wrapper
 
-- [ ] 2.1 Add a service wrapper for Hermes profile list/show/create/delete with
-  timeouts and structured errors; keep profile creation separate from agent row
-  creation.
-- [ ] 2.2 Validate profile names before passing them to subprocess arguments.
-- [ ] 2.3 Do not persist profile config, `.env`, memory, sessions, or secrets.
-- [ ] 2.4 Reject profile deletion while any non-deleted agent references that
-  profile.
-- [ ] 2.5 Reject profile deletion while existing `hermes_profile_bindings`
-  reference that profile.
-- [ ] 2.6 Reuse the project's configured Hermes executable resolution instead
-  of hardcoding a binary path or installing Hermes as part of this change.
+- [ ] 2.1 Add DTOs, repository/service methods, and validation for names,
+  profiles, capabilities, limits, control transitions, and soft deletion.
+- [ ] 2.2 Derive `stopped`, `idle`, `running`, `offline`, and `error` separately
+  from operator control state.
+- [ ] 2.3 Wrap Hermes profile list/show/create/delete with argv arrays, timeouts,
+  redacted structured errors, and configured executable resolution.
+- [ ] 2.4 Reject profile deletion while referenced by agents, active executions,
+  or existing Hermes role bindings.
+- [ ] 2.5 Keep profile contents, `.env`, memory, sessions, and secrets out of API
+  responses and PostgreSQL.
 
-## 3. Agent API
+## 3. Atomic dispatch, leases, and fencing
 
-- [ ] 3.1 Add `GET /api/agents`.
-- [ ] 3.2 Add `POST /api/agents`.
-- [ ] 3.3 Add `GET /api/agents/{id}` and `PATCH /api/agents/{id}`.
-- [ ] 3.4 Add `DELETE /api/agents/{id}` as soft delete with active-worker
-  conflict handling and historical audit preservation.
-- [ ] 3.5 Add `POST /api/agents/{id}/enable`,
-  `POST /api/agents/{id}/disable`, and `POST /api/agents/{id}/drain`.
-- [ ] 3.6 Add profile helper endpoints under `/api/hermes/profiles`.
+- [ ] 3.1 Implement transactional exact-attempt claim with capability, control
+  state, per-agent capacity, and global capacity checks.
+- [ ] 3.2 Issue a random fencing token and lease on every claim/recovery.
+- [ ] 3.3 Require owner/token predicates for heartbeat, fail, complete, cancel,
+  and publication authorization.
+- [ ] 3.4 Recover expired leases without allowing the old process to publish.
+- [ ] 3.5 Integrate file-queue movement as a reconciled side effect, not the pool
+  ownership authority.
+- [ ] 3.6 Define retry/backoff and terminal classifications for infrastructure,
+  generation, validation, scope, timeout, cancellation, and lost-lease failure.
 
-## 4. Dashboard
+## 4. Isolated execution preparation
 
-- [ ] 4.1 Add an Agents navigation entry and list view.
-- [ ] 4.2 Add create/edit forms with profile binding, capability checkboxes,
-  max concurrency, and lease settings.
-- [ ] 4.3 Add enable/disable/drain/delete actions with conflict handling,
-  editable control-state display, and read-only health display.
-- [ ] 4.4 Keep destructive profile deletion in the profile-helper UI only;
-  agent deletion must never delete a Hermes profile.
-- [ ] 4.5 Label idle/running/offline/error as derived health, not directly
-  editable lifecycle states.
+- [ ] 4.1 Create a unique execution staging root with read-only input, writable
+  output, logs, and manifest locations.
+- [ ] 4.2 Materialize only the exact shard, generation profile, common guidance,
+  and current category reference required by the execution.
+- [ ] 4.3 Render prompt paths from an explicit runtime path map; do not expose
+  inaccessible host absolute paths.
+- [ ] 4.4 Force a unique non-persistent Hermes terminal task/sandbox for each
+  execution; reject shared `task=default` execution.
+- [ ] 4.5 Define controlled access to the stable Hermes profile without sharing
+  task workspace, shell state, or file caches.
+- [ ] 4.6 Add same-runtime preflight for readable inputs, writable output,
+  identity/category consistency, and supported progress reporting.
+- [ ] 4.7 Move progress updates to the host runner or an authenticated local side
+  channel instead of a host-only CLI command in the sandbox prompt.
 
-## 5. Worker-pool integration
+## 5. Guarded artifact publication
 
-- [ ] 5.0 Confirm `add-category-safe-build-dispatch` is implemented before
-  enabling agent-owned build claim paths; otherwise leave this section blocked.
-- [ ] 5.1 Make future worker-pool claim APIs accept `agent_id` and validate
-  agent control state, derived health, and capabilities before claiming.
-- [ ] 5.2 For build work, require `build:<category>` capability before calling
-  constrained build dispatch.
-- [ ] 5.3 Record both project agent identity and Hermes profile name used on
-  execution-attempt audit rows.
-- [ ] 5.4 Ensure draining agents finish active work but do not claim new work.
-- [ ] 5.5 Keep existing non-agent `challenge-factory run` execution paths valid
-  with nullable agent audit fields.
-- [ ] 5.6 Do not add a multi-process supervisor in this change; reserve
-  automatic process spawning and max-concurrency enforcement for a later
-  worker-pool implementation.
+- [ ] 5.1 Generate a host-computed input manifest before Hermes invocation.
+- [ ] 5.2 Reject symlinks, special files, traversal, absolute paths, unexpected
+  roots, categories, ids, and metadata identity mismatches in output.
+- [ ] 5.3 Run deterministic challenge validation against staging output.
+- [ ] 5.4 Recheck the fencing token immediately before publication.
+- [ ] 5.5 Atomically publish the complete accepted output set or publish nothing.
+- [ ] 5.6 Record output manifest hashes and retain/quarantine failed staging data
+  according to a bounded retention policy.
+- [ ] 5.7 Verify that production challenge trees outside the target attempt are
+  unchanged by construction, not only by post-hoc diff.
 
-## 6. Verification
+## 6. Single-host supervisor
 
-- [ ] 6.1 Add migration/repository tests for agent and capability persistence.
-- [ ] 6.2 Add service tests for control-state transitions and profile wrapper
-  subprocess failures.
-- [ ] 6.3 Add API tests for CRUD, conflict, and profile-helper endpoints.
-- [ ] 6.4 Add dashboard interaction coverage or document manual smoke steps.
-- [ ] 6.5 Add worker claim tests proving an agent without `build:pwn` cannot
-  claim Pwn work.
-- [ ] 6.6 Add tests proving profile deletion rejects both agent references and
-  existing Hermes role/profile bindings.
-- [ ] 6.7 Run `openspec validate add-agent-worker-pool-management --strict`.
+- [ ] 6.1 Implement supervisor leadership with a PostgreSQL advisory lock or
+  renewable singleton lease.
+- [ ] 6.2 Reconcile enabled agents into bounded slots under per-agent and global
+  concurrency limits.
+- [ ] 6.3 Start workers with explicit agent, slot, execution, profile, and token
+  context and use process groups for cleanup.
+- [ ] 6.4 Heartbeat supervisor, slots, and executions; surface lost ownership and
+  stop late completion/publication.
+- [ ] 6.5 Implement drain semantics, graceful shutdown, crash reconciliation,
+  and restart backoff.
+- [ ] 6.6 Start with one slot behind a readiness gate, then enable concurrency
+  only after fault-injection tests pass.
+
+## 7. API and dashboard
+
+- [ ] 7.1 Add agent list/create/detail/patch/enable/disable/drain/soft-delete
+  APIs and separate safe profile helper APIs.
+- [ ] 7.2 Add pool status/start/stop/drain endpoints returning server-derived
+  readiness and leadership state.
+- [ ] 7.3 Add execution list/detail/log endpoints with agent, attempt, category,
+  lease, sandbox, manifest, and exit information.
+- [ ] 7.4 Add Agents and Executions dashboard views with control state distinct
+  from health and desired capacity distinct from active slots.
+- [ ] 7.5 Remove the legacy global worker action from category/build-attempt pool
+  surfaces; retain it only in explicitly labeled legacy shard administration.
+- [ ] 7.6 Never expose profile secrets, raw environment contents, or unredacted
+  subprocess configuration.
+
+## 8. Verification and rollout gates
+
+- [ ] 8.1 Add migration/repository/API/UI tests for registry, capabilities,
+  lifecycle, capacity, profile protection, and immutable audit.
+- [ ] 8.2 Add concurrency tests proving atomic capacity and exact-category claim.
+- [ ] 8.3 Seed stale Pwn/Re files in a prior sandbox and prove a Web execution
+  cannot observe or modify them.
+- [ ] 8.4 Prove inaccessible host-only prompt paths fail before Hermes invocation.
+- [ ] 8.5 Prove an old fencing token cannot heartbeat, complete, or publish after
+  lease recovery.
+- [ ] 8.6 Prove wrong-category, unexpected-id, symlink, traversal, and partial
+  outputs publish nothing.
+- [ ] 8.7 Kill Hermes, a slot process, the supervisor, and the dashboard at each
+  state transition and verify deterministic recovery.
+- [ ] 8.8 Run one-slot soak tests before enabling multi-slot execution.
+- [ ] 8.9 Run multi-slot tests with two Web attempts and mixed Web/Pwn queues.
+- [ ] 8.10 Run `openspec validate add-agent-worker-pool-management --strict`.
+
+## 9. Migration
+
+- [ ] 9.1 Ship schema and read-only dashboard views with pool execution disabled.
+- [ ] 9.2 Enable exact-attempt dispatch and isolated staging for one manual run.
+- [ ] 9.3 Enable one supervised slot after readiness checks pass.
+- [ ] 9.4 Enable bounded concurrency after soak and fault-injection approval.
+- [ ] 9.5 Document rollback: stop new claims, drain/fence active executions, keep
+  audit/staging, and restore legacy administration without category UI fallback.

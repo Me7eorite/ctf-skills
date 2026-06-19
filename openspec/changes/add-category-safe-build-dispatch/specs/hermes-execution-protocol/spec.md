@@ -13,7 +13,17 @@ The existing unconstrained runner behavior remains valid for whole-queue
 legacy operation.
 
 `--build-attempt` SHALL be mutually exclusive with `--loop`; it names one
-specific shard execution target. `--category` MAY be combined with `--loop`.
+specific shard execution target. `--category` MAY be combined with `--loop` or
+`--build-attempt`; combined filters SHALL all match. `--build-attempts-only`
+SHALL require `--category` and SHALL be mutually exclusive with
+`--build-attempt`.
+
+Before scanning the queue, constrained claims SHALL validate category and UUID
+filter arguments. Candidate attribution SHALL contain valid top-level
+`build_attempt_id` and `design_task_id` UUIDs when build-attempt attribution is
+required. Malformed JSON, invalid attribution, non-regular files, and symbolic
+links SHALL be skipped without mutation in constrained mode. Legacy
+unconstrained claims retain their existing compatibility behavior.
 
 #### Scenario: CLI category filter reaches the queue
 
@@ -37,11 +47,32 @@ specific shard execution target. `--category` MAY be combined with `--loop`.
 - **THEN** the runner passes `build_attempt_id = A` to the shard queue claim
 - **AND** no shard lacking `build_attempt_id = A` is claimed
 
+#### Scenario: CLI combines exact attempt and expected category
+
+- **WHEN** `challenge-factory run --worker W --build-attempt A --category web`
+  is invoked
+- **THEN** the runner passes both filters to the shard queue claim
+- **AND** a shard with attempt `A` but a non-Web challenge is not claimed
+
 #### Scenario: Build-attempt run rejects loop mode
 
 - **WHEN** `challenge-factory run --worker W --build-attempt A --loop` is
   invoked
 - **THEN** the CLI exits with code 2 before claiming any shard
+
+#### Scenario: Invalid constrained arguments do not scan the queue
+
+- **WHEN** the CLI receives an invalid category, invalid build-attempt UUID, or
+  incompatible constrained options
+- **THEN** it exits with code 2 before constructing a claim
+- **AND** no pending shard is mutated
+
+#### Scenario: Malformed constrained candidate remains pending
+
+- **GIVEN** a pending candidate has malformed JSON or invalid UUID attribution
+- **WHEN** a constrained runner scans the queue
+- **THEN** that candidate remains pending
+- **AND** Hermes is not invoked for that candidate
 
 #### Scenario: No matching shard is not a failed generation
 

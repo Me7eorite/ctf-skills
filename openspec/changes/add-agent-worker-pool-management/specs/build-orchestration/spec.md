@@ -2,11 +2,12 @@
 
 ### Requirement: build_attempts table is the editorial unit of building
 
-In addition to the existing build attempt fields and state-machine behavior,
-build execution audit SHALL be able to record nullable project agent identity
-and the Hermes profile name used for agent-owned execution. These values are
-historical audit data: changing an agent's profile binding later or
-soft-deleting an agent SHALL NOT rewrite completed or running attempt history.
+The build attempt editorial unit MUST retain existing state-machine behavior
+and record a nullable current execution reference plus
+immutable project agent/profile/category snapshots for agent-owned execution.
+Detailed lease, sandbox, manifest, and exit data SHALL live on execution rows.
+Changing an agent's profile binding later or soft-deleting an agent SHALL NOT
+rewrite completed or running attempt history.
 
 #### Scenario: Build attempt records agent and profile used
 
@@ -14,6 +15,8 @@ soft-deleting an agent SHALL NOT rewrite completed or running attempt history.
 - **WHEN** that agent claims and executes build attempt `A`
 - **THEN** attempt `A` records the project agent id and agent name used
 - **AND** attempt `A` records `profile_name_used = 'web-builder-01'`
+- **AND** its execution row records the claim token generation, sandbox policy,
+  manifest hashes, timestamps, and terminal classification
 
 ### Requirement: BuildOrchestrationService submits and retries builds
 

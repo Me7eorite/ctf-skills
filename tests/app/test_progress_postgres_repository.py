@@ -206,6 +206,33 @@ def test_reset_snapshots_preserves_events(store):
     assert len(events) == 1
 
 
+def test_purge_shards_standalone_removes_only_target_progress(store):
+    store.record(shard="delete.json", stage="build", status="running")
+    store.record(shard="keep.json", stage="build", status="running")
+
+    store.purge_shards(["delete.json"])
+
+    assert store.events_for_shard("delete.json") == []
+    assert len(store.events_for_shard("keep.json")) == 1
+    assert _snapshot(store, "delete.json", "") is None
+    assert _snapshot(store, "keep.json", "") is not None
+
+
+def test_purge_shards_joins_and_rolls_back_with_caller_transaction(store):
+    store.record(shard="rollback.json", stage="build", status="running")
+    session = store._factory()
+    try:
+        with pytest.raises(RuntimeError, match="force rollback"):
+            with session.begin():
+                store.purge_shards(["rollback.json"], transaction=session)
+                raise RuntimeError("force rollback")
+    finally:
+        session.close()
+
+    assert len(store.events_for_shard("rollback.json")) == 1
+    assert _snapshot(store, "rollback.json", "") is not None
+
+
 def test_dashboard_storage_masks_password(store):
     payload = store.dashboard()
     storage = payload["storage"]

@@ -8,9 +8,12 @@
   in the payload.
 - [ ] 1.4 Add tests proving `require_build_attempt=True` skips legacy category
   shards even when their category matches.
-- [ ] 1.5 Thread the same filters through `HermesRunner.process_one` and
+- [ ] 1.5 Validate filter arguments before scanning, require valid UUID
+  attribution, and skip malformed payloads, non-regular files, and symlinks in
+  constrained mode.
+- [ ] 1.6 Thread the same filters through `HermesRunner.process_one` and
   `HermesRunner.run`.
-- [ ] 1.6 Preserve legacy unconstrained claim behavior and test that malformed
+- [ ] 1.7 Preserve legacy unconstrained claim behavior and test that malformed
   legacy shards are still claimable without filters.
 
 ## 2. CLI and HTTP
@@ -20,8 +23,8 @@
 - [ ] 2.3 Add `challenge-factory run --category <web|pwn|re>
   --build-attempts-only`, rejecting `--build-attempts-only` without category.
 - [ ] 2.4 Reject invalid category/UUID values, `--build-attempts-only` without
-  `--category`, and `--build-attempt` with `--loop` with CLI exit code 2 and no
-  queue mutation.
+  `--category`, `--build-attempts-only` with `--build-attempt`, and
+  `--build-attempt` with `--loop` with CLI exit code 2 and no queue mutation.
 - [ ] 2.5 Add constrained build-worker HTTP endpoints for "next queued attempt
   in category" and single build-attempt execution.
 - [ ] 2.6 Return clear conflict responses when no matching pending shard exists
@@ -33,6 +36,11 @@
   build-attempt has no matching pending shard.
 - [ ] 2.9 Make category start choose the first eligible queued attempt by
   `(created_at, id)` so tests and operator behavior are deterministic.
+- [ ] 2.10 Match the exact persisted `shard_basename` and verify payload
+  `build_attempt_id`, `design_task_id`, and category against the selected DB
+  rows before launch; pass both attempt and category filters to the runner.
+- [ ] 2.11 Extend `TaskManager` with one atomic guarded exact-command start;
+  launch exact attempts without `--loop` and return `202` with the selected id.
 
 ## 3. Dashboard
 
@@ -45,8 +53,8 @@
   legacy or unknown attributed shards.
 - [ ] 3.4 In detail mode, start a build-attempt-constrained worker for that
   attempt.
-- [ ] 3.5 Keep any legacy global worker control visually separate from
-  build-attempt/category controls.
+- [ ] 3.5 Keep the legacy global worker endpoint for API compatibility without
+  adding another dashboard control for it.
 
 ## 4. Verification
 
@@ -56,3 +64,7 @@
 - [ ] 4.3 Smoke-test pending Pwn + pending Web where a Web-constrained worker
   claims only Web.
 - [ ] 4.4 Run `openspec validate add-category-safe-build-dispatch --strict`.
+- [ ] 4.5 Rebase `add-agent-worker-pool-management` implementation on this
+  dispatch contract before enabling its replacement endpoints.
+- [ ] 4.6 Verify every `ADDED` requirement name is absent from the corresponding
+  base spec, because strict validation does not detect duplicate names.

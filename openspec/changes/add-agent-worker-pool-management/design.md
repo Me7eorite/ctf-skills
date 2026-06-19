@@ -1,159 +1,210 @@
 ## Context
 
-Hermes profiles are useful execution identities. A profile can have its own
-configuration, environment, memory, sessions, skills, and status directory, and
-Hermes can be invoked with a profile name. The project should use that as the
-Hermes-side identity, but it must not treat profiles as queue permissions or
-filesystem isolation.
+Hermes profiles are execution identities, not queue permissions or filesystem
+sandboxes. The current shard runner combines four concerns that a pool must
+separate: queue selection, execution ownership, model workspace, and artifact
+publication. It also invokes Hermes from the repository root with host absolute
+paths while the configured terminal may use an unmounted persistent container.
 
-The project already has limited role-to-profile binding for research. That is
-not enough for a worker pool: pool members need stable ids, enabled/draining
-state, capabilities, health information, and a way for the dashboard to add or
-remove them.
+This design establishes a safe single-host worker pool. PostgreSQL is the
+authority for agents, slots, leases, and execution history. The file queue may
+remain as a compatibility/publication substrate during migration, but filename
+ordering is never a pool dispatch policy.
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- Let operators create and delete project agents from the dashboard.
-- Let agents join or leave the worker pool without editing database rows by
-  hand.
-- Bind each agent to a Hermes profile name.
-- Assign project-owned capabilities such as `research`, `design`, `build:web`,
-  `build:pwn`, and `build:re`.
-- Define the contract that future build workers use to claim only categories
-  allowed by their agent capabilities.
-- Provide profile discovery/creation/deletion helpers while keeping profile
-  contents out of PostgreSQL.
+- Manage named project agents and bind each to an existing Hermes profile.
+- Run multiple bounded local worker slots with explicit capabilities.
+- Claim only authorized category/attempt work using atomic leases and fencing.
+- Give every attempt a clean workspace with accessible, immutable inputs.
+- Prevent a Web attempt from reading, modifying, or publishing Pwn/Re artifacts.
+- Recover safely from worker, Hermes, dashboard, and host process failures.
+- Preserve an auditable snapshot of the identity and configuration used.
 
 **Non-Goals:**
 
-- No full supervisor implementation is required in this proposal.
-- No sandboxing or filesystem permission isolation through Hermes profiles.
-- No direct dashboard editing of Hermes profile `.env` or secret values.
-- No cross-host distributed worker deployment in this change.
-- No replacement of the existing `agent_roles` or `hermes_profile_bindings`
-  research/design profile bindings.
+- No cross-host scheduler or remote deployment protocol.
+- No storage of profile secrets or `.env` contents in PostgreSQL.
+- No live editing of Hermes secret/config files from the dashboard.
+- No migration of existing research/design bindings in this change.
+- No promise that a Hermes profile itself is a security sandbox.
 
 ## Decisions
 
-### Decision 1: project agents are separate from Hermes profiles
+### Decision 1: distinguish agent, slot, execution, profile, and sandbox
 
-The project owns an `agents` table. Each row has a stable UUID, unique name,
-optional description, `hermes_profile_name` string, `control_state`, execution
-settings, heartbeat/error fields, soft-delete timestamp, and timestamps. The
-profile name is passed to Hermes invocation, but the database does not store
-profile config, environment variables, memory, sessions, or secrets.
+- **Agent**: project-owned schedulable identity and capability set.
+- **Slot**: one unit of local concurrency belonging to an agent.
+- **Execution**: one leased attempt handled by one slot.
+- **Hermes profile**: stable model/provider configuration identity.
+- **Sandbox**: unique ephemeral filesystem/process environment for one execution.
 
-Deleting an agent soft-deletes the project row by default and disables future
-claims. Hard deletion is not part of the normal dashboard flow because build
-attempt audit rows may reference historical agent identities. Deleting the
-underlying Hermes profile is a separate explicit destructive action.
+These identifiers must not be substituted for one another. In particular,
+profile names and worker display names never imply queue category.
 
-### Decision 2: capabilities are project-owned authorization
+### Decision 2: project capabilities authorize dispatch
 
-Agent capabilities are stored in PostgreSQL and are the only source used by
-queue claim code. A Hermes profile named `web-builder` does not gain Web claim
-permission unless the agent row has `build:web`.
+Capabilities are normalized project-owned rows. Initial codes are `research`,
+`design`, `build:web`, `build:pwn`, and `build:re`. Claim code resolves the
+agent, requires `enabled` control state and a matching capability, and selects a
+DB-known eligible attempt. Unknown capability strings are rejected.
 
-Capability assignments are stored separately from the `agents` row so future
-capability codes do not require a new agent table shape. The valid code set is
-still project-owned and constrained by a lookup table or equivalent validated
-enumeration so worker authorization never trusts arbitrary user-provided
-strings. The initial capability set is:
+Build dispatch uses `build_attempt_id` as the exact identity. A category may be
+used to select the next eligible DB row, but the resulting execution always
+claims one exact attributed attempt. Payload category is verified again before
+execution.
 
-- `research`
-- `design`
-- `build:web`
-- `build:pwn`
-- `build:re`
+### Decision 3: database lease and fencing token own an execution
 
-The schema should allow adding future capabilities without a new table shape.
+Claim is a single transaction that:
 
-### Decision 3: control state is separate from runtime state
+1. locks/selects an eligible queued attempt;
+2. verifies agent capability and available slot capacity;
+3. creates an execution row with `agent_id`, `slot_id`, a random claim token,
+   lease expiry, and immutable agent/profile/category snapshots;
+4. transitions the attempt to the claimed/running protocol state.
 
-Agents have operator-controlled pool membership:
+Heartbeat and every terminal mutation require execution id, agent id, and the
+current claim token. Lease recovery issues a new token. A process holding an old
+token may finish locally but cannot publish artifacts or mark completion.
 
-- `enabled`: may claim new work when capabilities match.
-- `disabled`: cannot claim new work.
-- `draining`: cannot claim new work but may finish active work.
+The file move may mirror DB state during migration, but it is not sufficient
+ownership for pool execution.
 
-Runtime display state is derived, not directly edited:
+### Decision 4: control state and process health are separate
 
-- `idle`: enabled and no active lease.
-- `running`: has one or more active leases.
-- `offline`: expected heartbeat is missing.
-- `error`: last health check or process start failed.
+Operator state is `enabled`, `draining`, or `disabled`.
 
-Worker-pool claim must reject agents with `control_state` `disabled` or
-`draining`, and it must reject runtime states `offline` or `error` unless a
-later supervisor design defines an explicit repair/re-enable flow.
+- Enabled agents may receive new work while capacity exists.
+- Draining agents finish owned executions and receive no replacements.
+- Disabled agents receive no new work; disabling does not silently kill active
+  work unless an explicit force-stop operation is added later.
 
-### Decision 4: Hermes profile commands are wrapped, not trusted
+Health is derived from supervisor/slot heartbeat and execution state. An agent
+with no started supervisor is `stopped`, not `offline`. `offline` means a
+previously running supervisor missed its heartbeat. This avoids making a newly
+created enabled agent permanently unable to start.
 
-The backend may expose list/create/show/delete helpers that call Hermes profile
-commands through the same configured Hermes executable resolution used
-elsewhere in the project. The wrapper validates profile names, passes names as
-argument-array entries, captures stdout/stderr, applies timeouts, and returns
-structured errors. It does not parse or persist profile secrets. It does not
-make profile existence equivalent to agent existence: operators can bind an
-agent only to a profile that passes the wrapper's show or list check. Profile
-creation and agent row creation are modeled as separate operations so the UI
-cannot imply an atomic cross-system transaction.
+### Decision 5: a bounded local supervisor enforces capacity
 
-Agent names and Hermes profile names use the same conservative validation
-shape unless an existing Hermes command rejects them more strictly:
-`[A-Za-z0-9_.-]{1,64}`. Values outside that shape are rejected before any
-database write or subprocess invocation.
+One supervisor instance owns a process identity and heartbeat. It reconciles
+desired enabled agents into at most `max_concurrency` slots per agent and a
+configured global limit. Capacity reservation and claim happen atomically so
+two supervisor loops cannot oversubscribe the same agent.
 
-Profile deletion must also check existing `hermes_profile_bindings`, not only
-the new `agents` table, so the current research/design role bindings cannot be
-broken through the new dashboard helper.
+The supervisor starts workers with explicit `agent_id`, `slot_id`, and
+execution id. It records process start/exit, applies backoff after repeated
+failures, stops replacement claims while draining, and recovers expired leases.
+Multiple dashboard server processes must not each create an uncoordinated pool;
+supervisor leadership uses a DB advisory lock or equivalent singleton lease.
 
-### Decision 5: worker pool uses agent id for claims and audit
+### Decision 6: every execution receives an ephemeral sandbox
 
-Future worker-pool claim APIs take `agent_id`, resolve the agent, validate its
-control state, derived runtime state, and capabilities, then claim a matching
-task. For build work, the claim uses the constrained build-dispatch contract
-from `add-category-safe-build-dispatch` so category capability and file-queue
-claim cannot diverge. If that dependency is not present, the implementation may
-ship agent registry/profile management only, but it must not expose an
-agent-owned build claim path.
+The runner creates an execution root such as:
 
-Historical rows record nullable `agent_id`, `agent_name_used`, and
-`profile_name_used` values for agent-owned execution attempts. Legacy
-non-agent executions remain valid with these values unset or partially unset.
-Later profile changes or agent soft-deletion do not rewrite history.
+```text
+work/executions/<execution-id>/
+  input/
+  output/
+  logs/
+  manifest.json
+```
 
-### Decision 6: existing role bindings remain authoritative for current research
+`input/` contains the claimed shard, generation profile, and only required
+category/common references. It is mounted read-only. `output/` is the only
+writable artifact mount. The terminal sandbox is non-persistent and uniquely
+named by execution id; the shared Hermes `task=default` workspace is forbidden.
 
-The current `agent_roles` and `hermes_profile_bindings` tables remain
-authoritative for the already-implemented research/design profile resolution
-paths. This change may display profile names that also appear in those
-bindings, but it does not migrate or reinterpret those bindings as worker-pool
-agents. A later migration can map role bindings into agents after the worker
-pool is operational.
+Stable profile configuration may be read through a controlled profile home,
+but terminal workspace, shell state, file caches, and task memory are not reused
+between build attempts.
+
+### Decision 7: prompts use runtime-visible paths and preflight is mandatory
+
+Prompt rendering receives an explicit runtime path map, for example
+`/input/shard.json`, `/input/references`, and `/output`. It must not embed host
+paths that are absent from the sandbox.
+
+Before invoking the model, the runner probes from the same runtime boundary and
+verifies that the shard and required references are readable, output is
+writable, and the shard id/category matches the leased execution. Preflight
+failure marks the execution infrastructure-failed without consuming a model
+attempt. The model must never search for substitute shard files.
+
+Progress reporting moves to a host-owned side channel or authenticated local
+API. A prompt must not instruct a container to execute a host-only Python path.
+
+### Decision 8: output is staged, validated, and atomically published
+
+Hermes never writes directly to `work/challenges`. After it exits, the host:
+
+1. rejects symlinks, absolute paths, traversal, devices, and unexpected roots;
+2. requires output only for the leased category and challenge ids;
+3. verifies metadata id/category and the expected directory count;
+4. runs deterministic validation from a controlled host context;
+5. rechecks the fencing token;
+6. atomically publishes accepted directories and records hashes/manifest.
+
+Any Pwn/Re output from a Web execution is an execution failure and is never
+published. Existing challenge trees outside the staging root are unreachable
+to the sandbox, so rollback does not depend on detecting arbitrary mutations.
+
+### Decision 9: profile lifecycle remains separate and guarded
+
+The backend wraps Hermes profile list/show/create/delete using argv arrays,
+validated names, timeouts, and structured errors. Profile creation and agent
+creation are not transactionally coupled. Profile deletion is rejected while
+referenced by any non-deleted agent, active execution, or existing
+`hermes_profile_bindings` row. Secrets and profile file contents are not
+returned by APIs or persisted in PostgreSQL.
+
+### Decision 10: immutable audit snapshots explain historical behavior
+
+Execution rows retain nullable foreign keys plus immutable values used at
+claim time: agent name, profile name, capabilities/category, model/provider
+identifier when available, sandbox policy version, input manifest hash, output
+manifest hash, claim token generation, timestamps, exit classification, and
+log paths. Later agent/profile changes never rewrite history.
+
+### Decision 11: legacy execution is explicitly separated
+
+Legacy `challenge-factory run --worker W` remains available only for explicit
+whole-queue shard administration during migration. Category/build-attempt UI
+and pool APIs cannot call it. Pool build execution is disabled until constrained
+dispatch, sandbox preflight, fencing, and staged publication are all active.
+
+### Decision 12: rollout is fail-closed and phased
+
+1. Add schema, registry, audit, and profile wrappers.
+2. Add constrained exact-attempt dispatch.
+3. Add isolated execution staging and publication without concurrency.
+4. Enable one supervised slot and run fault-injection tests.
+5. Enable multiple slots under a global limit.
+6. Remove the legacy dashboard global-worker action from build surfaces.
+
+Feature readiness is server-derived. The UI must not offer pool start when a
+required safety component is missing.
 
 ## Risks / Trade-offs
 
-- **Profile is not a sandbox.** The design explicitly keeps filesystem and
-  queue authorization in the project.
-- **Deleting a profile can break other agents or existing role bindings.**
-  Profile deletion must reject live bindings in both the new agent registry and
-  existing Hermes profile binding tables.
-- **Worker state can drift from process reality.** Heartbeats and health checks
-  are needed before any supervisor is treated as authoritative.
-- **Existing research role binding overlaps conceptually.** The migration plan
-  leaves the old binding in place until a later cleanup change.
-- **Max concurrency is only a registry setting until a supervisor exists.**
-  The dashboard may store it, but current local start buttons must not imply
-  that multiple supervised workers are already implemented.
+- Staging duplicates some files and images, but provides a hard publication
+  boundary and deterministic cleanup.
+- Database leases add complexity, but file rename alone cannot fence a stale
+  process after recovery.
+- A single-host leader is not highly available; it is intentionally simpler
+  than an unsafe pseudo-distributed pool.
+- Stable Hermes profiles can still accumulate profile-level memory. Build
+  prompts use fresh conversation history, and task filesystem/shell state is
+  always isolated. If profile memory can influence correctness, build profiles
+  must disable it or use an execution-specific derived home.
+- Force-stopping native build processes requires process-group termination and
+  is deferred unless needed for shutdown correctness; lease fencing still
+  prevents late publication.
 
 ## Migration Plan
 
-1. Add registry schema and seed no build agents by default.
-2. Add API and dashboard management without starting new workers.
-3. Add Hermes profile wrapper endpoints.
-4. Connect build claim to agent capabilities after
-   `add-category-safe-build-dispatch` is present.
-5. Add supervisor/start-stop behavior in a later implementation pass.
+The phased rollout in Decision 12 is normative. Existing queued attempts remain
+compatible, but pool execution claims only attributed, schema-valid build
+attempt shards. No build agent is enabled by default.

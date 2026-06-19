@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import shutil
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -23,6 +24,7 @@ from persistence.models import research as research_model
 from persistence.session import SessionFactory
 
 ResourceType = Literal["generation_request", "design_task", "build_attempt"]
+LOG = logging.getLogger(__name__)
 
 
 class ResourceDeletionNotFoundError(LookupError):
@@ -83,6 +85,7 @@ class _QuarantineEntry:
     source: Path
     destination: Path
     state: str = "planned"
+    report_deleted: bool = False
 
 
 class _DeletionQuarantine:
@@ -93,12 +96,16 @@ class _DeletionQuarantine:
         self.manifest = self.root / "manifest.json"
         self.entries: list[_QuarantineEntry] = []
 
-    def move(self, source: Path) -> None:
+    def move(self, source: Path, *, report_deleted: bool = False) -> None:
         if not source.exists() and not source.is_symlink():
             return
         self.root.mkdir(parents=True, exist_ok=True)
         destination = self.root / f"{len(self.entries):04d}-{source.name}"
-        entry = _QuarantineEntry(source=source, destination=destination)
+        entry = _QuarantineEntry(
+            source=source,
+            destination=destination,
+            report_deleted=report_deleted,
+        )
         self.entries.append(entry)
         self._write_manifest()
         source.replace(destination)
@@ -113,6 +120,7 @@ class _DeletionQuarantine:
             entry.destination.replace(entry.source)
             entry.state = "restored"
         self._write_manifest()
+        self._cleanup_if_resolved()
 
     def purge(self) -> None:
         for entry in self.entries:
@@ -121,7 +129,8 @@ class _DeletionQuarantine:
             try:
                 _remove_path(entry.destination)
                 entry.state = "deleted"
-                self.result.deleted.append(str(entry.source))
+                if entry.report_deleted:
+                    self.result.deleted.append(str(entry.source))
             except OSError as exc:
                 self.result.quarantined.append(
                     ArtifactOutcome(str(entry.destination), "cleanup-failed")
@@ -130,11 +139,13 @@ class _DeletionQuarantine:
                     f"failed to remove quarantined path {entry.destination}: {exc}"
                 )
         self._write_manifest()
+        self._cleanup_if_resolved()
 
     def _write_manifest(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
+        temporary = self.manifest.with_suffix(".json.tmp")
         write_json(
-            self.manifest,
+            temporary,
             {
                 "root_resource": {
                     "type": self.result.resource_type,
@@ -145,11 +156,31 @@ class _DeletionQuarantine:
                         "source": str(entry.source),
                         "destination": str(entry.destination),
                         "state": entry.state,
+                        "report_deleted": entry.report_deleted,
                     }
                     for entry in self.entries
                 ],
             },
         )
+        temporary.replace(self.manifest)
+
+    def _cleanup_if_resolved(self) -> None:
+        if any(
+            entry.destination.exists() or entry.destination.is_symlink()
+            for entry in self.entries
+            if entry.state == "quarantined"
+        ):
+            return
+        try:
+            shutil.rmtree(self.root)
+            self.root.parent.rmdir()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            if self.root.exists():
+                self.result.warnings.append(
+                    f"failed to remove resolved quarantine {self.root}: {exc}"
+                )
 
 
 class ResourceDeletionService:
@@ -198,6 +229,93 @@ class ResourceDeletionService:
             delete_artifacts=delete_artifacts,
         )
 
+    def recover_quarantine(self) -> list[str]:
+        """Restore rolled-back deletions and purge committed quarantines."""
+        warnings: list[str] = []
+        quarantine_root = self.paths.work / "deletion-quarantine"
+        if not quarantine_root.exists():
+            return warnings
+        for operation_root in sorted(path for path in quarantine_root.iterdir() if path.is_dir()):
+            manifest = read_json(operation_root / "manifest.json", None)
+            if not isinstance(manifest, dict):
+                warnings.append(f"invalid deletion quarantine manifest: {operation_root}")
+                continue
+            root = manifest.get("root_resource")
+            entries = manifest.get("entries")
+            if not isinstance(root, dict) or not isinstance(entries, list):
+                warnings.append(f"invalid deletion quarantine manifest: {operation_root}")
+                continue
+            try:
+                root_type = root["type"]
+                root_id = UUID(str(root["id"]))
+            except (KeyError, TypeError, ValueError):
+                warnings.append(f"invalid deletion quarantine root: {operation_root}")
+                continue
+            if root_type not in {"generation_request", "design_task", "build_attempt"}:
+                warnings.append(f"invalid deletion quarantine root type: {operation_root}")
+                continue
+            with self.session_factory() as session:
+                root_exists = self._root_exists(session, root_type, root_id)
+            ambiguous = False
+            for raw_entry in entries:
+                if not isinstance(raw_entry, dict):
+                    ambiguous = True
+                    continue
+                try:
+                    source = Path(str(raw_entry["source"]))
+                    destination = Path(str(raw_entry["destination"]))
+                except KeyError:
+                    ambiguous = True
+                    continue
+                if not _is_within(source, self.paths.work) or not _is_within(
+                    destination, operation_root
+                ):
+                    warnings.append(f"unsafe deletion quarantine entry: {operation_root}")
+                    ambiguous = True
+                    continue
+                source_exists = source.exists() or source.is_symlink()
+                destination_exists = destination.exists() or destination.is_symlink()
+                if not destination_exists:
+                    continue
+                if root_exists:
+                    if source_exists:
+                        warnings.append(
+                            f"ambiguous deletion quarantine entry retained: {destination}"
+                        )
+                        ambiguous = True
+                        continue
+                    try:
+                        source.parent.mkdir(parents=True, exist_ok=True)
+                        destination.replace(source)
+                    except OSError as exc:
+                        warnings.append(
+                            f"failed to restore deletion quarantine {destination}: {exc}"
+                        )
+                        ambiguous = True
+                else:
+                    try:
+                        _remove_path(destination)
+                    except OSError as exc:
+                        warnings.append(
+                            f"failed to purge deletion quarantine {destination}: {exc}"
+                        )
+                        ambiguous = True
+            if ambiguous:
+                continue
+            try:
+                shutil.rmtree(operation_root)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                warnings.append(
+                    f"failed to remove recovered quarantine {operation_root}: {exc}"
+                )
+        try:
+            quarantine_root.rmdir()
+        except OSError:
+            pass
+        return warnings
+
     def _delete(
         self,
         resource_id: UUID,
@@ -206,10 +324,13 @@ class ResourceDeletionService:
         delete_artifacts: bool,
     ) -> DeletionResult:
         result = DeletionResult(resource_type=resource_type, resource_id=resource_id)
+        result.warnings.extend(self.recover_quarantine())
         quarantine = _DeletionQuarantine(self.paths, result)
         session = self.session_factory()
         try:
             with session.begin():
+                if delete_artifacts:
+                    self._lock_artifact_reference_tables(session)
                 scope = self._scope(session, resource_type, resource_id)
                 self._guard_active(session, scope)
                 self._quarantine_operational_files(scope, quarantine)
@@ -219,10 +340,36 @@ class ResourceDeletionService:
             quarantine.purge()
             return result
         except Exception:
-            quarantine.restore()
+            try:
+                quarantine.restore()
+            except OSError:
+                # Preserve the original transaction/business exception. The
+                # manifest remains available for startup recovery.
+                LOG.exception("failed to restore deletion quarantine %s", quarantine.root)
             raise
         finally:
             session.close()
+
+    @staticmethod
+    def _lock_artifact_reference_tables(session: Session) -> None:
+        # Acquire before row locks to avoid lock-order inversion with writers.
+        # SHARE ROW EXCLUSIVE blocks concurrent INSERT/UPDATE/DELETE while the
+        # service checks surviving references and quarantines owned paths.
+        session.execute(
+            sa.text(
+                "LOCK TABLE build_attempts, design_attempts, research_runs, "
+                "research_sources IN SHARE ROW EXCLUSIVE MODE"
+            )
+        )
+
+    @staticmethod
+    def _root_exists(session: Session, root_type: str, root_id: UUID) -> bool:
+        model = {
+            "generation_request": research_model.GenerationRequest,
+            "design_task": task_model.DesignTask,
+            "build_attempt": build_model.BuildAttempt,
+        }[root_type]
+        return session.scalar(sa.select(model.id).where(model.id == root_id)) is not None
 
     def _scope(
         self,
@@ -264,6 +411,24 @@ class ResourceDeletionService:
         return scope
 
     def _attempt_scope(self, session: Session, attempt_id: UUID) -> _Scope:
+        # Match BuildOrchestrationService's lock order (task before attempt).
+        # Reading the FK first is safe only as a locator; the locked re-read
+        # below remains authoritative. Holding the parent lock prevents a new
+        # queued sibling from appearing after the active-sibling guard.
+        parent_task_id = session.scalar(
+            sa.select(build_model.BuildAttempt.design_task_id).where(
+                build_model.BuildAttempt.id == attempt_id
+            )
+        )
+        if parent_task_id is None:
+            raise ResourceDeletionNotFoundError("build attempt not found")
+        parent = session.scalar(
+            sa.select(task_model.DesignTask)
+            .where(task_model.DesignTask.id == parent_task_id)
+            .with_for_update()
+        )
+        if parent is None:
+            raise ResourceDeletionNotFoundError("build attempt not found")
         row = session.scalar(
             sa.select(build_model.BuildAttempt)
             .where(build_model.BuildAttempt.id == attempt_id)
@@ -275,7 +440,7 @@ class ResourceDeletionService:
         scope.build_attempt_ids.add(attempt_id)
         scope.build_attempt_rows.append(row)
         scope.shard_basenames.add(row.shard_basename)
-        scope.direct_parent_task_id = row.design_task_id
+        scope.direct_parent_task_id = parent.id
         if row.resulting_challenge_dir:
             scope.artifact_paths.add(row.resulting_challenge_dir)
         return scope
@@ -450,21 +615,26 @@ class ResourceDeletionService:
         result: DeletionResult,
     ) -> None:
         surviving = self._surviving_artifact_paths(session, scope)
+        processed: set[str] = set()
         for stored in sorted(scope.artifact_paths):
             candidate = self._resolve_artifact_path(stored)
             if candidate is None:
                 result.skipped.append(ArtifactOutcome(stored, "unsafe-path"))
                 continue
+            key = _path_key(candidate)
+            if key in processed:
+                continue
+            processed.add(key)
             if not candidate.exists() and not candidate.is_symlink():
                 result.skipped.append(ArtifactOutcome(stored, "missing"))
                 continue
-            if _path_key(candidate) in surviving:
+            if key in surviving:
                 result.skipped.append(ArtifactOutcome(str(candidate), "shared-reference"))
                 continue
             if not delete_artifacts:
                 result.retained.append(ArtifactOutcome(str(candidate)))
                 continue
-            quarantine.move(candidate)
+            quarantine.move(candidate, report_deleted=True)
 
     def _resolve_artifact_path(self, stored: str) -> Path | None:
         raw = Path(stored)
@@ -480,7 +650,11 @@ class ResourceDeletionService:
         ]
         for root in allowed_roots:
             try:
-                resolved.relative_to(root.resolve())
+                relative = resolved.relative_to(root.resolve())
+                # Never allow a persisted path to remove a whole artifact root
+                # or a top-level category/type directory.
+                if len(relative.parts) < 2:
+                    return None
                 return candidate
             except ValueError:
                 continue
@@ -592,6 +766,14 @@ def _path_key(path: Path) -> str:
         return str(path.resolve())
     except OSError:
         return str(path)
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
 
 
 def _remove_path(path: Path) -> None:

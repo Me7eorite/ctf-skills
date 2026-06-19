@@ -137,6 +137,10 @@ async function pollDetail() {
     return;
   }
   if (state.detailPoll.loading) return;
+  if (state.flags.deleting) {
+    scheduleDetailPoll(ACTIVE_POLL_MS);
+    return;
+  }
 
   state.detailPoll.timer = null;
   state.detailPoll.loading = true;
@@ -195,12 +199,16 @@ async function generateDesignTasks() {
 }
 
 async function deleteRequest(requestId) {
-  const choice = await confirmDeletion({
-    title: "Delete request",
-    message: "This removes the request, research rows, design tasks, designs, and build attempts. Artifacts are retained unless selected.",
-  });
-  if (choice === null) return;
+  if (state.flags.deleting) return;
+  state.flags.deleting = true;
+  render(state.data);
+  initIcons();
   try {
+    const choice = await confirmDeletion({
+      title: "Delete request",
+      message: "This removes the request, research rows, design tasks, designs, and build attempts. Artifacts are retained unless selected.",
+    });
+    if (choice === null) return;
     const query = choice ? "?delete_artifacts=true" : "?delete_artifacts=false";
     const result = await del(`/api/research/requests/${requestId}${query}`);
     showToast(result.warnings?.length ? result.warnings[0] : "Request deleted");
@@ -212,6 +220,10 @@ async function deleteRequest(requestId) {
     initIcons();
   } catch (err) {
     showToast(err.message, true);
+  } finally {
+    state.flags.deleting = false;
+    render(state.data);
+    initIcons();
   }
 }
 

@@ -192,7 +192,7 @@ def design_evidence(challenge_dir: Path, challenge_id: str) -> bool:
 
 def implement_evidence(challenge_dir: Path, category: str) -> bool:
     """检查 implement 阶段是否完成。
-    
+
     web/pwn: deploy/src 目录存在 + Dockerfile + docker-compose.yml + 有业务代码
     re: src 目录下存在业务代码
     """

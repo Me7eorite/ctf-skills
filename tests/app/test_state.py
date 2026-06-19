@@ -59,6 +59,27 @@ class ProgressStoreTests(unittest.TestCase):
         self.assertEqual(progress["storage"]["backend"], "memory")
         self.assertFalse(progress["storage"]["fallback"])
 
+    def test_purge_shards_removes_events_and_snapshots_only_for_targets(self):
+        self.store.record(
+            shard="delete.json",
+            challenge_id="web-delete",
+            stage="build",
+            status="running",
+        )
+        self.store.record(
+            shard="keep.json",
+            challenge_id="web-keep",
+            stage="build",
+            status="running",
+        )
+
+        self.store.purge_shards(["delete.json"], transaction=object())
+
+        self.assertEqual(self.store.events_for_shard("delete.json"), [])
+        self.assertEqual(len(self.store.events_for_shard("keep.json")), 1)
+        snapshots = self.store.dashboard()["snapshots"]
+        self.assertEqual({row["shard"] for row in snapshots}, {"keep.json"})
+
     def test_core_state_exports_progress_contract(self):
         self.assertFalse(hasattr(state_module, "State" + "Store"))
         self.assertIsNotNone(ProgressStore)

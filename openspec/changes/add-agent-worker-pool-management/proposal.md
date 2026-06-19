@@ -1,64 +1,73 @@
 ## Why
 
-The project is moving toward a worker pool, but the current dashboard only
-starts one local anonymous worker process. Operators need to manage named
-agents, bind them to Hermes profiles, assign capabilities, and choose which
-agents participate in the pool. Hermes profiles provide separate Hermes
-configuration/state directories, but they are not a security sandbox and do
-not express project queue permissions.
+The project is moving toward a worker pool, but the current dashboard starts one
+anonymous whole-queue process. A category-filtered screen can therefore start a
+worker that claims another category. More seriously, Hermes currently receives
+host-only absolute paths while its terminal may run in a persistent Docker
+sandbox that does not mount the project cwd. A fresh Web conversation can fail
+to read its Web shard, discover stale Pwn/Re files in the reused sandbox, and
+continue the wrong work.
 
-Agent management should therefore be project-owned: PostgreSQL records which
-agents exist, which Hermes profile each one uses, which work categories it may
-claim, and whether it is enabled, disabled, or draining. Runtime conditions
-such as idle, running, offline, and error are derived from heartbeats, active
-leases, and last-error fields instead of being operator lifecycle states.
+An agent registry and Hermes profile binding are necessary but insufficient.
+The worker pool must make dispatch authorization, execution isolation, lease
+ownership, capacity, and artifact publication enforceable outside the model.
 
 ## What Changes
 
-- Add a project-level Agent Registry for worker-pool members.
-- Bind each agent to one Hermes profile name without persisting profile
-  contents or secrets in PostgreSQL.
-- Add dashboard and HTTP APIs to list, create, update, disable, drain, and
-  soft-delete agents.
-- Add optional Hermes profile lifecycle helpers for list/create/delete, guarded
-  by project-side validation and explicit destructive confirmation. Profile
-  creation and agent creation remain separate operations because Hermes file
-  changes cannot share a PostgreSQL transaction.
-- Make worker-pool claim decisions use agent capabilities rather than the
-  selected Hermes profile name.
-- Depend on `add-category-safe-build-dispatch` so build agents can safely claim
-  category- or attempt-scoped work.
-- Preserve the existing `agent_roles` and `hermes_profile_bindings` research
-  binding as-is; this change adds worker-pool agents and does not migrate the
-  current research execution path.
+- Add a project-owned Agent Registry with stable identities, Hermes profile
+  bindings, capabilities, control state, capacity, heartbeat, and soft deletion.
+- Add a bounded single-host supervisor that starts and monitors agent worker
+  slots. Cross-host deployment remains outside this change.
+- Require category- and build-attempt-constrained dispatch. Agent/profile names
+  never select queue work implicitly.
+- Add database-backed execution leases with fencing tokens and heartbeats so a
+  stale process cannot publish or complete work after ownership is recovered.
+- Run every build execution in a unique ephemeral task sandbox. Hermes profile
+  state may be stable, but terminal workspace state must not be shared between
+  attempts.
+- Materialize a per-attempt input bundle with container-visible paths and fail
+  before model invocation when required inputs are inaccessible.
+- Write generation output only to an attempt staging directory. The host
+  validates category/id/path allowlists and deterministic challenge checks,
+  then atomically publishes accepted artifacts.
+- Add dashboard and HTTP APIs for agent lifecycle, capacity, active executions,
+  logs, and explicit start/drain/disable operations.
+- Preserve existing research/design profile bindings while preventing the
+  legacy global worker action from category-specific build surfaces.
 
 ## Capabilities
 
 ### New Capabilities
 
-- `worker-agent-management`: persisted agents, Hermes profile bindings,
-  capability assignment, dashboard management, and worker-pool membership.
+- `worker-agent-management`: persisted agents, profile bindings, capability
+  assignment, control state, dashboard/API management, and audit identity.
+- `worker-pool-execution`: single-host supervision, slots, lease/fencing,
+  per-attempt sandboxing, staged output, and guarded publication.
 
 ### Modified Capabilities
 
-- `build-orchestration`: build attempt audit can record agent-owned
-  executions, and future agent-owned build claim paths claim only work
-  permitted by the agent's capabilities.
+- `build-orchestration`: build attempts become the dispatch and execution audit
+  unit and record immutable agent/profile/execution ownership snapshots.
+- `hermes-execution-protocol`: prompts use sandbox-visible paths and Hermes is
+  invoked only after execution preflight succeeds.
 
 ## Impact
 
-- **Code**: add persistence models/repositories, an agent service, web
-  endpoints, and a dashboard Agents view.
-- **Database**: add agent registry tables, capability assignments, and nullable
-  historical audit columns on build attempts for agent id/name and profile name
-  used by agent-owned executions.
-- **Hermes**: wrap profile list/create/delete/show commands without storing
-  profile files, `.env`, or secrets in the project database.
-- **Worker pool**: agents become the identities used for future worker
-  supervision and task claim. This proposal defines the registry and claim
-  authorization contract; it does not by itself require a full multi-process
-  supervisor.
-- **Dependencies**: requires the explicit constrained build-dispatch contract
-  from `add-category-safe-build-dispatch`.
-- **Tests**: add repository/service/API/UI coverage and subprocess-wrapper
-  tests for Hermes profile command handling.
+- **Code**: add persistence models/repositories, agent services, a local pool
+  supervisor, constrained claim/lease services, sandbox preparation, guarded
+  artifact publication, web endpoints, and dashboard views.
+- **Database**: add agent/capability/execution tables and immutable audit fields
+  on build attempts.
+- **Filesystem**: add per-execution input/output staging roots. Agents do not
+  write directly to `work/challenges`.
+- **Hermes**: continue to use named profiles for configuration, but force a
+  unique non-persistent terminal sandbox per execution and render only paths
+  visible inside it.
+- **Compatibility**: retain legacy CLI execution for explicit shard-management
+  use, but do not expose it as a worker-pool or category-specific action.
+- **Dependency**: constrained dispatch semantics from
+  `add-category-safe-build-dispatch` must be implemented or incorporated before
+  pool build claims are enabled.
+- **Tests**: include concurrency, fencing, stale-sandbox, wrong-category,
+  inaccessible-input, out-of-scope-write, crash recovery, and atomic-publication
+  coverage.

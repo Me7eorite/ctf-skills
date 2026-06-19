@@ -90,15 +90,36 @@ def test_delete_endpoints_accept_explicit_artifact_flag(monkeypatch):
     ]
 
 
+def test_delete_endpoints_default_to_retaining_artifacts(monkeypatch):
+    client = _client(monkeypatch)
+    ids = [uuid4(), uuid4(), uuid4()]
+
+    assert client.delete(f"/api/research/requests/{ids[0]}").status_code == 200
+    assert client.delete(f"/api/design-tasks/{ids[1]}").status_code == 200
+    assert client.delete(f"/api/build-attempts/{ids[2]}").status_code == 200
+
+    assert [seen[2] for seen in _FakeDeletionService.seen] == [False, False, False]
+
+
 def test_delete_endpoints_map_not_found_and_conflict(monkeypatch):
     client = _client(monkeypatch)
     _FakeDeletionService.mode = "missing"
-    assert client.delete(f"/api/design-tasks/{uuid4()}").status_code == 404
+    missing_urls = [
+        f"/api/research/requests/{uuid4()}",
+        f"/api/design-tasks/{uuid4()}",
+        f"/api/build-attempts/{uuid4()}",
+    ]
+    assert [client.delete(url).status_code for url in missing_urls] == [404, 404, 404]
 
     _FakeDeletionService.mode = "conflict"
-    response = client.delete(f"/api/build-attempts/{uuid4()}")
-    assert response.status_code == 409
-    assert response.json()["detail"] == "active"
+    conflict_urls = [
+        f"/api/research/requests/{uuid4()}",
+        f"/api/design-tasks/{uuid4()}",
+        f"/api/build-attempts/{uuid4()}",
+    ]
+    responses = [client.delete(url) for url in conflict_urls]
+    assert [response.status_code for response in responses] == [409, 409, 409]
+    assert all(response.json()["detail"] == "active" for response in responses)
 
 
 def test_malformed_delete_ids_are_not_found(monkeypatch):

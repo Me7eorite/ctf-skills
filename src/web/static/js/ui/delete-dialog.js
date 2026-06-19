@@ -1,9 +1,18 @@
 import { escapeHtml } from "./format.js";
 
+let activeConfirmation = null;
+let dialogSequence = 0;
+
 export function confirmDeletion({ title, message }) {
-  return new Promise((resolve) => {
+  if (activeConfirmation) return activeConfirmation;
+
+  activeConfirmation = new Promise((resolve) => {
+    dialogSequence += 1;
+    const titleId = `delete-dialog-title-${dialogSequence}`;
+    const previousFocus = document.activeElement;
     const overlay = document.createElement("div");
     overlay.className = "delete-dialog-overlay";
+    overlay.dataset.deleteDialog = "true";
     overlay.style.cssText = [
       "position: fixed",
       "inset: 0",
@@ -14,9 +23,9 @@ export function confirmDeletion({ title, message }) {
       "padding: 20px",
     ].join(";");
     overlay.innerHTML = `
-      <div role="dialog" aria-modal="true" aria-labelledby="delete-dialog-title" style="width: min(460px, 100%); border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--paper); box-shadow: var(--shadow-lg);">
+      <div role="dialog" aria-modal="true" aria-labelledby="${titleId}" style="width: min(460px, 100%); border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--paper); box-shadow: var(--shadow-lg);">
         <div style="padding: var(--space-lg); border-bottom: 1px solid var(--line);">
-          <div id="delete-dialog-title" style="font-size: var(--font-lg); font-weight: 600; color: var(--ink-800);">${escapeHtml(title)}</div>
+          <div id="${titleId}" style="font-size: var(--font-lg); font-weight: 600; color: var(--ink-800);">${escapeHtml(title)}</div>
           <p style="margin-top: var(--space-sm); color: var(--ink-600); font-size: var(--font-md);">${escapeHtml(message)}</p>
         </div>
         <label style="display: flex; align-items: center; gap: var(--space-sm); padding: var(--space-md) var(--space-lg); color: var(--ink-700);">
@@ -30,16 +39,40 @@ export function confirmDeletion({ title, message }) {
       </div>
     `;
     document.body.appendChild(overlay);
+    const cancelButton = overlay.querySelector("#delete-dialog-cancel");
+    const confirmButton = overlay.querySelector("#delete-dialog-confirm");
+    const artifactCheckbox = overlay.querySelector("#delete-dialog-artifacts");
     const cleanup = (value) => {
+      document.removeEventListener("keydown", onKeyDown);
       overlay.remove();
+      activeConfirmation = null;
+      if (previousFocus?.isConnected) previousFocus.focus();
       resolve(value);
     };
-    overlay.querySelector("#delete-dialog-cancel").addEventListener("click", () => cleanup(null));
-    overlay.querySelector("#delete-dialog-confirm").addEventListener("click", () => {
-      cleanup(overlay.querySelector("#delete-dialog-artifacts").checked);
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        cleanup(null);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = [artifactCheckbox, cancelButton, confirmButton];
+      const current = focusable.indexOf(document.activeElement);
+      const next = event.shiftKey
+        ? (current <= 0 ? focusable.length - 1 : current - 1)
+        : (current === focusable.length - 1 ? 0 : current + 1);
+      event.preventDefault();
+      focusable[next].focus();
+    };
+    cancelButton.addEventListener("click", () => cleanup(null));
+    confirmButton.addEventListener("click", () => {
+      cleanup(artifactCheckbox.checked);
     });
     overlay.addEventListener("click", (event) => {
       if (event.target === overlay) cleanup(null);
     });
+    document.addEventListener("keydown", onKeyDown);
+    cancelButton.focus();
   });
+  return activeConfirmation;
 }
