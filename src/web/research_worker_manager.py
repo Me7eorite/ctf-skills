@@ -56,6 +56,7 @@ class ResearchWorkerManager:
         max_jobs: int = 1,
         lease_seconds: int = _DEFAULT_LEASE_SECONDS,
         hermes_timeout_seconds: int = _DEFAULT_HERMES_TIMEOUT_SECONDS,
+        generation_request_id: str | None = None,
     ) -> tuple[bool, str]:
         """Spawn a research worker subprocess.
 
@@ -96,6 +97,8 @@ class ResearchWorkerManager:
                 argv.append("--loop")
             else:
                 argv.extend(["--max-jobs", str(max_jobs)])
+            if generation_request_id:
+                argv.extend(["--generation-request-id", generation_request_id])
 
             self.paths.research_logs.mkdir(parents=True, exist_ok=True)
             log_path = self.paths.research_logs / _LOG_FILE_NAME
@@ -127,7 +130,8 @@ class ResearchWorkerManager:
         if rc is not None and rc != 0:
             detail = self._log_tail()
             return False, f"worker exited immediately rc={rc}: {detail}"
-        return True, f"research worker started (kind={kind}, agent={agent})"
+        scope = f", request={generation_request_id}" if generation_request_id else ""
+        return True, f"research worker started (kind={kind}, agent={agent}{scope})"
 
     def stop(self) -> tuple[bool, str]:
         """Terminate the running worker. SIGTERM → wait 5s → SIGKILL."""

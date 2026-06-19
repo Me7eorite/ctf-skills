@@ -245,12 +245,13 @@ class ResearchWorkerTests(unittest.TestCase):
                 captured["kwargs"] = kwargs
 
             def run(self, agent_id, *, loop, max_jobs, poll_interval_seconds,
-                    lease_seconds, hermes_timeout_seconds):
+                    lease_seconds, hermes_timeout_seconds, generation_request_id=None):
                 captured["agent_id"] = agent_id
                 captured["loop"] = loop
                 captured["max_jobs"] = max_jobs
                 captured["lease_seconds"] = lease_seconds
                 captured["hermes_timeout_seconds"] = hermes_timeout_seconds
+                captured["generation_request_id"] = generation_request_id
                 return {"processed": 0, "agent_id": agent_id}
 
         with patch("persistence.session.transaction", side_effect=RuntimeError), patch(
@@ -272,6 +273,7 @@ class ResearchWorkerTests(unittest.TestCase):
         self.assertEqual(captured["max_jobs"], 2)
         self.assertEqual(captured["lease_seconds"], 60)
         self.assertEqual(captured["hermes_timeout_seconds"], 30)
+        self.assertIsNone(captured["generation_request_id"])
         self.assertFalse(captured["loop"])
 
     def test_worker_ignores_HERMES_TIMEOUT_env_var(self):
@@ -455,7 +457,7 @@ class ResearchWorkerExecutionTests(unittest.TestCase):
             def __init__(self, *_a, **_kw):
                 self.counter = 0
 
-            def claim_next_run(self, _agent_id, _lease):
+            def claim_next_run(self, _agent_id, _lease, **_kw):
                 self.counter += 1
                 return SimpleNamespace(id=uuid4(), claim_token=uuid4(), attempt=self.counter)
 

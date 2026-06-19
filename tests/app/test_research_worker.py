@@ -86,8 +86,8 @@ class InterruptAfterClaimService:
         self.inner = inner
         self.claimed_run = None
 
-    def claim_next_run(self, agent_id: str, lease_seconds: int):
-        self.claimed_run = self.inner.claim_next_run(agent_id, lease_seconds)
+    def claim_next_run(self, agent_id: str, lease_seconds: int, **kwargs):
+        self.claimed_run = self.inner.claim_next_run(agent_id, lease_seconds, **kwargs)
         raise KeyboardInterrupt
 
 
@@ -172,7 +172,7 @@ def test_two_workers_claim_distinct_runs(
         ) == 0
 
 
-def test_keyboard_interrupt_after_claim_leaves_recoverable_running_row(
+def test_keyboard_interrupt_after_claim_before_return_leaves_recoverable_running_row(
     session_factory: SessionFactory,
     paths: ProjectPaths,
 ):
@@ -200,3 +200,35 @@ def test_keyboard_interrupt_after_claim_leaves_recoverable_running_row(
         assert run.claimed_by == "w1"
         assert run.claim_token is not None
         assert run.lease_expires_at is not None
+
+
+def test_keyboard_interrupt_during_execute_marks_current_run_failed(
+    session_factory: SessionFactory,
+    paths: ProjectPaths,
+):
+    _seed_requests(session_factory, 1)
+    service = ResearchJobService(session_factory)
+
+    class InterruptingExecutor:
+        def execute(self, *_args):
+            raise KeyboardInterrupt
+
+    worker = ResearchWorker(paths, service, InterruptingExecutor())
+
+    result = worker.run(
+        "w1",
+        loop=True,
+        max_jobs=1,
+        poll_interval_seconds=0.01,
+        lease_seconds=60,
+        hermes_timeout_seconds=30,
+    )
+
+    assert result == {"processed": 0, "agent_id": "w1", "interrupted": True}
+    with session_factory() as session:
+        rows = session.scalars(
+            sa.select(model.ResearchRun).order_by(model.ResearchRun.attempt)
+        ).all()
+        assert rows[0].status == "failed"
+        assert rows[0].last_error == "cancelled by operator"
+        assert rows[1].status == "queued"

@@ -149,6 +149,47 @@ def test_latest_run_lookup_is_not_limited_to_first_page(session_factory: Session
         session.close()
 
 
+def test_latest_completed_run_ignores_newer_running_retry(session_factory: SessionFactory):
+    session = session_factory()
+    try:
+        repo = ResearchRepository(session)
+        request = repo.create_generation_request(
+            category="web",
+            topic="retry after success",
+            target_count=1,
+            difficulty_distribution={"easy": 1},
+        )
+        base_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        completed = model.ResearchRun(
+            id=uuid4(),
+            generation_request_id=request.id,
+            attempt=1,
+            status="completed",
+            created_at=base_time,
+            finished_at=base_time + timedelta(minutes=5),
+        )
+        running = model.ResearchRun(
+            id=uuid4(),
+            generation_request_id=request.id,
+            attempt=2,
+            status="running",
+            created_at=base_time + timedelta(minutes=10),
+        )
+        session.add_all([completed, running])
+        session.flush()
+
+        latest = repo.get_latest_run_for_request(request.id)
+        latest_completed = repo.get_latest_completed_run_for_request(request.id)
+
+        assert latest is not None
+        assert latest.id == running.id
+        assert latest_completed is not None
+        assert latest_completed.id == completed.id
+    finally:
+        session.rollback()
+        session.close()
+
+
 def test_dynamic_category_and_distribution_validation(session_factory: SessionFactory):
     session = session_factory()
     try:

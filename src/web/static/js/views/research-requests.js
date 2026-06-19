@@ -227,9 +227,12 @@ async function deleteRequest(requestId) {
   }
 }
 
-async function runWorkerAction(action, body = {}) {
+async function runWorkerAction(action, body = {}, requestId = null) {
   try {
-    const result = await postJson(`/api/research/worker/${action}`, body);
+    const endpoint = requestId && action === "start"
+      ? `/api/research/requests/${encodeURIComponent(requestId)}/worker/start`
+      : `/api/research/worker/${action}`;
+    const result = await postJson(endpoint, body);
     showToast(result.message || "OK");
     state.worker = result.state || null;
     await refreshDetail({ startPolling: true });
@@ -559,11 +562,11 @@ export function bind() {
       return;
     }
     if (e.target.closest("#detail-run-once")) {
-      runWorkerAction("start", { kind: "once", max_jobs: 1 });
+      runWorkerAction("start", { kind: "once", max_jobs: 1 }, state.detailId);
       return;
     }
     if (e.target.closest("#detail-run-loop")) {
-      runWorkerAction("start", { kind: "loop", max_jobs: 1 });
+      runWorkerAction("start", { kind: "loop", max_jobs: 1 }, state.detailId);
       return;
     }
     if (e.target.closest("#detail-run-stop")) {

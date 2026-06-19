@@ -113,6 +113,27 @@ class ResearchRepository:
         row = self.session.scalar(stmt)
         return _run(row) if row else None
 
+    def get_latest_completed_run_for_request(
+        self,
+        generation_request_id: UUID,
+    ) -> dto.ResearchRun | None:
+        """Read the newest completed run whose sources/findings are displayable."""
+        stmt = (
+            sa.select(model.ResearchRun)
+            .where(
+                model.ResearchRun.generation_request_id == generation_request_id,
+                model.ResearchRun.status == "completed",
+            )
+            .order_by(
+                model.ResearchRun.finished_at.desc().nulls_last(),
+                model.ResearchRun.created_at.desc(),
+                model.ResearchRun.attempt.desc(),
+            )
+            .limit(1)
+        )
+        row = self.session.scalar(stmt)
+        return _run(row) if row else None
+
     def list_runs_with_category(
         self,
         *,

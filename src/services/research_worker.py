@@ -9,10 +9,11 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any, TextIO
+from uuid import UUID
 
 from core.paths import ProjectPaths
 from services.research_agent_executor import ResearchAgentExecutor
-from services.research_job_service import ResearchJobService
+from services.research_job_service import ResearchJobService, StaleClaimError
 
 
 class ResearchWorker:
@@ -41,6 +42,7 @@ class ResearchWorker:
         poll_interval_seconds: float = 5.0,
         lease_seconds: int = 900,
         hermes_timeout_seconds: int = 810,
+        generation_request_id: UUID | None = None,
     ) -> dict[str, Any]:
         """运行 worker 主循环。Hermes 超时必须短于租约，保证 executor 有机会在租约内写入终态。"""
         self._validate_config(
@@ -57,12 +59,17 @@ class ResearchWorker:
         )
 
         processed_count = 0
+        current_run = None
         try:
             with _sigterm_as_keyboard_interrupt():
                 # 主循环：不断 claim 任务并执行，直到达到 max_jobs 或者收到 SIGTERM（转换成 KeyboardInterrupt）。
                 # 每次 claim 失败后等待一段时间，避免频繁查询数据库。
                 while True:
-                    research_run = self.job_service.claim_next_run(agent_id, lease_seconds)
+                    research_run = self.job_service.claim_next_run(
+                        agent_id,
+                        lease_seconds,
+                        generation_request_id=generation_request_id,
+                    )
                     if research_run is None:
                         if not loop:
                             self._log(
@@ -81,12 +88,14 @@ class ResearchWorker:
                         f"[research-worker {agent_id}] claimed run "
                         f"{research_run.id} (attempt={research_run.attempt})"
                     )
+                    current_run = research_run
                     self.agent_executor.execute(
                         research_run,
                         agent_id,
                         lease_seconds,
                         hermes_timeout_seconds,
                     )
+                    current_run = None
                     processed_count += 1
                     self._log(
                         f"[research-worker {agent_id}] finished run "
@@ -99,9 +108,11 @@ class ResearchWorker:
                         )
                         break
         except KeyboardInterrupt:
+            if current_run is not None:
+                self._cancel_current_run(current_run, agent_id)
             self._log(
                 f"[research-worker {agent_id}] interrupted "
-                f"(processed={processed_count}); leaving claimed run for lease recovery"
+                f"(processed={processed_count}); current run cancellation attempted"
             )
             return {
                 "processed": processed_count,
@@ -110,6 +121,25 @@ class ResearchWorker:
             }
 
         return {"processed": processed_count, "agent_id": agent_id}
+
+    def _cancel_current_run(self, run, agent_id: str) -> None:
+        if run.claim_token is None:
+            return
+        try:
+            self.job_service.mark_run_failed(
+                run.id,
+                agent_id,
+                run.claim_token,
+                "cancelled by operator",
+                log_path=self.paths.research_logs / f"{run.id}.log",
+            )
+            self._log(
+                f"[research-worker {agent_id}] cancelled run {run.id} after interrupt"
+            )
+        except StaleClaimError:
+            self._log(
+                f"[research-worker {agent_id}] skipped cancel for stale run {run.id}"
+            )
 
     def _log(self, message: str) -> None:
         """写一条 transition 日志到配置的流。"""

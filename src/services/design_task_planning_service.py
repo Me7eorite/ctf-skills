@@ -67,7 +67,7 @@ class DesignTaskPlanningService:
             # 场景串行化为干净的 409，而非 5xx 完整性错误。
             research_repo.lock_generation_request(request_id)
 
-            latest = research_repo.get_latest_run_for_request(request_id)
+            latest = research_repo.get_latest_completed_run_for_request(request_id)
             if latest is None or latest.status != "completed":
                 raise DesignTaskValidationError(
                     "generation request has no completed research run; "

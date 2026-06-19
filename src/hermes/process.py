@@ -11,6 +11,7 @@ import json
 import os
 import shlex
 import shutil
+import signal
 import subprocess
 import threading
 import time
@@ -211,6 +212,7 @@ def invoke_capture(
             stderr=subprocess.PIPE,       # 捕获 stderr（与 stdout 分开）
             text=True,
             encoding="utf-8",
+            start_new_session=os.name != "nt",
             errors="replace",             # 编码错误用替换字符，不崩溃
         )
     except FileNotFoundError:
@@ -348,13 +350,22 @@ def profile_exists(profile_name: str) -> bool:
 def _terminate(process: "subprocess.Popen[str]") -> None:
     """尽力终止子进程：先 SIGTERM，等待 5 秒后再 SIGKILL。"""
     try:
-        process.terminate()
+        if os.name != "nt":
+            os.killpg(process.pid, signal.SIGTERM)
+        else:
+            process.terminate()
     except ProcessLookupError:
         return
     try:
         process.wait(timeout=5)
     except subprocess.TimeoutExpired:
-        process.kill()
+        if os.name != "nt":
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                return
+        else:
+            process.kill()
 
 
 def _wait_after_terminate(process: "subprocess.Popen[str]") -> None:

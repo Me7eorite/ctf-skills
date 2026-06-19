@@ -323,6 +323,7 @@ class RequestDetailEndpointTests(unittest.TestCase):
             get_generation_request=lambda _: req,
             list_runs=lambda **_kw: [run_old, run_new],
             get_latest_run_for_request=lambda _: run_new,
+            get_latest_completed_run_for_request=lambda _: run_new,
             list_sources=lambda _: [src],
             list_findings=lambda _: [finding_a, finding_b, finding_c],
         )
@@ -333,6 +334,7 @@ class RequestDetailEndpointTests(unittest.TestCase):
             payload = resp.json()
             self.assertEqual(payload["request"]["id"], str(req.id))
             self.assertEqual(payload["latest_run"]["id"], str(run_new.id))
+            self.assertEqual(payload["latest_completed_run"]["id"], str(run_new.id))
             self.assertEqual(len(payload["runs"]), 2)
             self.assertEqual(len(payload["sources"]), 1)
             # Spec 10.2: findings grouped by kind.
@@ -350,6 +352,7 @@ class RequestDetailEndpointTests(unittest.TestCase):
             get_generation_request=lambda _: req,
             list_runs=lambda **_kw: [run_visible],
             get_latest_run_for_request=lambda _: run_latest,
+            get_latest_completed_run_for_request=lambda _: run_latest,
             list_sources=lambda run_id: [] if run_id == run_latest.id else [object()],
             list_findings=lambda run_id: [] if run_id == run_latest.id else [object()],
         )
@@ -362,6 +365,47 @@ class RequestDetailEndpointTests(unittest.TestCase):
             self.assertEqual([r["id"] for r in payload["runs"]], [str(run_visible.id)])
             self.assertEqual(payload["sources"], [])
             self.assertEqual(payload["findings_by_kind"], {})
+        finally:
+            _close(client)
+
+    def test_running_latest_does_not_hide_completed_results(self):
+        req = _make_request()
+        run_completed = _make_run(request_id=req.id, attempt=1, status="completed")
+        run_running = _make_run(request_id=req.id, attempt=2, status="running")
+        src = ResearchSource(
+            id=uuid4(),
+            research_run_id=run_completed.id,
+            url="https://x",
+            title="T",
+            summary="S",
+            content_hash="h",
+            fetched_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+            raw_text_path=None,
+        )
+        finding = ResearchFinding(
+            id=uuid4(),
+            research_run_id=run_completed.id,
+            kind="technique",
+            label="L",
+            summary="S",
+        )
+        repo = SimpleNamespace(
+            get_generation_request=lambda _: req,
+            list_runs=lambda **_kw: [run_completed, run_running],
+            get_latest_run_for_request=lambda _: run_running,
+            get_latest_completed_run_for_request=lambda _: run_completed,
+            list_sources=lambda run_id: [src] if run_id == run_completed.id else [],
+            list_findings=lambda run_id: [finding] if run_id == run_completed.id else [],
+        )
+        client = _client(repo)
+        try:
+            resp = client.get(f"/api/research/requests/{req.id}")
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.json()
+            self.assertEqual(payload["latest_run"]["id"], str(run_running.id))
+            self.assertEqual(payload["latest_completed_run"]["id"], str(run_completed.id))
+            self.assertEqual(payload["sources"][0]["id"], str(src.id))
+            self.assertEqual(payload["findings_by_kind"]["technique"][0]["id"], str(finding.id))
         finally:
             _close(client)
 
@@ -429,6 +473,35 @@ class RunsListEndpointTests(unittest.TestCase):
             self.assertEqual(resp.status_code, 400)
             self.assertIn("bogus", resp.json()["detail"])
             self.assertIn("queued", resp.json()["detail"])
+        finally:
+            _close(client)
+
+
+# ---------------------------------------------------------------------------
+# POST /api/research/requests/{id}/worker/start
+# ---------------------------------------------------------------------------
+
+
+class RequestScopedWorkerEndpointTests(unittest.TestCase):
+    def test_request_scoped_worker_start_passes_generation_request_id(self):
+        repo = SimpleNamespace(list_categories=lambda: [])
+        client = _client(repo)
+        calls = []
+
+        def fake_start(self, **kwargs):
+            calls.append(kwargs)
+            return True, "started"
+
+        try:
+            with patch("web.research_worker_manager.ResearchWorkerManager.start", fake_start):
+                request_id = uuid4()
+                resp = client.post(
+                    f"/api/research/requests/{request_id}/worker/start",
+                    json={"kind": "once", "max_jobs": 1},
+                )
+            self.assertEqual(resp.status_code, 202)
+            self.assertEqual(calls[0]["generation_request_id"], str(request_id))
+            self.assertEqual(calls[0]["kind"], "once")
         finally:
             _close(client)
 

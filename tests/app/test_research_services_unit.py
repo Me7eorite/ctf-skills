@@ -251,7 +251,7 @@ class FakeJobService:
     def __init__(self, runs):
         self.runs = list(runs)
 
-    def claim_next_run(self, _agent_id, _lease_seconds):
+    def claim_next_run(self, _agent_id, _lease_seconds, **_kwargs):
         if not self.runs:
             return None
         return self.runs.pop(0)

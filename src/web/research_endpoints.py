@@ -66,6 +66,29 @@ def _register_worker_endpoints(app: FastAPI, manager) -> None:
 
     @app.post("/api/research/worker/start")
     async def worker_start(request: Request) -> JSONResponse:
+        return await _start_worker_from_request(request, manager)
+
+    @app.post("/api/research/requests/{request_id}/worker/start")
+    async def request_worker_start(request_id: str, request: Request) -> JSONResponse:
+        try:
+            UUID(request_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND,
+                detail="request not found",
+            ) from exc
+        return await _start_worker_from_request(
+            request,
+            manager,
+            generation_request_id=request_id,
+        )
+
+    async def _start_worker_from_request(
+        request: Request,
+        manager,
+        *,
+        generation_request_id: str | None = None,
+    ) -> JSONResponse:
         if manager is None:
             raise HTTPException(
                 status_code=HTTPStatus.SERVICE_UNAVAILABLE,
@@ -94,6 +117,7 @@ def _register_worker_endpoints(app: FastAPI, manager) -> None:
             max_jobs=max_jobs,
             lease_seconds=lease_seconds,
             hermes_timeout_seconds=hermes_timeout_seconds,
+            generation_request_id=generation_request_id,
         )
         if not ok:
             raise HTTPException(
@@ -376,8 +400,21 @@ def _register_request_detail(app: FastAPI) -> None:
                 )
             runs = repo.list_runs(generation_request_id=request_uuid)
             latest = repo.get_latest_run_for_request(request_uuid)
-            sources = repo.list_sources(latest.id) if latest else []
-            findings = repo.list_findings(latest.id) if latest else []
+            latest_completed_lookup = getattr(
+                repo,
+                "get_latest_completed_run_for_request",
+                None,
+            )
+            latest_completed = (
+                latest_completed_lookup(request_uuid)
+                if latest_completed_lookup is not None
+                else (latest if latest and latest.status == "completed" else None)
+            )
+            result_run = latest_completed or (
+                latest if latest and latest.status == "completed" else None
+            )
+            sources = repo.list_sources(result_run.id) if result_run else []
+            findings = repo.list_findings(result_run.id) if result_run else []
             design_tasks_summary = DesignTaskRepository(
                 session
             ).summarize_for_request(request_uuid)
@@ -394,6 +431,12 @@ def _register_request_detail(app: FastAPI) -> None:
                 "request": _request_dict(request, latest_run=latest),
                 "latest_run": _run_dict(latest, category=request.category)
                 if latest is not None
+                else None,
+                "latest_completed_run": _run_dict(
+                    latest_completed,
+                    category=request.category,
+                )
+                if latest_completed is not None
                 else None,
                 "runs": [_run_dict(r, category=request.category) for r in runs],
                 "sources": [_source_dict(s) for s in sources],

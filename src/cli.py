@@ -192,6 +192,7 @@ def _register_research_commands(
     worker.add_argument("--poll-interval-seconds", type=float, default=5.0)
     worker.add_argument("--lease-seconds", type=_positive_int, default=900)
     worker.add_argument("--hermes-timeout-seconds", type=_positive_int, default=810)
+    worker.add_argument("--generation-request-id", default=None)
 
     wait = sub.add_parser("wait", help="poll a run to terminal status")
     wait.add_argument("run_id")
@@ -593,6 +594,11 @@ def _research_worker(args: argparse.Namespace, paths: ProjectPaths) -> None:
     # Spec 9.2b: existing HERMES_TIMEOUT env var (used by shard execution) MUST NOT
     # influence the research worker — only the CLI flag or its default.
     from services import ResearchAgentExecutor, ResearchJobService, ResearchWorker
+    try:
+        request_id = UUID(args.generation_request_id) if args.generation_request_id else None
+    except ValueError:
+        print("error: --generation-request-id must be a uuid", file=sys.stderr)
+        sys.exit(2)
 
     job_service = ResearchJobService()
     executor = ResearchAgentExecutor(paths)
@@ -604,6 +610,7 @@ def _research_worker(args: argparse.Namespace, paths: ProjectPaths) -> None:
         poll_interval_seconds=args.poll_interval_seconds,
         lease_seconds=args.lease_seconds,
         hermes_timeout_seconds=args.hermes_timeout_seconds,
+        generation_request_id=request_id,
     )
     print(json.dumps(result, ensure_ascii=False))
 

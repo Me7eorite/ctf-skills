@@ -69,6 +69,7 @@ class ResearchJobService:
         agent_id: str,
         lease_seconds: int,
         *,
+        generation_request_id: UUID | None = None,
         expired_recovery_limit: int = 16,
     ) -> dto.ResearchRun | None:
         """恢复过期 run，并 claim 最老的一条 queued run。"""
@@ -97,13 +98,18 @@ class ResearchJobService:
                 self._apply_run_failed(session, run, "lease expired", log_path=None)
 
             # 再 claim 最早创建的 queued run。FOR UPDATE SKIP LOCKED 保证并发 worker 拿到不同任务。
-            queued = session.scalars(
+            queued_stmt = (
                 sa.select(model.ResearchRun)
                 .where(model.ResearchRun.status == "queued")
                 .order_by(model.ResearchRun.created_at)
                 .limit(1)
                 .with_for_update(skip_locked=True)
-            ).first()
+            )
+            if generation_request_id is not None:
+                queued_stmt = queued_stmt.where(
+                    model.ResearchRun.generation_request_id == generation_request_id
+                )
+            queued = session.scalars(queued_stmt).first()
             if queued is None:
                 return None
 

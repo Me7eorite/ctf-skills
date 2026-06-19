@@ -345,6 +345,7 @@ class RequestDetailDesignTaskSummaryTests(unittest.TestCase):
             get_generation_request=lambda _: request,
             list_runs=lambda **_kw: [],
             get_latest_run_for_request=lambda _: None,
+            get_latest_completed_run_for_request=lambda _: None,
             list_sources=lambda _id: [],
             list_findings=lambda _id: [],
         )

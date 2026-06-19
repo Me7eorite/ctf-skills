@@ -97,3 +97,26 @@ def test_ten_threads_claim_only_five_available_runs(session_factory: SessionFact
     assert len(claimed_ids) == 5
     assert len(set(claimed_ids)) == 5
     assert len(empty_claims) == 5
+
+
+def test_claim_can_be_scoped_to_generation_request(session_factory: SessionFactory):
+    service = ResearchJobService(session_factory)
+    first_request, _first_run = service.submit_request("web", "first", 1, {"easy": 1})
+    second_request, _second_run = service.submit_request("web", "second", 1, {"easy": 1})
+
+    claimed = service.claim_next_run(
+        "w1",
+        60,
+        generation_request_id=second_request.id,
+    )
+
+    assert claimed is not None
+    assert claimed.generation_request_id == second_request.id
+    with session_factory() as session:
+        first = session.scalar(
+            sa.select(model.ResearchRun).where(
+                model.ResearchRun.generation_request_id == first_request.id
+            )
+        )
+        assert first is not None
+        assert first.status == "queued"
