@@ -46,6 +46,8 @@ the atomic move. A category-filtered claim accepts only shards where every
 `challenges[]` entry is a dict with the requested `category`, and the list is
 non-empty. A build-attempt-filtered claim accepts only a shard whose top-level
 `build_attempt_id` is a valid UUID equal to the normalized requested id.
+It also requires the canonical basename `<build_attempt_id>.json`, matching
+the invariant used by `BuildOrchestrationService`.
 `require_build_attempt=True` accepts only attributed shards: both top-level
 `build_attempt_id` and `design_task_id` must be valid UUIDs. If multiple
 filters are present, all must match. Filter arguments are validated before the

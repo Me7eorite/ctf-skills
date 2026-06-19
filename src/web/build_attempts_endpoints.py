@@ -6,6 +6,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from http import HTTPStatus
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -14,8 +15,11 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError
 
+from core.jsonio import read_json
 from core.queue import SUPPORTED_CATEGORIES
 from domain.build_attempts import BuildAttempt, BuildAttemptListItem, BuildAttemptStatus
+from persistence.models import build_attempts as build_model
+from persistence.models import design_tasks as task_model
 from persistence.models.progress import ProgressEvent
 from persistence.repositories import (
     BuildAttemptsRepository,
@@ -160,6 +164,67 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
         body["progress_events"] = [_progress_event_dict(row) for row in events]
         return JSONResponse(body)
 
+    @app.post("/api/build-attempts/worker/start")
+    async def start_category_build_worker(request: Request) -> JSONResponse:
+        try:
+            payload = await request.json()
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail=f"request body must be JSON: {exc}",
+            ) from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail="request body must be a JSON object",
+            )
+        category = payload.get("category")
+        if category not in SUPPORTED_CATEGORIES:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail=(
+                    f"unknown category {category!r}; "
+                    f"allowed: {sorted(SUPPORTED_CATEGORIES)}"
+                ),
+            )
+
+        BuildOrchestrationService(paths=_project_paths(app)).recover_staging()
+        selected = _next_eligible_attempt(app, category)
+        if selected is None:
+            raise HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail=f"no queued {category} build attempt has a matching pending shard",
+            )
+        attempt_id, selected_category = selected
+        return _start_constrained_worker(app, attempt_id, selected_category)
+
+    @app.post("/api/build-attempts/{attempt_id}/worker/start")
+    def start_attempt_build_worker(attempt_id: str) -> JSONResponse:
+        attempt_uuid = _parse_uuid(
+            attempt_id,
+            "build attempt id",
+            not_found=True,
+        )
+        BuildOrchestrationService(paths=_project_paths(app)).recover_staging()
+        selected = _exact_eligible_attempt(app, attempt_uuid)
+        if selected is None:
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND,
+                detail="build attempt not found",
+            )
+        status, category, matches_pending = selected
+        if status != "queued":
+            raise HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail=f"build attempt is {status}, expected queued",
+            )
+        if not matches_pending:
+            raise HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail="build attempt has no matching pending shard",
+            )
+        return _start_constrained_worker(app, attempt_uuid, category)
+
     @app.post("/api/build-attempts/{attempt_id}/retry")
     def retry_build_attempt(attempt_id: str) -> JSONResponse:
         attempt_uuid = _parse_uuid(attempt_id, "build attempt id")
@@ -258,6 +323,126 @@ def _parse_limit(raw: str | None) -> int:
             detail="limit must be a positive integer",
         )
     return value
+
+
+def _next_eligible_attempt(app: FastAPI, category: str) -> tuple[UUID, str] | None:
+    from persistence.session import transaction
+
+    paths = _project_paths(app)
+    with transaction() as session:
+        rows = session.execute(
+            sa.select(build_model.BuildAttempt, task_model.DesignTask.category)
+            .join(
+                task_model.DesignTask,
+                task_model.DesignTask.id == build_model.BuildAttempt.design_task_id,
+            )
+            .where(
+                build_model.BuildAttempt.status == "queued",
+                task_model.DesignTask.category == category,
+            )
+            .order_by(
+                build_model.BuildAttempt.created_at.asc(),
+                build_model.BuildAttempt.id.asc(),
+            )
+        ).all()
+        for attempt, row_category in rows:
+            if _pending_payload_matches(
+                paths,
+                attempt_id=attempt.id,
+                design_task_id=attempt.design_task_id,
+                shard_basename=attempt.shard_basename,
+                category=row_category,
+            ):
+                return attempt.id, row_category
+    return None
+
+
+def _exact_eligible_attempt(
+    app: FastAPI,
+    attempt_id: UUID,
+) -> tuple[str, str, bool] | None:
+    from persistence.session import transaction
+
+    paths = _project_paths(app)
+    with transaction() as session:
+        row = session.execute(
+            sa.select(build_model.BuildAttempt, task_model.DesignTask.category)
+            .join(
+                task_model.DesignTask,
+                task_model.DesignTask.id == build_model.BuildAttempt.design_task_id,
+            )
+            .where(build_model.BuildAttempt.id == attempt_id)
+        ).one_or_none()
+        if row is None:
+            return None
+        attempt, category = row
+        matches = _pending_payload_matches(
+            paths,
+            attempt_id=attempt.id,
+            design_task_id=attempt.design_task_id,
+            shard_basename=attempt.shard_basename,
+            category=category,
+        )
+        return attempt.status, category, matches
+
+
+def _pending_payload_matches(
+    paths,
+    *,
+    attempt_id: UUID,
+    design_task_id: UUID,
+    shard_basename: str,
+    category: str,
+) -> bool:
+    if Path(shard_basename).name != shard_basename:
+        return False
+    if shard_basename != f"{attempt_id}.json":
+        return False
+    shard = paths.shards / "pending" / shard_basename
+    if shard.is_symlink() or not shard.is_file():
+        return False
+    payload = read_json(shard, None)
+    if not isinstance(payload, dict):
+        return False
+    try:
+        payload_attempt_id = UUID(str(payload.get("build_attempt_id")))
+        payload_design_task_id = UUID(str(payload.get("design_task_id")))
+    except (TypeError, ValueError, AttributeError):
+        return False
+    challenges = payload.get("challenges")
+    return bool(
+        payload_attempt_id == attempt_id
+        and payload_design_task_id == design_task_id
+        and isinstance(challenges, list)
+        and challenges
+        and all(
+            isinstance(challenge, dict)
+            and challenge.get("category") == category
+            for challenge in challenges
+        )
+    )
+
+
+def _start_constrained_worker(
+    app: FastAPI,
+    attempt_id: UUID,
+    category: str,
+) -> JSONResponse:
+    tasks = app.state.dashboard_tasks
+    ok, message = tasks.start_worker(
+        category=category,
+        build_attempt_id=attempt_id,
+    )
+    if not ok:
+        raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=message)
+    return JSONResponse(
+        {
+            "ok": True,
+            "message": message,
+            "build_attempt_id": str(attempt_id),
+        },
+        status_code=HTTPStatus.ACCEPTED,
+    )
 
 
 def _parse_uuid(value: Any, label: str, *, not_found: bool = False) -> UUID:

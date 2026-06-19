@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from uuid import uuid4
 
 from core.paths import ProjectPaths
 from core.queue import ShardQueue, split_challenges, split_matrix
@@ -88,3 +89,149 @@ class ShardTests(unittest.TestCase):
 
         self.assertEqual(requeued.name, "re-0001.json")
         self.assertTrue(requeued.exists())
+
+    def _write_payload(self, name: str, payload: object) -> Path:
+        path = self.paths.shards / "pending" / name
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return path
+
+    def test_category_claim_skips_earlier_other_category(self):
+        pwn = self._write_payload(
+            "pwn-0001.json",
+            {"challenges": [{"id": "pwn-0001", "category": "pwn"}]},
+        )
+        web = self._write_payload(
+            "web-0001.json",
+            {"challenges": [{"id": "web-0001", "category": "web"}]},
+        )
+
+        claimed = ShardQueue(self.paths).claim("worker-1", category="web")
+
+        self.assertIsNotNone(claimed)
+        self.assertEqual(ShardQueue(self.paths).original_name(claimed), web.name)
+        self.assertTrue(pwn.exists())
+
+    def test_category_claim_reads_uuid_named_payload(self):
+        attempt_id = uuid4()
+        design_task_id = uuid4()
+        shard = self._write_payload(
+            f"{attempt_id}.json",
+            {
+                "build_attempt_id": str(attempt_id),
+                "design_task_id": str(design_task_id),
+                "challenges": [{"id": "web-0001", "category": "web"}],
+            },
+        )
+
+        claimed = ShardQueue(self.paths).claim("worker-1", category="web")
+
+        self.assertEqual(ShardQueue(self.paths).original_name(claimed), shard.name)
+
+    def test_require_build_attempt_skips_matching_legacy_shard(self):
+        legacy = self._write_payload(
+            "a-web.json",
+            {"challenges": [{"id": "web-0001", "category": "web"}]},
+        )
+        attempt_id = uuid4()
+        attributed = self._write_payload(
+            "b-web.json",
+            {
+                "build_attempt_id": str(attempt_id),
+                "design_task_id": str(uuid4()),
+                "challenges": [{"id": "web-0002", "category": "web"}],
+            },
+        )
+
+        claimed = ShardQueue(self.paths).claim(
+            "worker-1",
+            category="web",
+            require_build_attempt=True,
+        )
+
+        self.assertEqual(ShardQueue(self.paths).original_name(claimed), attributed.name)
+        self.assertTrue(legacy.exists())
+
+    def test_exact_attempt_requires_matching_id_and_valid_design_task(self):
+        wanted = uuid4()
+        other = uuid4()
+        wrong = self._write_payload(
+            f"{other}.json",
+            {
+                "build_attempt_id": str(other),
+                "design_task_id": str(uuid4()),
+                "challenges": [{"id": "web-0001", "category": "web"}],
+            },
+        )
+        matching = self._write_payload(
+            f"{wanted}.json",
+            {
+                "build_attempt_id": str(wanted),
+                "design_task_id": str(uuid4()),
+                "challenges": [{"id": "web-0002", "category": "web"}],
+            },
+        )
+
+        claimed = ShardQueue(self.paths).claim(
+            "worker-1",
+            category="web",
+            build_attempt_id=wanted,
+        )
+
+        self.assertEqual(ShardQueue(self.paths).original_name(claimed), matching.name)
+        self.assertTrue(wrong.exists())
+
+    def test_exact_attempt_skips_duplicate_noncanonical_basename(self):
+        wanted = uuid4()
+        payload = {
+            "build_attempt_id": str(wanted),
+            "design_task_id": str(uuid4()),
+            "challenges": [{"id": "web-0001", "category": "web"}],
+        }
+        duplicate = self._write_payload("a-duplicate.json", payload)
+        canonical = self._write_payload(f"{wanted}.json", payload)
+
+        claimed = ShardQueue(self.paths).claim(
+            "worker-1",
+            category="web",
+            build_attempt_id=wanted,
+        )
+
+        self.assertEqual(ShardQueue(self.paths).original_name(claimed), canonical.name)
+        self.assertTrue(duplicate.exists())
+
+    def test_constrained_claim_skips_malformed_and_symlink(self):
+        malformed = self.paths.shards / "pending" / "a.json"
+        malformed.write_text("{", encoding="utf-8")
+        target = self.paths.root / "outside.json"
+        target.write_text(
+            json.dumps({"challenges": [{"id": "web-1", "category": "web"}]}),
+            encoding="utf-8",
+        )
+        symlink = self.paths.shards / "pending" / "b.json"
+        symlink.symlink_to(target)
+
+        claimed = ShardQueue(self.paths).claim("worker-1", category="web")
+
+        self.assertIsNone(claimed)
+        self.assertTrue(malformed.exists())
+        self.assertTrue(symlink.is_symlink())
+
+    def test_invalid_filter_does_not_mutate_queue(self):
+        shard = self._write_payload(
+            "web.json",
+            {"challenges": [{"id": "web-1", "category": "web"}]},
+        )
+
+        with self.assertRaises(ValueError):
+            ShardQueue(self.paths).claim("worker-1", build_attempt_id="invalid")
+
+        self.assertTrue(shard.exists())
+
+    def test_unconstrained_claim_keeps_malformed_compatibility(self):
+        shard = self.paths.shards / "pending" / "bad.json"
+        shard.write_text("{", encoding="utf-8")
+
+        claimed = ShardQueue(self.paths).claim("worker-1")
+
+        self.assertIsNotNone(claimed)
+        self.assertFalse(shard.exists())

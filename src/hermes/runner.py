@@ -17,6 +17,7 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from core.docker import image_exists as default_image_exists
 from core.jsonio import read_json
@@ -190,6 +191,9 @@ class HermesRunner:
         dry_run: bool = False,
         max_shards: int = 0,
         timeout: int | None = None,
+        category: str | None = None,
+        build_attempt_id: UUID | str | None = None,
+        require_build_attempt: bool = False,
     ) -> dict:
         """批量处理待处理分片的主循环。
 
@@ -209,7 +213,14 @@ class HermesRunner:
         outcomes: list[dict] = []
 
         while True:
-            outcome = self.process_one(worker, dry_run=dry_run, timeout=timeout)
+            outcome = self.process_one(
+                worker,
+                dry_run=dry_run,
+                timeout=timeout,
+                category=category,
+                build_attempt_id=build_attempt_id,
+                require_build_attempt=require_build_attempt,
+            )
             if outcome["status"] == "empty":
                 break  # 队列已空
             outcomes.append(outcome)
@@ -228,6 +239,9 @@ class HermesRunner:
         *,
         dry_run: bool,
         timeout: int | None = None,
+        category: str | None = None,
+        build_attempt_id: UUID | str | None = None,
+        require_build_attempt: bool = False,
     ) -> dict:
         """处理一个待处理分片。
 
@@ -237,7 +251,12 @@ class HermesRunner:
           3. 根据 dry_run 标志分支到模拟执行或真实执行
         """
         # 认领分片（原子操作）
-        shard = self.queue.claim(worker)
+        shard = self.queue.claim(
+            worker,
+            category=category,
+            build_attempt_id=build_attempt_id,
+            require_build_attempt=require_build_attempt,
+        )
         if shard is None:
             return {"status": "empty"}
 

@@ -13,6 +13,7 @@ import sqlalchemy as sa
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 
+from core.jsonio import write_json
 from core.paths import ProjectPaths
 from persistence.models import build_attempts as build_model
 from persistence.models import challenge_designs as design_model
@@ -28,6 +29,16 @@ from web.server import create_app
 ROOT = Path(__file__).resolve().parents[2]
 
 pytestmark = pytest.mark.postgres
+
+
+class _StubBuildTaskManager:
+    def __init__(self, response: tuple[bool, str] = (True, "worker started")):
+        self.response = response
+        self.calls: list[tuple[str, UUID]] = []
+
+    def start_worker(self, *, category: str, build_attempt_id: UUID):
+        self.calls.append((category, build_attempt_id))
+        return self.response
 
 
 @pytest.fixture(scope="module")
@@ -166,6 +177,38 @@ def _seed_designed_task(
         session.add_all([request, run, task, design_attempt, design])
         session.commit()
         return task.id
+
+
+def _write_pending_attempt(
+    client: TestClient,
+    attempt,
+    *,
+    category: str = "web",
+    design_task_id: UUID | None = None,
+) -> Path:
+    path = (
+        client.app.state.project_paths.shards
+        / "pending"
+        / attempt.shard_basename
+    )
+    write_json(
+        path,
+        {
+            "build_attempt_id": str(attempt.id),
+            "design_task_id": str(design_task_id or attempt.design_task_id),
+            "challenges": [{"id": f"{category}-0001", "category": category}],
+        },
+    )
+    return path
+
+
+def _create_canonical_attempt(repo: BuildAttemptsRepository, task_id: UUID):
+    attempt_id = uuid4()
+    return repo.create_attempt(
+        task_id,
+        f"{attempt_id}.json",
+        attempt_id=attempt_id,
+    )
 
 
 def test_batch_submit_returns_ordered_ids(
@@ -315,3 +358,111 @@ def test_validation_errors_return_400(client: TestClient):
     assert client.get("/api/build-attempts?category=crypto").status_code == 400
     assert client.get("/api/build-attempts?limit=zero").status_code == 400
     assert client.get("/api/build-attempts?design_task_id=nope").status_code == 400
+
+
+def test_category_worker_starts_first_eligible_db_attempt(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    first_task = _seed_designed_task(session_factory, task_no=1)
+    second_task = _seed_designed_task(session_factory, task_no=2)
+    with transaction(factory=session_factory) as session:
+        repo = BuildAttemptsRepository(session)
+        first = _create_canonical_attempt(repo, first_task)
+        second = _create_canonical_attempt(repo, second_task)
+        first_row = session.get(build_model.BuildAttempt, first.id)
+        second_row = session.get(build_model.BuildAttempt, second.id)
+        first_row.created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        second_row.created_at = datetime(2026, 1, 2, tzinfo=timezone.utc)
+
+    _write_pending_attempt(client, first)
+    _write_pending_attempt(client, second)
+    tasks = _StubBuildTaskManager()
+    client.app.state.dashboard_tasks = tasks
+
+    response = client.post(
+        "/api/build-attempts/worker/start",
+        json={"category": "web"},
+    )
+
+    assert response.status_code == 202
+    assert response.json()["build_attempt_id"] == str(first.id)
+    assert tasks.calls == [("web", first.id)]
+
+
+def test_category_worker_skips_mismatched_payload(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    first_task = _seed_designed_task(session_factory, task_no=1)
+    second_task = _seed_designed_task(session_factory, task_no=2)
+    with transaction(factory=session_factory) as session:
+        repo = BuildAttemptsRepository(session)
+        first = _create_canonical_attempt(repo, first_task)
+        second = _create_canonical_attempt(repo, second_task)
+        session.get(build_model.BuildAttempt, first.id).created_at = datetime(
+            2026, 1, 1, tzinfo=timezone.utc
+        )
+        session.get(build_model.BuildAttempt, second.id).created_at = datetime(
+            2026, 1, 2, tzinfo=timezone.utc
+        )
+
+    _write_pending_attempt(client, first, design_task_id=uuid4())
+    _write_pending_attempt(client, second)
+    tasks = _StubBuildTaskManager()
+    client.app.state.dashboard_tasks = tasks
+
+    response = client.post(
+        "/api/build-attempts/worker/start",
+        json={"category": "web"},
+    )
+
+    assert response.status_code == 202
+    assert tasks.calls == [("web", second.id)]
+
+
+def test_exact_worker_rejects_terminal_missing_and_mismatched_attempts(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory)
+    with transaction(factory=session_factory) as session:
+        repo = BuildAttemptsRepository(session)
+        terminal = repo.create_attempt(task_id, f"{uuid4()}.json")
+        repo.update_to_terminal(terminal.id, status="failed", error="failed")
+    tasks = _StubBuildTaskManager()
+    client.app.state.dashboard_tasks = tasks
+
+    assert client.post("/api/build-attempts/not-a-uuid/worker/start").status_code == 404
+    assert client.post(f"/api/build-attempts/{uuid4()}/worker/start").status_code == 404
+    assert client.post(f"/api/build-attempts/{terminal.id}/worker/start").status_code == 409
+    assert tasks.calls == []
+
+
+def test_exact_worker_recovers_staging_and_respects_busy_guard(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory)
+    with transaction(factory=session_factory) as session:
+        attempt = _create_canonical_attempt(BuildAttemptsRepository(session), task_id)
+    paths = client.app.state.project_paths
+    staged = paths.build_attempt_staging / f"{attempt.id}.json"
+    write_json(
+        staged,
+        {
+            "build_attempt_id": str(attempt.id),
+            "design_task_id": str(attempt.design_task_id),
+            "challenges": [{"id": "web-0001", "category": "web"}],
+        },
+    )
+    tasks = _StubBuildTaskManager((False, "another task is already running"))
+    client.app.state.dashboard_tasks = tasks
+
+    response = client.post(f"/api/build-attempts/{attempt.id}/worker/start")
+
+    assert response.status_code == 409
+    assert "already running" in response.json()["detail"]
+    assert not staged.exists()
+    assert (paths.shards / "pending" / attempt.shard_basename).exists()
+    assert tasks.calls == [("web", attempt.id)]

@@ -21,8 +21,9 @@ SHALL require `--category` and SHALL be mutually exclusive with
 Before scanning the queue, constrained claims SHALL validate category and UUID
 filter arguments. Candidate attribution SHALL contain valid top-level
 `build_attempt_id` and `design_task_id` UUIDs when build-attempt attribution is
-required. Malformed JSON, invalid attribution, non-regular files, and symbolic
-links SHALL be skipped without mutation in constrained mode. Legacy
+required. An exact build-attempt claim SHALL also require the canonical
+`<build_attempt_id>.json` basename. Malformed JSON, invalid attribution,
+non-regular files, and symbolic links SHALL be skipped without mutation. Legacy
 unconstrained claims retain their existing compatibility behavior.
 
 #### Scenario: CLI category filter reaches the queue
@@ -53,6 +54,14 @@ unconstrained claims retain their existing compatibility behavior.
   is invoked
 - **THEN** the runner passes both filters to the shard queue claim
 - **AND** a shard with attempt `A` but a non-Web challenge is not claimed
+
+#### Scenario: Exact attempt ignores a duplicate noncanonical basename
+
+- **GIVEN** canonical shard `A.json` and another pending file both contain
+  `build_attempt_id = A`
+- **WHEN** an exact-attempt worker claims `A`
+- **THEN** only `A.json` is eligible
+- **AND** the duplicate file remains pending
 
 #### Scenario: Build-attempt run rejects loop mode
 

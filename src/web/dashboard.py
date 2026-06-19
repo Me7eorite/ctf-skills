@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from uuid import UUID
 
 from core.jsonio import read_json
 from core.paths import ProjectPaths
@@ -56,7 +57,43 @@ class TaskManager:
         }
         if kind not in commands:
             return False, "unknown action"
-        if kind == "worker" and not any(
+        return self._start(
+            kind,
+            commands[kind],
+            require_pending=kind == "worker",
+        )
+
+    def start_worker(
+        self,
+        *,
+        category: str,
+        build_attempt_id: UUID,
+    ) -> tuple[bool, str]:
+        cli_script = Path(__file__).resolve().parents[1] / "cli.py"
+        return self._start(
+            "worker",
+            [
+                sys.executable,
+                str(cli_script),
+                "run",
+                "--worker",
+                "dashboard-01",
+                "--category",
+                category,
+                "--build-attempt",
+                str(build_attempt_id),
+            ],
+            require_pending=False,
+        )
+
+    def _start(
+        self,
+        kind: str,
+        command: list[str],
+        *,
+        require_pending: bool,
+    ) -> tuple[bool, str]:
+        if require_pending and not any(
             (self.paths.shards / "pending").glob("*.json")
         ):
             running = len(
@@ -80,7 +117,7 @@ class TaskManager:
             self._log = f"dashboard-{kind}.log"
             with (self.paths.logs / self._log).open("w", encoding="utf-8") as output:
                 self._process = subprocess.Popen(
-                    commands[kind],
+                    command,
                     cwd=self.paths.root,
                     stdout=output,
                     stderr=subprocess.STDOUT,

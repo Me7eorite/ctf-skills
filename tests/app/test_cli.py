@@ -61,6 +61,9 @@ class CLIHelpAndParserTests(unittest.TestCase):
             result = _run_cli(["run", "--help"], cwd=tmp_path)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--timeout", result.stdout)
+        self.assertIn("--category", result.stdout)
+        self.assertIn("--build-attempt", result.stdout)
+        self.assertIn("--build-attempts-only", result.stdout)
         self.assertNotIn("--validate", result.stdout)
 
     def test_validate_subcommand_still_exists(self):
@@ -80,6 +83,48 @@ class CLIHelpAndParserTests(unittest.TestCase):
             )
         self.assertEqual(result.returncode, 2)
         self.assertIn("mutually exclusive", result.stderr)
+
+    def test_build_attempt_and_loop_are_mutually_exclusive(self):
+        with TemporaryDirectory() as tmp:
+            result = _run_cli(
+                [
+                    "run",
+                    "--worker",
+                    "worker-1",
+                    "--build-attempt",
+                    "11111111-1111-1111-1111-111111111111",
+                    "--loop",
+                ],
+                cwd=Path(tmp),
+            )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("mutually exclusive", result.stderr)
+
+    def test_build_attempts_only_requires_category(self):
+        with TemporaryDirectory() as tmp:
+            result = _run_cli(
+                ["run", "--worker", "worker-1", "--build-attempts-only"],
+                cwd=Path(tmp),
+            )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("requires --category", result.stderr)
+
+    def test_invalid_category_and_uuid_exit_before_queue_mutation(self):
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            _seed_pending_shard(tmp_path)
+            pending = tmp_path / "work" / "shards" / "pending" / "web-0001-0001.json"
+            category = _run_cli(
+                ["run", "--worker", "worker-1", "--category", "crypto"],
+                cwd=tmp_path,
+            )
+            invalid_uuid = _run_cli(
+                ["run", "--worker", "worker-1", "--build-attempt", "invalid"],
+                cwd=tmp_path,
+            )
+            self.assertEqual(category.returncode, 2)
+            self.assertEqual(invalid_uuid.returncode, 2)
+            self.assertTrue(pending.exists())
 
 
 class CLITimeoutPrecedenceTests(unittest.TestCase):

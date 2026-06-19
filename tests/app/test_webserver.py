@@ -1,6 +1,8 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
@@ -91,6 +93,44 @@ class WebserverTests(unittest.TestCase):
             response = client.post("/api/actions/validate")
         self.assertEqual(response.status_code, 409)
         self.assertEqual(tasks.calls, ["validate"])
+
+    def test_task_manager_starts_exact_worker_without_loop(self):
+        tasks = TaskManager(self.paths)
+        process = Mock()
+        process.poll.return_value = None
+        attempt_id = uuid4()
+        with (
+            patch("web.dashboard.subprocess.Popen", return_value=process) as popen,
+            patch("web.dashboard.time.sleep"),
+        ):
+            ok, _message = tasks.start_worker(
+                category="web",
+                build_attempt_id=attempt_id,
+            )
+
+        self.assertTrue(ok)
+        command = popen.call_args.args[0]
+        self.assertIn("--category", command)
+        self.assertIn("web", command)
+        self.assertIn("--build-attempt", command)
+        self.assertIn(str(attempt_id), command)
+        self.assertNotIn("--loop", command)
+
+    def test_task_manager_exact_worker_respects_busy_guard(self):
+        tasks = TaskManager(self.paths)
+        running = Mock()
+        running.poll.return_value = None
+        tasks._process = running
+
+        with patch("web.dashboard.subprocess.Popen") as popen:
+            ok, message = tasks.start_worker(
+                category="web",
+                build_attempt_id=uuid4(),
+            )
+
+        self.assertFalse(ok)
+        self.assertIn("already running", message)
+        popen.assert_not_called()
 
     def test_shard_requeue_validates_state(self):
         with self._client() as client:

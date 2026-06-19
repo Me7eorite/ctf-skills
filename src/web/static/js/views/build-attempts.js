@@ -148,6 +148,38 @@ async function runAction(kind) {
   }
 }
 
+async function startBuildWorker() {
+  let endpoint;
+  let body;
+  if (state.detailId) {
+    endpoint = `/api/build-attempts/${encodeURIComponent(state.detailId)}/worker/start`;
+    body = {};
+  } else {
+    const category = state.filters.category;
+    if (!category) {
+      showToast("Choose a category before starting a worker", true);
+      return;
+    }
+    endpoint = "/api/build-attempts/worker/start";
+    body = { category };
+  }
+
+  try {
+    const result = await postJson(endpoint, body);
+    showToast(result.message);
+    appState.data = {
+      ...(appState.data || {}),
+      process: {
+        ...(appState.data?.process || {}),
+        last_action: "worker",
+        last_message: result.message,
+      },
+    };
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
 async function retryAttempt(attemptId) {
   if (!attemptId) return;
   state.flags.retrying = { ...(state.flags.retrying || {}), [attemptId]: true };
@@ -351,6 +383,9 @@ function renderDetail(root) {
         <button id="ba-refresh" class="btn btn-secondary btn-sm">
           <i data-lucide="refresh-cw"></i>Refresh
         </button>
+        ${attempt.status === "queued"
+          ? `<button id="ba-worker" class="btn btn-primary btn-sm"><i data-lucide="play"></i>Start Worker</button>`
+          : ""}
         ${attempt.status === "failed" || attempt.status === "lost"
           ? `<button class="btn btn-primary btn-sm ba-retry" data-build-attempt-id="${escapeHtml(attempt.id)}">Retry</button>`
           : ""}
@@ -500,7 +535,7 @@ export function bind() {
       return;
     }
     if (event.target.closest("#ba-worker")) {
-      runAction("worker");
+      startBuildWorker();
       return;
     }
     if (event.target.closest("#ba-validate")) {

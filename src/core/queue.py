@@ -9,6 +9,8 @@ from __future__ import annotations
 import time
 from collections import defaultdict
 from pathlib import Path
+from typing import Any
+from uuid import UUID
 
 from core.jsonio import read_json, read_jsonl, write_json
 from core.paths import ProjectPaths
@@ -117,7 +119,14 @@ class ShardQueue:
     def __init__(self, paths: ProjectPaths):
         self.paths = paths
 
-    def claim(self, worker: str) -> Path | None:
+    def claim(
+        self,
+        worker: str,
+        *,
+        category: str | None = None,
+        build_attempt_id: UUID | str | None = None,
+        require_build_attempt: bool = False,
+    ) -> Path | None:
         """认领一个待处理分片。
 
         原子操作流程:
@@ -133,12 +142,37 @@ class ShardQueue:
             已认领的分片路径（位于 running/ 目录），
             如果没有可认领的分片则返回 None。
         """
+        normalized_attempt_id = _claim_filters(
+            category=category,
+            build_attempt_id=build_attempt_id,
+        )
+        constrained = bool(
+            category is not None
+            or normalized_attempt_id is not None
+            or require_build_attempt
+        )
         pending = self.paths.shards / "pending"
         running = self.paths.shards / "running"
         running.mkdir(parents=True, exist_ok=True)
 
         # 按文件名排序遍历，保证多个 Worker 有相同的处理顺序
         for shard in sorted(pending.glob("*.json")):
+            if constrained:
+                if shard.is_symlink() or not shard.is_file():
+                    continue
+                if (
+                    normalized_attempt_id is not None
+                    and shard.name != f"{normalized_attempt_id}.json"
+                ):
+                    continue
+                payload = read_json(shard, None)
+                if not _matches_claim_filters(
+                    payload,
+                    category=category,
+                    build_attempt_id=normalized_attempt_id,
+                    require_build_attempt=require_build_attempt,
+                ):
+                    continue
             # 目标路径包含 worker 名，这样可以看到是哪个 worker 在处理
             target = running / f"{shard.stem}.{worker}.json"
             try:
@@ -268,3 +302,60 @@ class ShardQueue:
         例如: web-0001-0005.json → web-0001-0005.json.claim.json
         """
         return shard.with_suffix(shard.suffix + ".claim.json")
+
+
+def _claim_filters(
+    *,
+    category: str | None,
+    build_attempt_id: UUID | str | None,
+) -> UUID | None:
+    if category is not None and category not in SUPPORTED_CATEGORIES:
+        raise ValueError(
+            f"unsupported category {category!r}; allowed: {sorted(SUPPORTED_CATEGORIES)}"
+        )
+    if build_attempt_id is None:
+        return None
+    try:
+        return UUID(str(build_attempt_id))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ValueError("build_attempt_id must be a UUID") from exc
+
+
+def _matches_claim_filters(
+    payload: Any,
+    *,
+    category: str | None,
+    build_attempt_id: UUID | None,
+    require_build_attempt: bool,
+) -> bool:
+    if not isinstance(payload, dict):
+        return False
+
+    payload_attempt_id = _payload_uuid(payload.get("build_attempt_id"))
+    payload_design_task_id = _payload_uuid(payload.get("design_task_id"))
+    if build_attempt_id is not None:
+        if payload_attempt_id != build_attempt_id or payload_design_task_id is None:
+            return False
+    if require_build_attempt and (
+        payload_attempt_id is None or payload_design_task_id is None
+    ):
+        return False
+
+    if category is not None:
+        challenges = payload.get("challenges")
+        if not isinstance(challenges, list) or not challenges:
+            return False
+        if any(
+            not isinstance(challenge, dict)
+            or challenge.get("category") != category
+            for challenge in challenges
+        ):
+            return False
+    return True
+
+
+def _payload_uuid(value: Any) -> UUID | None:
+    try:
+        return UUID(str(value))
+    except (TypeError, ValueError, AttributeError):
+        return None

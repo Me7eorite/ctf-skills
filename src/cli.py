@@ -77,6 +77,9 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--loop", action="store_true")
     run.add_argument("--dry-run", action="store_true")
     run.add_argument("--max-shards", type=int, default=0)
+    run.add_argument("--category", choices=sorted(SUPPORTED_CATEGORIES))
+    run.add_argument("--build-attempt", type=UUID)
+    run.add_argument("--build-attempts-only", action="store_true")
     run.add_argument(
         "--timeout",
         type=_positive_int,
@@ -758,7 +761,8 @@ def _check_category_consistency() -> None:
 
 
 def main() -> None:
-    args = parser().parse_args()
+    argument_parser = parser()
+    args = argument_parser.parse_args()
     paths = ProjectPaths.discover()
 
     if args.command == "init":
@@ -779,8 +783,15 @@ def main() -> None:
 
     if args.command == "run":
         if args.dry_run and args.loop:
-            print("error: --dry-run and --loop are mutually exclusive", file=sys.stderr)
-            sys.exit(2)
+            argument_parser.error("--dry-run and --loop are mutually exclusive")
+        if args.build_attempt is not None and args.loop:
+            argument_parser.error("--build-attempt and --loop are mutually exclusive")
+        if args.build_attempts_only and args.category is None:
+            argument_parser.error("--build-attempts-only requires --category")
+        if args.build_attempts_only and args.build_attempt is not None:
+            argument_parser.error(
+                "--build-attempts-only and --build-attempt are mutually exclusive"
+            )
         effective_timeout, source = _resolve_run_timeout(args.timeout)
         print(f"effective_timeout={effective_timeout} source={source}", flush=True)
         result = HermesRunner(
@@ -796,6 +807,9 @@ def main() -> None:
             dry_run=args.dry_run,
             max_shards=args.max_shards,
             timeout=effective_timeout,
+            category=args.category,
+            build_attempt_id=args.build_attempt,
+            require_build_attempt=args.build_attempts_only,
         )
         print(json.dumps(result, indent=2))
         if result["failed"]:

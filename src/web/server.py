@@ -39,6 +39,7 @@ def create_app(
     app.state.project_paths = service.paths
     app.state.build_reconciler = build_reconciler
     app.state.progress_store = service.store
+    app.state.dashboard_tasks = service.tasks
 
     @app.get("/api/state")
     def get_state() -> JSONResponse:

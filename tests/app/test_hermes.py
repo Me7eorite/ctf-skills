@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from uuid import uuid4
 
 from core.paths import ProjectPaths
 from hermes import HermesRunner
@@ -180,3 +181,23 @@ class HermesRunnerTests(unittest.TestCase):
             outcome = runner.process_one("worker-1", dry_run=False)
 
         self.assertEqual(outcome["status"], "failed")
+
+    def test_process_one_passes_claim_filters(self):
+        runner = HermesRunner(self.paths)
+        attempt_id = uuid4()
+        with patch.object(runner.queue, "claim", return_value=None) as claim:
+            outcome = runner.process_one(
+                "worker-1",
+                dry_run=False,
+                category="web",
+                build_attempt_id=attempt_id,
+                require_build_attempt=True,
+            )
+
+        self.assertEqual(outcome, {"status": "empty"})
+        claim.assert_called_once_with(
+            "worker-1",
+            category="web",
+            build_attempt_id=attempt_id,
+            require_build_attempt=True,
+        )
