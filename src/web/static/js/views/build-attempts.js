@@ -15,6 +15,7 @@ const SETTLED_POLL_MS = 12000;
 const STATUSES = ["queued", "running", "succeeded", "failed", "lost"];
 const CATEGORIES = ["web", "pwn", "re"];
 const state = appState.buildAttempts;
+const detailEventNodes = new Map();
 
 export function openBuildAttemptsRoute({ detailId = null, filters = {} } = {}) {
   state.detailId = detailId;
@@ -63,12 +64,19 @@ async function poll() {
   state.poll.loading = true;
   try {
     if (state.detailId) {
-      state.detail = await api(`/api/build-attempts/${state.detailId}`);
+      const nextDetail = await api(`/api/build-attempts/${state.detailId}`);
+      if (patchDetailEvents(nextDetail)) {
+        state.detail = nextDetail;
+      } else {
+        state.detail = nextDetail;
+        render(appState.data);
+        initIcons();
+      }
     } else {
       state.list = await api(buildListUrl());
+      render(appState.data);
+      initIcons();
     }
-    render(appState.data);
-    initIcons();
   } catch (err) {
     showToast(err.message, true);
   } finally {
@@ -230,7 +238,9 @@ export function render(data) {
 
   if (state.detailId) {
     renderDetail(root);
+    requestAnimationFrame(rebuildDetailEventNodes);
   } else {
+    detailEventNodes.clear();
     renderList(root);
   }
 
@@ -417,7 +427,7 @@ function renderDetail(root) {
     <section class="card" style="margin-top: var(--space-lg);">
       <div class="card-header">
         <div><div class="card-title">进度事件</div></div>
-        <span class="pill">${(attempt.progress_events || []).length}</span>
+        <span class="pill" id="ba-progress-event-count">${(attempt.progress_events || []).length}</span>
       </div>
       ${renderProgressEvents(attempt.progress_events || [])}
     </section>
@@ -449,18 +459,65 @@ function renderSiblingAttempts(attempt) {
 }
 
 function renderProgressEvents(events) {
-  if (!events.length) return `<div class="empty card-body">没有进度事件</div>`;
   return `
-    <div class="card-body" style="display: grid; gap: var(--space-sm);">
-      ${events.map((event) => `
-        <div class="mono" style="font-size: var(--font-sm); color: ${event.message?.startsWith("carry-forward:") ? "var(--accent-amber)" : "var(--ink-700)"};">
-          #${event.id} ${escapeHtml(event.stage)}/${escapeHtml(event.status)}
-          ${event.challenge_id ? escapeHtml(event.challenge_id) : "shard"}
-          ${escapeHtml(event.message || "")}
-        </div>
-      `).join("")}
+    <div id="ba-progress-events" class="card-body" style="display: grid; gap: var(--space-sm);">
+      ${events.length
+        ? events.map(renderProgressEvent).join("")
+        : `<div class="empty" data-empty-events>没有进度事件</div>`}
     </div>
   `;
+}
+
+function renderProgressEvent(event) {
+  return `
+    <div class="mono" data-progress-event-id="${event.id}" style="font-size: var(--font-sm); color: ${event.message?.startsWith("carry-forward:") ? "var(--accent-amber)" : "var(--ink-700)"};">
+      #${event.id} ${escapeHtml(event.stage)}/${escapeHtml(event.status)}
+      ${event.challenge_id ? escapeHtml(event.challenge_id) : "shard"}
+      ${escapeHtml(event.message || "")}
+    </div>
+  `;
+}
+
+function detailWithoutEvents(detail) {
+  if (!detail) return null;
+  const { progress_events: _events, ...rest } = detail;
+  return rest;
+}
+
+function patchDetailEvents(nextDetail) {
+  if (!state.detail || state.detail.id !== nextDetail.id) return false;
+  if (JSON.stringify(detailWithoutEvents(state.detail)) !== JSON.stringify(detailWithoutEvents(nextDetail))) return false;
+  const current = state.detail.progress_events || [];
+  const next = nextDetail.progress_events || [];
+  if (next.length < current.length) return false;
+  for (let index = 0; index < current.length; index += 1) {
+    if (JSON.stringify(current[index]) !== JSON.stringify(next[index])) return false;
+  }
+  if (next.length === current.length) return true;
+  const container = document.querySelector("#ba-progress-events");
+  if (!container) return false;
+  const appended = next.slice(current.length);
+  const knownIds = new Set(current.map((event) => event.id));
+  const lastKnownId = current.length ? current[current.length - 1].id : null;
+  if ((lastKnownId !== null && appended[0].id <= lastKnownId)
+      || appended.some((event, index) => knownIds.has(event.id)
+      || (index > 0 && appended[index - 1].id >= event.id))) return false;
+  container.querySelector("[data-empty-events]")?.remove();
+  container.insertAdjacentHTML("beforeend", appended.map(renderProgressEvent).join(""));
+  for (const event of appended) {
+    const node = container.querySelector(`[data-progress-event-id="${event.id}"]`);
+    if (node) detailEventNodes.set(event.id, node);
+  }
+  const count = document.querySelector("#ba-progress-event-count");
+  if (count) count.textContent = String(next.length);
+  return true;
+}
+
+function rebuildDetailEventNodes() {
+  detailEventNodes.clear();
+  document.querySelectorAll("#ba-progress-events [data-progress-event-id]").forEach((node) => {
+    detailEventNodes.set(Number(node.dataset.progressEventId), node);
+  });
 }
 
 function artifactPill(value) {
@@ -537,6 +594,7 @@ function clearFilters() {
 }
 
 function openDetail(id) {
+  detailEventNodes.clear();
   state.detailId = id;
   state.detail = null;
   window.location.hash = `#/build-attempts/${encodeURIComponent(id)}`;

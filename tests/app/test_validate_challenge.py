@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
+from core.jsonio import write_json
 from domain.validation import ChallengeValidator
 from hermes.runner import merge_validation_into_report
 
@@ -72,6 +75,40 @@ class ValidateChallengeLookupTests(unittest.TestCase):
             # validate_one returns invalid_metadata when metadata.json missing.
             self.assertIn(result["status"], {"invalid_metadata", "contract_failed"})
             self.assertEqual(result.get("path"), str(directory))
+
+
+class ValidateChallengeFlagExtractionTests(unittest.TestCase):
+    def _validate_stdout(self, stdout: str, expected: str = "flag{expected-value}"):
+        temp = TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        paths = _seed_paths(Path(temp.name))
+        directory = _make_challenge_dir(paths, "web-0001")
+        write_json(directory / "metadata.json", {"flag": expected})
+        (directory / "validate.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+        validator = ChallengeValidator(paths)  # type: ignore[arg-type]
+        validator.contract_errors = lambda *_: []  # type: ignore[method-assign]
+        with patch(
+            "domain.validation.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 0, stdout, ""),
+        ):
+            return validator.validate_one(directory)
+
+    def test_cleanup_after_flag_does_not_mask_success(self):
+        result = self._validate_stdout(
+            "flag{expected-value}\n[*] Cleaning up...\n"
+        )
+        self.assertEqual(result["status"], "passed")
+
+    def test_last_independent_flag_token_wins(self):
+        result = self._validate_stdout(
+            "flag{wrong}\nprefixflag{ignored}\nflag{expected-value}\n"
+        )
+        self.assertEqual(result["printed_flag"], "flag{expected-value}")
+
+    def test_no_flag_token_is_mismatch(self):
+        result = self._validate_stdout("validation completed\n")
+        self.assertEqual(result["status"], "flag_mismatch")
+        self.assertEqual(result["printed_flag"], "")
 
 
 class MergeValidationIntoReportTests(unittest.TestCase):

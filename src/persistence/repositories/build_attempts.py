@@ -102,10 +102,47 @@ class BuildAttemptsRepository:
             .subquery("ranked_build_attempts")
         )
         latest = aliased(model.BuildAttempt)
+        selected_query = (
+            sa.select(
+                latest.id.label("attempt_id"),
+                latest.shard_basename.label("shard_basename"),
+                latest.created_at.label("created_at"),
+            )
+            .join(
+                ranked,
+                sa.and_(ranked.c.attempt_id == latest.id, ranked.c.rank == 1),
+            )
+            .join(
+                task_model.DesignTask,
+                task_model.DesignTask.id == latest.design_task_id,
+            )
+        )
+        if design_task_id is not None:
+            selected_query = selected_query.where(
+                latest.design_task_id == design_task_id
+            )
+        if generation_request_id is not None:
+            selected_query = selected_query.where(
+                task_model.DesignTask.generation_request_id == generation_request_id
+            )
+        if status is not None:
+            selected_query = selected_query.where(latest.status == status)
+        if worker is not None:
+            selected_query = selected_query.where(latest.worker == worker)
+        if category is not None:
+            selected_query = selected_query.where(
+                task_model.DesignTask.category == category
+            )
+        selected = selected_query.order_by(
+            latest.created_at.desc(), latest.id
+        ).limit(limit).cte("selected_build_attempts")
         progress = (
             sa.select(
                 ProgressSnapshot.shard.label("shard"),
                 sa.func.max(ProgressSnapshot.percent).label("percent"),
+            )
+            .where(
+                ProgressSnapshot.shard.in_(sa.select(selected.c.shard_basename))
             )
             .group_by(ProgressSnapshot.shard)
             .subquery("build_attempt_progress")
@@ -121,8 +158,8 @@ class BuildAttemptsRepository:
                 sa.func.coalesce(progress.c.percent, 0),
             )
             .join(
-                ranked,
-                sa.and_(ranked.c.attempt_id == latest.id, ranked.c.rank == 1),
+                selected,
+                selected.c.attempt_id == latest.id,
             )
             .join(
                 task_model.DesignTask,
@@ -130,21 +167,8 @@ class BuildAttemptsRepository:
             )
             .outerjoin(progress, progress.c.shard == latest.shard_basename)
         )
-        if design_task_id is not None:
-            query = query.where(latest.design_task_id == design_task_id)
-        if generation_request_id is not None:
-            query = query.where(
-                task_model.DesignTask.generation_request_id == generation_request_id
-            )
-        if status is not None:
-            query = query.where(latest.status == status)
-        if worker is not None:
-            query = query.where(latest.worker == worker)
-        if category is not None:
-            query = query.where(task_model.DesignTask.category == category)
-
         rows = self.session.execute(
-            query.order_by(latest.created_at.desc(), latest.id).limit(limit)
+            query.order_by(selected.c.created_at.desc(), selected.c.attempt_id)
         ).all()
         return [
             _list_item(

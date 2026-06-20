@@ -361,6 +361,12 @@ def test_revalidate_endpoint_rejects_non_failed_attempt(
     assert "expected failed" in response.json()["detail"]
 
 
+def test_revalidate_endpoint_returns_404_for_missing_attempt(client: TestClient):
+    response = client.post(f"/api/build-attempts/{uuid4()}/revalidate")
+
+    assert response.status_code == 404
+
+
 def test_validation_errors_return_400(client: TestClient):
     assert client.post("/api/design-tasks/not-a-uuid/build").status_code == 400
     assert (

@@ -7,8 +7,18 @@ from uuid import uuid4
 from core.paths import ProjectPaths
 from hermes import HermesRunner
 
+ROOT = Path(__file__).resolve().parents[2]
+
 
 class HermesRunnerTests(unittest.TestCase):
+    def test_validation_prompt_requires_clean_stdout_and_stale_cleanup(self):
+        prompt = (ROOT / "prompts" / "shard_prompt.md").read_text(encoding="utf-8")
+        self.assertIn("redirect its output to stderr (`>&2`)", prompt)
+        self.assertIn(
+            'docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true',
+            prompt,
+        )
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

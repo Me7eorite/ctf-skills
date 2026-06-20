@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -12,6 +13,7 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy import create_engine
 
+import services.build_attempt_revalidation_service as revalidation_module
 from core.jsonio import write_json
 from core.paths import ProjectPaths
 from persistence.models import build_attempts as build_model
@@ -32,8 +34,13 @@ pytestmark = pytest.mark.postgres
 
 
 class _PassingValidator:
-    def validate_challenge(self, challenge_id: str) -> dict:
-        return {"challenge_id": challenge_id, "status": "passed", "elapsed": 0.01}
+    def validate_one(self, challenge_dir: Path) -> dict:
+        return {"path": str(challenge_dir), "status": "passed", "elapsed": 0.01}
+
+
+class _RaisingValidator:
+    def validate_one(self, challenge_dir: Path) -> dict:
+        raise RuntimeError(f"validator crashed for {challenge_dir.name}")
 
 
 @pytest.fixture(scope="module")
@@ -186,6 +193,147 @@ def test_revalidate_rejects_stale_failed_attempt(
 
     with pytest.raises(BuildAttemptRevalidationError, match="latest"):
         service.revalidate(attempt_id)
+
+
+def test_revalidate_rejects_duplicate_advisory_lock_before_progress(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    paths = ProjectPaths(root=tmp_path, repository=tmp_path)
+    paths.initialize()
+    task_id, attempt_id, basename, challenge_id = _seed_failed_attempt(
+        session_factory
+    )
+    _write_failed_shard(paths, task_id, attempt_id, basename, challenge_id)
+    key = attempt_id.int & ((1 << 63) - 1)
+    service = BuildAttemptRevalidationService(
+        paths=paths,
+        progress=PostgresProgressStore(session_factory),
+        session_factory=session_factory,
+        validator=_PassingValidator(),  # type: ignore[arg-type]
+        image_exists=lambda _image: True,
+    )
+
+    with session_factory.engine.connect() as connection:
+        assert connection.scalar(sa.select(sa.func.pg_try_advisory_lock(key)))
+        connection.commit()
+        try:
+            with pytest.raises(BuildAttemptRevalidationError, match="already"):
+                service.revalidate(attempt_id)
+        finally:
+            connection.execute(sa.select(sa.func.pg_advisory_unlock(key)))
+            connection.commit()
+
+    with session_factory() as session:
+        assert session.scalar(sa.select(sa.func.count()).select_from(ProgressEvent)) == 0
+
+
+def test_validator_exception_writes_terminal_failure_events(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    paths = ProjectPaths(root=tmp_path, repository=tmp_path)
+    paths.initialize()
+    task_id, attempt_id, basename, challenge_id = _seed_failed_attempt(
+        session_factory
+    )
+    _write_failed_shard(paths, task_id, attempt_id, basename, challenge_id)
+    _write_web_challenge(paths, challenge_id)
+    service = BuildAttemptRevalidationService(
+        paths=paths,
+        progress=PostgresProgressStore(session_factory),
+        session_factory=session_factory,
+        validator=_RaisingValidator(),  # type: ignore[arg-type]
+        image_exists=lambda _image: True,
+    )
+
+    with pytest.raises(BuildAttemptRevalidationError, match="validator_error"):
+        service.revalidate(attempt_id)
+
+    with session_factory() as session:
+        row = session.get(build_model.BuildAttempt, attempt_id)
+        events = session.scalars(
+            sa.select(ProgressEvent)
+            .where(ProgressEvent.shard == basename)
+            .order_by(ProgressEvent.id)
+        ).all()
+        assert "validator_error" in row.error
+        assert [(event.stage, event.status) for event in events][-2:] == [
+            ("validate", "failed"),
+            ("complete", "failed"),
+        ]
+
+
+def test_recorded_artifact_directory_wins_over_ambiguous_lookup(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    paths = ProjectPaths(root=tmp_path, repository=tmp_path)
+    paths.initialize()
+    task_id, attempt_id, basename, challenge_id = _seed_failed_attempt(
+        session_factory
+    )
+    _write_failed_shard(paths, task_id, attempt_id, basename, challenge_id)
+    _write_web_challenge(paths, challenge_id)
+    selected = paths.challenges / "web" / f"{challenge_id}-demo"
+    duplicate = paths.challenges / "web" / f"{challenge_id}-duplicate"
+    duplicate.mkdir(parents=True)
+    write_json(duplicate / "metadata.json", {"id": challenge_id})
+    with transaction(factory=session_factory) as session:
+        session.get(build_model.BuildAttempt, attempt_id).resulting_challenge_dir = (
+            selected.relative_to(paths.root).as_posix()
+        )
+    service = BuildAttemptRevalidationService(
+        paths=paths,
+        progress=PostgresProgressStore(session_factory),
+        session_factory=session_factory,
+        validator=_PassingValidator(),  # type: ignore[arg-type]
+        image_exists=lambda _image: True,
+    )
+
+    service.revalidate(attempt_id)
+
+    with session_factory() as session:
+        assert session.get(build_model.BuildAttempt, attempt_id).status == "succeeded"
+
+
+def test_database_failure_after_shard_move_restores_failed_queue(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    paths = ProjectPaths(root=tmp_path, repository=tmp_path)
+    paths.initialize()
+    task_id, attempt_id, basename, challenge_id = _seed_failed_attempt(
+        session_factory
+    )
+    _write_failed_shard(paths, task_id, attempt_id, basename, challenge_id)
+    real_transaction = revalidation_module.transaction
+
+    @contextmanager
+    def failing_transaction(*, factory=None):
+        with real_transaction(factory=factory) as session:
+            yield session
+            raise RuntimeError("simulated commit failure")
+
+    service = BuildAttemptRevalidationService(
+        paths=paths,
+        progress=PostgresProgressStore(session_factory),
+        session_factory=session_factory,
+        validator=_PassingValidator(),  # type: ignore[arg-type]
+        image_exists=lambda _image: True,
+    )
+    monkeypatch.setattr(revalidation_module, "transaction", failing_transaction)
+
+    with pytest.raises(RuntimeError, match="simulated commit failure"):
+        service._mark_succeeded(
+            attempt_id,
+            shard_basename=basename,
+            challenge_dir=f"work/challenges/web/{challenge_id}-demo",
+        )
+
+    assert (paths.shards / "failed" / basename).is_file()
+    assert not (paths.shards / "done" / basename).exists()
 
 
 def _seed_failed_attempt(

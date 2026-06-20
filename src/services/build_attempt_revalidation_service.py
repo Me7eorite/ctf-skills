@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -31,11 +32,35 @@ class BuildAttemptRevalidationError(ValueError):
     """Raised when a build attempt cannot be revalidated or remains invalid."""
 
 
+class BuildAttemptRevalidationNotFoundError(BuildAttemptRevalidationError):
+    """Raised when the requested build attempt does not exist."""
+
+
 @dataclass(frozen=True)
 class BuildAttemptRevalidationResult:
     """Result of a successful same-attempt revalidation."""
 
     attempt_id: UUID
+
+
+class _DirectoryBoundValidator:
+    """Prevent challenge-id lookup from selecting a different artifact directory."""
+
+    def __init__(
+        self,
+        validator: ChallengeValidator,
+        plans: Mapping[str, ChallengeResumePlan],
+    ) -> None:
+        self.validator = validator
+        self.plans = plans
+
+    def validate_challenge(self, challenge_id: str) -> dict:
+        plan = self.plans.get(challenge_id)
+        if plan is None or plan.directory is None:
+            return {"challenge_id": challenge_id, "status": "missing_challenge"}
+        result = self.validator.validate_one(plan.directory)
+        result.setdefault("challenge_id", challenge_id)
+        return result
 
 
 class BuildAttemptRevalidationService:
@@ -59,37 +84,91 @@ class BuildAttemptRevalidationService:
         self.worker = worker
 
     def revalidate(self, attempt_id: UUID) -> BuildAttemptRevalidationResult:
-        attempt, challenge_ids = self._prepare(attempt_id)
-        plans = self._current_plans(challenge_ids)
-        results = run_validation(
-            state=self.progress,
-            validator=self.validator,
-            paths=self.paths,
-            image_exists=self.image_exists,
-            original_shard_name=attempt.shard_basename,
-            worker=self.worker,
-            challenge_ids=challenge_ids,
-            plan_by_id=plans,
-        )
-        record_per_challenge_complete(
-            self.progress,
-            attempt.shard_basename,
-            self.worker,
-            results,
-        )
-        failures = [result for result in results if result.get("solve_status") != "passed"]
-        if failures:
-            reason = _failure_reason(failures[0])
-            self._mark_failed(attempt.id, reason)
-            raise BuildAttemptRevalidationError(reason)
+        with self._advisory_lock(attempt_id):
+            attempt, challenge_ids = self._prepare(attempt_id)
+            plans = self._current_plans(attempt, challenge_ids)
+            validator = _DirectoryBoundValidator(self.validator, plans)
+            try:
+                results = run_validation(
+                    state=self.progress,
+                    validator=validator,  # type: ignore[arg-type]
+                    paths=self.paths,
+                    image_exists=self.image_exists,
+                    original_shard_name=attempt.shard_basename,
+                    worker=self.worker,
+                    challenge_ids=challenge_ids,
+                    plan_by_id=plans,
+                )
+            except Exception as exc:
+                reason = f"validator_error: {type(exc).__name__}: {exc}"
+                self._mark_failed(attempt.id, reason)
+                self._record_unexpected_failure(
+                    attempt.shard_basename,
+                    challenge_ids,
+                    reason,
+                )
+                raise BuildAttemptRevalidationError(reason) from exc
 
-        challenge_dir = _relative_challenge_dir(self.paths, plans[challenge_ids[0]])
-        self._mark_succeeded(
-            attempt.id,
-            shard_basename=attempt.shard_basename,
-            challenge_dir=challenge_dir,
-        )
-        return BuildAttemptRevalidationResult(attempt_id=attempt.id)
+            failures = [
+                result
+                for result in results
+                if result.get("solve_status") != "passed"
+            ]
+            if failures:
+                reason = _failure_reason(failures[0])
+                self._mark_failed(attempt.id, reason)
+                record_per_challenge_complete(
+                    self.progress,
+                    attempt.shard_basename,
+                    self.worker,
+                    results,
+                )
+                raise BuildAttemptRevalidationError(reason)
+
+            challenge_dir = _relative_challenge_dir(
+                self.paths, plans[challenge_ids[0]]
+            )
+            try:
+                self._mark_succeeded(
+                    attempt.id,
+                    shard_basename=attempt.shard_basename,
+                    challenge_dir=challenge_dir,
+                )
+            except Exception as exc:
+                reason = f"finalization_error: {type(exc).__name__}: {exc}"
+                self._record_complete_failure(
+                    attempt.shard_basename,
+                    challenge_ids,
+                    reason,
+                )
+                if isinstance(exc, BuildAttemptRevalidationError):
+                    raise
+                raise BuildAttemptRevalidationError(reason) from exc
+            record_per_challenge_complete(
+                self.progress,
+                attempt.shard_basename,
+                self.worker,
+                results,
+            )
+            return BuildAttemptRevalidationResult(attempt_id=attempt.id)
+
+    @contextmanager
+    def _advisory_lock(self, attempt_id: UUID) -> Iterator[None]:
+        key = attempt_id.int & ((1 << 63) - 1)
+        with self.session_factory.engine.connect() as connection:
+            acquired = connection.scalar(
+                sa.select(sa.func.pg_try_advisory_lock(key))
+            )
+            connection.commit()
+            if not acquired:
+                raise BuildAttemptRevalidationError(
+                    "build attempt is already being revalidated"
+                )
+            try:
+                yield
+            finally:
+                connection.execute(sa.select(sa.func.pg_advisory_unlock(key)))
+                connection.commit()
 
     def _prepare(self, attempt_id: UUID):
         with transaction(factory=self.session_factory) as session:
@@ -99,7 +178,7 @@ class BuildAttemptRevalidationService:
                 .with_for_update()
             ).one_or_none()
             if row is None:
-                raise BuildAttemptRevalidationError(
+                raise BuildAttemptRevalidationNotFoundError(
                     f"build attempt {attempt_id} does not exist"
                 )
             if row.status != "failed":
@@ -159,20 +238,57 @@ class BuildAttemptRevalidationService:
 
     def _current_plans(
         self,
+        attempt,
         challenge_ids: list[str],
     ) -> dict[str, ChallengeResumePlan]:
         plans: dict[str, ChallengeResumePlan] = {}
         for challenge_id in challenge_ids:
-            lookup = find_challenge_directory(self.paths, challenge_id)
+            directory, lookup_status = self._resolve_challenge_directory(
+                attempt,
+                challenge_id,
+            )
             plans[challenge_id] = ChallengeResumePlan(
                 challenge_id=challenge_id,
-                directory=lookup.directory,
-                lookup_status=lookup.status,
+                directory=directory,
+                lookup_status=lookup_status,
                 skipped_stages=(),
                 first_pending_stage="validate",
                 stage_sources={},
             )
         return plans
+
+    def _resolve_challenge_directory(
+        self,
+        attempt,
+        challenge_id: str,
+    ) -> tuple[Path | None, str]:
+        if attempt.resulting_challenge_dir:
+            directory = (self.paths.root / attempt.resulting_challenge_dir).resolve()
+            try:
+                directory.relative_to(self.paths.challenges.resolve())
+            except ValueError as exc:
+                raise BuildAttemptRevalidationError(
+                    "resulting challenge directory is outside work/challenges"
+                ) from exc
+            if not directory.is_dir():
+                raise BuildAttemptRevalidationError(
+                    "resulting challenge directory is missing"
+                )
+            metadata = read_json(directory / "metadata.json", None)
+            if not isinstance(metadata, Mapping) or metadata.get("id") != challenge_id:
+                raise BuildAttemptRevalidationError(
+                    "resulting challenge metadata id does not match"
+                )
+            return directory, "matched"
+
+        lookup = find_challenge_directory(self.paths, challenge_id)
+        if lookup.directory is not None:
+            metadata = read_json(lookup.directory / "metadata.json", None)
+            if not isinstance(metadata, Mapping) or metadata.get("id") != challenge_id:
+                raise BuildAttemptRevalidationError(
+                    "challenge metadata id does not match"
+                )
+        return lookup.directory, lookup.status
 
     def _move_failed_shard_to_done(self, shard_basename: str) -> None:
         source = self.paths.shards / "failed" / shard_basename
@@ -184,8 +300,69 @@ class BuildAttemptRevalidationService:
         destination.parent.mkdir(parents=True, exist_ok=True)
         source.replace(destination)
         claim_source = ShardQueue._claim_path(source)
-        if claim_source.exists():
-            claim_source.replace(ShardQueue._claim_path(destination))
+        try:
+            if claim_source.exists():
+                claim_source.replace(ShardQueue._claim_path(destination))
+        except Exception:
+            destination.replace(source)
+            raise
+
+    def _restore_done_shard_to_failed(self, shard_basename: str) -> None:
+        source = self.paths.shards / "failed" / shard_basename
+        destination = self.paths.shards / "done" / shard_basename
+        if source.exists() or not destination.is_file():
+            raise BuildAttemptRevalidationError(
+                "cannot restore done shard to failed"
+            )
+        claim_destination = ShardQueue._claim_path(destination)
+        claim_source = ShardQueue._claim_path(source)
+        claim_moved = False
+        if claim_destination.exists():
+            claim_destination.replace(claim_source)
+            claim_moved = True
+        try:
+            destination.replace(source)
+        except Exception:
+            if claim_moved:
+                claim_source.replace(claim_destination)
+            raise
+
+    def _record_unexpected_failure(
+        self,
+        shard_basename: str,
+        challenge_ids: list[str],
+        reason: str,
+    ) -> None:
+        for challenge_id in challenge_ids:
+            self.progress.record(
+                shard=shard_basename,
+                challenge_id=challenge_id,
+                worker=self.worker,
+                stage="validate",
+                status="failed",
+                message=reason,
+            )
+        self._record_complete_failure(shard_basename, challenge_ids, reason)
+
+    def _record_complete_failure(
+        self,
+        shard_basename: str,
+        challenge_ids: list[str],
+        reason: str,
+    ) -> None:
+        record_per_challenge_complete(
+            self.progress,
+            shard_basename,
+            self.worker,
+            [
+                {
+                    "challenge_id": challenge_id,
+                    "solve_status": "failed",
+                    "validation_status": reason,
+                }
+                for challenge_id in challenge_ids
+            ],
+        )
 
     def _mark_failed(self, attempt_id: UUID, reason: str) -> None:
         now = datetime.now(timezone.utc)
@@ -223,41 +400,53 @@ class BuildAttemptRevalidationService:
         challenge_dir: str,
     ) -> None:
         now = datetime.now(timezone.utc)
-        with transaction(factory=self.session_factory) as session:
-            current = session.get(build_model.BuildAttempt, attempt_id)
-            if current is None:
-                raise BuildAttemptRevalidationError(
-                    f"build attempt {attempt_id} does not exist"
+        moved = False
+        try:
+            with transaction(factory=self.session_factory) as session:
+                current = session.get(build_model.BuildAttempt, attempt_id)
+                if current is None:
+                    raise BuildAttemptRevalidationError(
+                        f"build attempt {attempt_id} does not exist"
+                    )
+                task = _lock_task(session, current.design_task_id)
+                row = session.scalars(
+                    sa.select(build_model.BuildAttempt)
+                    .where(build_model.BuildAttempt.id == attempt_id)
+                    .with_for_update()
+                ).one()
+                latest = BuildAttemptsRepository(session).latest_for_design_task(
+                    row.design_task_id
                 )
-            task = _lock_task(session, current.design_task_id)
-            row = session.scalars(
-                sa.select(build_model.BuildAttempt)
-                .where(build_model.BuildAttempt.id == attempt_id)
-                .with_for_update()
-            ).one()
-            latest = BuildAttemptsRepository(session).latest_for_design_task(
-                row.design_task_id
-            )
-            if latest is None or latest.id != row.id or row.status != "failed":
-                raise BuildAttemptRevalidationError(
-                    "build attempt changed during revalidation"
+                if latest is None or latest.id != row.id or row.status != "failed":
+                    raise BuildAttemptRevalidationError(
+                        "build attempt changed during revalidation"
+                    )
+                self._failed_payload(
+                    shard_basename,
+                    attempt_id=row.id,
+                    design_task_id=row.design_task_id,
                 )
-            self._failed_payload(
-                shard_basename,
-                attempt_id=row.id,
-                design_task_id=row.design_task_id,
-            )
-            self._move_failed_shard_to_done(shard_basename)
-            row.status = "succeeded"
-            row.worker = row.worker or self.worker
-            row.started_at = row.started_at or now
-            row.finished_at = now
-            row.resulting_challenge_dir = challenge_dir
-            row.artifact_status = "present"
-            row.error = None
-            if task is not None:
-                task.status = "built"
-                task.updated_at = now
+                self._move_failed_shard_to_done(shard_basename)
+                moved = True
+                row.status = "succeeded"
+                row.worker = row.worker or self.worker
+                row.started_at = row.started_at or now
+                row.finished_at = now
+                row.resulting_challenge_dir = challenge_dir
+                row.artifact_status = "present"
+                row.error = None
+                if task is not None:
+                    task.status = "built"
+                    task.updated_at = now
+        except Exception as exc:
+            if moved:
+                try:
+                    self._restore_done_shard_to_failed(shard_basename)
+                except Exception as restore_exc:
+                    raise BuildAttemptRevalidationError(
+                        f"database update failed and shard restore failed: {restore_exc}"
+                    ) from exc
+            raise
 
 
 def _challenge_ids(payload: Mapping[str, Any]) -> list[str]:

@@ -224,6 +224,11 @@ docker image inspect "$IMAGE" >/dev/null 2>&1 || docker build -t "$IMAGE" .
 
 After that gate, `validate.sh` must start the service, wait for
 health/readiness, run `writenup/exp.py`, and always clean up with a shell trap.
+Every command and diagnostic in a function invoked by an `EXIT` or `ERR` trap
+MUST redirect its output to stderr (`>&2`); cleanup must never write to stdout.
+Before starting a container named `"$CONTAINER_NAME"`, remove a stale
+same-name container with
+`docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true`.
 Forced rebuilds are an operator concern (`docker rmi` outside the script);
 `validate.sh` itself does not need a force flag. For Re, `validate.sh` must
 build the artifact when needed and run the solver against `dist/`. Its last

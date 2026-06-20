@@ -27,6 +27,7 @@ from persistence.repositories import (
 from services import BuildOrchestrationError, BuildOrchestrationService
 from services.build_attempt_revalidation_service import (
     BuildAttemptRevalidationError,
+    BuildAttemptRevalidationNotFoundError,
     BuildAttemptRevalidationService,
 )
 
@@ -276,6 +277,11 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
                 paths=_project_paths(app),
                 progress=progress,
             ).revalidate(attempt_uuid)
+        except BuildAttemptRevalidationNotFoundError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND,
+                detail=str(exc),
+            ) from exc
         except BuildAttemptRevalidationError as exc:
             raise HTTPException(
                 status_code=HTTPStatus.CONFLICT,

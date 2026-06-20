@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import time
 from collections import Counter
@@ -31,11 +32,9 @@ ARCH_ACCEPTS: dict[str, tuple[str, ...]] = {
 }
 
 
-def last_nonempty_line(text: str) -> str:
-    """获取文本的最后一行非空内容（strip 后的结果）。"""
-    return next(
-        (line.strip() for line in reversed(text.splitlines()) if line.strip()), ""
-    )
+FLAG_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9_])flag\{[^\r\n{}]+\}(?![A-Za-z0-9_])"
+)
 
 
 def is_elf(path: Path) -> bool:
@@ -224,7 +223,8 @@ class ChallengeValidator:
             return {**record, "status": "nonzero_exit"}
 
         # 比对 flag
-        printed_flag = last_nonempty_line(process.stdout)
+        matches = FLAG_TOKEN_RE.findall(process.stdout)
+        printed_flag = matches[-1] if matches else ""
         record["printed_flag"] = printed_flag
         if expected_flag and printed_flag == expected_flag:
             self._update_metadata(metadata_path, "passed")
