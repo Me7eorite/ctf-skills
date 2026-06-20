@@ -20,12 +20,12 @@
 
 ## 3. R3 — 前端进度卡 alert 重渲染 + 历史表新列
 
-- [ ] 3.1 在 `src/web/static/js/ui/format.js` 加 `failureMeta(category) -> {icon, tone}` 展示映射；title/description/actions 只使用 API 字段，不复制 taxonomy 文案。
-- [ ] 3.2 重写 `src/web/static/js/views/research-requests.js` 当前 `latest?.last_error` alert 区域：标题行（图标 + API title）/ API description 段 / API actions 列表 / `<details>` 折叠原始 `last_error`。actions 为空数组时整段隐藏；该区域不得继续通过前端 `researchErrorMessage(latest.last_error)` 推导分类文案。
-- [ ] 3.3 在运行历史表增加“失败原因”列；failed 行显示 API 的 `last_error_title`，其他行留空。
-- [ ] 3.4 在 `src/web/static/css/views/research-requests.css` 加 `.rq-alert-actions ul`（缩进 + 圆点）、`.rq-alert-details summary`（可点击折叠样式）、`.rq-history-failure-col`（窄屏下 `display: none` via `@media (max-width: 767px)`）。
-- [ ] 3.5 UI 测试覆盖 `failureMeta`、API 文案字段、`<details>`、actions、窄屏列与 HTML escaping；不得断言复制后端 taxonomy 的 JS 文案表。
-- [ ] 3.6 启动 dev server 用浏览器手动验收一条 failed run：alert 渲染正确、actions 显示、`<details>` 可展开折叠、历史表新列显示。
+- [x] 3.1 在 `src/web/static/js/ui/format.js` 加 `failureMeta(category) -> {icon, tone}` 展示映射；title/description/actions 只使用 API 字段，不复制 taxonomy 文案。
+- [x] 3.2 重写 `src/web/static/js/views/research-requests.js` 当前 `latest?.last_error` alert 区域：标题行（图标 + API title）/ API description 段 / API actions 列表 / `<details>` 折叠原始 `last_error`。actions 为空数组时整段隐藏；该区域不得继续通过前端 `researchErrorMessage(latest.last_error)` 推导分类文案。
+- [x] 3.3 在运行历史表增加“失败原因”列；failed 行显示 API 的 `last_error_title`，其他行留空。
+- [x] 3.4 在 `src/web/static/css/views/research-requests.css` 加 `.rq-alert-actions ul`（缩进 + 圆点）、`.rq-alert-details summary`（可点击折叠样式）、`.rq-history-failure-col`（窄屏下 `display: none` via `@media (max-width: 767px)`）。
+- [x] 3.5 UI 测试覆盖 `failureMeta`、API 文案字段、`<details>`、actions、窄屏列与 HTML escaping；不得断言复制后端 taxonomy 的 JS 文案表。
+- [ ] 3.6 启动 dev server 用浏览器手动验收一条 failed run：alert 渲染正确、actions 显示、`<details>` 可展开折叠、历史表新列显示。（本轮未执行：当前会话未暴露可用浏览器控制工具，且没有已建 failed-run fixture。）
 
 ## 4. R4 — 纯解析、materialize 与持久化边界
 

@@ -89,6 +89,21 @@ export function difficultyLabel(difficulty) {
   return DIFFICULTY_LABELS[difficulty] || difficulty || "未知";
 }
 
+export function failureMeta(category) {
+  const meta = {
+    timeout: { icon: "timer-off", tone: "danger" },
+    lease_expired: { icon: "clock-alert", tone: "warning" },
+    parse_failure: { icon: "braces", tone: "danger" },
+    quality_gate: { icon: "badge-alert", tone: "warning" },
+    field_validation: { icon: "list-checks", tone: "danger" },
+    binding: { icon: "plug-zap", tone: "warning" },
+    runtime: { icon: "terminal", tone: "danger" },
+    cancelled: { icon: "circle-slash", tone: "muted" },
+    unknown: { icon: "circle-help", tone: "muted" },
+  };
+  return meta[category] || meta.unknown;
+}
+
 export const designTaskStatusMeta = {
   draft: { label: "草稿", tone: "text-ink-700 bg-ink-100", stage: "plan" },
   queued: { label: "等待设计", tone: "text-amber-700 bg-amber-50", stage: "design" },

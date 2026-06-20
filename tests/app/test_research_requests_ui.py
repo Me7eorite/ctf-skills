@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 STATIC = Path(__file__).parents[2] / "src" / "web" / "static"
 
 
@@ -75,6 +74,42 @@ def test_research_status_and_diagnostics_are_chinese() -> None:
         "研究来源存在重复内容",
     ):
         assert diagnostic in source
+
+
+def test_research_failure_alert_uses_api_classification_fields() -> None:
+    source = (STATIC / "js" / "views" / "research-requests.js").read_text(
+        encoding="utf-8"
+    )
+    format_source = (STATIC / "js" / "ui" / "format.js").read_text(encoding="utf-8")
+    styles = (STATIC / "css" / "views" / "research-requests.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert "failureMeta(run.last_error_category)" in source
+    assert "run.last_error_title" in source
+    assert "run.last_error_description" in source
+    assert "run.last_error_actions" in source
+    assert "<details class=\"rq-alert-details\">" in source
+    assert "researchErrorMessage(latest.last_error)" not in source
+    assert "export function failureMeta(category)" in format_source
+    for category in ("timeout", "lease_expired", "parse_failure", "quality_gate"):
+        assert category in format_source
+    for selector in (
+        ".rq-alert-actions ul",
+        ".rq-alert-details summary",
+        ".rq-history-failure-col",
+    ):
+        assert selector in styles
+
+
+def test_research_run_history_shows_failure_reason_column() -> None:
+    source = (STATIC / "js" / "views" / "research-requests.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "失败原因" in source
+    assert "run.last_error_title" in source
+    assert 'run.status === "failed"' in source
 
 
 def test_api_error_object_preserves_machine_readable_code() -> None:

@@ -7,6 +7,7 @@ import {
   categoryLabel,
   categoryTone,
   formatDateTime,
+  failureMeta,
   requestStatusPill,
   requestStatusMeta,
   runStatusLabel,
@@ -580,7 +581,7 @@ function renderResearchProgress(request, latest, findingCount, minimumFindings) 
         <div class="rq-progress-steps">
           ${stages.map((stage, index) => `<div class="rq-progress-step ${index < stageIndex || displayStatus === "researched" ? "done" : index === stageIndex ? "active" : ""}"><span>${index < stageIndex || displayStatus === "researched" ? "✓" : index + 1}</span><strong>${stage}</strong></div>`).join("")}
         </div>
-        ${latest?.last_error ? `<div class="rq-alert rq-alert-error rq-progress-alert"><div class="rq-alert-title">本次运行未完成</div><p>${escapeHtml(researchErrorMessage(latest.last_error))}</p><code>${escapeHtml(latest.last_error)}</code></div>` : ""}
+        ${latest?.last_error ? renderFailureAlert(latest) : ""}
         ${request.status === "researched" ? `<div class="rq-quality ${findingCount >= minimumFindings ? "passed" : "failed"}"><i data-lucide="${findingCount >= minimumFindings ? "badge-check" : "triangle-alert"}"></i><div><strong>${findingCount >= minimumFindings ? "已通过质量检查" : "未通过质量检查"}</strong><p>有效研究结论 ${findingCount} 条，最低要求 ${minimumFindings} 条。</p></div></div>` : ""}
       </div>
     </section>
@@ -606,6 +607,33 @@ function renderRequestConfiguration(request) {
   `;
 }
 
+function renderFailureAlert(run) {
+  const meta = failureMeta(run.last_error_category);
+  const title = run.last_error_title || "本次运行未完成";
+  const description = run.last_error_description || "研究运行未完成。";
+  const actions = Array.isArray(run.last_error_actions) ? run.last_error_actions : [];
+  return `
+    <div class="rq-alert rq-alert-error rq-alert-${escapeHtml(meta.tone)} rq-progress-alert">
+      <div class="rq-alert-heading">
+        <i data-lucide="${escapeHtml(meta.icon)}"></i>
+        <div class="rq-alert-title">${escapeHtml(title)}</div>
+      </div>
+      <p>${escapeHtml(description)}</p>
+      ${actions.length ? `
+        <div class="rq-alert-actions">
+          <ul>
+            ${actions.map(action => `<li>${escapeHtml(action)}</li>`).join("")}
+          </ul>
+        </div>
+      ` : ""}
+      <details class="rq-alert-details">
+        <summary>原始错误</summary>
+        <code>${escapeHtml(run.last_error || "")}</code>
+      </details>
+    </div>
+  `;
+}
+
 function renderRunsTable(runs) {
   return `
     <div class="table-container">
@@ -614,6 +642,7 @@ function renderRunsTable(runs) {
           <tr>
             <th>次数</th>
             <th>状态</th>
+            <th class="rq-history-failure-col">失败原因</th>
             <th>执行 Worker</th>
             <th>开始时间</th>
             <th>结束时间</th>
@@ -624,6 +653,7 @@ function renderRunsTable(runs) {
             <tr>
               <td class="table-cell-id">第 ${escapeHtml(run.attempt)} 次</td>
               <td>${statusIndicator(run.status)}</td>
+              <td class="rq-history-failure-col">${run.status === "failed" ? escapeHtml(run.last_error_title || "") : ""}</td>
               <td class="table-cell-mono">${escapeHtml(run.claimed_by || "—")}</td>
               <td class="table-cell-time">${escapeHtml(formatDateTime(run.started_at))}</td>
               <td class="table-cell-time">${escapeHtml(formatDateTime(run.finished_at))}</td>
