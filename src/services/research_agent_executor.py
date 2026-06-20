@@ -105,7 +105,10 @@ class ResearchAgentExecutor:
 
         try:
             try:
-                self.job_service.mark_run_started(run.id, agent_id, run.claim_token)
+                # 把 log_path 在 started 时写入数据库，过期清扫路径才能找到这份日志做救援。
+                self.job_service.mark_run_started(
+                    run.id, agent_id, run.claim_token, log_path=log_path,
+                )
             except StaleClaimError:
                 LOGGER.warning("lost claim before starting run %s", run.id)
                 return
@@ -197,18 +200,35 @@ class ResearchAgentExecutor:
     ) -> None:
         """后台续租循环，直到 stop_event 触发或租约丢失。"""
         # 中文注释：每次 heartbeat 都走独立短事务，避免跨线程共享 SQLAlchemy session。
+        # 单次 DB 抖动不应该毁掉一整次 Hermes 运行——只有连续失败超过 lease 的 1/3
+        # 心跳预算（默认 ~10 次）才宣告租约丢失。任何抛出的异常都计入失败计数。
+        consecutive_failures = 0
+        max_failures = max(
+            1, int(lease_seconds / HEARTBEAT_INTERVAL_SECONDS / 3),
+        )
         while not stop_event.wait(HEARTBEAT_INTERVAL_SECONDS):
-            ok = self.job_service.heartbeat(
-                run.id,
-                agent_id,
-                run.claim_token,
-                lease_seconds,
-            )
-            if not ok:
+            try:
+                ok = self.job_service.heartbeat(
+                    run.id,
+                    agent_id,
+                    run.claim_token,
+                    lease_seconds,
+                )
+            except Exception as exc:  # noqa: BLE001 — 心跳线程任何异常都计入失败
+                LOGGER.warning(
+                    "heartbeat error for run %s: %s", run.id, exc,
+                )
+                ok = False
+            if ok:
+                consecutive_failures = 0
+                continue
+            consecutive_failures += 1
+            if consecutive_failures >= max_failures:
                 lost_lease.set()
                 LOGGER.warning(
-                    "lost heartbeat lease for run %s; claim_token=%s",
+                    "lost heartbeat lease for run %s after %d consecutive failures; claim_token=%s",
                     run.id,
+                    consecutive_failures,
                     run.claim_token,
                 )
                 return

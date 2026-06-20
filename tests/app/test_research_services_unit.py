@@ -155,7 +155,7 @@ class FakeExecutorJobService:
     def set_profile_name_used(self, *_args):
         return None
 
-    def mark_run_started(self, *_args):
+    def mark_run_started(self, *_args, **_kwargs):
         return None
 
     def heartbeat(self, *_args):

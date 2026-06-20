@@ -73,6 +73,7 @@ class ResearchWorker:
                         agent_id,
                         lease_seconds,
                         generation_request_id=generation_request_id,
+                        paths=self.paths,
                     )
                     if research_run is None:
                         if not loop:

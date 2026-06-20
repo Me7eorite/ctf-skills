@@ -117,6 +117,7 @@ class ResearchJobService:
         *,
         generation_request_id: UUID | None = None,
         expired_recovery_limit: int = 16,
+        paths: Any | None = None,
     ) -> dto.ResearchRun | None:
         """恢复过期 run，并 claim 最老的一条 queued run。"""
         # lease 和恢复批量上限必须为正，否则队列状态机没有明确语义。
@@ -140,6 +141,9 @@ class ResearchJobService:
             ).all()
 
             for run in expired_rows:
+                # 若 worker 已经把完整 Hermes 输出写到 log，先尝试解析救回；救不回再走失败路径。
+                if paths is not None and self._try_rescue_from_log(session, run, paths):
+                    continue
                 # 过期恢复和普通失败共用同一套失败/重试逻辑，确保 request.status 同步规则一致。
                 self._apply_run_failed(session, run, "lease expired", log_path=None)
 
@@ -227,6 +231,8 @@ class ResearchJobService:
         run_id: UUID,
         agent_id: str,
         claim_token: UUID,
+        *,
+        log_path: str | Path | None = None,
     ) -> dto.ResearchRun:
         """记录 Hermes 子进程开始执行的时间。"""
         with transaction(factory=self.repository_factory) as session:
@@ -234,6 +240,9 @@ class ResearchJobService:
             run = self._get_owned_running_run(session, run_id, agent_id, claim_token)
             if run.started_at is None:
                 run.started_at = _utcnow()
+            # 早早把 log 路径落库，这样即使后面走过期清扫或崩溃路径，UI 依然能找到日志。
+            if log_path is not None and not run.hermes_log_path:
+                run.hermes_log_path = str(log_path)
             session.flush()
             return _run_dto(run)
 
@@ -423,6 +432,95 @@ class ResearchJobService:
         request.status = "researched"
         request.updated_at = now
 
+    def _try_rescue_from_log(
+        self,
+        session,
+        run: model.ResearchRun,
+        paths: Any,
+    ) -> bool:
+        """过期 run 救援：解析 hermes 日志 + 落库 + 标 completed。
+
+        失败任何一步都返回 False 并清理已写入的暂存文件；调用方会接着走
+        `_apply_run_failed`。整段逻辑必须吃掉所有异常，否则会污染外层事务。
+        """
+        log_str = run.hermes_log_path or str(paths.research_logs / f"{run.id}.log")
+        log_file = Path(log_str)
+        if not log_file.exists():
+            return False
+        try:
+            log_text = log_file.read_text(encoding="utf-8")
+        except OSError as exc:
+            LOG.warning("rescue: cannot read log %s for run %s: %s", log_file, run.id, exc)
+            return False
+
+        stdout_text = _extract_stdout_block(log_text)
+        if not stdout_text:
+            return False
+
+        # 延迟导入避免 executor↔job_service 循环依赖。
+        try:
+            from services.research_agent_executor import _parse_research_output
+        except ImportError:
+            return False
+
+        request_row = _get_request(session, run.generation_request_id)
+        try:
+            source_payloads, finding_payloads = _parse_research_output(
+                stdout_text,
+                paths=paths,
+                run_id=run.id,
+                target_count=request_row.target_count,
+            )
+        except ResearchValidationError as exc:
+            LOG.warning("rescue: parse failed for run %s: %s", run.id, exc)
+            _cleanup_staged_sources(run.id, paths)
+            return False
+        except Exception as exc:  # noqa: BLE001 — rescue 永远不能让外层事务挂掉
+            LOG.warning("rescue: unexpected parse error for run %s: %s", run.id, exc)
+            _cleanup_staged_sources(run.id, paths)
+            return False
+
+        # savepoint 让落库失败时只回滚救援本身，外层事务仍能继续处理其他过期 run。
+        savepoint = session.begin_nested()
+        promoted = False
+        try:
+            repo = ResearchRepository(session)
+            source_ids: list[UUID] = []
+            for source in source_payloads:
+                saved = repo.add_source(
+                    run.id,
+                    url=_required_str(source, "url"),
+                    title=_required_str(source, "title"),
+                    summary=_required_str(source, "summary"),
+                    content_hash=_required_str(source, "content_hash"),
+                    fetched_at=_coerce_datetime(source.get("fetched_at")),
+                    raw_text_path=_optional_str(source.get("raw_text_path")),
+                )
+                source_ids.append(saved.id)
+            for finding in finding_payloads:
+                repo.create_finding(
+                    run.id,
+                    kind=_required_str(finding, "kind"),
+                    label=_required_str(finding, "label"),
+                    summary=_required_str(finding, "summary"),
+                    source_ids=_finding_source_ids(finding, source_ids),
+                )
+            self._apply_run_completed(session, run, log_str)
+            session.flush()
+            _promote_staged_sources(run.id, paths)
+            promoted = True
+            savepoint.commit()
+            LOG.info("rescue: recovered expired run %s from %s", run.id, log_file)
+            return True
+        except Exception as exc:  # noqa: BLE001 — 同上
+            savepoint.rollback()
+            LOG.warning("rescue: persist failed for run %s: %s", run.id, exc)
+            if promoted:
+                _cleanup_final_sources(run.id, paths)
+            else:
+                _cleanup_staged_sources(run.id, paths)
+            return False
+
     def _apply_run_failed(
         self,
         session,
@@ -491,6 +589,22 @@ def _request_fingerprint(
     }
     data = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(data.encode("utf-8")).hexdigest()
+
+
+_STDOUT_START_MARKER = "--- stdout ---\n"
+_STDOUT_END_MARKER = "\n--- end stdout ---"
+
+
+def _extract_stdout_block(log_text: str) -> str | None:
+    """从 Hermes 包装日志中切出 `--- stdout ---` 之间的内容。"""
+    start = log_text.find(_STDOUT_START_MARKER)
+    if start == -1:
+        return None
+    start += len(_STDOUT_START_MARKER)
+    end = log_text.find(_STDOUT_END_MARKER, start)
+    if end == -1:
+        return None
+    return log_text[start:end]
 
 
 def _promote_staged_sources(run_id: UUID, paths: Any) -> None:
