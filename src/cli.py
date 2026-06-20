@@ -56,7 +56,7 @@ def parser() -> argparse.ArgumentParser:
     # DB-backed argparse `choices` are only useful when the user is actually
     # invoking the relevant subcommand tree. Pre-scanning argv lets `init`,
     # `split`, `--help`, etc. boot without touching PostgreSQL.
-    needs_categories = _argv_targets("research")
+    needs_categories = _argv_targets_leaf("research", "submit")
     needs_roles = _argv_targets("profile")
 
     root = argparse.ArgumentParser(prog="challenge-factory")
@@ -149,6 +149,12 @@ def _argv_targets(command: str) -> bool:
     return False
 
 
+def _argv_targets_leaf(command: str, leaf: str) -> bool:
+    """Return true when the first two positional tokens select a command leaf."""
+    positional = [token for token in sys.argv[1:] if not token.startswith("-")]
+    return positional[:2] == [command, leaf]
+
+
 # ---------------------------------------------------------------------------
 # `research` subcommand group
 # ---------------------------------------------------------------------------
@@ -212,6 +218,14 @@ def _register_research_commands(
     listing = sub.add_parser("list", help="list generation requests")
     listing.add_argument("--category", default=None)
     listing.add_argument("--status", default=None, choices=GenerationRequestStatus)
+
+    backfill = sub.add_parser("backfill", help="preview or batch-apply failed-run log recovery")
+    target = backfill.add_mutually_exclusive_group(required=True)
+    target.add_argument("--run-id", help="preview one failed research run")
+    target.add_argument("--all-recoverable", action="store_true", help="scan every recoverable failed run")
+    mode = backfill.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--dry-run", action="store_true", help="preview without writing")
+    mode.add_argument("--apply", action="store_true", help="apply each eligible candidate")
 
     sub.add_parser("categories", help="list the configured challenge categories")
 
@@ -562,6 +576,8 @@ def _handle_research(args: argparse.Namespace, paths: ProjectPaths) -> None:
             _research_show(args)
         elif args.research_command == "list":
             _research_list(args)
+        elif args.research_command == "backfill":
+            _research_backfill(args, paths)
         elif args.research_command == "categories":
             _research_categories()
         else:  # pragma: no cover — argparse rejects this earlier
@@ -766,6 +782,89 @@ def _research_categories() -> None:
         print(f"{cat.code:8s}  {cat.display_name:20s}  {cat.description or ''}")
 
 
+def _research_backfill(args: argparse.Namespace, paths: ProjectPaths) -> None:
+    from persistence.repositories import ResearchRepository
+    from persistence.session import transaction
+    from services.research_backfill_service import ResearchBackfillError, ResearchBackfillService
+    from services.research_log_utils import (
+        SafeResearchLogError,
+        has_ordered_stdout_markers,
+        read_safe_research_log,
+    )
+
+    service = ResearchBackfillService(paths)
+    if args.run_id:
+        try:
+            run_id = UUID(args.run_id)
+        except ValueError:
+            print(f"[backfill] error: {args.run_id!r} is not a valid uuid", file=sys.stderr)
+            sys.exit(2)
+        try:
+            preview = service.preview(run_id)
+        except ResearchBackfillError as exc:
+            print(f"[backfill] {run_id} error={exc.code} detail={exc.detail}")
+            sys.exit(1)
+        _print_backfill_preview(preview)
+        return
+
+    failed = 0
+    skipped = 0
+    succeeded = 0
+    cursor_created_at = None
+    cursor_id = None
+    while True:
+        with transaction() as session:
+            page = ResearchRepository(session).list_failed_runs_page(
+                after_created_at=cursor_created_at,
+                after_id=cursor_id,
+                limit=100,
+            )
+        if not page:
+            break
+        for run in page:
+            cursor_created_at, cursor_id = run.created_at, run.id
+            try:
+                safe_log = read_safe_research_log(paths, run.hermes_log_path)
+                if not has_ordered_stdout_markers(safe_log.text):
+                    skipped += 1
+                    print(f"[backfill] {run.id} skipped=no_stdout_markers")
+                    continue
+            except SafeResearchLogError as exc:
+                skipped += 1
+                print(f"[backfill] {run.id} skipped={exc.code} detail={exc.detail}")
+                continue
+
+            try:
+                preview = service.preview(run.id)
+                _print_backfill_preview(preview)
+                if args.apply:
+                    result = service.apply(run.id, preview.log_sha256)
+                    succeeded += 1
+                    print(
+                        f"[backfill] {run.id} applied sources={result.inserted_sources} "
+                        f"findings={result.inserted_findings} status={result.run_status}"
+                    )
+            except ResearchBackfillError as exc:
+                failed += 1
+                print(f"[backfill] {run.id} error={exc.code} detail={exc.detail}")
+            except Exception as exc:  # keep the batch moving on unexpected per-run failures
+                failed += 1
+                print(f"[backfill] {run.id} error={exc.__class__.__name__} detail={exc}")
+
+    print(f"[backfill] summary succeeded={succeeded} skipped={skipped} failed={failed}")
+    if skipped or failed:
+        sys.exit(1)
+
+
+def _print_backfill_preview(preview) -> None:
+    print(
+        f"[backfill] {preview.run_id} preview sha256={preview.log_sha256} "
+        f"sources={preview.would_insert_sources} findings={preview.would_insert_findings} "
+        f"run={preview.current_run_status}->{preview.would_run_status} "
+        f"request={preview.current_request_status}->{preview.would_request_status}"
+    )
+
+
 def _check_category_consistency() -> None:
     """Warn when `challenge_categories` (DB) diverges from `SUPPORTED_CATEGORIES`.
 
@@ -804,6 +903,15 @@ def _check_category_consistency() -> None:
 def main() -> None:
     argument_parser = parser()
     args = argument_parser.parse_args()
+    if (
+        args.command == "research"
+        and args.research_command == "backfill"
+        and args.run_id
+        and args.apply
+    ):
+        argument_parser.error(
+            "--run-id only supports --dry-run; single-run apply requires the dashboard"
+        )
     paths = ProjectPaths.discover()
 
     if args.command == "init":

@@ -51,25 +51,25 @@
 - [x] 6.3 在进度卡 alert 中分类描述 / actions 下方加入 backfill 入口：仅当 `state.detail.latest_run.recoverable === true` 渲染；按钮文案"尝试从日志恢复结果"；点击 → `requestBackfillPreview` → 弹窗 → 确认后 `requestBackfillApply` → toast → `refreshDetail()`。
 - [x] 6.4 弹窗显示日志路径、摘要、数量和目标状态，并说明候选不保证成功；preview 错误禁用确认；`preview_stale` 不自动重试，要求重新预览。
 - [x] 6.5 在 `tests/app/test_research_requests_ui.py` 加静态契约断言：源码包含 `confirmBackfill`、`requestBackfillPreview`、`recoverable`、按钮文案"尝试从日志恢复结果"。
-- [ ] 6.6 用测试 fixture 启动 dev server 验收 preview → 取消 → preview → 确认及 stale-preview 路径；生产样本仅作部署后可选观察。
+- [x] 6.6 用测试 fixture 启动 dev server 验收 preview → 取消 → preview → 确认及 stale-preview 路径；生产样本仅作部署后可选观察。（2026-06-21 Chrome CDP fixture：`PASS preview=3 apply=2 hero=研究结果已就绪`。）
 
 ## 7. R7 — CLI `challenge-factory research backfill`
 
-- [ ] 7.1 增加 `backfill` 子命令；`--run-id <UUID>` 只接受一个值，并与 `--all-recoverable` 互斥。
-- [ ] 7.2 校验互斥：单独 `--run-id ... --apply`（无 `--all-recoverable`）必须报错并 exit code != 0（spec 要求）；`--dry-run` 不能和 `--apply` 同时出现；`--all-recoverable` 必须配 `--dry-run` 或 `--apply` 之一。
-- [ ] 7.3 实现 `--run-id <id> --dry-run`：调 `ResearchBackfillService.preview` 打印结果，每行格式 `[backfill] ...`；error 也按行打。
-- [ ] 7.4 `--all-recoverable --apply` 扫 failed safe-log marker candidates，必须使用专用分页/流式枚举而不是 `list_runs(limit=100)` 默认上限；逐条 preview 并把 digest 传给 apply；每条独立事务，继续并汇总。任何 skipped/failed 时退出 1。
-- [ ] 7.5 CLI 测试覆盖互斥/缺失 mode、单 run apply 拒绝、dry-run 零写、batch digest 传递、逐条失败继续和退出码。
+- [x] 7.1 增加 `backfill` 子命令；`--run-id <UUID>` 只接受一个值，并与 `--all-recoverable` 互斥。
+- [x] 7.2 校验互斥：单独 `--run-id ... --apply`（无 `--all-recoverable`）必须报错并 exit code != 0（spec 要求）；`--dry-run` 不能和 `--apply` 同时出现；`--all-recoverable` 必须配 `--dry-run` 或 `--apply` 之一。
+- [x] 7.3 实现 `--run-id <id> --dry-run`：调 `ResearchBackfillService.preview` 打印结果，每行格式 `[backfill] ...`；error 也按行打。
+- [x] 7.4 `--all-recoverable --apply` 扫 failed safe-log marker candidates，必须使用专用分页/流式枚举而不是 `list_runs(limit=100)` 默认上限；逐条 preview 并把 digest 传给 apply；每条独立事务，继续并汇总。任何 skipped/failed 时退出 1。
+- [x] 7.5 CLI 测试覆盖互斥/缺失 mode、单 run apply 拒绝、dry-run 零写、batch digest 传递、逐条失败继续和退出码。
 
 ## 8. 共用：分类 i18n 文案稳定性
 
-- [ ] 8.1 把所有中文 title / description / actions 文案集中到 `src/domain/research_failure_taxonomy.py` 模块级常量字典 `_CATEGORY_COPY`，便于将来 i18n。
-- [ ] 8.2 在 README 操作员手册（或新建 `docs/research-failure-categories.md`）列一张分类对照表：category 英文枚举 / 中文 title / 触发条件 / 推荐动作。
+- [x] 8.1 把所有中文 title / description / actions 文案集中到 `src/domain/research_failure_taxonomy.py` 模块级常量字典 `_CATEGORY_COPY`，便于将来 i18n。
+- [x] 8.2 在 README 操作员手册（或新建 `docs/research-failure-categories.md`）列一张分类对照表：category 英文枚举 / 中文 title / 触发条件 / 推荐动作。
 
 ## 9. 上线验证
 
-- [ ] 9.1 本地 `uv run pytest tests/app -q` 全过。
-- [ ] 9.2 用可重建 fixture 在 dashboard 验证分类、原文 disclosure、preview/confirm/stale 和 hero 刷新。
+- [x] 9.1 本地 `uv run pytest tests/app -q` 全过。（639 passed，5 subtests passed。）
+- [x] 9.2 用可重建 fixture 在 dashboard 验证分类、原文 disclosure、preview/confirm/stale 和 hero 刷新。（`tests/browser/research-backfill-fixture.html` 验收通过。）
 - [ ] 9.3 跑 `uv run challenge-factory research backfill --run-id <fixture> --dry-run`，核对 DB 与文件树零变化。
 - [ ] 9.4 部署后由操作员明确授权再运行 `uv run challenge-factory research backfill --all-recoverable --apply`；stdout 只是操作记录，不宣称强审计。
 - [ ] 9.5 新建一个故意失败的需求（删 binding 或塞坏 prompt），确认 alert 显示对应分类（`binding` / `parse_failure`）且 `recoverable=false` 不显示按钮。
@@ -77,6 +77,6 @@
 
 ## 10. 收尾
 
-- [ ] 10.1 commit 拆 6 段，每段独立 revert-safe（顺序见 design.md "Migration Plan"）。
+- [x] 10.1 commit 拆 6 段，每段独立 revert-safe（顺序见 design.md "Migration Plan"）。
 - [ ] 10.2 PR description 引用 design.md 的 decisions 段；备注与上一轮 lease-rescue 提案的关系。
 - [ ] 10.3 将自动化测试结果贴进 PR；浏览器截图和生产 batch log 仅在相应环境/授权存在时补充。

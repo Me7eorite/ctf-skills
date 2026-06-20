@@ -99,6 +99,27 @@ class ResearchRepository:
             stmt = stmt.where(model.ResearchRun.generation_request_id == generation_request_id)
         return [_run(row) for row in self.session.scalars(stmt)]
 
+    def list_failed_runs_page(
+        self,
+        *,
+        after_created_at: datetime | None = None,
+        after_id: UUID | None = None,
+        limit: int = 100,
+    ) -> list[dto.ResearchRun]:
+        """Page failed runs with a stable keyset cursor for maintenance jobs."""
+        stmt = (
+            sa.select(model.ResearchRun)
+            .where(model.ResearchRun.status == "failed")
+            .order_by(model.ResearchRun.created_at, model.ResearchRun.id)
+            .limit(limit)
+        )
+        if after_created_at is not None and after_id is not None:
+            stmt = stmt.where(
+                sa.tuple_(model.ResearchRun.created_at, model.ResearchRun.id)
+                > sa.tuple_(after_created_at, after_id)
+            )
+        return [_run(row) for row in self.session.scalars(stmt)]
+
     def get_latest_run_for_request(
         self,
         generation_request_id: UUID,

@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>Research backfill browser fixture</title>
+</head>
+<body>
+  <div id="viewTitle"></div>
+  <div id="toast" class="hidden"></div>
+  <section data-view="research-requests" class="view active"></section>
+  <pre id="fixture-result">RUNNING</pre>
+  <script type="module">
+    const requestId = "11111111-1111-4111-8111-111111111111";
+    const runId = "22222222-2222-4222-8222-222222222222";
+    const digest = "a".repeat(64);
+    let previewCount = 0;
+    let applyCount = 0;
+    let completed = false;
+
+    const request = () => ({
+      id: requestId,
+      category: "web",
+      topic: "浏览器回填验收",
+      target_count: 1,
+      difficulty_distribution: { easy: 1 },
+      runtime_constraints: {},
+      seed_urls: [],
+      max_attempts: 1,
+      status: completed ? "researched" : "failed",
+      display_status: completed ? "researched" : "failed",
+      created_at: "2026-06-21T00:00:00Z",
+    });
+    const failedRun = () => ({
+      id: runId,
+      generation_request_id: requestId,
+      attempt: 1,
+      status: completed ? "completed" : "failed",
+      created_at: "2026-06-21T00:01:00Z",
+      finished_at: "2026-06-21T00:02:00Z",
+      last_error: completed ? null : "lease expired",
+      last_error_category: completed ? null : "lease_expired",
+      last_error_title: completed ? null : "研究租约过期",
+      last_error_description: completed ? null : "Worker 未能持续续租。",
+      last_error_actions: completed ? [] : ["检查 Worker 心跳"],
+      recoverable: !completed,
+      hermes_log_path: "/fixture/research.log",
+    });
+    const detail = () => ({
+      request: request(),
+      latest_run: failedRun(),
+      latest_completed_run: completed ? failedRun() : null,
+      runs: [failedRun()],
+      sources: completed ? [{
+        id: "33333333-3333-4333-8333-333333333333",
+        url: "https://example.test/source",
+        title: "Fixture source",
+        summary: "Recovered source",
+        fetched_at: "2026-06-21T00:03:00Z",
+      }] : [],
+      findings_by_kind: completed ? { technique: [{
+        id: "44444444-4444-4444-8444-444444444444",
+        kind: "technique",
+        label: "Recovered finding",
+        summary: "Recovered finding summary",
+        source_ids: ["33333333-3333-4333-8333-333333333333"],
+      }] } : {},
+      design_tasks_summary: { total: 0 },
+    });
+    const json = (payload, status = 200) => new Response(JSON.stringify(payload), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    });
+    window.fetch = async (input, options = {}) => {
+      const url = new URL(typeof input === "string" ? input : input.url, location.href);
+      if (url.pathname === "/api/research/requests") return json([request()]);
+      if (url.pathname === "/api/research/categories") return json([{ code: "web", display_name: "Web" }]);
+      if (url.pathname === `/api/research/requests/${requestId}`) return json(detail());
+      if (url.pathname === "/api/research/worker/status") return json({ running: false, available: true });
+      if (url.pathname === `/api/research/runs/${runId}/backfill`) {
+        const body = JSON.parse(options.body || "{}");
+        if (!body.apply) {
+          previewCount += 1;
+          return json({
+            run_id: runId,
+            generation_request_id: requestId,
+            log_path: "/fixture/research.log",
+            log_sha256: digest,
+            would_insert_sources: 1,
+            would_insert_findings: 1,
+            current_run_status: "failed",
+            would_run_status: "completed",
+            current_request_status: "failed",
+            would_request_status: "researched",
+          });
+        }
+        applyCount += 1;
+        if (applyCount === 1) return json({ code: "preview_stale", detail: "changed" }, 409);
+        completed = true;
+        return json({ run_id: runId, inserted_sources: 1, inserted_findings: 1 });
+      }
+      return json({});
+    };
+
+    const waitFor = async (predicate, label) => {
+      const deadline = Date.now() + 4000;
+      while (Date.now() < deadline) {
+        const value = predicate();
+        if (value) return value;
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      throw new Error(`timeout: ${label}`);
+    };
+
+    try {
+      const view = await import("/src/web/static/js/views/research-requests.js");
+      view.bind();
+      view.render({});
+      document.dispatchEvent(new CustomEvent("ctf:open-research-request", {
+        detail: { requestId },
+      }));
+      const button = await waitFor(() => document.querySelector(".rq-backfill-run"), "backfill button");
+      if (document.querySelector(".rq-alert-title")?.textContent !== "研究租约过期") {
+        throw new Error("failure classification title was not rendered");
+      }
+      if (!document.querySelector(".rq-alert-details")?.textContent.includes("lease expired")) {
+        throw new Error("raw failure disclosure was not rendered");
+      }
+
+      button.click();
+      (await waitFor(() => document.querySelector("#backfill-dialog-cancel"), "cancel dialog")).click();
+      await waitFor(() => !document.querySelector("[data-backfill-dialog]"), "cancel cleanup");
+      if (previewCount !== 1 || applyCount !== 0) throw new Error("cancel path wrote data");
+
+      (await waitFor(() => document.querySelector(".rq-backfill-run"), "second backfill button")).click();
+      (await waitFor(() => document.querySelector("#backfill-dialog-confirm"), "stale confirmation")).click();
+      await waitFor(() => document.querySelector("#toast")?.textContent.includes("日志已变化"), "stale toast");
+      if (previewCount !== 2 || applyCount !== 1) throw new Error("stale path call counts mismatch");
+
+      (await waitFor(() => document.querySelector(".rq-backfill-run"), "third backfill button")).click();
+      (await waitFor(() => document.querySelector("#backfill-dialog-confirm"), "success confirmation")).click();
+      await waitFor(
+        () => document.querySelector(".rq-hero")?.getAttribute("aria-label") === "研究结果已就绪",
+        "refreshed hero",
+      );
+      if (previewCount !== 3 || applyCount !== 2) throw new Error("success path call counts mismatch");
+      document.body.dataset.status = "passed";
+      document.querySelector("#fixture-result").textContent =
+        `PASS preview=${previewCount} apply=${applyCount} hero=研究结果已就绪`;
+    } catch (error) {
+      document.body.dataset.status = "failed";
+      document.querySelector("#fixture-result").textContent = `FAIL ${error.stack || error}`;
+    }
+  </script>
+</body>
+</html>
