@@ -172,8 +172,8 @@ the terminal update. Claim-sidecar `claimed_at` SHALL be preferred for
 The system SHALL provide `services.BuildOrchestrationService` with at least
 these public methods. Mutation methods SHALL keep database writes inside short
 PostgreSQL transactions; staging writes and queue publication are recoverable
-filesystem steps outside those row-transition transactions. `render_shard_payload`
-SHALL be a pure renderer:
+filesystem steps outside those row-transition transactions.
+`render_shard_payload` SHALL be a pure renderer:
 
 - `submit_batch(design_task_ids: list[UUID]) -> list[UUID]`
 - `submit_single(design_task_id: UUID) -> UUID`
@@ -194,40 +194,41 @@ directory guarantees as `pending/`, `running/`, `done/`, and `failed/`.
    `work/shards/staging/build-attempts/` exists, and render every payload into
    `work/shards/staging/build-attempts/<build_attempt_id>.json`; no file is yet
    visible to workers.
-2. In one PostgreSQL transaction, insert each `build_attempts` row with its
-   pre-allocated id, `status = 'queued'`, and
-   `attempt_no = COALESCE(max(attempt_no), 0) + 1`, and set every parent
+2. In one PostgreSQL transaction, lock every selected design-task row in stable
+   UUID order, insert each `build_attempts` row with its pre-allocated id,
+   `status = 'queued'`, and `attempt_no` allocated from that task's persistent
+   `next_build_attempt_no`; increment each counter once and set every parent
    design task to `building`; then commit.
 3. After commit, make an immediate best-effort atomic rename of every staged
    payload to `work/shards/pending/<shard_basename>`. A post-commit publication
    error SHALL be logged and recovered asynchronously; it SHALL NOT be reported
    as if the committed submission rolled back.
 
-If validation, staging, or the database transaction fails, no database change
-or pending shard SHALL survive. If the process exits after commit but before
-all renames, a recovery pass SHALL publish matching committed rows on startup
-or the next reconciliation tick. Staged files older than one hour without
-committed rows SHALL be removed by recovery. Younger staged payloads without a
-row SHALL be left alone so recovery cannot race an in-flight submission
-transaction.
+If validation, staging, or the database transaction fails, no database change,
+counter increment, or pending shard SHALL survive. If the process exits after
+commit but before all renames, a recovery pass SHALL publish matching committed
+rows on startup or the next reconciliation tick. Staged files older than one
+hour without committed rows SHALL be removed by recovery. Younger staged
+payloads without a row SHALL be left alone so recovery cannot race an in-flight
+submission transaction.
 
 For a `designed` task, the emitted payload SHALL omit
 `resume_from_shard_basename`. For a `build_failed` task, the service SHALL
 require its highest-`attempt_no` row to be `failed` or `lost` and SHALL use
 that row's basename as `resume_from_shard_basename`.
 
-A design task in any other status SHALL be rejected with a
-validation error and SHALL NOT advance.
+A design task in any other status SHALL be rejected with a validation error and
+SHALL NOT advance.
 
 `retry` SHALL require that the named `build_attempts` row is both the highest-
 `attempt_no` row for its design task and in `failed` or `lost`, and that the
 parent task is `build_failed`. It SHALL create a new attempt for the same design
-task following the same flow with a fresh attempt-specific
-`shard_basename` and `resume_from_shard_basename` set to the source
-attempt's basename, then return the new attempt id. It SHALL NOT touch
-`work/challenges/<category>/<id>-<slug>/`; the runner's resume
-protocol carries forward already-passed stages by inspecting artifact
-evidence for the same challenge id.
+task following the same flow with the next persistent attempt number, a fresh
+attempt-specific `shard_basename`, and `resume_from_shard_basename` set to the
+source attempt's basename, then return the new attempt id. It SHALL NOT touch
+`work/challenges/<category>/<id>-<slug>/`; the runner's resume protocol carries
+forward already-passed stages by inspecting artifact evidence for the same
+challenge id.
 
 #### Scenario: Submit batch rejects ineligible tasks
 
@@ -235,29 +236,35 @@ evidence for the same challenge id.
 - **WHEN** `submit_batch([A, B])` is invoked
 - **THEN** the call raises a validation error
 - **AND** no new `build_attempts` rows are inserted for either task
+- **AND** no counter is incremented for either task
 - **AND** no shard file is written under `work/shards/pending/`
 
 #### Scenario: Submit batch failure before commit leaves no work
 
-- **GIVEN** tasks A and B both `designed`, and the file system blocks
-  the shard write for B
+- **GIVEN** tasks A and B are both `designed`, and the filesystem blocks the shard write for B
 - **WHEN** `submit_batch([A, B])` is invoked
 - **THEN** neither task transitions to `building`
-- **AND** no `build_attempts` rows are inserted for either task
+- **AND** no row or counter increment is committed for either task
 - **AND** no shard is visible under `work/shards/pending/`
+
+#### Scenario: Concurrent submissions allocate distinct numbers
+
+- **GIVEN** two transactions concurrently submit the same eligible task
+- **WHEN** both attempt to lock and allocate its counter
+- **THEN** row locking serializes allocation
+- **AND** the active-attempt uniqueness rule permits only one active attempt
+- **AND** a rolled-back conflicting transaction does not consume a number
 
 #### Scenario: Crash after commit converges through staging recovery
 
-- **GIVEN** rows A and B committed but the process exited after publishing
-  only shard A
+- **GIVEN** rows A and B committed but the process exited after publishing only shard A
 - **WHEN** staging recovery next runs
 - **THEN** shard B is published from its attributed staged payload
 - **AND** no duplicate shard A is created
 
 #### Scenario: Post-commit publication error remains accepted
 
-- **GIVEN** the database transaction committed and a staged payload remains
-  durable, but its immediate rename to `pending/` fails
+- **GIVEN** the database transaction committed and a staged payload remains durable, but its immediate rename to `pending/` fails
 - **WHEN** `submit_batch` completes
 - **THEN** it returns the committed attempt id as accepted
 - **AND** a warning is logged
@@ -265,17 +272,21 @@ evidence for the same challenge id.
 
 #### Scenario: Retry preserves existing artifacts
 
-- **GIVEN** build attempt #1 for design task T finished `failed` and
-  `work/challenges/<category>/<challenge_id>-<slug>/` exists with partial output
+- **GIVEN** build attempt #1 for design task T finished `failed` and `work/challenges/<category>/<challenge_id>-<slug>/` exists with partial output
 - **WHEN** `retry(attempt_1.id)` is invoked
 - **THEN** a new `attempt_no = 2` row is inserted
 - **AND** the new row has a different `shard_basename` from attempt #1
 - **AND** its `resume_from_shard_basename` equals attempt #1's basename
 - **AND** the existing artifact directory is not deleted or modified
-- **AND** normal immediate publication moves the new shard into
-  `work/shards/pending/`
-- **AND** if immediate publication fails after commit, the staged shard remains
-  recoverable and the accepted attempt stays `queued`
+- **AND** normal immediate publication moves the new shard into `work/shards/pending/`
+- **AND** if immediate publication fails after commit, the staged shard remains recoverable and the accepted attempt stays `queued`
+
+#### Scenario: Retry after a deleted sibling preserves sequence
+
+- **GIVEN** task T allocated attempts 1 and 2, attempt 2 was deleted, and attempt 1 remains the latest failed row
+- **WHEN** the operator submits or retries from the valid remaining state
+- **THEN** the new attempt receives `attempt_no = 3`
+- **AND** its resume source follows the latest remaining failed attempt when retry rules require one
 
 #### Scenario: Retry of a stale sibling is rejected
 
@@ -552,56 +563,255 @@ the supported retry path.
 ### Requirement: 构建任务 view follows the Design Tasks layout
 
 The dashboard SHALL expose a top-level navigation entry "构建任务"
-(slug `build-attempts`) under its own sidebar group. The list view
-SHALL render a filter bar above a table. Filter bar fields SHALL include
-`状态` (build-attempts statuses), `Worker`, `分类` (web/pwn/re), `Design Task`
-(UUID input), and `Generation Request` (UUID input). The view SHALL initialize
+(slug `build-attempts`) under its own sidebar group. The list view SHALL render
+a filter bar above a table. Filter bar fields SHALL include `状态`
+(build-attempts statuses), `Worker`, `分类` (web/pwn/re), `Design Task` (UUID
+input), and `Generation Request` (UUID input). The view SHALL initialize
 `Generation Request` from the route's `generation_request_id` query parameter
 and display it as an active, editable filter. The filter bar's right side SHALL
-present five action buttons: `Apply`, `Clear`, `⟳ 刷新`,
-`▶ 启动 Worker`, `☑ 重新验证`. The table SHALL have one row per
-design task that has at least one `build_attempts` row, showing the
-  title, category, difficulty, latest attempt status, derived percent
-  (from `progress_snapshots`, "-" if absent), worker, attempt count,
-  artifact availability, created-at, and an action area with `详情` (always) and `重试` (only
-when the latest attempt is in `failed` or `lost`).
+present five action buttons: `Apply`, `Clear`, `⟳ 刷新`, `▶ 启动 Worker`,
+`☑ 重新验证`.
 
-The detail view SHALL show, for the inspected attempt: basic info,
-a link to its parent design task, the related shard path, the
-`resulting_challenge_dir` and `artifact_status` (when set), a table of all sibling
-attempts ordered by `attempt_no`, and a list of progress events
-preserving `carry-forward:` styling.
+The table SHALL have one row per design task that has at least one
+`build_attempts` row, showing the title, category, difficulty, latest attempt
+status, derived percent (from `progress_snapshots`, `-` if absent), worker,
+attempt count, artifact availability, created-at, and an action area with
+`详情` (always) and `重试` (only when the latest attempt is in `failed` or
+`lost`).
 
-The application-wide `<header>` toolbar's `重新验证`, `启动 Worker`,
-update timestamp, and refresh icon SHALL be removed; the mobile
-bottom action bar SHALL be removed. The `重新验证` and `启动 Worker`
-actions SHALL be reachable only from the build-attempts view.
-`POST /api/actions/worker` and `POST /api/actions/validate` SHALL
-remain unchanged at the HTTP level.
+The detail view SHALL show, for the inspected attempt: basic info, a link to
+its parent design task, the related shard path, the
+`resulting_challenge_dir` and `artifact_status` (when set), a table of all
+sibling attempts ordered by `attempt_no`, and a list of progress events
+preserving `carry-forward:` styling. The detail action area SHALL expose
+`▶ 启动 Worker` for that exact attempt.
+
+The application-wide `<header>` toolbar's `重新验证`, `启动 Worker`, update
+timestamp, and refresh icon SHALL be removed; the mobile bottom action bar
+SHALL be removed. The `重新验证` and `启动 Worker` actions SHALL be reachable
+only from the build-attempts view. `POST /api/actions/worker` and
+`POST /api/actions/validate` SHALL remain unchanged at the HTTP level.
+
+The build-attempts dashboard view SHALL NOT use the legacy global
+`POST /api/actions/worker` endpoint for category-filtered or attempt-specific
+build work. A list action SHALL require an explicit category filter and SHALL
+call the constrained category endpoint, which resolves to one DB-known queued
+attempt and launches by build-attempt id. A detail action SHALL call the
+constrained single-build-attempt endpoint for the inspected attempt.
+
+The legacy global worker endpoint SHALL NOT be wired to another dashboard
+control by this change; it remains available only to explicit API clients.
+
+Constrained build-worker starts SHALL preserve the existing dashboard local
+task guard: a server process may not start a constrained worker while another
+local worker or validation subprocess is still running.
+
+#### Scenario: List worker action requires an explicit category
+
+- **GIVEN** the operator is on the Build Attempts list with category filter
+  unset
+- **WHEN** the operator clicks Start Worker
+- **THEN** no worker process is started
+- **AND** the UI asks the operator to choose a category
 
 #### Scenario: Sidebar exposes build-attempts entry
 
 - **WHEN** the dashboard loads
-- **THEN** the sidebar shows a "构建任务" entry that opens the
-  list view at route `#/build-attempts`
+- **THEN** the sidebar shows a "构建任务" entry that opens the list view at
+  route `#/build-attempts`
 
-#### Scenario: List actions invoke the unchanged endpoints
+#### Scenario: List worker action starts constrained category execution
 
-- **WHEN** the operator clicks `▶ 启动 Worker` on the build-tasks
-  view
-- **THEN** the frontend issues `POST /api/actions/worker`
-- **AND** the response is rendered through the existing dashboard
-  task-state UI mechanism
+- **GIVEN** the operator is on the Build Attempts list with category filter
+  `web`
+- **WHEN** the operator clicks Start Worker
+- **THEN** the frontend calls the constrained build-worker endpoint with
+  `category = web`
+- **AND** it does not call `POST /api/actions/worker`
+
+#### Scenario: Detail worker action starts constrained attempt execution
+
+- **GIVEN** the operator is viewing build attempt `A`
+- **WHEN** the operator clicks Start Worker
+- **THEN** the frontend calls the constrained build-worker endpoint with
+  `build_attempt_id = A`
+- **AND** no unrelated shard may be claimed
+
+#### Scenario: Constrained worker respects local process guard
+
+- **GIVEN** the dashboard task manager already has a running worker or
+  validation subprocess
+- **WHEN** the operator starts a category- or attempt-constrained build worker
+- **THEN** the endpoint returns a conflict
+- **AND** no second worker process is started
 
 #### Scenario: Global header no longer exposes build actions
 
 - **WHEN** the dashboard renders any view other than `build-attempts`
-- **THEN** the `<header class="layout-header">` element contains
-  no `启动 Worker`, `重新验证`, refresh icon, or sync-time element
+- **THEN** the `<header class="layout-header">` element contains no
+  `启动 Worker`, `重新验证`, refresh icon, or sync-time element
 
 #### Scenario: Refresh button triggers a synchronous reconciler tick
 
 - **WHEN** the operator clicks `⟳ 刷新` in the build-tasks view
-- **THEN** the frontend calls `/api/state` first (which triggers a
-  reconciler tick) and then refetches `/api/build-attempts`
+- **THEN** the frontend calls `/api/state` first, which triggers a reconciler
+  tick
+- **AND** the frontend then refetches `/api/build-attempts`
+
+### Requirement: Build attempt allocation remains monotonic after deletion
+
+Each `design_tasks` row SHALL carry
+`next_build_attempt_no INTEGER NOT NULL DEFAULT 1` with a positive CHECK
+constraint. The migration SHALL backfill existing tasks to
+`COALESCE(MAX(build_attempts.attempt_no), 0) + 1`. Build submission SHALL lock
+the task row, allocate the current value, and increment the counter in the same
+transaction that inserts the attempt. Deletion SHALL NOT decrement or recompute
+the counter.
+
+#### Scenario: Deleting the latest attempt does not reuse its number
+
+- **GIVEN** task T allocated attempts 1, 2, and 3
+- **WHEN** attempt 3 is deleted and T is submitted again
+- **THEN** the new attempt receives `attempt_no = 4`
+- **AND** `attempt_no = 3` is not reused
+
+#### Scenario: Existing tasks are backfilled
+
+- **GIVEN** a task has existing attempts through `attempt_no = 5` before migration
+- **WHEN** the migration is applied
+- **THEN** its `next_build_attempt_no` becomes 6
+- **AND** a task with no attempts receives 1
+
+### Requirement: Build attempt dashboard exposes governed deletion
+
+The existing Build Attempts list and detail modes SHALL add Delete actions
+without replacing their filters, worker/validation actions, refresh behavior,
+detail navigation, or retry controls. Deletion behavior and confirmation SHALL
+conform to the `resource-deletion` capability.
+
+#### Scenario: List adds deletion alongside existing build actions
+
+- **WHEN** the build-attempt list renders
+- **THEN** refresh, start-worker, validate, detail, and eligible retry actions retain their existing behavior
+- **AND** Delete is available for each attempt row
+
+#### Scenario: Detail exposes governed deletion
+
+- **WHEN** a non-running build-attempt detail renders
+- **THEN** a Delete action opens the shared confirmation dialog
+- **AND** default confirmation preserves its challenge artifacts
+
+### Requirement: Constrained build dispatch selects only eligible attributed shards
+
+The generated shard payload SHALL remain the execution input for Hermes.
+Build-attempt dispatch SHALL select work by verified attribution and SHALL NOT
+rely on filename ordering to choose which
+category or build attempt to execute. Any service or endpoint that starts a
+build-attempt worker for a category SHALL claim only attributed shards whose
+payload has a non-empty top-level `build_attempt_id` and whose challenge
+entries all match that category. Any service or endpoint that starts a worker
+for a single build attempt SHALL claim only the shard whose payload has that
+top-level `build_attempt_id`.
+
+#### Scenario: Category-constrained build dispatch does not claim another category
+
+- **GIVEN** `work/shards/pending/` contains a pending Pwn shard and a pending
+  Web shard
+- **WHEN** the operator starts a Web-constrained build worker
+- **THEN** only an attributed shard whose payload challenge categories are all
+  `web` may be moved to `running/`
+- **AND** the Pwn shard remains pending
+
+#### Scenario: Category-constrained build dispatch ignores legacy category shards
+
+- **GIVEN** `work/shards/pending/` contains a hand-written legacy Web shard
+  with no top-level `build_attempt_id`
+- **AND** it contains an attributed Web build-attempt shard
+- **WHEN** the operator starts a Web-constrained build-attempt worker
+- **THEN** only the attributed Web shard may be moved to `running/`
+- **AND** the legacy Web shard remains pending
+
+#### Scenario: Build-attempt-constrained dispatch claims only the named attempt
+
+- **GIVEN** two attributed pending shards exist with different top-level
+  `build_attempt_id` values
+- **WHEN** the operator starts a worker for build attempt `A`
+- **THEN** only the shard whose payload has `build_attempt_id = A` may be
+  moved to `running/`
+- **AND** the other attributed shard remains pending
+
+### Requirement: HTTP API exposes constrained build-worker starts
+
+The dashboard backend SHALL expose constrained build-worker start endpoints in
+addition to the existing build submission, list, detail, and retry endpoints:
+
+- `POST /api/build-attempts/worker/start` with body `{"category": "<category>"}`
+  selects one DB-known queued build attempt whose parent design task has that
+  category, then starts a local worker constrained to that build attempt id.
+  The selected row SHALL be the first eligible row ordered by
+  `(build_attempts.created_at ASC, build_attempts.id ASC)` after staging
+  recovery and pending-shard matching. The endpoint SHALL reject missing or
+  unsupported categories with `400`.
+- `POST /api/build-attempts/{id}/worker/start` with an empty body starts a
+  local worker constrained to the named build attempt. The endpoint SHALL
+  return `404` for malformed or unknown ids.
+
+Both endpoints SHALL run build staging recovery before checking for a matching
+pending shard. A matching pending shard SHALL have the exact persisted
+`shard_basename`; its payload SHALL match the selected build-attempt id,
+design-task id, and design-task category. Both launch forms SHALL pass the
+selected attempt id and its DB-known category to the runner. The category
+endpoint SHALL return `409` when no queued DB-known
+attempt in that category has a matching pending shard after recovery. The
+single-attempt endpoint SHALL return `409` when the named attempt is not
+`queued` or when no matching pending shard exists after recovery. Both
+endpoints SHALL return `409` when another local dashboard task is already
+running. The final busy check and subprocess creation SHALL be one atomic local
+task-manager operation. A successful start SHALL return `202` and the selected
+`build_attempt_id`; the exact-attempt subprocess SHALL run without `--loop`.
+
+#### Scenario: Category worker endpoint starts one DB-known attempt
+
+- **GIVEN** queued Web build attempts `A` and `B` both have matching pending
+  attributed shards
+- **AND** `A` sorts before `B` by `(created_at, id)`
+- **WHEN** `POST /api/build-attempts/worker/start` is called with
+  `{"category": "web"}`
+- **THEN** the backend starts the worker constrained to `build_attempt_id = A`
+- **AND** the worker is also constrained to A's DB-known category
+- **AND** no legacy Web shard or unknown attributed Web shard is eligible for
+  that invocation
+
+#### Scenario: Attempt worker endpoint recovers staging before conflict
+
+- **GIVEN** build attempt `A` is `queued` and its matching staged payload is
+  still under `work/shards/staging/build-attempts/`
+- **WHEN** `POST /api/build-attempts/A/worker/start` is called
+- **THEN** staging recovery runs before pending-shard matching
+- **AND** the request is not rejected merely because immediate publication had
+  not previously run
+
+#### Scenario: Terminal attempt cannot be started
+
+- **GIVEN** build attempt `A` is `succeeded`, `failed`, or `lost`
+- **WHEN** `POST /api/build-attempts/A/worker/start` is called
+- **THEN** the response is `409`
+- **AND** no worker process is started
+
+#### Scenario: Exact start rejects a mismatched attributed payload
+
+- **GIVEN** queued build attempt `A` names shard basename `A.json`
+- **AND** pending `A.json` has a different `design_task_id` or challenge category
+- **WHEN** the exact-attempt start endpoint evaluates `A`
+- **THEN** the endpoint returns `409`
+- **AND** the mismatched shard is not claimed
+
+#### Scenario: Category start skips a mismatched attributed payload
+
+- **GIVEN** queued build attempt `A` sorts before eligible attempt `B` in the
+  requested category
+- **AND** A's pending payload does not match A's design-task id or category
+- **WHEN** the category start endpoint evaluates the queue
+- **THEN** A is skipped and B is selected
+- **AND** A's mismatched shard is not claimed
 
