@@ -1,5 +1,7 @@
 # Research Logic Assessment - 2026-06-20
 
+Tracked by openspec change `tighten-research-evaluation-flow`.
+
 Scope: current research planning/execution implementation only. This is an
 analysis record for a possible future OpenSpec proposal. No implementation
 changes are included.

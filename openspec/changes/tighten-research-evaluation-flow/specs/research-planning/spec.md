@@ -7,7 +7,7 @@ The dashboard backend SHALL gate `POST /api/research/requests/{request_id}/worke
 Preflight (executed in a single short DB transaction):
 
 1. `generation_requests` row with `id = request_id` MUST exist. Otherwise: `404` with `detail = "request not found"`.
-2. The row's `status` MUST be `draft`, `researching`, or `failed`. If `researched`: `409` with `code = "already_researched"`. If `failed` with no retry budget remaining: `409` with `code = "final_failure_no_retry_left"`.
+2. The row's `status` MUST be `draft` or `researching`. If `researched`: `409` with `code = "already_researched"`. If `failed`: `409` with `code = "final_failure_no_retry_left"`. A `failed` parent request is already terminal by the R6 status contract and MUST NOT be treated as runnable preflight input.
 3. The request MUST have at least one runnable `research_runs` row, where "runnable" means `status = 'queued'` OR `status = 'running'` with `lease_expires_at <= NOW()` (an expired lease the next claim will recover). Otherwise: `409` with `code = "no_runnable_run"`.
 
 Handshake (after subprocess Popen succeeds):
@@ -15,8 +15,8 @@ Handshake (after subprocess Popen succeeds):
 - The worker subprocess SHALL `touch work/research/worker_handshake/<pid>.ready` immediately after it has finished imports, opened the DB session pool, and is about to call `claim_next_run`.
 - The manager SHALL wait up to `5` seconds for the ready file to appear (poll cadence ≤ 100 ms).
 - If the file appears within the window: return `202` with `message = "worker started"`.
-- If the subprocess exits before the file appears OR the window elapses: kill the subprocess (`SIGTERM` then `SIGKILL` after 1 s grace), return `409` with `code = "worker_startup_failed"` and a `stderr_tail` of up to 1 KB.
-- The ready file SHALL be unlinked by the worker on clean exit; the manager SHALL also sweep ready files for non-running PIDs on each start to avoid leaks.
+- If the subprocess exits before the file appears OR the window elapses: terminate the subprocess using the platform's graceful termination API, then force-kill it after 1 s grace if it is still running. POSIX implementations MAY map this to `SIGTERM` followed by `SIGKILL`; Windows implementations MUST use the equivalent `Popen.terminate()` / `Popen.kill()` or Win32 process APIs rather than assuming POSIX signal semantics. Return `409` with `code = "worker_startup_failed"` and a `stderr_tail` of up to 1 KB.
+- The ready file SHALL be unlinked by the worker on clean exit; the manager SHALL also sweep ready files for non-running PIDs on each start to avoid leaks. The PID liveness check SHALL be platform-aware: POSIX may use `kill(pid, 0)`, while Windows must use an equivalent process-existence check rather than assuming POSIX signal semantics.
 
 The unscoped `POST /api/research/worker/start` SHALL apply the same handshake but skip the request-existence preflight (since it operates on the global queue).
 
@@ -49,33 +49,52 @@ The unscoped `POST /api/research/worker/start` SHALL apply the same handshake bu
 
 - **GIVEN** the worker imports raise an exception before writing the ready file
 - **WHEN** 5 s elapse without the ready file appearing
-- **THEN** the manager kills the subprocess (`SIGTERM`, then `SIGKILL` after 1 s)
+- **THEN** the manager gracefully terminates the subprocess and force-kills it after 1 s if it is still running, using platform-appropriate process APIs
 - **AND** the response is `409` with `code = "worker_startup_failed"` and `stderr_tail` containing the captured tail of `stderr`
 
 ### Requirement: Submit endpoint is idempotent under operator-supplied Idempotency-Key
 
-`POST /api/research/requests` SHALL accept an optional `Idempotency-Key` header carrying an opaque string ≤ 256 bytes. When the header is present, the service SHALL look up an existing `generation_requests` row matching all four of:
+`POST /api/research/requests` SHALL accept an optional `Idempotency-Key` header carrying an opaque UTF-8 string whose encoded length is ≤ 256 bytes. Oversized keys SHALL be rejected with HTTP `400`. When the header is present, the service SHALL compute a `request_fingerprint` from the normalized operator intent and then look up the most recent existing `generation_requests` row with:
 
-- `category = body.category`
-- `topic = body.topic`
-- `target_count = body.target_count`
 - `idempotency_key = header value`
+- `created_at >= NOW() - INTERVAL :ttl`
 
-with `created_at >= NOW() - INTERVAL :ttl`, where `:ttl` defaults to `1800` seconds and MAY be overridden by environment variable `RESEARCH_SUBMIT_IDEMPOTENCY_TTL_SECONDS` (positive integer; invalid values fall back to default with a WARNING).
+where `:ttl` defaults to `1800` seconds and MAY be overridden by environment variable `RESEARCH_SUBMIT_IDEMPOTENCY_TTL_SECONDS` (positive integer; invalid values fall back to default with a WARNING).
 
-- Lookup hit: return the existing request representation with HTTP `200 OK`. No new row is created. No additional `research_runs` row is created.
-- Lookup miss: the existing submit flow runs unchanged and returns `201 Created`.
+The `request_fingerprint` SHALL be the lower-case SHA-256 hex digest of canonical JSON over exactly these normalized body fields: `category`, `topic`, `target_count`, `difficulty_distribution`, `runtime_constraints`, `seed_urls`, and `max_attempts`. The canonical JSON SHALL sort object keys and use normalized defaults so omitted optional fields hash the same as explicit default values.
+
+The idempotency lookup and possible request/run creation SHALL be concurrency-safe for the same non-empty `Idempotency-Key`. Before the lookup, the submit transaction SHALL acquire a transaction-scoped per-key serialization guard. The preferred implementation is a PostgreSQL advisory transaction lock derived from a stable hash of the UTF-8 key, for example a two-int `pg_advisory_xact_lock(...)` hash split; an equivalent single-row idempotency ledger table with a UNIQUE key is also acceptable. The existing non-unique `generation_requests` index is only a lookup accelerator and is NOT sufficient by itself for concurrent idempotency.
+
+- Lookup hit with the same `request_fingerprint`: return the same submit response shape as a fresh submit, `{"request": <request-representation>, "latest_run": <run-representation>}`, with HTTP `200 OK`. No new row is created. No additional `research_runs` row is created.
+- Lookup hit with a different `request_fingerprint`: reject with HTTP `409` and `code = "idempotency_key_conflict"`. No new row is created. No additional `research_runs` row is created.
+- Lookup miss: the existing submit flow runs unchanged and returns the same submit response shape with HTTP `201 Created`.
 
 When the header is absent, the existing "every call creates a new request" semantics SHALL be preserved.
 
-The `generation_requests` table SHALL gain a `idempotency_key TEXT` column (nullable) and a composite BTree index `(category, topic, target_count, idempotency_key, created_at DESC)`. The index SHALL NOT be UNIQUE; expired (older than TTL) entries SHALL be eligible for fresh submission.
+The `generation_requests` table SHALL gain `idempotency_key TEXT` and `request_fingerprint TEXT` columns (both nullable) and a BTree index `(idempotency_key, created_at DESC)`. The index SHALL NOT be UNIQUE; expired (older than TTL) entries SHALL be eligible for fresh submission.
 
 #### Scenario: Idempotency-Key hit within TTL returns existing request
 
 - **GIVEN** an `Idempotency-Key: K` submit at time `T` created request `R`
 - **WHEN** the same submit body with `Idempotency-Key: K` is re-sent at `T + 100 s`
 - **THEN** the response is `200 OK` with the same request id `R`
+- **AND** the response body is `{"request": {...}, "latest_run": {...}}`
 - **AND** no new row appears in `generation_requests` or `research_runs`
+
+#### Scenario: Idempotency-Key reused with different body is rejected
+
+- **GIVEN** an `Idempotency-Key: K` submit at time `T` created request `R`
+- **WHEN** a different submit body with `Idempotency-Key: K` is sent at `T + 100 s`
+- **THEN** the response is `409` with `code = "idempotency_key_conflict"`
+- **AND** no new row appears in `generation_requests` or `research_runs`
+
+#### Scenario: Concurrent same-key submits serialize to one request
+
+- **GIVEN** two identical `POST /api/research/requests` calls with `Idempotency-Key: K` arrive concurrently
+- **WHEN** both transactions execute the idempotency path
+- **THEN** exactly one `generation_requests` row and one initial `research_runs` row are created
+- **AND** one response is `201 Created`
+- **AND** the other response is `200 OK` with the same request id
 
 #### Scenario: Idempotency-Key miss outside TTL creates new request
 
@@ -98,7 +117,7 @@ The `generation_requests` table SHALL gain a `idempotency_key TEXT` column (null
 - `insufficient_findings:got=<N>,need=<M>` — `findings.length < ceil(target_count * 0.5)`, where `M = ceil(target_count * 0.5)`.
 - `unparseable_output:<reason>` — stdout cannot be reduced to a single JSON object (see below).
 
-The `research_sources` table SHALL carry a UNIQUE constraint on `(research_run_id, content_hash)`, replacing the prior non-unique `ix_research_sources_run_hash` index. The Alembic migration SHALL include a pre-step that audits existing rows, fails loudly if duplicates remain, and is preceded by a `tools/scripts/dedup_research_sources.py` operator script that resolves duplicates by keeping the earliest `id` per group and rewriting any `research_findings` source references away from the deleted rows.
+The `research_sources` table SHALL carry a UNIQUE constraint on `(research_run_id, content_hash)`, replacing the prior non-unique `ix_research_sources_run_hash` index. The Alembic migration SHALL include a pre-step that audits existing rows, fails loudly if duplicates remain, and is preceded by a `tools/scripts/dedup_research_sources.py` operator script that resolves duplicates by keeping the earliest `research_sources.id` per `(research_run_id, content_hash)` group and rewriting `research_finding_sources.source_id` from every deleted source row to the kept source row before deletion.
 
 `ResearchAgentExecutor` stdout parsing SHALL accept arbitrary leading lines (markdown, log, banners) and SHALL extract the LAST top-level JSON object in stdout by scanning from the end: locate the final `}`, walk back matching braces (respecting string literals and escapes), and attempt `json.loads(...)` on the resulting substring. The first object that parses cleanly is the output. If no such substring parses, the run is marked `failed: unparseable_output:no_terminal_json_object`.
 
@@ -223,7 +242,7 @@ A research run whose binding is absent or `status = 'disabled'` SHALL be marked 
 
 ### Requirement: Generation requests capture operator intent with validated distribution
 
-The system SHALL persist generation requests as rows in `generation_requests` with `category` (text, fk to `challenge_categories.code`), `topic` (text), `target_count` (positive integer), `difficulty_distribution` (jsonb mapping difficulty label → count), `runtime_constraints` (jsonb), `seed_urls` (jsonb array, default empty array), `max_attempts` (positive integer, default 3), `status` (enum `draft|researching|researched|failed`), `idempotency_key` (text, nullable), and `created_at` / `updated_at` timestamps. Difficulty labels SHALL be one of `easy|medium|hard|expert`. The sum of values in `difficulty_distribution` SHALL equal `target_count`. A request whose distribution does not sum to `target_count`, or whose distribution contains an unknown label, SHALL be rejected by the repository before any row is written.
+The system SHALL persist generation requests as rows in `generation_requests` with `category` (text, fk to `challenge_categories.code`), `topic` (text), `target_count` (positive integer), `difficulty_distribution` (jsonb mapping difficulty label → count), `runtime_constraints` (jsonb), `seed_urls` (jsonb array, default empty array), `max_attempts` (positive integer, default 3), `status` (enum `draft|researching|researched|failed`), `idempotency_key` (text, nullable), `request_fingerprint` (text, nullable), and `created_at` / `updated_at` timestamps. Difficulty labels SHALL be one of `easy|medium|hard|expert`. The sum of values in `difficulty_distribution` SHALL equal `target_count`. A request whose distribution does not sum to `target_count`, or whose distribution contains an unknown label, SHALL be rejected by the repository before any row is written.
 
 `runtime_constraints` top-level keys SHALL be limited to the following ALLOWED set, with the value-type constraints listed:
 
@@ -290,7 +309,9 @@ The HTTP `POST /api/research/requests` handler SHALL extract `runtime_constraint
 
 ### Requirement: Generation request status reflects the latest run
 
-The system SHALL maintain `generation_requests.status` as a denormalized view of the request's latest run:
+The system SHALL maintain `generation_requests.status` as a denormalized view of the request's latest run.
+
+The status rules below assume this invariant: for each `generation_requests.id`, at most one `research_runs` row may be non-terminal (`queued` or `running`) at a time, and no runnable run may remain after a later `completed` or final `failed` run is committed. Terminal-transition code MUST preserve this invariant. If an implementation detects a historical or manually-mutated request that violates it, it SHALL treat the request as inconsistent and refuse operator-facing generation/worker-start actions with a machine-readable conflict rather than silently choosing one status rule.
 
 | Condition                                              | request.status |
 |--------------------------------------------------------|----------------|
@@ -314,7 +335,7 @@ API responses SHALL expose TWO distinct status fields on every generation-reques
 
 List filters SHALL strictly use the persisted field. `GET /api/research/requests?status=<v>` SHALL reject any value not in the persisted vocabulary with `400` and SHALL filter on `generation_requests.status` directly, NOT on the derived label. A separate parameter `?display_status=<v>` SHALL filter on the derived label using the vocabulary above.
 
-The submit endpoint response SHALL be `{"request": <request-representation>, "latest_run": <run-representation>}` where both inner objects use the two-field `status`/`display_status` convention. The legacy hardcoded `"status": "queued"` top-level field is REMOVED; this is a breaking change for any caller that was reading it.
+The submit endpoint response SHALL be `{"request": <request-representation>, "latest_run": <run-representation>}`. The request representation uses the two-field `status`/`display_status` convention; the run representation uses the native `research_runs.status` vocabulary because run status is not remapped. The legacy hardcoded `"status": "queued"` top-level field is REMOVED; this is a breaking change for any caller that was reading it.
 
 #### Scenario: Submit creates request and queued run atomically
 
@@ -363,12 +384,14 @@ The submit endpoint response SHALL be `{"request": <request-representation>, "la
 
 The system SHALL store the raw fetched page text under `work/research/sources/<run_id>/<index>.txt` when raw text is captured, and the Hermes stdout/stderr log under `work/research/logs/<run_id>.log`. The corresponding `research_sources.raw_text_path` and `research_runs.hermes_log_path` columns SHALL hold these paths. PostgreSQL SHALL NOT store the raw text or the full Hermes log in any column.
 
-Raw text writes SHALL follow a stage-then-promote lifecycle so that a DB rollback or a parse-error exception cannot leave orphaned files:
+Raw text writes SHALL follow a stage-then-promote lifecycle so that a DB rollback or a parse-error exception cannot leave orphaned files after normal error handling, and so crash windows are recoverable on server startup:
 
 1. During parsing, `ResearchAgentExecutor` writes each source's raw text to `work/research/sources_staging/<run_id>/<index>.txt`.
-2. After `complete_run_with_results` commits successfully, the executor atomically renames the staging directory to `work/research/sources/<run_id>/`. Any pre-existing target directory aborts the operation and is logged as a reconciliation conflict.
-3. Any failure path (parser error, validation error, DB rollback, stale-claim error, unexpected exception) SHALL invoke a cleanup helper that recursively deletes `work/research/sources_staging/<run_id>/`. The cleanup is idempotent and tolerant of partial writes.
-4. Server startup (`web/server.py:serve`) SHALL invoke a sweep that deletes any `work/research/sources_staging/<run_id>/` directory whose `mtime` is older than `300` seconds. This recovers from a server crash during step 1 or 2.
+2. `complete_run_with_results` SHALL insert and flush source/finding rows inside its terminal transaction, with `research_sources.raw_text_path` already pointing at the final path under `work/research/sources/<run_id>/`.
+3. Before committing that transaction, the service SHALL atomically rename the staging directory to `work/research/sources/<run_id>/`. Any pre-existing target directory aborts the operation and rolls back the transaction.
+4. The implementation MUST use explicit transaction control or equivalent transaction-helper hooks so the promotion happens before the final commit and commit failures can be caught by the service. If the DB commit fails after promotion, the service SHALL delete `work/research/sources/<run_id>/` before returning the error. If parsing, validation, stale-claim handling, or DB flush fails before promotion, the service SHALL delete `work/research/sources_staging/<run_id>/`. Cleanup is idempotent and tolerant of partial writes.
+5. Server startup (`web/server.py:serve`) SHALL invoke a sweep that deletes any `work/research/sources_staging/<run_id>/` directory whose `mtime` is older than `300` seconds by default. Implementations MAY raise the effective threshold to `max(300, research_worker_manager.hermes_timeout_seconds + 60)` to avoid deleting a legitimate long-running staging directory. This threshold SHALL come from the research-worker manager's effective timeout, not the shard-oriented `HERMES_TIMEOUT` environment variable.
+6. Server startup SHALL also reconcile final `work/research/sources/<run_id>/` directories: if `run_id` does not exist as a completed `research_runs` row with at least one `research_sources.raw_text_path` under that directory, the directory is treated as an orphan created by a crash window and is quarantined/deleted using the same operational-file deletion mechanism as resource deletion.
 
 `ResourceDeletionService` SHALL include `work/research/sources/<run_id>/` in the operational-files set it quarantines/deletes when removing a generation request or its runs. The staging directory MUST also be cleaned if present.
 
@@ -394,17 +417,25 @@ The migration that introduces this lifecycle SHALL NOT relocate or modify any ex
 - **THEN** after the executor returns, `work/research/sources_staging/<run_id>/` does not exist
 - **AND** `work/research/sources/<run_id>/` does not exist
 
-#### Scenario: Successful commit promotes atomically
+#### Scenario: Successful completion promotes before commit
 
 - **WHEN** `complete_run_with_results` commits successfully
 - **THEN** `work/research/sources_staging/<run_id>/` no longer exists
 - **AND** `work/research/sources/<run_id>/` exists and contains every captured source's raw text
+- **AND** every persisted `research_sources.raw_text_path` for that run points into the final directory
 
 #### Scenario: Server startup sweeps stale staging directories
 
 - **GIVEN** a stale `work/research/sources_staging/<run_id>/` directory whose mtime is older than 300 seconds (e.g. a prior crash)
 - **WHEN** `web/server.py:serve` runs its startup sweep
 - **THEN** that directory is deleted before HTTP traffic is accepted
+
+#### Scenario: Server startup reconciles orphan final source directories
+
+- **GIVEN** `work/research/sources/<run_id>/` exists from a crash after promotion
+- **AND** there is no completed `research_runs` row with persisted source rows referencing that directory
+- **WHEN** `web/server.py:serve` runs startup reconciliation
+- **THEN** that directory is quarantined or deleted before HTTP traffic is accepted
 
 #### Scenario: Deleting a request removes its source directory
 

@@ -23,10 +23,10 @@ SHALL be rejected with a `409` carrying a machine-readable reason code:
   lives in `research-planning` and prevents `completed` rows from being
   persisted below the threshold).
 
-#### Scenario: Researched request creates target_count tasks
+#### Scenario: Latest completed research run creates target_count tasks
 
-- **GIVEN** a generation request with `target_count = 3` and at least 2 findings on its latest completed run
-- **AND** its latest research run is completed with findings and sources
+- **GIVEN** a generation request with `target_count = 3` whose latest research run is completed and has at least 2 findings
+- **AND** that completed run has sources
 - **WHEN** the operator generates design tasks
 - **THEN** exactly three `design_tasks` rows are created
 - **AND** each row has `status = "draft"`
@@ -43,8 +43,8 @@ SHALL be rejected with a `409` carrying a machine-readable reason code:
 #### Scenario: Request with insufficient findings is rejected defensively
 
 - **GIVEN** a generation request with `target_count = 4`
-- **AND** a historical completed run carrying only 1 finding (predating the
-  research-planning quality gate)
+- **AND** the latest research run is completed but predates the
+  research-planning quality gate and carries only 1 finding
 - **WHEN** the operator generates design tasks
 - **THEN** the response is `409` with reason code `insufficient_findings`
 - **AND** no `design_tasks` row is created
