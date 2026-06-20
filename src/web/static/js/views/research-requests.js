@@ -382,28 +382,39 @@ function renderDetail(root) {
   const qualityPassed = request.status === "researched" && findingCount >= minimumFindings;
   const designTaskCount = design_tasks_summary?.total || 0;
   const displayStatus = request.display_status || request.status;
+  const heroState = requestHeroState(displayStatus, qualityPassed);
 
   root.innerHTML = `
     <button class="btn btn-ghost rq-back" id="research-back">
       <i data-lucide="arrow-left"></i> 返回研究需求
     </button>
 
-    <div class="rq-detail-header">
-      <div class="rq-detail-heading">
-        <div class="rq-badges">
-          ${softPill(categoryLabel(request.category), categoryTone(request.category))}
-          ${requestStatusPill(displayStatus)}
+    <section class="rq-hero rq-hero-${heroState.tone}" aria-label="${escapeHtml(heroState.label)}">
+      <div class="rq-hero-content">
+        <div class="rq-badges rq-hero-badges">
+          ${renderHeroCategory(request.category)}
+          <span class="rq-hero-status rq-status-${escapeHtml(displayStatus)}">
+            <span class="rq-status-dot" aria-hidden="true"></span>
+            ${escapeHtml(heroState.label)}
+          </span>
+          <span class="rq-hero-id" title="需求 ID: ${escapeHtml(request.id)}">${escapeHtml(request.id.slice(0, 8))}</span>
         </div>
         <h2>${escapeHtml(request.topic)}</h2>
-        <div class="rq-request-id" title="${escapeHtml(request.id)}">需求 ID · ${escapeHtml(request.id)}</div>
+        <div class="rq-hero-meta">
+          <span>${escapeHtml(request.target_count)} 道</span>
+          <span aria-hidden="true">·</span>
+          <span>${escapeHtml(renderDifficultySummary(request.difficulty_distribution))}</span>
+          <span aria-hidden="true">·</span>
+          <span>${escapeHtml(formatShortDate(request.created_at))}</span>
+        </div>
       </div>
-      <div class="rq-primary-actions">
+      <div class="rq-hero-actions">
         ${renderPrimaryAction({ request, latest, qualityPassed, designTaskCount, workerRunning, available })}
-        <button class="btn btn-secondary btn-sm" id="detail-refresh"${state.flags.detail?.refreshing ? " disabled" : ""}>
-          <i data-lucide="refresh-cw"></i> 刷新
+        <button class="btn btn-ghost btn-icon btn-icon-sm" id="detail-refresh" aria-label="刷新"${state.flags.detail?.refreshing ? " disabled" : ""}>
+          <i data-lucide="refresh-cw"></i>
         </button>
       </div>
-    </div>
+    </section>
 
     <div class="rq-detail-layout">
       <div class="rq-detail-main">
@@ -442,6 +453,54 @@ function renderDetail(root) {
   `;
 
   scheduleDetailPoll(detailNeedsActivePolling() ? ACTIVE_POLL_MS : SETTLED_POLL_MS);
+}
+
+function requestHeroState(displayStatus, qualityPassed) {
+  if (displayStatus === "researched" && qualityPassed) {
+    return { tone: "success", label: "研究结果已就绪" };
+  }
+  if (displayStatus === "researched") {
+    return { tone: "warning", label: "研究结果需要处理" };
+  }
+  if (displayStatus === "failed") {
+    return { tone: "danger", label: "研究执行失败" };
+  }
+  if (displayStatus === "researching") {
+    return { tone: "info", label: "研究正在执行" };
+  }
+  if (displayStatus === "queued") {
+    return { tone: "warning", label: "研究等待执行" };
+  }
+  return { tone: "neutral", label: "研究需求草稿" };
+}
+
+function renderHeroCategory(category) {
+  const meta = {
+    web: { label: "Web", icon: "globe-2" },
+    pwn: { label: "Pwn", icon: "bug" },
+    re: { label: "RE", icon: "binary" },
+  }[category] || { label: categoryLabel(category), icon: "shapes" };
+  const tone = ["web", "pwn", "re"].includes(category) ? category : "other";
+  return `<span class="rq-hero-chip rq-category-chip rq-category-${tone}"><i data-lucide="${meta.icon}"></i>${escapeHtml(meta.label)}</span>`;
+}
+
+function renderDifficultySummary(distribution) {
+  const entries = Object.entries(distribution || {}).filter(([, count]) => Number(count) > 0);
+  if (!entries.length) return "未配置难度";
+  if (entries.length === 1) return difficultyLabel(entries[0][0]);
+  return entries.map(([difficulty, count]) => `${difficultyLabel(difficulty)} ${count}`).join(" / ");
+}
+
+function formatShortDate(value) {
+  if (!value) return "日期未知";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value).slice(0, 10);
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date).replaceAll("/", "-");
 }
 
 function renderPrimaryAction({ request, latest, qualityPassed, designTaskCount, workerRunning, available }) {

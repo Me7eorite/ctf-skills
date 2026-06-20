@@ -89,6 +89,45 @@ export function difficultyLabel(difficulty) {
   return DIFFICULTY_LABELS[difficulty] || difficulty || "未知";
 }
 
+export const designTaskStatusMeta = {
+  draft: { label: "草稿", tone: "text-ink-700 bg-ink-100", stage: "plan" },
+  queued: { label: "等待设计", tone: "text-amber-700 bg-amber-50", stage: "design" },
+  designing: { label: "设计中", tone: "text-blue-700 bg-blue-50", stage: "design" },
+  designed: { label: "设计完成", tone: "text-emerald-700 bg-emerald-50", stage: "design" },
+  failed: { label: "设计失败", tone: "text-rose-700 bg-rose-50", stage: "design" },
+  archived: { label: "已归档", tone: "text-ink-700 bg-ink-100", stage: "plan" },
+  building: { label: "构建中", tone: "text-blue-700 bg-blue-50", stage: "build" },
+  built: { label: "构建完成", tone: "text-emerald-700 bg-emerald-50", stage: "build" },
+  build_failed: { label: "构建失败", tone: "text-rose-700 bg-rose-50", stage: "build" },
+};
+
+export function designTaskStatusLabel(status) {
+  return designTaskStatusMeta[status]?.label || status || "未知";
+}
+
+export function designTaskStatusPill(status) {
+  const meta = designTaskStatusMeta[status] || {
+    label: status || "未知",
+    tone: "text-ink-700 bg-ink-100",
+  };
+  return softPill(meta.label, meta.tone);
+}
+
+export function designTaskStage(status) {
+  return designTaskStatusMeta[status]?.stage || "plan";
+}
+
+export function designErrorMessage(error) {
+  if (!error) return "未提供失败原因";
+  if (error.includes("exhausted")) return "已达到最大设计尝试次数";
+  if (error.includes("expected queued")) return "当前任务不在等待设计状态";
+  if (error.includes("profile_not_bound")) return "未绑定题目设计 Agent 配置";
+  if (error.includes("profile_disabled")) return "题目设计 Agent 配置已停用";
+  if (error.includes("timeout")) return "题目设计执行超时";
+  if (error.includes("quality_gate")) return "题目设计未通过质量检查";
+  return error;
+}
+
 export function researchErrorMessage(error) {
   if (!error) return "未提供失败原因";
   if (error === "profile_not_bound") return "未绑定研究 Agent 配置";

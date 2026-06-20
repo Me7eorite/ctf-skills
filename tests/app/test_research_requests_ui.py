@@ -34,6 +34,35 @@ def test_request_detail_exposes_quality_gate_and_runtime_constraints() -> None:
     assert "暂停 Worker 可能影响正在执行的其他研究需求" in source
 
 
+def test_request_detail_header_is_a_state_aware_summary_card() -> None:
+    source = (STATIC / "js" / "views" / "research-requests.js").read_text(
+        encoding="utf-8"
+    )
+    styles = (STATIC / "css" / "views" / "research-requests.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'class="rq-hero rq-hero-${heroState.tone}"' in source
+    assert "requestHeroState(displayStatus, qualityPassed)" in source
+    assert "研究结果已就绪" in source
+    assert "研究执行失败" in source
+    assert "renderDifficultySummary(request.difficulty_distribution)" in source
+    assert "formatShortDate(request.created_at)" in source
+    assert ".rq-hero-success" in styles
+    assert ".rq-hero-danger" in styles
+    assert ".rq-hero-actions" in styles
+    assert "renderHeroCategory(request.category)" in source
+    for category in (".rq-category-web", ".rq-category-pwn", ".rq-category-re"):
+        assert category in styles
+    for status in (
+        ".rq-status-queued",
+        ".rq-status-researching",
+        ".rq-status-researched",
+        ".rq-status-failed",
+    ):
+        assert status in styles
+
+
 def test_research_status_and_diagnostics_are_chinese() -> None:
     source = (STATIC / "js" / "ui" / "format.js").read_text(encoding="utf-8")
 
