@@ -32,7 +32,34 @@ const state = {
   flags: {},
   filter: { category: "", displayStatus: "" },
   detailPoll: { timer: null, loading: false },
+  lastRender: null,
 };
+
+function listSignature() {
+  return [
+    "L",
+    JSON.stringify(state.requests),
+    state.categories?.length ?? -1,
+    state.filter.category,
+    state.filter.displayStatus,
+    state.flags.requests?.loading || false,
+    state.flags.requests?.error || "",
+    state.flags.deleting || false,
+  ].join("|");
+}
+
+function detailSignature() {
+  return [
+    "D",
+    state.detailId,
+    JSON.stringify(state.detail),
+    state.worker?.running || false,
+    state.worker?.available !== false,
+    state.flags.detail?.loading || false,
+    state.flags.detail?.refreshing || false,
+    state.flags.deleting || false,
+  ].join("|");
+}
 
 async function ensureRequests() {
   if (state.requests !== null) return;
@@ -253,8 +280,18 @@ export function render(data) {
   const root = document.querySelector('[data-view="research-requests"]');
   if (!root) {
     clearDetailPoll();
+    state.lastRender = null;
     return;
   }
+
+  if (state.detailId) {
+    renderDetail(root);
+    return;
+  }
+
+  const sig = listSignature();
+  if (sig === state.lastRender) return;
+  state.lastRender = sig;
 
   const flag = state.flags.requests || {};
   if (flag.loading && !state.requests) {
@@ -268,11 +305,6 @@ export function render(data) {
         <p>${escapeHtml(flag.error)}</p>
       </div>
     `;
-    return;
-  }
-
-  if (state.detailId) {
-    renderDetail(root);
     return;
   }
 
@@ -369,9 +401,20 @@ function renderDetail(root) {
   if (state.detail === null) {
     fetchDetail(state.detailId);
     ensureWorker();
-    root.innerHTML = `<div class="empty">正在加载需求详情…</div>`;
+    const loadingSig = "D-loading|" + state.detailId;
+    if (state.lastRender !== loadingSig) {
+      state.lastRender = loadingSig;
+      root.innerHTML = `<div class="empty">正在加载需求详情…</div>`;
+    }
     return;
   }
+
+  const sig = detailSignature();
+  if (sig === state.lastRender) {
+    scheduleDetailPoll(detailNeedsActivePolling() ? ACTIVE_POLL_MS : SETTLED_POLL_MS);
+    return;
+  }
+  state.lastRender = sig;
 
   const { request, latest_run: latest, runs = [], sources = [], findings_by_kind = {}, design_tasks_summary = null } = state.detail;
   const worker = state.worker || {};
