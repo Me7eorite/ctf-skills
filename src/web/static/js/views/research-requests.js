@@ -2,6 +2,7 @@ import { api, del, postJson } from "../api.js";
 import { initIcons } from "../ui/icons.js";
 import { showToast } from "../ui/toast.js";
 import { confirmDeletion } from "../ui/delete-dialog.js";
+import { confirmBackfill } from "../ui/backfill-dialog.js";
 import {
   escapeHtml,
   categoryLabel,
@@ -59,6 +60,7 @@ function detailSignature() {
     state.flags.detail?.loading || false,
     state.flags.detail?.refreshing || false,
     state.flags.deleting || false,
+    state.flags.backfill?.loading || false,
   ].join("|");
 }
 
@@ -227,6 +229,66 @@ async function generateDesignTasks() {
     initIcons();
   } catch (err) {
     showToast(researchErrorMessage(err.message), true);
+  }
+}
+
+async function requestBackfillPreview(runId) {
+  return requestBackfill(runId, { apply: false });
+}
+
+async function requestBackfillApply(runId, preview) {
+  return requestBackfill(runId, {
+    apply: true,
+    expected_log_sha256: preview.log_sha256,
+  });
+}
+
+async function requestBackfill(runId, body) {
+  const response = await fetch(`/api/research/runs/${encodeURIComponent(runId)}/backfill`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  let payload = {};
+  try { payload = await response.json(); } catch { /* keep empty payload */ }
+  if (!response.ok) {
+    const error = new Error(payload.detail || payload.message || `请求失败 (${response.status})`);
+    error.code = payload.code || "request_failed";
+    error.detail = payload.detail || error.message;
+    throw error;
+  }
+  return payload;
+}
+
+function backfillErrorMessage(err) {
+  if (err?.code === "preview_stale") return "日志已变化，请重新预览后再恢复";
+  return err?.detail || err?.message || "日志恢复失败";
+}
+
+async function backfillLatestRun(runId) {
+  if (state.flags.backfill?.loading) return;
+  state.flags.backfill = { loading: true };
+  render(state.data);
+  initIcons();
+  try {
+    let preview;
+    try {
+      preview = await requestBackfillPreview(runId);
+    } catch (err) {
+      await confirmBackfill({ preview: null, error: err });
+      return;
+    }
+    const confirmed = await confirmBackfill({ preview });
+    if (!confirmed) return;
+    await requestBackfillApply(runId, preview);
+    showToast("研究结果已从日志恢复");
+    await refreshDetail();
+  } catch (err) {
+    showToast(backfillErrorMessage(err), true);
+  } finally {
+    state.flags.backfill = { loading: false };
+    render(state.data);
+    initIcons();
   }
 }
 
@@ -612,6 +674,7 @@ function renderFailureAlert(run) {
   const title = run.last_error_title || "本次运行未完成";
   const description = run.last_error_description || "研究运行未完成。";
   const actions = Array.isArray(run.last_error_actions) ? run.last_error_actions : [];
+  const backfillLoading = state.flags.backfill?.loading;
   return `
     <div class="rq-alert rq-alert-error rq-alert-${escapeHtml(meta.tone)} rq-progress-alert">
       <div class="rq-alert-heading">
@@ -624,6 +687,13 @@ function renderFailureAlert(run) {
           <ul>
             ${actions.map(action => `<li>${escapeHtml(action)}</li>`).join("")}
           </ul>
+        </div>
+      ` : ""}
+      ${run.recoverable === true ? `
+        <div class="rq-alert-backfill">
+          <button class="btn btn-secondary btn-sm rq-backfill-run" data-run-id="${escapeHtml(run.id)}"${backfillLoading ? " disabled" : ""}>
+            <i data-lucide="database-backup"></i> ${backfillLoading ? "正在恢复…" : "尝试从日志恢复结果"}
+          </button>
         </div>
       ` : ""}
       <details class="rq-alert-details">
@@ -843,6 +913,11 @@ export function bind() {
     }
     if (e.target.closest("#detail-delete-request") && state.detailId) {
       deleteRequest(state.detailId);
+      return;
+    }
+    const backfillButton = e.target.closest(".rq-backfill-run");
+    if (backfillButton?.dataset.runId) {
+      backfillLatestRun(backfillButton.dataset.runId);
       return;
     }
     if (e.target.closest("#req-clear-filter")) {

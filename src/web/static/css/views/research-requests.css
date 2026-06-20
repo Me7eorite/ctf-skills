@@ -132,6 +132,10 @@
   margin-top: 4px;
 }
 
+.rq-alert-backfill {
+  margin-top: var(--space-sm);
+}
+
 .rq-alert-details {
   margin-top: var(--space-sm);
 }

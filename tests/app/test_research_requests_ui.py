@@ -117,3 +117,46 @@ def test_api_error_object_preserves_machine_readable_code() -> None:
 
     assert 'typeof detail === "object"' in source
     assert "detail.code" in source
+
+
+def test_research_backfill_ui_contract() -> None:
+    source = (STATIC / "js" / "views" / "research-requests.js").read_text(
+        encoding="utf-8"
+    )
+    dialog_source = (STATIC / "js" / "ui" / "backfill-dialog.js").read_text(
+        encoding="utf-8"
+    )
+    styles = (STATIC / "css" / "views" / "research-requests.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'import { confirmBackfill } from "../ui/backfill-dialog.js"' in source
+    assert "async function requestBackfillPreview" in source
+    assert "async function requestBackfillApply" in source
+    assert "expected_log_sha256: preview.log_sha256" in source
+    assert "payload.code" in source
+    assert "preview_stale" in source
+    assert "confirmBackfill({ preview: null, error: err })" in source
+    assert "run.recoverable === true" in source
+    assert "尝试从日志恢复结果" in source
+    assert ".rq-backfill-run" in source
+    assert "postJson(`/api/research/runs/${encodeURIComponent(runId)}/backfill`" not in source
+
+    assert "export function confirmBackfill" in dialog_source
+    assert "error = null" in dialog_source
+    assert "预览失败" in dialog_source
+    assert 'hasError ? " disabled" : ""' in dialog_source
+    for field in (
+        "preview?.log_path",
+        "preview?.log_sha256",
+        "preview?.would_insert_sources",
+        "preview?.would_insert_findings",
+        "preview?.current_run_status",
+        "preview?.would_run_status",
+        "preview?.current_request_status",
+        "preview?.would_request_status",
+    ):
+        assert field in dialog_source
+    assert "候选不保证恢复一定成功" in dialog_source
+    assert "确认恢复" in dialog_source
+    assert ".rq-alert-backfill" in styles

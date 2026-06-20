@@ -46,11 +46,11 @@
 
 ## 6. R6 — 前端 backfill 弹窗 + alert 内入口
 
-- [ ] 6.1 新建 `src/web/static/js/ui/backfill-dialog.js`：仿 `delete-dialog.js` 的弹窗骨架，导出 `confirmBackfill({preview})`；返回 Promise，resolve(true) = 确认，resolve(false) = 取消。
-- [ ] 6.2 增加 preview/apply fetch；apply 必须携带 preview 的 `expected_log_sha256`，失败解析顶层 `{code,detail}`。
-- [ ] 6.3 在进度卡 alert 中分类描述 / actions 下方加入 backfill 入口：仅当 `state.detail.latest_run.recoverable === true` 渲染；按钮文案"尝试从日志恢复结果"；点击 → `requestBackfillPreview` → 弹窗 → 确认后 `requestBackfillApply` → toast → `refreshDetail()`。
-- [ ] 6.4 弹窗显示日志路径、摘要、数量和目标状态，并说明候选不保证成功；preview 错误禁用确认；`preview_stale` 不自动重试，要求重新预览。
-- [ ] 6.5 在 `tests/app/test_research_requests_ui.py` 加静态契约断言：源码包含 `confirmBackfill`、`requestBackfillPreview`、`recoverable`、按钮文案"尝试从日志恢复结果"。
+- [x] 6.1 新建 `src/web/static/js/ui/backfill-dialog.js`：仿 `delete-dialog.js` 的弹窗骨架，导出 `confirmBackfill({preview})`；返回 Promise，resolve(true) = 确认，resolve(false) = 取消。
+- [x] 6.2 增加 preview/apply fetch；apply 必须携带 preview 的 `expected_log_sha256`，失败解析顶层 `{code,detail}`。
+- [x] 6.3 在进度卡 alert 中分类描述 / actions 下方加入 backfill 入口：仅当 `state.detail.latest_run.recoverable === true` 渲染；按钮文案"尝试从日志恢复结果"；点击 → `requestBackfillPreview` → 弹窗 → 确认后 `requestBackfillApply` → toast → `refreshDetail()`。
+- [x] 6.4 弹窗显示日志路径、摘要、数量和目标状态，并说明候选不保证成功；preview 错误禁用确认；`preview_stale` 不自动重试，要求重新预览。
+- [x] 6.5 在 `tests/app/test_research_requests_ui.py` 加静态契约断言：源码包含 `confirmBackfill`、`requestBackfillPreview`、`recoverable`、按钮文案"尝试从日志恢复结果"。
 - [ ] 6.6 用测试 fixture 启动 dev server 验收 preview → 取消 → preview → 确认及 stale-preview 路径；生产样本仅作部署后可选观察。
 
 ## 7. R7 — CLI `challenge-factory research backfill`
