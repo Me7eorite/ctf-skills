@@ -181,8 +181,10 @@ class ResearchSubmitTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("invalid choice", stderr)
 
-    def test_submit_prints_request_id_and_run_id(self):
-        request = _make_request(category="web", target_count=2)
+    def test_submit_prints_request_and_latest_run(self):
+        # New contract (R6 / D8): CLI submit mirrors the HTTP response shape —
+        # nested `{request, latest_run}` objects, no top-level `request_id`/`run_id`/`status`.
+        request = _make_request(category="web", target_count=2, status="researching")
         run = _make_run(request_id=request.id, status="queued")
         with patch("persistence.session.transaction", side_effect=RuntimeError), patch(
             "services.ResearchJobService"
@@ -197,10 +199,12 @@ class ResearchSubmitTests(unittest.TestCase):
         import json
 
         payload = json.loads(stdout)
-        self.assertEqual(payload["request_id"], str(request.id))
-        self.assertEqual(payload["run_id"], str(run.id))
-        self.assertEqual(payload["category"], "web")
-        self.assertEqual(payload["status"], "queued")
+        self.assertEqual(payload["request"]["id"], str(request.id))
+        self.assertEqual(payload["request"]["category"], "web")
+        self.assertEqual(payload["request"]["status"], "researching")
+        self.assertEqual(payload["request"]["display_status"], "queued")
+        self.assertEqual(payload["latest_run"]["id"], str(run.id))
+        self.assertEqual(payload["latest_run"]["status"], "queued")
 
     def test_submit_distribution_mismatch_exits_2(self):
         from domain.research_validators import ResearchValidationError as RVE

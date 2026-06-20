@@ -247,12 +247,13 @@ def test_executor_final_failure_marks_parent_failed(
         assert retry_count == 0
 
 
-def test_disabled_binding_falls_back_to_default(
+def test_disabled_binding_marks_run_failed_profile_disabled(
     session_factory: SessionFactory,
     paths: ProjectPaths,
-    caplog,
     monkeypatch,
 ):
+    # New contract (R1 / D2): disabled binding no longer silently falls back to
+    # `default` — it fail-fasts and the run is marked `failed:profile_disabled:<name>`.
     with session_factory() as session:
         binding = session.get(model.HermesProfileBinding, "research")
         assert binding is not None
@@ -262,20 +263,19 @@ def test_disabled_binding_falls_back_to_default(
     _request, claimed = _submit_and_claim(session_factory)
     seen_profiles: list[str] = []
 
-    def fake_hermes_invoke(**kwargs):
+    def fake_hermes_invoke(**kwargs):  # pragma: no cover — must not be called
         seen_profiles.append(kwargs["profile_name"])
         return HermesProcessResult(returncode=0, stdout=_research_stdout(), cancelled=False)
 
     monkeypatch.setattr("services.research_agent_executor.profile_exists", lambda _name: True)
-    with caplog.at_level(logging.WARNING):
-        _run_executor(_executor(paths, session_factory, fake_hermes_invoke), claimed)
+    _run_executor(_executor(paths, session_factory, fake_hermes_invoke), claimed)
 
     with session_factory() as session:
         run = session.get(model.ResearchRun, claimed.id)
         assert run is not None
-        assert run.profile_name_used == "default"
-    assert seen_profiles == ["default"]
-    assert "disabled" in caplog.text
+        assert run.status == "failed"
+        assert run.last_error == "profile_disabled:ctf-research-bot"
+    assert seen_profiles == []
 
 
 def test_lost_lease_during_hermes_discards_output(

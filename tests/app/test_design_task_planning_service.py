@@ -169,7 +169,7 @@ def test_generate_rejected_when_no_completed_run(session_factory: SessionFactory
     request, _ = _seed(session_factory, finished=False)
     service = DesignTaskPlanningService(session_factory)
 
-    with pytest.raises(DesignTaskValidationError, match="completed research run"):
+    with pytest.raises(DesignTaskValidationError, match="latest_run_not_completed"):
         service.generate_for_request(request.id)
 
     session = session_factory()

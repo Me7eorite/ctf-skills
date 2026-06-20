@@ -595,7 +595,10 @@ class BindingDetailEndpointTests(unittest.TestCase):
         finally:
             _close(client)
 
-    def test_queued_latest_run_displays_as_draft_even_when_stored_researching(self):
+    def test_queued_latest_run_exposes_status_and_display_status(self):
+        # New contract (R6): `status` mirrors the persisted column; `display_status`
+        # is the derived operator-facing label. A researching request with a queued
+        # latest run is persisted-`researching` but display-`queued`.
         req = _make_request(category="web", topic="Queued", status="researching")
         run = _make_run(request_id=req.id, status="queued")
         repo = SimpleNamespace(
@@ -608,12 +611,15 @@ class BindingDetailEndpointTests(unittest.TestCase):
             resp = client.get("/api/research/requests")
             self.assertEqual(resp.status_code, 200)
             payload = resp.json()[0]
-            self.assertEqual(payload["status"], "draft")
-            self.assertEqual(payload["stored_status"], "researching")
+            self.assertEqual(payload["status"], "researching")
+            self.assertEqual(payload["display_status"], "queued")
         finally:
             _close(client)
 
-    def test_status_filter_uses_display_status(self):
+    def test_status_filter_uses_persisted_status(self):
+        # New contract (R6): `?status=` strictly filters the persisted column;
+        # `?display_status=` is the derived path. Both rows below are persisted
+        # `researching` so both must appear under `?status=researching`.
         queued = _make_request(category="web", topic="Queued", status="researching")
         running = _make_request(category="web", topic="Running", status="researching")
         latest_by_request = {
@@ -627,12 +633,16 @@ class BindingDetailEndpointTests(unittest.TestCase):
         )
         client = _client(repo)
         try:
-            resp = client.get("/api/research/requests?status=draft")
+            resp = client.get("/api/research/requests?status=researching")
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual({row["id"] for row in resp.json()}, {str(queued.id), str(running.id)})
+
+            resp = client.get("/api/research/requests?display_status=queued")
             self.assertEqual(resp.status_code, 200)
             payload = resp.json()
             self.assertEqual(len(payload), 1)
             self.assertEqual(payload[0]["id"], str(queued.id))
-            self.assertEqual(payload[0]["status"], "draft")
+            self.assertEqual(payload[0]["display_status"], "queued")
         finally:
             _close(client)
 
@@ -696,8 +706,11 @@ class SubmitRequestEndpointTests(unittest.TestCase):
         body.update(overrides)
         return body
 
-    def test_happy_path_returns_201_with_ids(self):
-        request = _make_request(category="web")
+    def test_happy_path_returns_201_with_request_and_latest_run(self):
+        # New contract (R6 / D8): submit returns `{request: {...}, latest_run: {...}}`
+        # — no top-level hard-coded `"status": "queued"`. The request object carries
+        # both persisted `status` and derived `display_status`.
+        request = _make_request(category="web", status="researching")
         run = _make_run(request_id=request.id, status="queued")
 
         captured: dict = {}
@@ -716,10 +729,16 @@ class SubmitRequestEndpointTests(unittest.TestCase):
                 resp = client.post("/api/research/requests", json=self._body())
             self.assertEqual(resp.status_code, 201)
             payload = resp.json()
-            self.assertEqual(payload["request_id"], str(request.id))
-            self.assertEqual(payload["run_id"], str(run.id))
-            self.assertEqual(payload["category"], "web")
-            self.assertEqual(payload["status"], "queued")
+            self.assertIn("request", payload)
+            self.assertIn("latest_run", payload)
+            self.assertEqual(payload["request"]["id"], str(request.id))
+            self.assertEqual(payload["request"]["category"], "web")
+            self.assertEqual(payload["request"]["status"], "researching")
+            self.assertEqual(payload["request"]["display_status"], "queued")
+            self.assertEqual(payload["latest_run"]["id"], str(run.id))
+            self.assertEqual(payload["latest_run"]["status"], "queued")
+            self.assertNotIn("request_id", payload)
+            self.assertNotIn("run_id", payload)
             # 中文注释：seed_urls 与 distribution 必须原样进入 service。
             self.assertEqual(captured["seed_urls"], ["https://example.com/sqli"])
             self.assertEqual(

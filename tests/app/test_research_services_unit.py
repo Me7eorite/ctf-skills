@@ -19,7 +19,8 @@ from services.research_worker import ResearchWorker, _sigterm_as_keyboard_interr
 
 
 def test_parse_research_output_writes_raw_text(tmp_path):
-    # 中文注释：raw_text 不入库，executor 负责写文件并替换成 raw_text_path。
+    # 中文注释：R2 之后，raw text 物理写入 sources_staging（DB commit 前的 staging
+    # 目录），DTO 里的 raw_text_path 已经记下 promote 之后的最终位置。
     paths = ProjectPaths(root=tmp_path, repository=tmp_path)
     run_id = uuid4()
     stdout_text = json.dumps(
@@ -50,10 +51,12 @@ def test_parse_research_output_writes_raw_text(tmp_path):
         run_id=run_id,
     )
 
-    raw_text_path = paths.research_sources / str(run_id) / "0.txt"
-    assert raw_text_path.read_text(encoding="utf-8") == "captured body"
+    staged_path = paths.research_sources_staging / str(run_id) / "0.txt"
+    final_path = paths.research_sources / str(run_id) / "0.txt"
+    assert staged_path.read_text(encoding="utf-8") == "captured body"
+    assert not final_path.exists()  # promote 由 service 层在事务里做
     assert "raw_text" not in source_payloads[0]
-    assert source_payloads[0]["raw_text_path"] == str(raw_text_path)
+    assert source_payloads[0]["raw_text_path"] == str(final_path)
     assert finding_payloads[0]["source_indices"] == [0]
 
 
@@ -74,7 +77,7 @@ def test_parse_research_output_writes_raw_text(tmp_path):
                     }
                 ],
             },
-            "source field 'url'",
+            "url_shape_invalid",
         ),
         (
             {
@@ -135,12 +138,19 @@ def test_finding_source_ids_rejects_negative_index():
         _finding_source_ids({"source_indices": [-1]}, [uuid4()])
 
 
+class _FakeBinding:
+    # 中文注释：R1 之后 binding 缺失会 fail-fast，commit-validation 路径需要先满足
+    # binding 这一关，所以提供一个 enabled binding 让测试能走到 commit 那一步。
+    profile_name = "default"
+    status = "enabled"
+
+
 class FakeExecutorJobService:
     def __init__(self):
         self.failed_errors = []
 
     def get_binding(self, _role):
-        return None
+        return _FakeBinding()
 
     def set_profile_name_used(self, *_args):
         return None
@@ -152,6 +162,10 @@ class FakeExecutorJobService:
         return True
 
     def complete_run_with_results(self, *_args, **_kwargs):
+        raise ResearchValidationError("commit validation failed")
+
+    def complete_run_with_staged_results(self, *_args, **_kwargs):
+        # 中文注释：R2 之后 executor 走 staged 版本，仍然由 service 决定 commit 是否通过。
         raise ResearchValidationError("commit validation failed")
 
     def mark_run_failed(self, _run_id, _agent_id, _claim_token, last_error, **_kwargs):
