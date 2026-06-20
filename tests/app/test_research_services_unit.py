@@ -15,12 +15,11 @@ from domain.research_validators import ResearchValidationError
 from hermes.process import HermesProcessResult
 from services.research_agent_executor import ResearchAgentExecutor, _parse_research_output
 from services.research_job_service import _finding_source_ids
+from services.research_output import materialize_research_raw_text, parse_research_output
 from services.research_worker import ResearchWorker, _sigterm_as_keyboard_interrupt
 
 
-def test_parse_research_output_writes_raw_text(tmp_path):
-    # 中文注释：R2 之后，raw text 物理写入 sources_staging（DB commit 前的 staging
-    # 目录），DTO 里的 raw_text_path 已经记下 promote 之后的最终位置。
+def test_parse_research_output_is_pure_until_materialize(tmp_path):
     paths = ProjectPaths(root=tmp_path, repository=tmp_path)
     run_id = uuid4()
     stdout_text = json.dumps(
@@ -45,19 +44,63 @@ def test_parse_research_output_writes_raw_text(tmp_path):
         }
     )
 
-    source_payloads, finding_payloads = _parse_research_output(
+    parsed = parse_research_output(stdout_text)
+
+    staged_path = paths.research_sources_staging / str(run_id) / "0.txt"
+    final_path = paths.research_sources / str(run_id) / "0.txt"
+    assert not staged_path.exists()
+    assert not final_path.exists()
+    assert parsed.sources[0]["raw_text"] == "captured body"
+
+    source_payloads, finding_payloads = materialize_research_raw_text(
+        parsed,
+        paths=paths,
+        run_id=run_id,
+    )
+
+    assert staged_path.read_text(encoding="utf-8") == "captured body"
+    assert not final_path.exists()  # promote 由 service 层在事务里做
+    assert "raw_text" not in source_payloads[0]
+    assert source_payloads[0]["raw_text_path"] == str(final_path)
+    assert finding_payloads[0]["source_indices"] == [0]
+
+
+def test_legacy_parse_wrapper_still_materializes_raw_text(tmp_path):
+    paths = ProjectPaths(root=tmp_path, repository=tmp_path)
+    run_id = uuid4()
+    stdout_text = json.dumps(
+        {
+            "sources": [
+                {
+                    "url": "https://example.com/a",
+                    "title": "A",
+                    "summary": "Summary",
+                    "content_hash": "a" * 64,
+                    "raw_text": "captured body",
+                }
+            ],
+            "findings": [
+                {
+                    "kind": "technique",
+                    "label": "Technique",
+                    "summary": "Finding summary",
+                    "source_indices": [0],
+                }
+            ],
+        }
+    )
+
+    source_payloads, _finding_payloads = _parse_research_output(
         stdout_text,
         paths=paths,
         run_id=run_id,
     )
 
     staged_path = paths.research_sources_staging / str(run_id) / "0.txt"
-    final_path = paths.research_sources / str(run_id) / "0.txt"
     assert staged_path.read_text(encoding="utf-8") == "captured body"
-    assert not final_path.exists()  # promote 由 service 层在事务里做
-    assert "raw_text" not in source_payloads[0]
-    assert source_payloads[0]["raw_text_path"] == str(final_path)
-    assert finding_payloads[0]["source_indices"] == [0]
+    assert source_payloads[0]["raw_text_path"] == str(
+        paths.research_sources / str(run_id) / "0.txt"
+    )
 
 
 @pytest.mark.parametrize(

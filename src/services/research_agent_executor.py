@@ -4,24 +4,21 @@ from __future__ import annotations
 
 import logging
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
 from core.paths import ProjectPaths
 from domain import research as dto
-from domain.research_validators import (
-    ResearchValidationError,
-    apply_research_quality_gate,
-    extract_terminal_json_object,
-)
+from domain.research_validators import ResearchValidationError
 from hermes.process import HermesProcessResult, profile_exists
 from hermes.prompt import render_research_prompt
 from hermes.research import invoke_research_agent
 from persistence.repositories import ResearchRepository
 from persistence.session import SessionFactory, transaction
 from services.research_job_service import ResearchJobService, StaleClaimError
+from services.research_output import materialize_research_raw_text, parse_research_output
 
 LOGGER = logging.getLogger(__name__)
 HEARTBEAT_INTERVAL_SECONDS = 30.0
@@ -144,11 +141,14 @@ class ResearchAgentExecutor:
             return
 
         try:
-            source_payloads, finding_payloads = _parse_research_output(
+            parsed = parse_research_output(
                 res_data.stdout,
+                target_count=generation_request.target_count,
+            )
+            source_payloads, finding_payloads = materialize_research_raw_text(
+                parsed,
                 paths=self.paths,
                 run_id=run.id,
-                target_count=generation_request.target_count,
             )
         except ResearchValidationError as exc:
             self._mark_failed_if_owned(run, agent_id, str(exc), log_path)
@@ -267,90 +267,6 @@ def _parse_research_output(
     run_id: UUID,
     target_count: int = 1,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """解析 Hermes stdout，并把可选 raw_text 落到磁盘。"""
-    # 中文注释：下游 repository 只存 raw_text_path，完整原文留在 work/research/sources。
-    res_data = extract_terminal_json_object(stdout_text)
-    if res_data is None:
-        raise ResearchValidationError("unparseable_output:no_terminal_json_object")
-    ok, error = apply_research_quality_gate(res_data, target_count)
-    if not ok:
-        raise ResearchValidationError(error or "unparseable_output:quality_gate_failed")
-
-    source_items = res_data.get("sources")
-    finding_items = res_data.get("findings")
-    if not isinstance(source_items, list):
-        raise ResearchValidationError("research output field 'sources' must be a list")
-    if not isinstance(finding_items, list):
-        raise ResearchValidationError("research output field 'findings' must be a list")
-
-    source_payloads = [
-        _normalize_source_payload(source_item, paths=paths, run_id=run_id, source_index=source_index)
-        for source_index, source_item in enumerate(source_items)
-    ]
-    finding_payloads = [
-        _normalize_finding_payload(finding_item, source_count=len(source_payloads))
-        for finding_item in finding_items
-    ]
-    return source_payloads, finding_payloads
-
-
-def _normalize_source_payload(
-    source_item: Any,
-    *,
-    paths: ProjectPaths,
-    run_id: UUID,
-    source_index: int,
-) -> dict[str, Any]:
-    """规范化单个 source，并处理 raw_text 文件写入。"""
-    # 中文注释：保留 Agent 输出字段，同时把 raw_text 从 payload 中替换成 raw_text_path。
-    if not isinstance(source_item, Mapping):
-        raise ResearchValidationError("each source must be a JSON object")
-    source_payload = dict(source_item)
-    for field_name in ("url", "title", "summary", "content_hash"):
-        _required_text(source_payload, field_name, "source")
-    raw_text = source_payload.pop("raw_text", None)
-    if raw_text is not None:
-        if not isinstance(raw_text, str):
-            raise ResearchValidationError("source raw_text must be a string when present")
-        staging_dir = paths.research_sources_staging / str(run_id)
-        staging_dir.mkdir(parents=True, exist_ok=True)
-        staged_path = staging_dir / f"{source_index}.txt"
-        staged_path.write_text(raw_text, encoding="utf-8")
-        source_payload["raw_text_path"] = str(
-            paths.research_sources / str(run_id) / f"{source_index}.txt"
-        )
-    return source_payload
-
-
-def _normalize_finding_payload(finding_item: Any, *, source_count: int) -> dict[str, Any]:
-    """规范化单个 finding。"""
-    # 中文注释：在 parse 阶段提前拒绝缺字段和无效 source_indices，保留真实失败原因。
-    if not isinstance(finding_item, Mapping):
-        raise ResearchValidationError("each finding must be a JSON object")
-    finding_payload = dict(finding_item)
-    for field_name in ("kind", "label", "summary"):
-        _required_text(finding_payload, field_name, "finding")
-    source_indices = finding_payload.get("source_indices")
-    if not isinstance(source_indices, list):
-        raise ResearchValidationError("finding source_indices must be a list")
-    if not source_indices:
-        raise ResearchValidationError("finding source_indices must be non-empty")
-    for source_index in source_indices:
-        if not isinstance(source_index, int) or isinstance(source_index, bool):
-            raise ResearchValidationError(
-                f"finding source_indices must contain integers, got {source_index!r}"
-            )
-        if source_index < 0 or source_index >= source_count:
-            raise ResearchValidationError(f"source index {source_index} is out of range")
-    return finding_payload
-
-
-def _required_text(payload: Mapping[str, Any], field_name: str, item_name: str) -> str:
-    """读取必填文本字段。"""
-    # 中文注释：Hermes 输出缺少必填字段时，在 parse 阶段给出明确诊断。
-    field_value = payload.get(field_name)
-    if not isinstance(field_value, str) or not field_value:
-        raise ResearchValidationError(
-            f"{item_name} field {field_name!r} must be a non-empty string"
-        )
-    return field_value
+    """Compatibility wrapper for existing tests and callers."""
+    parsed = parse_research_output(stdout_text, target_count=target_count)
+    return materialize_research_raw_text(parsed, paths=paths, run_id=run_id)

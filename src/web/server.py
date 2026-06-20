@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import mimetypes
 import shutil
+import sys
 import time
 from http import HTTPStatus
 from pathlib import Path
@@ -230,7 +231,7 @@ def serve(paths: ProjectPaths, host: str, port: int) -> None:
     thread = Thread(target=reconciler.run_forever, daemon=True)
     thread.start()
     app = create_app(service, build_reconciler=reconciler)
-    print(f"Challenge Factory dashboard: http://{host}:{port}", flush=True)
+    print(f"Challenge Factory dashboard: http://{host}:{port}", file=sys.stderr, flush=True)
     try:
         uvicorn.run(app, host=host, port=port, log_level="info", access_log=False)
     finally:

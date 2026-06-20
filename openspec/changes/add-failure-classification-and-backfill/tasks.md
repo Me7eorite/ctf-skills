@@ -25,14 +25,14 @@
 - [x] 3.3 在运行历史表增加“失败原因”列；failed 行显示 API 的 `last_error_title`，其他行留空。
 - [x] 3.4 在 `src/web/static/css/views/research-requests.css` 加 `.rq-alert-actions ul`（缩进 + 圆点）、`.rq-alert-details summary`（可点击折叠样式）、`.rq-history-failure-col`（窄屏下 `display: none` via `@media (max-width: 767px)`）。
 - [x] 3.5 UI 测试覆盖 `failureMeta`、API 文案字段、`<details>`、actions、窄屏列与 HTML escaping；不得断言复制后端 taxonomy 的 JS 文案表。
-- [ ] 3.6 启动 dev server 用浏览器手动验收一条 failed run：alert 渲染正确、actions 显示、`<details>` 可展开折叠、历史表新列显示。（本轮未执行：当前会话未暴露可用浏览器控制工具，且没有已建 failed-run fixture。）
+- [x] 3.6 启动 dev server 用浏览器手动验收一条 failed run：alert 渲染正确、actions 显示、`<details>` 可展开折叠、历史表新列显示。（2026-06-21 使用 Playwright fixture server 验收通过，截图见 `.tmp/task36-failed-run.png`。）
 
 ## 4. R4 — 纯解析、materialize 与持久化边界
 
-- [ ] 4.1 把 `_parse_research_output` 拆为无 I/O 的解析/规范化/质量门与显式 raw-text materialize；normal executor 与 lease rescue 保持原结果。
-- [ ] 4.2 抽 `_persist_rescue_payload(session, run, source_payloads, finding_payloads, log_path)`；它只写 DB rows 与 `_apply_run_completed`，不开事务、不取锁、不 promote、不 commit。
-- [ ] 4.3 lease rescue/backfill 调用方分别负责安全日志读取、staging → flush → promote → commit/savepoint 及异常清理；补 `_try_rescue_from_log` 拒绝逃逸/超限/非 UTF-8 日志和 commit 失败后 final cleanup 测试。
-- [ ] 4.4 加 preview 文件树前后快照测试，证明带 `raw_text` 的 preview 也不创建 staging/final；跑 lease/executor/heartbeat/service 回归。
+- [x] 4.1 把 `_parse_research_output` 拆为无 I/O 的解析/规范化/质量门与显式 raw-text materialize；normal executor 与 lease rescue 保持原结果。
+- [x] 4.2 抽 `_persist_rescue_payload(session, run, source_payloads, finding_payloads, log_path)`；它只写 DB rows 与 `_apply_run_completed`，不开事务、不取锁、不 promote、不 commit。
+- [x] 4.3 lease rescue/backfill 调用方分别负责安全日志读取、staging → flush → promote → commit/savepoint 及异常清理；补 `_try_rescue_from_log` 拒绝逃逸/超限/非 UTF-8 日志和 commit 失败后 final cleanup 测试。
+- [x] 4.4 加 preview 文件树前后快照测试，证明带 `raw_text` 的 preview 也不创建 staging/final；跑 lease/executor/heartbeat/service 回归。
 
 ## 5. R5 — `ResearchBackfillService` + 新 API 端点
 

@@ -20,6 +20,13 @@ from domain.research_validators import ResearchValidationError, validate_runtime
 from persistence.models import research as model
 from persistence.repositories import ResearchRepository
 from persistence.session import SessionFactory, transaction
+from services.research_log_utils import (
+    STDOUT_END_MARKER,
+    STDOUT_START_MARKER,
+    SafeResearchLogError,
+    read_safe_research_log,
+)
+from services.research_output import materialize_research_raw_text, parse_research_output
 
 
 class _RowcountResult(Protocol):
@@ -346,29 +353,14 @@ class ResearchJobService:
             try:
                 session.connection()
                 run = self._get_owned_running_run(session, run_id, agent_id, claim_token)
-                repo = ResearchRepository(session)
-                source_ids: list[UUID] = []
-                for source in sources:
-                    saved = repo.add_source(
-                        run_id,
-                        url=_required_str(source, "url"),
-                        title=_required_str(source, "title"),
-                        summary=_required_str(source, "summary"),
-                        content_hash=_required_str(source, "content_hash"),
-                        fetched_at=_coerce_datetime(source.get("fetched_at")),
-                        raw_text_path=_optional_str(source.get("raw_text_path")),
-                    )
-                    source_ids.append(saved.id)
-                for finding in findings:
-                    repo.create_finding(
-                        run_id,
-                        kind=_required_str(finding, "kind"),
-                        label=_required_str(finding, "label"),
-                        summary=_required_str(finding, "summary"),
-                        source_ids=_finding_source_ids(finding, source_ids),
-                    )
-                repo.touch_binding(binding_role, last_used_at=_utcnow(), last_used_run_id=run_id)
-                self._apply_run_completed(session, run, log_path)
+                self._persist_rescue_payload(
+                    session,
+                    run,
+                    sources,
+                    findings,
+                    log_path,
+                    binding_role=binding_role,
+                )
                 session.flush()
                 _promote_staged_sources(run_id, paths)
                 promoted = True
@@ -432,6 +424,42 @@ class ResearchJobService:
         request.status = "researched"
         request.updated_at = now
 
+    def _persist_rescue_payload(
+        self,
+        session,
+        run: model.ResearchRun,
+        source_payloads: Sequence[Mapping[str, Any]],
+        finding_payloads: Sequence[Mapping[str, Any]],
+        log_path: str | Path,
+        *,
+        binding_role: str | None = None,
+    ) -> None:
+        """Persist parsed results and mark completed; caller owns transaction and files."""
+        repo = ResearchRepository(session)
+        source_ids: list[UUID] = []
+        for source in source_payloads:
+            saved = repo.add_source(
+                run.id,
+                url=_required_str(source, "url"),
+                title=_required_str(source, "title"),
+                summary=_required_str(source, "summary"),
+                content_hash=_required_str(source, "content_hash"),
+                fetched_at=_coerce_datetime(source.get("fetched_at")),
+                raw_text_path=_optional_str(source.get("raw_text_path")),
+            )
+            source_ids.append(saved.id)
+        for finding in finding_payloads:
+            repo.create_finding(
+                run.id,
+                kind=_required_str(finding, "kind"),
+                label=_required_str(finding, "label"),
+                summary=_required_str(finding, "summary"),
+                source_ids=_finding_source_ids(finding, source_ids),
+            )
+        if binding_role is not None:
+            repo.touch_binding(binding_role, last_used_at=_utcnow(), last_used_run_id=run.id)
+        self._apply_run_completed(session, run, log_path)
+
     def _try_rescue_from_log(
         self,
         session,
@@ -444,32 +472,26 @@ class ResearchJobService:
         `_apply_run_failed`。整段逻辑必须吃掉所有异常，否则会污染外层事务。
         """
         log_str = run.hermes_log_path or str(paths.research_logs / f"{run.id}.log")
-        log_file = Path(log_str)
-        if not log_file.exists():
-            return False
         try:
-            log_text = log_file.read_text(encoding="utf-8")
-        except OSError as exc:
-            LOG.warning("rescue: cannot read log %s for run %s: %s", log_file, run.id, exc)
+            safe_log = read_safe_research_log(paths, log_str)
+        except SafeResearchLogError as exc:
+            LOG.warning("rescue: unsafe or unreadable log for run %s: %s", run.id, exc.detail)
             return False
 
-        stdout_text = _extract_stdout_block(log_text)
+        stdout_text = _extract_stdout_block(safe_log.text)
         if not stdout_text:
-            return False
-
-        # 延迟导入避免 executor↔job_service 循环依赖。
-        try:
-            from services.research_agent_executor import _parse_research_output
-        except ImportError:
             return False
 
         request_row = _get_request(session, run.generation_request_id)
         try:
-            source_payloads, finding_payloads = _parse_research_output(
+            parsed = parse_research_output(
                 stdout_text,
+                target_count=request_row.target_count,
+            )
+            source_payloads, finding_payloads = materialize_research_raw_text(
+                parsed,
                 paths=paths,
                 run_id=run.id,
-                target_count=request_row.target_count,
             )
         except ResearchValidationError as exc:
             LOG.warning("rescue: parse failed for run %s: %s", run.id, exc)
@@ -484,33 +506,12 @@ class ResearchJobService:
         savepoint = session.begin_nested()
         promoted = False
         try:
-            repo = ResearchRepository(session)
-            source_ids: list[UUID] = []
-            for source in source_payloads:
-                saved = repo.add_source(
-                    run.id,
-                    url=_required_str(source, "url"),
-                    title=_required_str(source, "title"),
-                    summary=_required_str(source, "summary"),
-                    content_hash=_required_str(source, "content_hash"),
-                    fetched_at=_coerce_datetime(source.get("fetched_at")),
-                    raw_text_path=_optional_str(source.get("raw_text_path")),
-                )
-                source_ids.append(saved.id)
-            for finding in finding_payloads:
-                repo.create_finding(
-                    run.id,
-                    kind=_required_str(finding, "kind"),
-                    label=_required_str(finding, "label"),
-                    summary=_required_str(finding, "summary"),
-                    source_ids=_finding_source_ids(finding, source_ids),
-                )
-            self._apply_run_completed(session, run, log_str)
+            self._persist_rescue_payload(session, run, source_payloads, finding_payloads, log_str)
             session.flush()
             _promote_staged_sources(run.id, paths)
             promoted = True
             savepoint.commit()
-            LOG.info("rescue: recovered expired run %s from %s", run.id, log_file)
+            LOG.info("rescue: recovered expired run %s from %s", run.id, safe_log.path)
             return True
         except Exception as exc:  # noqa: BLE001 — 同上
             savepoint.rollback()
@@ -591,19 +592,19 @@ def _request_fingerprint(
     return hashlib.sha256(data.encode("utf-8")).hexdigest()
 
 
-_STDOUT_START_MARKER = "--- stdout ---\n"
-_STDOUT_END_MARKER = "\n--- end stdout ---"
-
-
 def _extract_stdout_block(log_text: str) -> str | None:
     """从 Hermes 包装日志中切出 `--- stdout ---` 之间的内容。"""
-    start = log_text.find(_STDOUT_START_MARKER)
+    start = log_text.find(STDOUT_START_MARKER)
     if start == -1:
         return None
-    start += len(_STDOUT_START_MARKER)
-    end = log_text.find(_STDOUT_END_MARKER, start)
+    start += len(STDOUT_START_MARKER)
+    if start < len(log_text) and log_text[start] == "\n":
+        start += 1
+    end = log_text.find(STDOUT_END_MARKER, start)
     if end == -1:
         return None
+    if end > start and log_text[end - 1] == "\n":
+        end -= 1
     return log_text[start:end]
 
 

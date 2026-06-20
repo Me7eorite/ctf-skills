@@ -140,11 +140,16 @@ def _executor(
     )
 
 
-def _run_executor(executor: ResearchAgentExecutor, run) -> None:
+def _run_executor(
+    executor: ResearchAgentExecutor,
+    run,
+    *,
+    lease_seconds: int = 60,
+) -> None:
     executor.execute(
         run,
         "worker-1",
-        lease_seconds=60,
+        lease_seconds=lease_seconds,
         hermes_timeout_seconds=30,
     )
 
@@ -299,7 +304,7 @@ def test_lost_lease_during_hermes_discards_output(
         return HermesProcessResult(returncode=0, stdout=_research_stdout(), cancelled=False)
 
     monkeypatch.setattr("services.research_agent_executor.profile_exists", lambda _name: True)
-    _run_executor(_executor(paths, session_factory, fake_hermes_invoke), claimed)
+    _run_executor(_executor(paths, session_factory, fake_hermes_invoke), claimed, lease_seconds=1)
 
     with session_factory() as session:
         run = session.get(model.ResearchRun, claimed.id)
@@ -341,3 +346,65 @@ def test_stale_claim_after_hermes_is_logged_without_terminal_write(
         assert ResearchRepository(session).list_sources(claimed.id) == []
         assert ResearchRepository(session).list_findings(claimed.id) == []
     assert "lost claim while completing" in caplog.text
+
+
+def test_commit_failure_after_promotion_cleans_final_sources(
+    session_factory: SessionFactory,
+    paths: ProjectPaths,
+):
+    _request, claimed = _submit_and_claim(session_factory)
+    assert claimed.claim_token is not None
+    staged_dir = paths.research_sources_staging / str(claimed.id)
+    staged_dir.mkdir(parents=True)
+    (staged_dir / "0.txt").write_text("captured source text", encoding="utf-8")
+
+    class CommitFailingSession:
+        def __init__(self, inner):
+            self.inner = inner
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+
+        def commit(self):
+            raise RuntimeError("injected commit failure")
+
+    def failing_factory():
+        return CommitFailingSession(session_factory())
+
+    service = ResearchJobService(failing_factory)
+    final_path = paths.research_sources / str(claimed.id) / "0.txt"
+    with pytest.raises(RuntimeError, match="injected commit failure"):
+        service.complete_run_with_staged_results(
+            claimed.id,
+            "worker-1",
+            claimed.claim_token,
+            sources=[
+                {
+                    "url": "https://example.com/source",
+                    "title": "Source",
+                    "summary": "Source summary",
+                    "content_hash": "a" * 64,
+                    "raw_text_path": str(final_path),
+                }
+            ],
+            findings=[
+                {
+                    "kind": "technique",
+                    "label": "UNION SELECT",
+                    "summary": "Use UNION SELECT to align columns.",
+                    "source_indices": [0],
+                }
+            ],
+            binding_role="research",
+            log_path=paths.research_logs / f"{claimed.id}.log",
+            paths=paths,
+        )
+
+    assert not final_path.exists()
+    assert not staged_dir.exists()
+    with session_factory() as session:
+        run = session.get(model.ResearchRun, claimed.id)
+        assert run is not None
+        assert run.status == "running"
+        assert ResearchRepository(session).list_sources(claimed.id) == []
+        assert ResearchRepository(session).list_findings(claimed.id) == []
