@@ -8,6 +8,10 @@ import {
   categoryTone,
   formatDateTime,
   requestStatusPill,
+  requestStatusMeta,
+  runStatusLabel,
+  difficultyLabel,
+  researchErrorMessage,
   statusIndicator,
   softPill,
 } from "../ui/format.js";
@@ -15,7 +19,7 @@ import { setView } from "../router.js";
 import { showDesignTasksForRequest } from "./design-tasks.js";
 import { showRunsForRequest } from "./research-runs.js";
 
-const REQUEST_STATUSES = ["draft", "researching", "researched", "failed"];
+const REQUEST_STATUSES = ["draft", "queued", "researching", "researched", "failed"];
 const ACTIVE_POLL_MS = 2000;
 const SETTLED_POLL_MS = 12000;
 
@@ -26,7 +30,7 @@ const state = {
   detailId: null,
   worker: null,
   flags: {},
-  filter: { category: "", status: "" },
+  filter: { category: "", displayStatus: "" },
   detailPoll: { timer: null, loading: false },
 };
 
@@ -70,7 +74,7 @@ async function ensureWorker() {
 function buildRequestsUrl() {
   const p = new URLSearchParams();
   if (state.filter.category) p.set("category", state.filter.category);
-  if (state.filter.status) p.set("status", state.filter.status);
+  if (state.filter.displayStatus) p.set("display_status", state.filter.displayStatus);
   return p.toString() ? `/api/research/requests?${p}` : "/api/research/requests";
 }
 
@@ -83,7 +87,7 @@ async function fetchDetail(id) {
     render(state.data);
     initIcons();
   } catch (err) {
-    showToast(err.message, true);
+    showToast(researchErrorMessage(err.message), true);
     state.flags.detail = { loading: false };
     state.detailId = null;
     state.detail = null;
@@ -157,7 +161,7 @@ async function pollDetail() {
     render(state.data);
     initIcons();
   } catch (err) {
-    showToast(err.message, true);
+    showToast(researchErrorMessage(err.message), true);
   } finally {
     state.detailPoll.loading = false;
     const delay = detailNeedsActivePolling() ? ACTIVE_POLL_MS : SETTLED_POLL_MS;
@@ -189,12 +193,12 @@ async function generateDesignTasks() {
   if (!state.detailId) return;
   try {
     await postJson(`/api/research/requests/${state.detailId}/design-tasks/generate`, {});
-    showToast("Design tasks generated");
+    showToast("设计任务已生成");
     await reloadDetail();
     showDesignTasksForRequest(state.detailId);
     initIcons();
   } catch (err) {
-    showToast(err.message, true);
+    showToast(researchErrorMessage(err.message), true);
   }
 }
 
@@ -205,13 +209,13 @@ async function deleteRequest(requestId) {
   initIcons();
   try {
     const choice = await confirmDeletion({
-      title: "Delete request",
-      message: "This removes the request, research rows, design tasks, designs, and build attempts. Artifacts are retained unless selected.",
+      title: "删除研究需求",
+      message: "将同时删除研究记录、设计任务、题目设计和构建记录。你可以选择是否一并删除产物文件。",
     });
     if (choice === null) return;
     const query = choice ? "?delete_artifacts=true" : "?delete_artifacts=false";
     const result = await del(`/api/research/requests/${requestId}${query}`);
-    showToast(result.warnings?.length ? result.warnings[0] : "Request deleted");
+    showToast(result.warnings?.length ? result.warnings[0] : "研究需求已删除");
     state.detailId = null;
     state.detail = null;
     state.requests = null;
@@ -237,7 +241,7 @@ async function runWorkerAction(action, body = {}, requestId = null) {
     state.worker = result.state || null;
     await refreshDetail({ startPolling: true });
   } catch (err) {
-    showToast(err.message, true);
+    showToast(researchErrorMessage(err.message), true);
   }
 }
 
@@ -254,14 +258,14 @@ export function render(data) {
 
   const flag = state.flags.requests || {};
   if (flag.loading && !state.requests) {
-    root.innerHTML = `<div class="empty">Loading requests...</div>`;
+    root.innerHTML = `<div class="empty">正在加载研究需求…</div>`;
     return;
   }
   if (flag.error) {
     root.innerHTML = `
-      <div style="border-radius: var(--radius-md); border: 1px solid var(--accent-red-border); background: var(--accent-red-light); padding: var(--space-md);">
-        <div style="font-weight: 500;">Load failed</div>
-        <p style="font-size: var(--font-md);">${escapeHtml(flag.error)}</p>
+      <div class="rq-alert rq-alert-error">
+        <div class="rq-alert-title">研究需求加载失败</div>
+        <p>${escapeHtml(flag.error)}</p>
       </div>
     `;
     return;
@@ -276,59 +280,72 @@ export function render(data) {
   const cats = state.categories || [];
 
   root.innerHTML = `
-    <section class="card">
-      <div class="card-header">
+    <div class="rq-page-header">
+      <div>
+        <h2 class="rq-page-title">研究需求</h2>
+        <p class="rq-page-desc">管理研究意图、执行状态和设计任务生成。</p>
+      </div>
+      <button class="btn btn-primary" data-jump="research-submit">
+        <i data-lucide="plus"></i> 新建需求
+      </button>
+    </div>
+    <section class="card rq-list-card">
+      <div class="rq-list-summary">
         <div>
-          <div class="card-title">Requests</div>
-          <div class="card-subtitle">Open a request to inspect runs, sources, findings, and worker controls.</div>
+          <div class="card-title">需求列表</div>
+          <div class="card-subtitle">打开需求可查看研究过程、质量检查和设计任务。</div>
         </div>
-        <span class="pill">${items.length} rows</span>
+        <span class="pill">共 ${items.length} 条</span>
       </div>
       <div class="filter-bar">
-        <label class="filter-item">Category
+        <label class="filter-item">题目类别
           <select id="req-filter-cat" class="filter-select">
-            <option value=""${state.filter.category === "" ? " selected" : ""}>All</option>
-            ${cats.map(c => `<option value="${escapeHtml(c.code)}"${state.filter.category === c.code ? " selected" : ""}>${escapeHtml(c.code)}</option>`).join("")}
+            <option value=""${state.filter.category === "" ? " selected" : ""}>全部类别</option>
+            ${cats.map(c => `<option value="${escapeHtml(c.code)}"${state.filter.category === c.code ? " selected" : ""}>${escapeHtml(c.display_name || categoryLabel(c.code))}</option>`).join("")}
           </select>
         </label>
-        <label class="filter-item">Status
+        <label class="filter-item">执行状态
           <select id="req-filter-status" class="filter-select">
-            <option value=""${state.filter.status === "" ? " selected" : ""}>All</option>
-            ${REQUEST_STATUSES.map(s => `<option value="${escapeHtml(s)}"${state.filter.status === s ? " selected" : ""}>${escapeHtml(s)}</option>`).join("")}
+            <option value=""${state.filter.displayStatus === "" ? " selected" : ""}>全部状态</option>
+            ${REQUEST_STATUSES.map(s => `<option value="${escapeHtml(s)}"${state.filter.displayStatus === s ? " selected" : ""}>${escapeHtml(requestStatusMeta[s].label)}</option>`).join("")}
           </select>
         </label>
-        <button id="req-clear-filter" class="filter-clear">Clear</button>
+        <button id="req-clear-filter" class="filter-clear">重置筛选</button>
       </div>
-      ${items.length ? renderRequestsTable(items) : `<div class="empty card-body">No matching requests</div>`}
+      ${items.length ? renderRequestsTable(items) : `<div class="empty card-body">没有符合条件的研究需求</div>`}
     </section>
   `;
 }
 
 function renderRequestsTable(items) {
   return `
-    <div class="table-container">
-      <table class="table">
+    <div class="table-container rq-table-wrap">
+      <table class="table rq-table">
         <thead>
           <tr>
-            <th>#</th>
-            <th>Category</th>
-            <th>Topic</th>
-            <th>Target</th>
-            <th>Status</th>
-            <th>Created</th>
-            <th>Actions</th>
+            <th>研究主题</th>
+            <th>类别</th>
+            <th>目标配置</th>
+            <th>当前阶段</th>
+            <th>创建时间</th>
+            <th><span class="sr-only">操作</span></th>
           </tr>
         </thead>
         <tbody>
           ${items.map(r => `
             <tr class="table-row-clickable" data-id="${escapeHtml(r.id)}">
-              <td class="table-cell-id">${items.indexOf(r) + 1}</td>
+              <td>
+                <div class="rq-topic">${escapeHtml(r.topic)}</div>
+                <div class="rq-short-id">${escapeHtml(r.id.slice(0, 8))}</div>
+              </td>
               <td>${softPill(categoryLabel(r.category), categoryTone(r.category))}</td>
-              <td><div class="truncate" style="max-width: 360px;">${escapeHtml(r.topic)}</div></td>
-              <td style="text-align: right;">${r.target_count}</td>
+              <td>${renderTargetSummary(r)}</td>
               <td>${requestStatusPill(r.display_status || r.status)}</td>
               <td class="table-cell-time">${escapeHtml(formatDateTime(r.created_at))}</td>
-              <td><button class="btn btn-danger btn-xs req-delete" title="Delete"><i data-lucide="trash-2"></i></button></td>
+              <td class="rq-row-action">
+                <button class="btn btn-danger btn-xs req-delete" title="删除需求"><i data-lucide="trash-2"></i></button>
+                <button class="btn btn-ghost btn-xs" title="查看详情"><i data-lucide="chevron-right"></i></button>
+              </td>
             </tr>
           `).join("")}
         </tbody>
@@ -337,11 +354,22 @@ function renderRequestsTable(items) {
   `;
 }
 
+function renderTargetSummary(request) {
+  const distribution = Object.entries(request.difficulty_distribution || {})
+    .filter(([, count]) => Number(count) > 0)
+    .map(([difficulty, count]) => `${difficultyLabel(difficulty)} ${count}`)
+    .join(" / ");
+  return `
+    <div class="rq-target-count">${escapeHtml(request.target_count)} 道</div>
+    <div class="rq-target-dist">${escapeHtml(distribution || "未配置难度")}</div>
+  `;
+}
+
 function renderDetail(root) {
   if (state.detail === null) {
     fetchDetail(state.detailId);
     ensureWorker();
-    root.innerHTML = `<div class="empty">Loading detail...</div>`;
+    root.innerHTML = `<div class="empty">正在加载需求详情…</div>`;
     return;
   }
 
@@ -349,79 +377,131 @@ function renderDetail(root) {
   const worker = state.worker || {};
   const workerRunning = !!worker.running;
   const available = worker.available !== false;
+  const findingCount = Object.values(findings_by_kind).reduce((sum, items) => sum + items.length, 0);
+  const minimumFindings = Math.ceil(Number(request.target_count || 0) * 0.5);
+  const qualityPassed = request.status === "researched" && findingCount >= minimumFindings;
+  const designTaskCount = design_tasks_summary?.total || 0;
+  const displayStatus = request.display_status || request.status;
 
   root.innerHTML = `
-    <div style="display: flex; align-items: center; justify-content: space-between; gap: var(--space-md); flex-wrap: wrap; margin-bottom: var(--space-md);">
-      <button class="btn btn-ghost" id="research-back">
-        <i data-lucide="arrow-left"></i> Back
-      </button>
-      <div class="btn-group" style="flex-wrap: wrap;">
-        <button class="btn btn-primary btn-sm" id="detail-run-once"${workerRunning || !available ? " disabled" : ""}>
-          <i data-lucide="play"></i> Run once
-        </button>
-        <button class="btn btn-secondary btn-sm" id="detail-run-loop"${workerRunning || !available ? " disabled" : ""}>
-          <i data-lucide="rotate-cw"></i> Continue
-        </button>
-        <button class="btn btn-danger btn-sm" id="detail-run-stop"${!workerRunning || !available ? " disabled" : ""}>
-          <i data-lucide="pause"></i> Pause
-        </button>
+    <button class="btn btn-ghost rq-back" id="research-back">
+      <i data-lucide="arrow-left"></i> 返回研究需求
+    </button>
+
+    <div class="rq-detail-header">
+      <div class="rq-detail-heading">
+        <div class="rq-badges">
+          ${softPill(categoryLabel(request.category), categoryTone(request.category))}
+          ${requestStatusPill(displayStatus)}
+        </div>
+        <h2>${escapeHtml(request.topic)}</h2>
+        <div class="rq-request-id" title="${escapeHtml(request.id)}">需求 ID · ${escapeHtml(request.id)}</div>
+      </div>
+      <div class="rq-primary-actions">
+        ${renderPrimaryAction({ request, latest, qualityPassed, designTaskCount, workerRunning, available })}
         <button class="btn btn-secondary btn-sm" id="detail-refresh"${state.flags.detail?.refreshing ? " disabled" : ""}>
-          <i data-lucide="refresh-cw"></i> Refresh
-        </button>
-        <button class="btn btn-secondary btn-sm" id="detail-open-runs">
-          <i data-lucide="list"></i> Runs
-        </button>
-        <button class="btn btn-ghost btn-sm" id="detail-open-logs">
-          <i data-lucide="file-text"></i> Logs
-        </button>
-        <button class="btn btn-danger btn-sm" id="detail-delete-request">
-          <i data-lucide="trash-2"></i> Delete
+          <i data-lucide="refresh-cw"></i> 刷新
         </button>
       </div>
     </div>
 
-    <section class="card card-body">
-      <div class="flex items-center gap-2" style="flex-wrap: wrap;">
-        ${softPill(categoryLabel(request.category), categoryTone(request.category))}
-        ${requestStatusPill(request.display_status || request.status)}
-        ${statusIndicator(workerRunning ? "running" : "idle")}
+    <div class="rq-detail-layout">
+      <div class="rq-detail-main">
+        ${renderResearchProgress(request, latest, findingCount, minimumFindings)}
+        ${renderRequestConfiguration(request)}
+        ${renderFindings(findings_by_kind, minimumFindings)}
+        ${renderSources(sources)}
+        ${renderDesignTasksSummary(design_tasks_summary, request, qualityPassed, findingCount, minimumFindings)}
+        <section class="card rq-section-card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">运行历史</div>
+              <div class="card-subtitle">默认显示最近三次研究执行记录。</div>
+            </div>
+            <button class="btn btn-ghost btn-sm detail-open-runs"><i data-lucide="list"></i> 查看全部</button>
+          </div>
+          ${runs.length ? renderRunsTable(runs.slice(0, 3)) : `<div class="empty card-body">暂无运行记录</div>`}
+        </section>
       </div>
-      <h2 style="font-size: var(--font-lg); font-weight: 600; margin-top: var(--space-sm);">${escapeHtml(request.topic)}</h2>
-      <div class="mono" style="font-size: var(--font-sm); color: var(--ink-500); margin-top: 2px;">${escapeHtml(request.id)}</div>
-      <dl style="margin-top: var(--space-lg); display: grid; gap: var(--space-md); grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));">
-        <div>
-          <dt style="font-size: var(--font-xs); color: var(--ink-400); text-transform: uppercase;">target_count</dt>
-          <dd style="font-size: var(--font-md); color: var(--ink-700);">${request.target_count}</dd>
-        </div>
-        <div>
-          <dt style="font-size: var(--font-xs); color: var(--ink-400); text-transform: uppercase;">difficulty</dt>
-          <dd style="font-size: var(--font-md); color: var(--ink-700);">${Object.entries(request.difficulty_distribution || {}).map(([k, v]) => `${escapeHtml(k)}=${escapeHtml(v)}`).join(", ") || "-"}</dd>
-        </div>
-        <div>
-          <dt style="font-size: var(--font-xs); color: var(--ink-400); text-transform: uppercase;">latest_run</dt>
-          <dd style="font-size: var(--font-md); color: var(--ink-700);">${latest ? `${escapeHtml(latest.status)} / attempt ${latest.attempt}` : "-"}</dd>
-        </div>
-        <div>
-          <dt style="font-size: var(--font-xs); color: var(--ink-400); text-transform: uppercase;">worker</dt>
-          <dd style="font-size: var(--font-md); color: var(--ink-700);">${escapeHtml(worker.message || "-")}</dd>
-        </div>
-      </dl>
-    </section>
-
-    <section class="card" style="margin-top: var(--space-lg);">
-      <div class="card-header">
-        <div><div class="card-title">Runs</div></div>
-        <span class="pill">${runs.length}</span>
-      </div>
-      ${runs.length ? renderRunsTable(runs) : `<div class="empty card-body">No runs yet</div>`}
-    </section>
-
-    ${renderDesignTasksSummary(design_tasks_summary, request)}
-    ${renderFindings(findings_by_kind)}
-    ${renderSources(sources)}
+      <aside class="rq-detail-side">
+        ${renderExecutionSummary({ request, latest, worker, findingCount, minimumFindings, sources, designTaskCount })}
+        <section class="card rq-side-actions">
+          <div class="rq-side-title">相关操作</div>
+          <button class="btn btn-secondary btn-sm" id="detail-run-loop"${workerRunning || !available ? " disabled" : ""}>
+            <i data-lucide="rotate-cw"></i> 持续处理该需求
+          </button>
+          <button class="btn btn-secondary btn-sm" id="detail-run-stop"${!workerRunning || !available ? " disabled" : ""}>
+            <i data-lucide="pause"></i> 暂停 Worker
+          </button>
+          <button class="btn btn-ghost btn-sm" id="detail-open-logs"><i data-lucide="file-text"></i> 查看研究日志</button>
+          <button class="btn btn-danger btn-sm" id="detail-delete-request"><i data-lucide="trash-2"></i> 删除研究需求</button>
+          ${workerRunning ? `<p class="rq-side-note">暂停 Worker 可能影响正在执行的其他研究需求。</p>` : ""}
+        </section>
+      </aside>
+    </div>
   `;
 
   scheduleDetailPoll(detailNeedsActivePolling() ? ACTIVE_POLL_MS : SETTLED_POLL_MS);
+}
+
+function renderPrimaryAction({ request, latest, qualityPassed, designTaskCount, workerRunning, available }) {
+  if (designTaskCount > 0) {
+    return `<button class="btn btn-primary design-tasks-view"><i data-lucide="workflow"></i> 查看设计任务</button>`;
+  }
+  if (qualityPassed) {
+    return `<button class="btn btn-primary design-tasks-generate"><i data-lucide="wand-sparkles"></i> 生成设计任务</button>`;
+  }
+  if (request.status === "researched") {
+    return `<button class="btn btn-secondary" disabled><i data-lucide="triangle-alert"></i> 质量未达标</button>`;
+  }
+  if (request.display_status === "researching") {
+    return `<button class="btn btn-primary detail-open-runs"><i data-lucide="activity"></i> 查看运行状态</button>`;
+  }
+  if (request.status === "failed" && latest && Number(latest.attempt) >= Number(request.max_attempts)) {
+    return `<button class="btn btn-secondary" disabled><i data-lucide="circle-x"></i> 已达重试上限</button>`;
+  }
+  const label = request.status === "failed" ? "重新研究" : "启动研究";
+  return `<button class="btn btn-primary" id="detail-run-once"${workerRunning || !available ? " disabled" : ""}><i data-lucide="play"></i> ${label}</button>`;
+}
+
+function renderResearchProgress(request, latest, findingCount, minimumFindings) {
+  const displayStatus = request.display_status || request.status;
+  const stageIndex = displayStatus === "researched" ? 3 : displayStatus === "researching" ? 1 : displayStatus === "queued" ? 0 : -1;
+  const stages = ["等待研究", "Agent 研究", "质量检查", "研究完成"];
+  return `
+    <section class="card rq-section-card">
+      <div class="card-header">
+        <div><div class="card-title">研究进度</div><div class="card-subtitle">从需求排队到通过最小质量检查。</div></div>
+        ${latest ? `<span class="pill">第 ${escapeHtml(latest.attempt)} 次运行</span>` : ""}
+      </div>
+      <div class="card-body">
+        <div class="rq-progress-steps">
+          ${stages.map((stage, index) => `<div class="rq-progress-step ${index < stageIndex || displayStatus === "researched" ? "done" : index === stageIndex ? "active" : ""}"><span>${index < stageIndex || displayStatus === "researched" ? "✓" : index + 1}</span><strong>${stage}</strong></div>`).join("")}
+        </div>
+        ${latest?.last_error ? `<div class="rq-alert rq-alert-error rq-progress-alert"><div class="rq-alert-title">本次运行未完成</div><p>${escapeHtml(researchErrorMessage(latest.last_error))}</p><code>${escapeHtml(latest.last_error)}</code></div>` : ""}
+        ${request.status === "researched" ? `<div class="rq-quality ${findingCount >= minimumFindings ? "passed" : "failed"}"><i data-lucide="${findingCount >= minimumFindings ? "badge-check" : "triangle-alert"}"></i><div><strong>${findingCount >= minimumFindings ? "已通过质量检查" : "未通过质量检查"}</strong><p>有效研究结论 ${findingCount} 条，最低要求 ${minimumFindings} 条。</p></div></div>` : ""}
+      </div>
+    </section>
+  `;
+}
+
+function renderRequestConfiguration(request) {
+  const constraints = Object.entries(request.runtime_constraints || {});
+  const seeds = request.seed_urls || [];
+  return `
+    <section class="card rq-section-card">
+      <div class="card-header"><div><div class="card-title">需求配置</div><div class="card-subtitle">提交时记录的研究意图与执行约束。</div></div></div>
+      <dl class="rq-config-grid">
+        <div><dt>题目类别</dt><dd>${escapeHtml(categoryLabel(request.category))}</dd></div>
+        <div><dt>目标数量</dt><dd>${escapeHtml(request.target_count)} 道</dd></div>
+        <div><dt>最大尝试次数</dt><dd>${escapeHtml(request.max_attempts)} 次</dd></div>
+        <div><dt>创建时间</dt><dd>${escapeHtml(formatDateTime(request.created_at))}</dd></div>
+        <div class="rq-config-wide"><dt>难度分布</dt><dd class="rq-chip-list">${Object.entries(request.difficulty_distribution || {}).map(([key, value]) => `<span>${escapeHtml(difficultyLabel(key))} ${escapeHtml(value)}</span>`).join("") || "未配置"}</dd></div>
+        <div class="rq-config-wide"><dt>运行约束</dt><dd class="rq-chip-list">${constraints.map(([key, value]) => `<span>${escapeHtml(key)}：${escapeHtml(typeof value === "object" ? JSON.stringify(value) : value)}</span>`).join("") || "未设置运行约束"}</dd></div>
+        <div class="rq-config-wide"><dt>种子 URL</dt><dd>${seeds.length ? seeds.map(url => `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(url)}</a>`).join("") : "未提供种子 URL"}</dd></div>
+      </dl>
+    </section>
+  `;
 }
 
 function renderRunsTable(runs) {
@@ -430,19 +510,19 @@ function renderRunsTable(runs) {
       <table class="table">
         <thead>
           <tr>
-            <th>ID</th>
-            <th>Status</th>
-            <th>Worker</th>
-            <th>Started</th>
-            <th>Finished</th>
+            <th>次数</th>
+            <th>状态</th>
+            <th>执行 Worker</th>
+            <th>开始时间</th>
+            <th>结束时间</th>
           </tr>
         </thead>
         <tbody>
           ${runs.map(run => `
             <tr>
-              <td class="table-cell-id">${runs.indexOf(run) + 1}</td>
+              <td class="table-cell-id">第 ${escapeHtml(run.attempt)} 次</td>
               <td>${statusIndicator(run.status)}</td>
-              <td class="mono" style="font-size: var(--font-mono);">${escapeHtml(run.claimed_by || "-")}</td>
+              <td class="table-cell-mono">${escapeHtml(run.claimed_by || "—")}</td>
               <td class="table-cell-time">${escapeHtml(formatDateTime(run.started_at))}</td>
               <td class="table-cell-time">${escapeHtml(formatDateTime(run.finished_at))}</td>
             </tr>
@@ -453,55 +533,59 @@ function renderRunsTable(runs) {
   `;
 }
 
-function renderDesignTasksSummary(summary, request) {
+function renderDesignTasksSummary(summary, request, qualityPassed, findingCount, minimumFindings) {
   const total = summary?.total || 0;
   const counts = summary?.by_status || {};
   const summaryEntries = Object.entries(counts)
     .filter(([, n]) => n > 0)
-    .map(([status, n]) => `${escapeHtml(status)}=${n}`)
-    .join(", ");
-  const canGenerate = (request?.status === "researched");
+    .map(([status, n]) => `${runStatusLabel(status)} ${n}`)
+    .join(" · ");
+  const blocker = request?.status !== "researched"
+    ? "研究完成并通过质量检查后才能生成设计任务。"
+    : !qualityPassed
+      ? `当前有 ${findingCount} 条有效结论，最低需要 ${minimumFindings} 条。`
+      : "研究质量已达标，可以生成题目设计任务。";
   return `
-    <section class="card" style="margin-top: var(--space-lg);">
+    <section class="card rq-section-card">
       <div class="card-header">
         <div>
-          <div class="card-title">Design Tasks</div>
-          <div class="card-subtitle">${summaryEntries || "No tasks yet"}</div>
+          <div class="card-title">设计任务</div>
+          <div class="card-subtitle">${escapeHtml(summaryEntries || "尚未生成设计任务")}</div>
         </div>
         <div class="btn-group">
-          <button class="btn btn-secondary btn-sm" id="design-tasks-view"${total ? "" : " disabled"}>
-            <i data-lucide="list"></i> View design tasks
+          <button class="btn btn-secondary btn-sm design-tasks-view"${total ? "" : " disabled"}>
+            <i data-lucide="list"></i> 查看设计任务
           </button>
-          <button class="btn btn-primary btn-sm" id="design-tasks-generate"${canGenerate ? "" : " disabled"}>
-            <i data-lucide="wand"></i> Generate design tasks
+          <button class="btn btn-primary btn-sm design-tasks-generate"${qualityPassed && !total ? "" : " disabled"}>
+            <i data-lucide="wand-sparkles"></i> 生成设计任务
           </button>
           <span class="pill">${total}</span>
         </div>
       </div>
-      <div class="empty card-body">${total ? "Open the dedicated Design Tasks view to inspect rows, attempts, and latest designs." : "No design tasks yet. Generate tasks once the research run completes."}</div>
+      <div class="rq-section-message ${qualityPassed ? "ready" : ""}">${total ? "设计任务已生成，可进入题目设计页面查看详情。" : blocker}</div>
     </section>
   `;
 }
 
-function renderFindings(findingsByKind) {
+function renderFindings(findingsByKind, minimumFindings) {
   const entries = Object.entries(findingsByKind || {});
   if (!entries.length) return "";
   const count = entries.reduce((sum, [, items]) => sum + items.length, 0);
   return `
-    <section class="card" style="margin-top: var(--space-lg);">
+    <section class="card rq-section-card">
       <div class="card-header">
-        <div><div class="card-title">Findings</div></div>
-        <span class="pill">${count}</span>
+        <div><div class="card-title">研究结论</div><div class="card-subtitle">已获得 ${count} 条，质量门最低要求 ${minimumFindings} 条。</div></div>
+        <span class="pill">${count} 条</span>
       </div>
-      <div style="border-top: 1px solid var(--line);">
+      <div class="rq-findings">
         ${entries.map(([kind, items]) => `
-          <div style="padding: var(--space-md);">
-            <div style="font-size: var(--font-sm); font-weight: 600; color: var(--ink-700); margin-bottom: var(--space-sm);">${escapeHtml(kind)}</div>
-            <div style="display: grid; gap: var(--space-sm);">
+          <div class="rq-finding-group">
+            <div class="rq-finding-kind">${escapeHtml(findingKindLabel(kind))} · ${items.length}</div>
+            <div class="rq-finding-list">
               ${items.map((item) => `
-                <div style="border: 1px solid var(--line); border-radius: var(--radius-md); padding: var(--space-md);">
-                  <div style="font-weight: 500; color: var(--ink-800);">${escapeHtml(item.label)}</div>
-                  <div style="font-size: var(--font-sm); color: var(--ink-600); margin-top: 2px;">${escapeHtml(item.summary)}</div>
+                <div class="rq-finding-item">
+                  <div class="rq-finding-label">${escapeHtml(item.label)}</div>
+                  <div class="rq-finding-summary">${escapeHtml(item.summary)}</div>
                 </div>
               `).join("")}
             </div>
@@ -515,21 +599,55 @@ function renderFindings(findingsByKind) {
 function renderSources(sources) {
   if (!sources.length) return "";
   return `
-    <section class="card" style="margin-top: var(--space-lg);">
+    <section class="card rq-section-card">
       <div class="card-header">
-        <div><div class="card-title">Sources</div></div>
-        <span class="pill">${sources.length}</span>
+        <div><div class="card-title">参考来源</div><div class="card-subtitle">研究 Agent 使用的外部资料。</div></div>
+        <span class="pill">${sources.length} 条</span>
       </div>
-      <div style="border-top: 1px solid var(--line);">
+      <div class="rq-sources">
         ${sources.map(s => `
-          <div style="padding: var(--space-md);">
-            <a href="${escapeHtml(s.url)}" target="_blank" style="font-size: var(--font-md); font-weight: 500; color: var(--brand-600);">${escapeHtml(s.title || s.url)}</a>
-            <p style="font-size: var(--font-md); color: var(--ink-600); margin-top: 2px;">${escapeHtml(s.summary || "")}</p>
+          <div class="rq-source-item">
+            <div class="rq-source-head">
+              <a href="${escapeHtml(s.url)}" target="_blank" rel="noreferrer">${escapeHtml(s.title || sourceHost(s.url))}</a>
+              <span>${escapeHtml(sourceHost(s.url))}</span>
+              <i data-lucide="external-link"></i>
+            </div>
+            <p>${escapeHtml(s.summary || "暂无来源摘要")}</p>
           </div>
         `).join("")}
       </div>
     </section>
   `;
+}
+
+function renderExecutionSummary({ request, latest, worker, findingCount, minimumFindings, sources, designTaskCount }) {
+  const workerStatus = worker.running ? "running" : "idle";
+  return `
+    <section class="card rq-execution-summary">
+      <div class="rq-side-title">执行摘要</div>
+      <dl>
+        <div><dt>当前状态</dt><dd>${requestStatusPill(request.display_status || request.status)}</dd></div>
+        <div><dt>持久化状态</dt><dd>${requestStatusPill(request.status)}</dd></div>
+        <div><dt>最新运行</dt><dd>${latest ? `第 ${escapeHtml(latest.attempt)} 次 · ${escapeHtml(runStatusLabel(latest.status))}` : "暂无"}</dd></div>
+        <div><dt>Worker</dt><dd>${statusIndicator(workerStatus)}</dd></div>
+        <div><dt>研究结论</dt><dd class="${findingCount >= minimumFindings ? "rq-value-ok" : ""}">${findingCount} / ${minimumFindings} 条</dd></div>
+        <div><dt>参考来源</dt><dd>${sources.length} 条</dd></div>
+        <div><dt>设计任务</dt><dd>${designTaskCount} 个</dd></div>
+      </dl>
+    </section>
+  `;
+}
+
+function findingKindLabel(kind) {
+  return ({ technique: "技术要点", variant: "变化方式", pitfall: "常见陷阱", reference: "参考信息" })[kind] || kind;
+}
+
+function sourceHost(url) {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
 }
 
 export function bind() {
@@ -583,7 +701,7 @@ export function bind() {
       });
       return;
     }
-    if (e.target.closest("#detail-open-runs")) {
+    if (e.target.closest(".detail-open-runs")) {
       showRunsForRequest(state.detailId);
       return;
     }
@@ -596,15 +714,15 @@ export function bind() {
       return;
     }
     if (e.target.closest("#req-clear-filter")) {
-      state.filter = { category: "", status: "" };
+      state.filter = { category: "", displayStatus: "" };
       forceReloadRequests();
       return;
     }
-    if (e.target.closest("#design-tasks-generate")) {
+    if (e.target.closest(".design-tasks-generate")) {
       generateDesignTasks();
       return;
     }
-    if (e.target.closest("#design-tasks-view")) {
+    if (e.target.closest(".design-tasks-view")) {
       showDesignTasksForRequest(state.detailId);
       return;
     }
@@ -630,7 +748,7 @@ export function bind() {
       state.filter.category = e.target.value;
       forceReloadRequests();
     } else if (e.target.id === "req-filter-status") {
-      state.filter.status = e.target.value;
+      state.filter.displayStatus = e.target.value;
       forceReloadRequests();
     }
   });

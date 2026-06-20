@@ -3,7 +3,11 @@ export async function api(path, options = {}) {
   let payload = {};
   try { payload = await response.json(); } catch { /* ignore body parse errors */ }
   if (!response.ok) {
-    throw new Error(payload.message || payload.detail || payload.error || `请求失败 (${response.status})`);
+    const detail = payload.message || payload.detail || payload.error;
+    const message = typeof detail === "object" && detail !== null
+      ? detail.code || JSON.stringify(detail)
+      : detail;
+    throw new Error(message || `请求失败 (${response.status})`);
   }
   return payload;
 }
