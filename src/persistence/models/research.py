@@ -91,6 +91,7 @@ class GenerationRequest(Base):
         sa.CheckConstraint("target_count > 0", name="ck_generation_requests_target_count_positive"),
         sa.CheckConstraint("max_attempts > 0", name="ck_generation_requests_max_attempts_positive"),
         sa.Index("ix_generation_requests_category_status", "category", "status"),
+        sa.Index("ix_generation_requests_idempotency", "idempotency_key", "created_at"),
     )
 
     id: Mapped[UuidPk]
@@ -110,6 +111,8 @@ class GenerationRequest(Base):
         nullable=False,
         server_default=sa.text("'draft'"),
     )
+    idempotency_key: Mapped[str | None] = mapped_column(sa.Text())
+    request_fingerprint: Mapped[str | None] = mapped_column(sa.Text())
     created_at: Mapped[CreatedAt]
     updated_at: Mapped[UpdatedAt]
 
@@ -167,7 +170,11 @@ class ResearchRun(Base):
 class ResearchSource(Base):
     __tablename__ = "research_sources"
     __table_args__ = (
-        sa.Index("ix_research_sources_run_hash", "research_run_id", "content_hash"),
+        sa.UniqueConstraint(
+            "research_run_id",
+            "content_hash",
+            name="uq_research_sources_run_hash",
+        ),
     )
 
     id: Mapped[UuidPk]

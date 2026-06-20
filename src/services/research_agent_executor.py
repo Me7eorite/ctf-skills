@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 from collections.abc import Callable, Mapping
@@ -12,7 +11,11 @@ from uuid import UUID
 
 from core.paths import ProjectPaths
 from domain import research as dto
-from domain.research_validators import ResearchValidationError
+from domain.research_validators import (
+    ResearchValidationError,
+    apply_research_quality_gate,
+    extract_terminal_json_object,
+)
 from hermes.process import HermesProcessResult, profile_exists
 from hermes.prompt import render_research_prompt
 from hermes.research import invoke_research_agent
@@ -56,7 +59,11 @@ class ResearchAgentExecutor:
             return
 
         log_path = self.paths.research_logs / f"{run.id}.log"
-        profile_name = self._resolve_profile_name(run.id)
+        try:
+            profile_name = self._resolve_profile_name(run.id)
+        except ResearchValidationError as exc:
+            self._mark_failed_if_owned(run, agent_id, str(exc), log_path)
+            return
         if not profile_exists(profile_name):
             self._mark_failed_if_owned(
                 run,
@@ -138,13 +145,14 @@ class ResearchAgentExecutor:
                 res_data.stdout,
                 paths=self.paths,
                 run_id=run.id,
+                target_count=generation_request.target_count,
             )
         except ResearchValidationError as exc:
             self._mark_failed_if_owned(run, agent_id, str(exc), log_path)
             return
 
         try:
-            self.job_service.complete_run_with_results(
+            self.job_service.complete_run_with_staged_results(
                 run.id,
                 agent_id,
                 run.claim_token,
@@ -152,6 +160,7 @@ class ResearchAgentExecutor:
                 findings=finding_payloads,
                 binding_role=RESEARCH_BINDING_ROLE,
                 log_path=log_path,
+                paths=self.paths,
             )
         except StaleClaimError:
             LOGGER.warning(
@@ -167,22 +176,9 @@ class ResearchAgentExecutor:
         # 中文注释：profile binding 属于数据库配置，executor 只读取并选择实际 profile。
         binding = self.job_service.get_binding(RESEARCH_BINDING_ROLE)
         if binding is None:
-            LOGGER.warning(
-                "missing Hermes binding for role %s; using %s for run %s",
-                RESEARCH_BINDING_ROLE,
-                DEFAULT_PROFILE_NAME,
-                run_id,
-            )
-            return DEFAULT_PROFILE_NAME
+            raise ResearchValidationError("profile_not_bound")
         if binding.status != "enabled":
-            LOGGER.warning(
-                "Hermes binding for role %s is %s; using %s for run %s",
-                RESEARCH_BINDING_ROLE,
-                binding.status,
-                DEFAULT_PROFILE_NAME,
-                run_id,
-            )
-            return DEFAULT_PROFILE_NAME
+            raise ResearchValidationError(f"profile_disabled:{binding.profile_name}")
         return binding.profile_name
 
     def _load_generation_request(self, request_id: UUID) -> dto.GenerationRequest | None:
@@ -249,15 +245,16 @@ def _parse_research_output(
     *,
     paths: ProjectPaths,
     run_id: UUID,
+    target_count: int = 1,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """解析 Hermes stdout，并把可选 raw_text 落到磁盘。"""
     # 中文注释：下游 repository 只存 raw_text_path，完整原文留在 work/research/sources。
-    try:
-        res_data = json.loads(stdout_text)
-    except json.JSONDecodeError as exc:
-        raise ResearchValidationError(f"invalid research JSON: {exc.msg}") from exc
-    if not isinstance(res_data, Mapping):
-        raise ResearchValidationError("research output must be a JSON object")
+    res_data = extract_terminal_json_object(stdout_text)
+    if res_data is None:
+        raise ResearchValidationError("unparseable_output:no_terminal_json_object")
+    ok, error = apply_research_quality_gate(res_data, target_count)
+    if not ok:
+        raise ResearchValidationError(error or "unparseable_output:quality_gate_failed")
 
     source_items = res_data.get("sources")
     finding_items = res_data.get("findings")
@@ -295,11 +292,13 @@ def _normalize_source_payload(
     if raw_text is not None:
         if not isinstance(raw_text, str):
             raise ResearchValidationError("source raw_text must be a string when present")
-        source_dir = paths.research_sources / str(run_id)
-        source_dir.mkdir(parents=True, exist_ok=True)
-        raw_text_path = source_dir / f"{source_index}.txt"
-        raw_text_path.write_text(raw_text, encoding="utf-8")
-        source_payload["raw_text_path"] = str(raw_text_path)
+        staging_dir = paths.research_sources_staging / str(run_id)
+        staging_dir.mkdir(parents=True, exist_ok=True)
+        staged_path = staging_dir / f"{source_index}.txt"
+        staged_path.write_text(raw_text, encoding="utf-8")
+        source_payload["raw_text_path"] = str(
+            paths.research_sources / str(run_id) / f"{source_index}.txt"
+        )
     return source_payload
 
 

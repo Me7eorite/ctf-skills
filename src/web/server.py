@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import logging
 import mimetypes
+import shutil
+import time
 from http import HTTPStatus
 from pathlib import Path
 from threading import Thread
+from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
@@ -216,6 +219,14 @@ def serve(paths: ProjectPaths, host: str, port: int) -> None:
             LOG.warning("startup deletion quarantine recovery: %s", warning)
     except Exception as exc:
         LOG.warning("startup deletion quarantine recovery failed: %s", exc)
+    try:
+        _sweep_stale_research_staging(
+            paths,
+            max_age_seconds=300,
+        )
+        _reconcile_orphan_research_sources(paths)
+    except Exception as exc:
+        LOG.warning("startup research source cleanup failed: %s", exc)
     thread = Thread(target=reconciler.run_forever, daemon=True)
     thread.start()
     app = create_app(service, build_reconciler=reconciler)
@@ -224,3 +235,47 @@ def serve(paths: ProjectPaths, host: str, port: int) -> None:
         uvicorn.run(app, host=host, port=port, log_level="info", access_log=False)
     finally:
         reconciler.stop()
+
+
+def _sweep_stale_research_staging(paths: ProjectPaths, *, max_age_seconds: int = 300) -> None:
+    root = paths.research_sources_staging
+    if not root.exists():
+        return
+    cutoff = time.time() - max_age_seconds
+    for child in root.iterdir():
+        try:
+            if child.is_dir() and child.stat().st_mtime < cutoff:
+                shutil.rmtree(child)
+        except OSError as exc:
+            LOG.warning("failed to remove stale research staging %s: %s", child, exc)
+
+
+def _reconcile_orphan_research_sources(paths: ProjectPaths) -> None:
+    import sqlalchemy as sa
+
+    from persistence.models import research as model
+    from persistence.session import transaction
+
+    root = paths.research_sources
+    if not root.exists():
+        return
+    with transaction() as session:
+        for child in root.iterdir():
+            if not child.is_dir():
+                continue
+            try:
+                run_id = UUID(child.name)
+            except ValueError:
+                continue
+            supported = session.scalar(
+                sa.select(sa.func.count())
+                .select_from(model.ResearchSource)
+                .join(model.ResearchRun, model.ResearchSource.research_run_id == model.ResearchRun.id)
+                .where(
+                    model.ResearchRun.id == run_id,
+                    model.ResearchRun.status == "completed",
+                    model.ResearchSource.raw_text_path.like(f"%{child.name}%"),
+                )
+            )
+            if not supported:
+                shutil.rmtree(child)

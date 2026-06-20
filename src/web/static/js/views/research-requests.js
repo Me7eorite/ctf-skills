@@ -326,7 +326,7 @@ function renderRequestsTable(items) {
               <td>${softPill(categoryLabel(r.category), categoryTone(r.category))}</td>
               <td><div class="truncate" style="max-width: 360px;">${escapeHtml(r.topic)}</div></td>
               <td style="text-align: right;">${r.target_count}</td>
-              <td>${requestStatusPill(r.status)}</td>
+              <td>${requestStatusPill(r.display_status || r.status)}</td>
               <td class="table-cell-time">${escapeHtml(formatDateTime(r.created_at))}</td>
               <td><button class="btn btn-danger btn-xs req-delete" title="Delete"><i data-lucide="trash-2"></i></button></td>
             </tr>
@@ -383,7 +383,7 @@ function renderDetail(root) {
     <section class="card card-body">
       <div class="flex items-center gap-2" style="flex-wrap: wrap;">
         ${softPill(categoryLabel(request.category), categoryTone(request.category))}
-        ${requestStatusPill(request.status)}
+        ${requestStatusPill(request.display_status || request.status)}
         ${statusIndicator(workerRunning ? "running" : "idle")}
       </div>
       <h2 style="font-size: var(--font-lg); font-weight: 600; margin-top: var(--space-sm);">${escapeHtml(request.topic)}</h2>

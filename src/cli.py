@@ -19,7 +19,7 @@ from core.state import STAGES, STATUSES, InMemoryProgressStore
 from domain.metrics import duration_breakdown
 from domain.reports import merge_reports
 from domain.research import DIFFICULTY_LABELS, GenerationRequestStatus
-from domain.research_validators import ResearchValidationError
+from domain.research_validators import ResearchValidationError, validate_runtime_constraints
 from domain.validation import ChallengeValidator
 from hermes import HermesRunner
 from hermes.runner import DEFAULT_HERMES_TIMEOUT
@@ -184,6 +184,13 @@ def _register_research_commands(
         help="seed URL; may be passed multiple times",
     )
     submit.add_argument("--max-attempts", type=_positive_int, default=3)
+    submit.add_argument(
+        "--runtime-constraint",
+        dest="runtime_constraints",
+        action="append",
+        default=[],
+        help="runtime constraint key=value; may be passed multiple times",
+    )
 
     worker = sub.add_parser("worker", help="long-running research worker")
     worker.add_argument("--agent-id", required=True)
@@ -256,6 +263,25 @@ def _parse_difficulty(raw: str) -> dict[str, int]:
             raise argparse.ArgumentTypeError(f"--difficulty has duplicate label {label!r}")
         distribution[label] = count
     return distribution
+
+
+def _parse_runtime_constraints(items: list[str]) -> dict[str, object]:
+    values: dict[str, object] = {}
+    for item in items:
+        if "=" not in item:
+            raise ResearchValidationError(
+                f"--runtime-constraint entries must be key=value, got {item!r}"
+            )
+        key, raw_value = item.split("=", 1)
+        key = key.strip()
+        value = raw_value.strip()
+        if key == "port":
+            values[key] = int(value)
+        elif key == "strip":
+            values[key] = value.lower() in {"1", "true", "yes", "on"}
+        else:
+            values[key] = value
+    return validate_runtime_constraints(values)
 
 
 def _resolve_run_timeout(cli_value: int | None) -> tuple[int, str]:
@@ -557,6 +583,7 @@ def _research_submit(args: argparse.Namespace) -> None:
     from services import ResearchJobService
 
     try:
+        runtime_constraints = _parse_runtime_constraints(args.runtime_constraints)
         request, run = ResearchJobService().submit_request(
             category=args.category,
             topic=args.topic,
@@ -564,6 +591,7 @@ def _research_submit(args: argparse.Namespace) -> None:
             difficulty_distribution=args.difficulty,
             seed_urls=args.seed_urls,
             max_attempts=args.max_attempts,
+            runtime_constraints=runtime_constraints,
         )
     except ResearchValidationError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -571,10 +599,16 @@ def _research_submit(args: argparse.Namespace) -> None:
     print(
         json.dumps(
             {
-                "request_id": str(request.id),
-                "run_id": str(run.id),
-                "category": request.category,
-                "status": "queued",
+                "request": {
+                    "id": str(request.id),
+                    "category": request.category,
+                    "status": request.status,
+                    "display_status": "queued" if run.status == "queued" else request.status,
+                },
+                "latest_run": {
+                    "id": str(run.id),
+                    "status": run.status,
+                },
             },
             ensure_ascii=False,
         )

@@ -245,6 +245,8 @@ class ResearchRepository:
         max_attempts: int = 3,
         runtime_constraints: Mapping[str, Any] | None = None,
         status: str = "draft",
+        idempotency_key: str | None = None,
+        request_fingerprint: str | None = None,
     ) -> dto.GenerationRequest:
         """创建 generation request，但不提交事务。"""
         # category 不是 Python 常量，必须从数据库 lookup table 动态读取允许值。
@@ -265,6 +267,8 @@ class ResearchRepository:
             seed_urls=list(seed_urls),
             max_attempts=max_attempts,
             status=status,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
         )
         self.session.add(row)
         # flush 让数据库执行约束检查并生成 server default 字段。

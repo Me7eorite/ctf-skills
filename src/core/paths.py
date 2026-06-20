@@ -88,9 +88,19 @@ class ProjectPaths:
         return self.work / "research" / "sources"
 
     @property
+    def research_sources_staging(self) -> Path:
+        """Research source raw-text staging directory."""
+        return self.work / "research" / "sources_staging"
+
+    @property
     def research_logs(self) -> Path:
         """Research 流程的日志目录。"""
         return self.work / "research" / "logs"
+
+    @property
+    def worker_handshake(self) -> Path:
+        """Research worker startup handshake directory."""
+        return self.work / "research" / "worker_handshake"
 
     # ========== Design 设计流程路径 ==========
 
@@ -159,7 +169,9 @@ class ProjectPaths:
             self.reports,
             self.logs,
             self.research_sources,
+            self.research_sources_staging,
             self.research_logs,
+            self.worker_handshake,
             self.design_prompts,
             self.design_logs,
         ]

@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import logging
+import os
+import shutil
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -11,7 +16,7 @@ from uuid import UUID, uuid4
 import sqlalchemy as sa
 
 from domain import research as dto
-from domain.research_validators import ResearchValidationError
+from domain.research_validators import ResearchValidationError, validate_runtime_constraints
 from persistence.models import research as model
 from persistence.repositories import ResearchRepository
 from persistence.session import SessionFactory, transaction
@@ -29,12 +34,17 @@ class ResearchAttemptError(RuntimeError):
     """持久化 attempt 状态违反重试合同时抛出。"""
 
 
+LOG = logging.getLogger(__name__)
+DEFAULT_IDEMPOTENCY_TTL_SECONDS = 1800
+
+
 class ResearchJobService:
     """负责 research queue 状态变化和事务边界。"""
 
     def __init__(self, repository_factory: SessionFactory | None = None) -> None:
         # service 自己不持有长期 session；每个公开写操作都会打开一个短事务。
         self.repository_factory = repository_factory
+        self.last_submit_created = True
 
     def submit_request(
         self,
@@ -45,9 +55,38 @@ class ResearchJobService:
         seed_urls: Sequence[str] = (),
         max_attempts: int = 3,
         runtime_constraints: Mapping[str, Any] | None = None,
+        idempotency_key: str | None = None,
     ) -> tuple[dto.GenerationRequest, dto.ResearchRun]:
         """提交一个新的 research request，并创建对应的第一条 run 记录。"""
+        runtime_constraints = validate_runtime_constraints(runtime_constraints)
+        fingerprint = _request_fingerprint(
+            category=category,
+            topic=topic,
+            target_count=target_count,
+            difficulty_distribution=difficulty_distribution,
+            runtime_constraints=runtime_constraints,
+            seed_urls=seed_urls,
+            max_attempts=max_attempts,
+        )
+        if idempotency_key is not None and len(idempotency_key.encode("utf-8")) > 256:
+            raise ResearchValidationError("idempotency_key_too_long")
+
         with transaction(factory=self.repository_factory) as session:
+            if idempotency_key:
+                _lock_idempotency_key(session, idempotency_key)
+                existing = _find_idempotent_request(
+                    session,
+                    idempotency_key,
+                    ttl_seconds=_idempotency_ttl_seconds(),
+                )
+                if existing is not None:
+                    if existing.request_fingerprint != fingerprint:
+                        raise ResearchValidationError("idempotency_key_conflict")
+                    latest = _latest_run(session, existing.id)
+                    if latest is None:
+                        raise ResearchValidationError("idempotency_key_hit_without_run")
+                    self.last_submit_created = False
+                    return _generation_request_dto(existing), _run_dto(latest)
             # 同一个事务里创建 request 和首个 queued run，避免出现只有 request 没有任务的半状态。
             repo = ResearchRepository(session)
             request = repo.create_generation_request(
@@ -59,10 +98,17 @@ class ResearchJobService:
                 max_attempts=max_attempts,
                 runtime_constraints=runtime_constraints,
                 status="draft",
+                idempotency_key=idempotency_key,
+                request_fingerprint=fingerprint if idempotency_key else None,
             )
             run = repo.create_run(generation_request_id=request.id, attempt=1, status="queued")
+            request_row = _get_request(session, request.id)
+            request_row.status = "researching"
+            request_row.updated_at = _utcnow()
+            session.flush()
             # 返回的是 DTO；事务提交后调用方不会拿到仍绑定 session 的 ORM 对象。
-            return request, run
+            self.last_submit_created = True
+            return _generation_request_dto(request_row), run
 
     def claim_next_run(
         self,
@@ -234,6 +280,7 @@ class ResearchJobService:
         findings: Sequence[Mapping[str, Any]],
         binding_role: str,
         log_path: str | Path,
+        paths: Any | None = None,
     ) -> dto.ResearchRun:
         """原子保存 sources/findings，并把 run 标记为 completed。"""
         with transaction(factory=self.repository_factory) as session:
@@ -270,6 +317,63 @@ class ResearchJobService:
             self._apply_run_completed(session, run, log_path)
             session.flush()
             return _run_dto(run)
+
+    def complete_run_with_staged_results(
+        self,
+        run_id: UUID,
+        agent_id: str,
+        claim_token: UUID,
+        *,
+        sources: Sequence[Mapping[str, Any]],
+        findings: Sequence[Mapping[str, Any]],
+        binding_role: str,
+        log_path: str | Path,
+        paths: Any,
+    ) -> dto.ResearchRun:
+        """Persist results and promote staged source files before DB commit."""
+        session = (self.repository_factory or SessionFactory())()
+        promoted = False
+        try:
+            try:
+                session.connection()
+                run = self._get_owned_running_run(session, run_id, agent_id, claim_token)
+                repo = ResearchRepository(session)
+                source_ids: list[UUID] = []
+                for source in sources:
+                    saved = repo.add_source(
+                        run_id,
+                        url=_required_str(source, "url"),
+                        title=_required_str(source, "title"),
+                        summary=_required_str(source, "summary"),
+                        content_hash=_required_str(source, "content_hash"),
+                        fetched_at=_coerce_datetime(source.get("fetched_at")),
+                        raw_text_path=_optional_str(source.get("raw_text_path")),
+                    )
+                    source_ids.append(saved.id)
+                for finding in findings:
+                    repo.create_finding(
+                        run_id,
+                        kind=_required_str(finding, "kind"),
+                        label=_required_str(finding, "label"),
+                        summary=_required_str(finding, "summary"),
+                        source_ids=_finding_source_ids(finding, source_ids),
+                    )
+                repo.touch_binding(binding_role, last_used_at=_utcnow(), last_used_run_id=run_id)
+                self._apply_run_completed(session, run, log_path)
+                session.flush()
+                _promote_staged_sources(run_id, paths)
+                promoted = True
+                session.commit()
+                return _run_dto(run)
+            except BaseException:
+                session.rollback()
+                if promoted:
+                    _cleanup_final_sources(run_id, paths)
+                else:
+                    _cleanup_staged_sources(run_id, paths)
+                raise
+        finally:
+            session.close()
 
     def get_binding(self, role: str) -> dto.HermesProfileBinding | None:
         """读取某个 agent role 对应的 Hermes profile binding。"""
@@ -364,6 +468,126 @@ class ResearchJobService:
             was_retried = False
         request.updated_at = now
         return was_retried
+
+
+def _request_fingerprint(
+    *,
+    category: str,
+    topic: str,
+    target_count: int,
+    difficulty_distribution: Mapping[str, int],
+    runtime_constraints: Mapping[str, Any],
+    seed_urls: Sequence[str],
+    max_attempts: int,
+) -> str:
+    payload = {
+        "category": category,
+        "topic": topic,
+        "target_count": target_count,
+        "difficulty_distribution": dict(sorted(difficulty_distribution.items())),
+        "runtime_constraints": dict(sorted(runtime_constraints.items())),
+        "seed_urls": list(seed_urls),
+        "max_attempts": max_attempts,
+    }
+    data = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(data.encode("utf-8")).hexdigest()
+
+
+def _promote_staged_sources(run_id: UUID, paths: Any) -> None:
+    source = paths.research_sources_staging / str(run_id)
+    target = paths.research_sources / str(run_id)
+    if not source.exists():
+        return
+    if target.exists():
+        raise ResearchValidationError(f"research source target already exists: {target}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    source.replace(target)
+
+
+def _cleanup_staged_sources(run_id: UUID, paths: Any) -> None:
+    _remove_tree(paths.research_sources_staging / str(run_id))
+
+
+def _cleanup_final_sources(run_id: UUID, paths: Any) -> None:
+    _remove_tree(paths.research_sources / str(run_id))
+
+
+def _remove_tree(path: Path) -> None:
+    try:
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink(missing_ok=True)
+    except FileNotFoundError:
+        return
+
+
+def _idempotency_ttl_seconds() -> int:
+    raw = os.environ.get("RESEARCH_SUBMIT_IDEMPOTENCY_TTL_SECONDS")
+    if not raw:
+        return DEFAULT_IDEMPOTENCY_TTL_SECONDS
+    try:
+        value = int(raw)
+    except ValueError:
+        LOG.warning("invalid RESEARCH_SUBMIT_IDEMPOTENCY_TTL_SECONDS=%r", raw)
+        return DEFAULT_IDEMPOTENCY_TTL_SECONDS
+    if value <= 0:
+        LOG.warning("non-positive RESEARCH_SUBMIT_IDEMPOTENCY_TTL_SECONDS=%r", raw)
+        return DEFAULT_IDEMPOTENCY_TTL_SECONDS
+    return value
+
+
+def _lock_idempotency_key(session, idempotency_key: str) -> None:
+    bind = session.get_bind()
+    if bind.dialect.name != "postgresql":
+        return
+    digest = hashlib.sha256(idempotency_key.encode("utf-8")).digest()
+    first = int.from_bytes(digest[:4], "big", signed=True)
+    second = int.from_bytes(digest[4:8], "big", signed=True)
+    session.execute(sa.text("SELECT pg_advisory_xact_lock(:a, :b)"), {"a": first, "b": second})
+
+
+def _find_idempotent_request(
+    session,
+    idempotency_key: str,
+    *,
+    ttl_seconds: int,
+) -> model.GenerationRequest | None:
+    cutoff = _utcnow() - timedelta(seconds=ttl_seconds)
+    return session.scalar(
+        sa.select(model.GenerationRequest)
+        .where(
+            model.GenerationRequest.idempotency_key == idempotency_key,
+            model.GenerationRequest.created_at >= cutoff,
+        )
+        .order_by(model.GenerationRequest.created_at.desc())
+        .limit(1)
+    )
+
+
+def _latest_run(session, request_id: UUID) -> model.ResearchRun | None:
+    return session.scalar(
+        sa.select(model.ResearchRun)
+        .where(model.ResearchRun.generation_request_id == request_id)
+        .order_by(model.ResearchRun.created_at.desc(), model.ResearchRun.attempt.desc())
+        .limit(1)
+    )
+
+
+def _generation_request_dto(row: model.GenerationRequest) -> dto.GenerationRequest:
+    return dto.GenerationRequest(
+        id=row.id,
+        category=row.category,
+        topic=row.topic,
+        target_count=row.target_count,
+        difficulty_distribution=dict(row.difficulty_distribution),
+        runtime_constraints=dict(row.runtime_constraints),
+        seed_urls=tuple(row.seed_urls),
+        max_attempts=row.max_attempts,
+        status=row.status,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
 
 
 def _get_request(session, request_id: UUID) -> model.GenerationRequest:

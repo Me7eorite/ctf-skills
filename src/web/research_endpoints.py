@@ -23,7 +23,7 @@ from domain import design_tasks as design_dto
 from domain import research as dto
 from domain.design_task_validators import DesignTaskValidationError
 from domain.research import GenerationRequestStatus, ResearchRunStatus
-from domain.research_validators import ResearchValidationError
+from domain.research_validators import ResearchValidationError, validate_runtime_constraints
 
 
 def register_research_endpoints(app: FastAPI, worker_manager=None) -> None:
@@ -111,6 +111,11 @@ def _register_worker_endpoints(app: FastAPI, manager) -> None:
                 detail=f"worker parameters must be integers: {exc}",
             ) from exc
 
+        if generation_request_id is not None:
+            ok, status_code, body = _preflight_scoped_research_worker(generation_request_id)
+            if not ok:
+                return JSONResponse(body, status_code=status_code)
+
         ok, message = manager.start(
             kind=kind,
             agent_id=payload.get("agent_id"),
@@ -120,6 +125,15 @@ def _register_worker_endpoints(app: FastAPI, manager) -> None:
             generation_request_id=generation_request_id,
         )
         if not ok:
+            if str(message).startswith("worker_startup_failed:"):
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "code": "worker_startup_failed",
+                        "stderr_tail": str(message).split(":", 1)[1].strip(),
+                    },
+                    status_code=HTTPStatus.CONFLICT,
+                )
             raise HTTPException(
                 status_code=HTTPStatus.CONFLICT, detail=message
             )
@@ -142,6 +156,43 @@ def _register_worker_endpoints(app: FastAPI, manager) -> None:
             )
         return JSONResponse({"ok": True, "message": message, "state": manager.state()})
 
+
+def _preflight_scoped_research_worker(request_id: str) -> tuple[bool, int, dict[str, Any]]:
+    import sqlalchemy as sa
+
+    from persistence.models import research as model
+    from persistence.session import transaction
+
+    request_uuid = UUID(request_id)
+    with transaction() as session:
+        if not hasattr(session, "get"):
+            return True, HTTPStatus.ACCEPTED, {}
+        row = session.get(model.GenerationRequest, request_uuid)
+        if row is None:
+            return False, HTTPStatus.NOT_FOUND, {"detail": "request not found"}
+        if row.status == "researched":
+            return False, HTTPStatus.CONFLICT, {"code": "already_researched"}
+        if row.status == "failed":
+            return False, HTTPStatus.CONFLICT, {"code": "final_failure_no_retry_left"}
+        if row.status not in {"draft", "researching"}:
+            return False, HTTPStatus.CONFLICT, {"code": "request_not_runnable"}
+        runnable = session.scalar(
+            sa.select(sa.func.count())
+            .select_from(model.ResearchRun)
+            .where(
+                model.ResearchRun.generation_request_id == request_uuid,
+                sa.or_(
+                    model.ResearchRun.status == "queued",
+                    sa.and_(
+                        model.ResearchRun.status == "running",
+                        model.ResearchRun.lease_expires_at <= sa.func.now(),
+                    ),
+                ),
+            )
+        )
+        if not runnable:
+            return False, HTTPStatus.CONFLICT, {"code": "no_runnable_run"}
+    return True, HTTPStatus.ACCEPTED, {}
 
 # ---------------------------------------------------------------------------
 # GET /api/research/logs
@@ -217,6 +268,7 @@ def _register_requests_list(app: FastAPI) -> None:
     def list_requests(
         category: str | None = Query(default=None),
         status: str | None = Query(default=None),
+        display_status: str | None = Query(default=None),
     ) -> JSONResponse:
         from persistence.repositories import ResearchRepository
         from persistence.session import transaction
@@ -232,6 +284,17 @@ def _register_requests_list(app: FastAPI) -> None:
                     f"allowed: {list(GenerationRequestStatus)}"
                 ),
             )
+        if display_status is not None and display_status not in {
+            "draft",
+            "queued",
+            "researching",
+            "researched",
+            "failed",
+        }:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail=f"unknown display_status {display_status!r}",
+            )
 
         with transaction() as session:
             repo = ResearchRepository(session)
@@ -245,7 +308,7 @@ def _register_requests_list(app: FastAPI) -> None:
                             f"allowed: {allowed}"
                         ),
                     )
-            requests = repo.list_generation_requests(category=category)
+            requests = repo.list_generation_requests(category=category, status=status)
             latest_for_request = {}
             latest_lookup = getattr(repo, "get_latest_run_for_request", None)
             if latest_lookup is not None:
@@ -256,8 +319,8 @@ def _register_requests_list(app: FastAPI) -> None:
                 _request_dict(request, latest_run=latest_for_request.get(request.id))
                 for request in requests
             ]
-            if status is not None:
-                rows = [row for row in rows if row["status"] == status]
+            if display_status is not None:
+                rows = [row for row in rows if row["display_status"] == display_status]
         return JSONResponse(rows)
 
 
@@ -310,31 +373,48 @@ def _register_request_submit(app: FastAPI) -> None:
                 status_code=HTTPStatus.BAD_REQUEST,
                 detail="max_attempts must be a positive integer",
             )
+        try:
+            runtime_constraints = validate_runtime_constraints(
+                payload.get("runtime_constraints", {})
+            )
+        except ResearchValidationError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
 
         from services import ResearchJobService
 
+        service = ResearchJobService()
         try:
-            generation_request, run = ResearchJobService().submit_request(
+            generation_request, run = service.submit_request(
                 category=category,
                 topic=topic,
                 target_count=target_count,
                 difficulty_distribution=distribution,
                 seed_urls=seed_urls,
                 max_attempts=max_attempts,
+                runtime_constraints=runtime_constraints,
+                idempotency_key=request.headers.get("Idempotency-Key"),
             )
         except ResearchValidationError as exc:
+            if str(exc) == "idempotency_key_conflict":
+                raise HTTPException(
+                    status_code=HTTPStatus.CONFLICT,
+                    detail={"code": "idempotency_key_conflict"},
+                ) from exc
             raise HTTPException(
                 status_code=HTTPStatus.BAD_REQUEST, detail=str(exc)
             ) from exc
 
         return JSONResponse(
             {
-                "request_id": str(generation_request.id),
-                "run_id": str(run.id),
-                "category": generation_request.category,
-                "status": "queued",
+                "request": _request_dict(generation_request, latest_run=run),
+                "latest_run": _run_dict(run, category=generation_request.category),
             },
-            status_code=HTTPStatus.CREATED,
+            status_code=HTTPStatus.CREATED
+            if getattr(service, "last_submit_created", True)
+            else HTTPStatus.OK,
         )
 
 
@@ -632,20 +712,15 @@ def _category_dict(category: dto.ChallengeCategory) -> dict[str, Any]:
     }
 
 
-def _display_request_status(
+def _derive_display_status(
     request: dto.GenerationRequest,
     latest_run: dto.ResearchRun | None = None,
 ) -> str:
-    if latest_run is None:
-        return "draft" if request.status == "researching" else request.status
-    if latest_run.status == "running":
-        return "researching"
-    if latest_run.status == "completed":
-        return "researched"
-    if latest_run.status == "failed":
-        return "failed" if request.status == "failed" else "draft"
-    if latest_run.status == "queued":
-        return "draft"
+    if request.status == "researching" and latest_run is not None:
+        if latest_run.status == "queued":
+            return "queued"
+        if latest_run.status == "running":
+            return "researching"
     return request.status
 
 
@@ -663,8 +738,8 @@ def _request_dict(
         "runtime_constraints": dict(request.runtime_constraints),
         "seed_urls": list(request.seed_urls),
         "max_attempts": request.max_attempts,
-        "status": _display_request_status(request, latest_run),
-        "stored_status": request.status,
+        "status": request.status,
+        "display_status": _derive_display_status(request, latest_run),
         "created_at": _isofmt(request.created_at),
         "updated_at": _isofmt(request.updated_at),
     }

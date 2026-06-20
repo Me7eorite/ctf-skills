@@ -578,6 +578,8 @@ Content-Type: application/json
 | `BUILD_ATTEMPTS_LIST_DEFAULT_LIMIT` | `100` | `/api/build-attempts` 未指定 `limit` 时的返回上限 |
 | `BUILD_ATTEMPTS_LIST_MAX_LIMIT` | `500` | `/api/build-attempts` 允许的最大 `limit`，超过时返回该上限并设置 `X-Limit-Capped` |
 
+Hermes profile binding is a hard requirement for research execution: role `research` must have an enabled binding before a worker can run.
+
 ---
 
 ### 5.3 打包导出流程

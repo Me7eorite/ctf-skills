@@ -67,7 +67,7 @@ export function render(data) {
             ${f.lastResult ? `
               <div class="success-banner">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
-                <span>已入队 — request <code style="font-family: var(--font-mono-family); font-size: 11px;">${escapeHtml(f.lastResult.request_id.slice(0, 8))}&hellip;</code></span>
+                <span>已入队 — request <code style="font-family: var(--font-mono-family); font-size: 11px;">${escapeHtml(f.lastResult.request.id.slice(0, 8))}&hellip;</code></span>
               </div>
             ` : ""}
             ${f.lastError ? `
@@ -297,7 +297,7 @@ async function handleSubmit() {
       max_attempts: Number(f.max_attempts),
     });
     f.lastResult = result;
-    showToast(`\u5DF2\u5165\u961F\uFF1A${result.request_id.slice(0, 8)}\u2026`);
+    showToast(`\u5DF2\u5165\u961F\uFF1A${result.request.id.slice(0, 8)}\u2026`);
   } catch (err) {
     f.lastError = err.message || String(err);
   } finally {

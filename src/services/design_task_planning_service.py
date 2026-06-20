@@ -14,6 +14,7 @@ rendering happens at design-execution time in a later change.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 from uuid import UUID
@@ -67,15 +68,14 @@ class DesignTaskPlanningService:
             # 场景串行化为干净的 409，而非 5xx 完整性错误。
             research_repo.lock_generation_request(request_id)
 
-            latest = research_repo.get_latest_completed_run_for_request(request_id)
+            latest = research_repo.get_latest_run_for_request(request_id)
             if latest is None or latest.status != "completed":
-                raise DesignTaskValidationError(
-                    "generation request has no completed research run; "
-                    "cannot generate design tasks"
-                )
+                raise DesignTaskValidationError("latest_run_not_completed")
 
             findings = research_repo.list_findings(latest.id)
             sources = research_repo.list_sources(latest.id)
+            if len(findings) < math.ceil(request.target_count * 0.5):
+                raise DesignTaskValidationError("insufficient_findings")
             if not findings or not sources:
                 raise DesignTaskValidationError(
                     "completed research run has no sources or findings; "

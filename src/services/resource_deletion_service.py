@@ -572,6 +572,9 @@ class ResourceDeletionService:
         for attempt in scope.build_attempt_rows:
             for path in self._operational_paths(attempt):
                 quarantine.move(path)
+        for run_id in sorted(scope.research_run_ids):
+            quarantine.move(self.paths.research_sources / str(run_id), report_deleted=True)
+            quarantine.move(self.paths.research_sources_staging / str(run_id), report_deleted=True)
         for shard in sorted(scope.shard_basenames):
             if self._running_matches(shard):
                 quarantine.restore()

@@ -10,7 +10,12 @@
 
 from __future__ import annotations
 
+import json
+import math
+import re
 from collections.abc import Iterable, Mapping, Sequence
+from typing import Any
+from urllib.parse import urlparse
 from uuid import UUID
 
 from domain.research import DIFFICULTY_LABELS, ResearchFindingKind
@@ -18,6 +23,24 @@ from domain.research import DIFFICULTY_LABELS, ResearchFindingKind
 
 class ResearchValidationError(ValueError):
     """领域校验器拒绝输入时抛出的异常。"""
+
+
+URL_RE = re.compile(r"^https?://[^\s]+$")
+CONTENT_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
+RUNTIME_CONSTRAINT_KEYS = {
+    "runtime",
+    "framework",
+    "language",
+    "compiler",
+    "target_format",
+    "architecture",
+    "port",
+    "mitigations",
+    "target_platform",
+    "strip",
+}
+TARGET_FORMATS = {"elf", "wasm", "jar", "container"}
+TARGET_PLATFORMS = {"linux/amd64", "linux/arm64", "linux/arm"}
 
 
 def validate_distribution(
@@ -60,6 +83,144 @@ def validate_distribution(
         raise ResearchValidationError(
             f"difficulty_distribution sums to {total} but target_count is {target_count}"
         )
+
+
+def validate_runtime_constraints(payload: Any) -> dict[str, Any]:
+    """Validate operator-supplied runtime constraints shared by HTTP and CLI."""
+    if payload is None:
+        return {}
+    if not isinstance(payload, Mapping):
+        raise ResearchValidationError("runtime_constraints must be an object")
+    result: dict[str, Any] = {}
+    for raw_key, value in payload.items():
+        if not isinstance(raw_key, str) or not raw_key:
+            raise ResearchValidationError("runtime_constraints keys must be non-empty strings")
+        key = raw_key
+        if key.startswith("experimental."):
+            if not isinstance(value, str):
+                raise ResearchValidationError(
+                    f"runtime_constraints[{key!r}] must be a string"
+                )
+            result[key] = value
+            continue
+        if key not in RUNTIME_CONSTRAINT_KEYS:
+            allowed = sorted(RUNTIME_CONSTRAINT_KEYS) + ["experimental.*"]
+            raise ResearchValidationError(
+                f"unknown runtime_constraints key {key!r}; allowed: {allowed}"
+            )
+        result[key] = _validate_runtime_constraint_value(key, value)
+    return result
+
+
+def _validate_runtime_constraint_value(key: str, value: Any) -> Any:
+    if key in {"runtime", "framework", "language", "compiler", "architecture"}:
+        if not isinstance(value, str):
+            raise ResearchValidationError(f"runtime_constraints[{key!r}] must be a string")
+        return value
+    if key == "target_format":
+        if not isinstance(value, str) or value not in TARGET_FORMATS:
+            raise ResearchValidationError(
+                f"runtime_constraints['target_format'] must be one of {sorted(TARGET_FORMATS)}"
+            )
+        return value
+    if key == "target_platform":
+        if not isinstance(value, str) or value not in TARGET_PLATFORMS:
+            raise ResearchValidationError(
+                f"runtime_constraints['target_platform'] must be one of {sorted(TARGET_PLATFORMS)}"
+            )
+        return value
+    if key == "port":
+        if not isinstance(value, int) or isinstance(value, bool) or not (1 <= value <= 65535):
+            raise ResearchValidationError("runtime_constraints['port'] must be an integer 1..65535")
+        return value
+    if key == "mitigations":
+        if not isinstance(value, Mapping) or not all(
+            isinstance(k, str) and isinstance(v, bool) for k, v in value.items()
+        ):
+            raise ResearchValidationError(
+                "runtime_constraints['mitigations'] must be an object mapping string to bool"
+            )
+        return dict(value)
+    if key == "strip":
+        if not isinstance(value, bool):
+            raise ResearchValidationError("runtime_constraints['strip'] must be a bool")
+        return value
+    raise ResearchValidationError(f"unknown runtime_constraints key {key!r}")
+
+
+def extract_terminal_json_object(stdout: str) -> dict[str, Any] | None:
+    """Extract the last parseable top-level JSON object from noisy stdout."""
+    for end in range(len(stdout) - 1, -1, -1):
+        if stdout[end] != "}":
+            continue
+        start = _matching_object_start(stdout, end)
+        if start is None:
+            continue
+        try:
+            parsed = json.loads(stdout[start : end + 1])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _matching_object_start(text: str, end: int) -> int | None:
+    depth = 0
+    in_string: str | None = None
+    escaped = False
+    for index in range(end, -1, -1):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == in_string:
+                in_string = None
+            continue
+        if char in {'"', "'"}:
+            in_string = char
+            continue
+        if char == "}":
+            depth += 1
+        elif char == "{":
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
+
+
+def apply_research_quality_gate(
+    parsed: Mapping[str, Any],
+    target_count: int,
+) -> tuple[bool, str | None]:
+    sources = parsed.get("sources")
+    findings = parsed.get("findings")
+    if not isinstance(sources, list):
+        return False, "unparseable_output:sources_not_list"
+    if not isinstance(findings, list):
+        return False, "unparseable_output:findings_not_list"
+
+    seen_hashes: set[str] = set()
+    for source in sources:
+        if not isinstance(source, Mapping):
+            return False, "unparseable_output:source_not_object"
+        url = source.get("url")
+        if not isinstance(url, str) or not URL_RE.match(url) or not urlparse(url).hostname:
+            return False, f"url_shape_invalid:{url}"
+        content_hash = source.get("content_hash")
+        if not isinstance(content_hash, str) or not CONTENT_HASH_RE.match(content_hash):
+            return False, f"content_hash_shape_invalid:{content_hash}"
+        if content_hash in seen_hashes:
+            return False, f"content_hash_dup:{content_hash}"
+        seen_hashes.add(content_hash)
+
+    needed = math.ceil(target_count * 0.5)
+    got = len(findings)
+    if got < needed:
+        return False, f"insufficient_findings:got={got},need={needed}"
+    return True, None
 
 
 def validate_category(category: str | None, allowed_codes: Iterable[str]) -> None:

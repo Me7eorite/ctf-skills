@@ -77,6 +77,7 @@ class ResearchWorkerManager:
             if self._process and self._process.poll() is None:
                 return False, "research worker is already running"
 
+            self._sweep_dead_handshake_files()
             agent = agent_id or _DEFAULT_AGENT_ID
             cli_script = Path(__file__).resolve().parents[1] / "cli.py"
             argv = [
@@ -124,12 +125,15 @@ class ResearchWorkerManager:
             self._exit_message = None
             self._max_jobs = max_jobs if kind == "once" else None
 
-        # Give the subprocess a moment to either crash immediately or settle.
-        time.sleep(0.2)
-        rc = process.poll()
-        if rc is not None and rc != 0:
-            detail = self._log_tail()
-            return False, f"worker exited immediately rc={rc}: {detail}"
+        if not self._wait_for_handshake(process.pid, timeout=5.0, interval=0.05):
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+            detail = self._log_tail()[-1024:]
+            return False, f"worker_startup_failed: {detail}"
         scope = f", request={generation_request_id}" if generation_request_id else ""
         return True, f"research worker started (kind={kind}, agent={agent}{scope})"
 
@@ -199,3 +203,37 @@ class ResearchWorkerManager:
             return ""
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         return "\n".join(lines[-8:])
+
+    def _wait_for_handshake(self, pid: int, *, timeout: float, interval: float) -> bool:
+        marker = self.paths.worker_handshake / f"{pid}.ready"
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if marker.exists():
+                return True
+            with self._lock:
+                process = self._process
+            if process is not None and process.poll() is not None:
+                return False
+            time.sleep(interval)
+        return marker.exists()
+
+    def _sweep_dead_handshake_files(self) -> None:
+        self.paths.worker_handshake.mkdir(parents=True, exist_ok=True)
+        for marker in self.paths.worker_handshake.glob("*.ready"):
+            try:
+                pid = int(marker.stem)
+            except ValueError:
+                marker.unlink(missing_ok=True)
+                continue
+            if not _pid_exists(pid):
+                marker.unlink(missing_ok=True)
+
+
+def _pid_exists(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True

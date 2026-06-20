@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import signal
 import sys
 import threading
@@ -52,6 +53,9 @@ class ResearchWorker:
             hermes_timeout_seconds=hermes_timeout_seconds,
         )
         self.paths.initialize()
+        ready_path = self.paths.worker_handshake / f"{os.getpid()}.ready"
+        self.paths.worker_handshake.mkdir(parents=True, exist_ok=True)
+        ready_path.touch()
         self._log(
             f"[research-worker {agent_id}] started "
             f"(loop={loop} max_jobs={max_jobs} lease={lease_seconds}s "
@@ -119,6 +123,8 @@ class ResearchWorker:
                 "agent_id": agent_id,
                 "interrupted": True,
             }
+        finally:
+            ready_path.unlink(missing_ok=True)
 
         return {"processed": processed_count, "agent_id": agent_id}
 
