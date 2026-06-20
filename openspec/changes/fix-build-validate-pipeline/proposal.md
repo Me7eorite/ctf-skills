@@ -11,7 +11,7 @@
 ## What Changes
 
 - **Bug 2 — flag 提取兜底**：`ChallengeValidator.validate_one` 不再用 `last_nonempty_line`，改用带 token 边界的 flag 正则扫描 stdout，取最后一处匹配作为 `printed_flag`。
-- **Bug 2 — validate.sh 模板**：更新 Hermes prompt 的 "Exploit Validation" 段，要求生成的 `validate.sh` (a) cleanup 函数全部输出走 `>&2`，(b) 脚本开头执行一次 pre-cleanup `docker rm -f "$CONTAINER_NAME" 2>/dev/null || true` 防止容器名残留触发 `nonzero_exit`。
+- **Bug 2 — validate.sh 模板**：更新 Hermes prompt 的 "Exploit Validation" 段，要求生成的 `validate.sh` (a) cleanup 函数全部输出走 `>&2`，(b) 脚本开头执行一次 pre-cleanup `docker rm -f "$CONTAINER_NAME" 2>/dev/null || true` 防止容器名残留触发 `nonzero_exit`，(c) image 缺失时 fail-fast `exit 1`，**禁止 validate.sh 内出现 `docker build` / `docker compose build` / `pip install` / `apt-get`** 等任何依赖网络的步骤——image 是 Stage 3（build 阶段）的交付物，不允许 validate 时临时构建。
 - **Bug 3 — 加固现有 revalidate**：保留 `bcdd3fba` 已有的 failed-only API/UI 和 `complete/*` 事件语义；增加 PostgreSQL advisory lock、验证器异常终态、精确 artifact 目录绑定，以及 failed→done 文件移动在数据库提交失败时的反向补偿。
 - **Bug 3 — 保持 UI 语义**：继续使用现有“重新校验 / 重试构建”按钮和中文失败摘要，不恢复已移除的列表级全量 Validate 按钮。
 - **Bug 1 — `list_attempts` 子查询收敛**：先应用 latest fold、过滤、排序和 limit 得到 `selected_attempts`，`progress` 聚合只读取该批次的 shard；复用 `progress_snapshots(shard, challenge_id)` 主键索引，不增加冗余单列索引。

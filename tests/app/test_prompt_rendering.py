@@ -141,7 +141,7 @@ class RenderPromptTests(unittest.TestCase):
             )
             self.assertIn("first-time run", rendered)
 
-    def test_prompt_contains_image_inspect_pattern(self):
+    def test_prompt_forbids_in_script_image_build(self):
         with TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             paths = _seed_paths(tmp_path)
@@ -155,7 +155,19 @@ class RenderPromptTests(unittest.TestCase):
                 original_shard_name="s.json",
             )
             self.assertIn(
-                'docker image inspect "$IMAGE" >/dev/null 2>&1 || docker build',
+                'docker image inspect "$IMAGE" >/dev/null 2>&1 || {',
+                rendered,
+            )
+            self.assertIn(
+                "validate.sh: required image '$IMAGE' is missing",
+                rendered,
+            )
+            self.assertIn(
+                "MUST NOT contain `docker build`",
+                rendered,
+            )
+            self.assertNotIn(
+                '|| docker build -t "$IMAGE" .',
                 rendered,
             )
 

@@ -214,13 +214,20 @@ return, observe its exit code and recovered flag, and write the authoritative
 - Re solvers must derive the flag from files in `dist/`, never from `src/`,
   `metadata.json`, or `challenge.yml`.
 
-For Web/Pwn, `validate.sh` MUST reuse an already-built image rather than
-forcing a rebuild on every run. Place the following check before
-`docker compose up`:
+For Web/Pwn, `validate.sh` MUST consume an already-built image and MUST NOT
+attempt to build it. The Docker image is part of Stage 3's deliverable: by
+the time `build/passed` is recorded, the image MUST already be present in the
+local Docker daemon. Place this fail-fast gate before `docker compose up`:
 
 ```bash
-docker image inspect "$IMAGE" >/dev/null 2>&1 || docker build -t "$IMAGE" .
+docker image inspect "$IMAGE" >/dev/null 2>&1 || {
+  echo "validate.sh: required image '$IMAGE' is missing; rebuild via the build stage" >&2
+  exit 1
+}
 ```
+
+`validate.sh` MUST NOT contain `docker build`, `docker compose build`, or any
+network-fetching dependency installation. Validation is offline-capable.
 
 After that gate, `validate.sh` must start the service, wait for
 health/readiness, run `writenup/exp.py`, and always clean up with a shell trap.

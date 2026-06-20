@@ -48,33 +48,44 @@ result status is `passed`.
 - **WHEN** `validate_challenge` runs
 - **THEN** the result status is `flag_mismatch` with `printed_flag = ""`
 
-### Requirement: validate.sh prompt contract reuses existing images
+### Requirement: validate.sh prompt contract forbids in-script image builds
 
-The prompt SHALL instruct Web/Pwn validate scripts to inspect the expected image
-before building it. Generated `validate.sh` scripts MUST use the pattern
-`docker image inspect "$IMAGE" >/dev/null 2>&1 || docker build -t "$IMAGE" .`
-before `docker compose up`. Force rebuild is performed manually by deleting the
-image outside the script.
+The Docker image SHALL be a Stage 3 (`build`) deliverable. By the time the
+runner records `build/passed` for a Web/Pwn challenge, the image named in
+`metadata.docker_image` MUST already be present in the local Docker daemon.
 
-Generated `validate.sh` scripts MUST also satisfy two stdout-hygiene rules so
-the host validator's flag extraction is not contaminated:
+Generated `validate.sh` scripts MUST satisfy the following hygiene rules:
 
-1. The `cleanup` function (and any other shell function fired from
+1. The script MUST gate on image presence with a **fail-fast** check and MUST
+   NOT contain any `docker build`, `docker compose build`, `pip install`,
+   `apt-get`, or other network-fetching commands. The gate pattern is:
+   ```bash
+   docker image inspect "$IMAGE" >/dev/null 2>&1 || {
+     echo "validate.sh: required image '$IMAGE' is missing; rebuild via the build stage" >&2
+     exit 1
+   }
+   ```
+   This makes validation offline-capable and prevents transient network
+   failures (e.g. a registry / mirror outage during base-image pull, or a
+   `pip install` package fetch failure) from being misreported as
+   `nonzero_exit` validation failures.
+2. The `cleanup` function (and any other shell function fired from
    `trap ... EXIT` / `trap ... ERR`) MUST redirect ALL of its output to stderr
    (`>&2`). This includes `echo` lines, `docker stop`, `docker rm`, and any
    diagnostic messages. The recovered flag MUST be the last text written to
    stdout in the success path.
-2. The script MUST perform a pre-run cleanup of any stale container name
+3. The script MUST perform a pre-run cleanup of any stale container name
    before `docker run --name "$CONTAINER_NAME"`, e.g.
    `docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true`. This prevents
    `nonzero_exit` failures caused by leftover containers from a previous
    killed run.
 
-#### Scenario: Prompt includes image inspect fallback
+#### Scenario: Prompt forbids in-script image build
 
 - **WHEN** a dry-run prompt is rendered for Web/Pwn validation
-- **THEN** it contains the literal `docker image inspect "$IMAGE" >/dev/null
-  2>&1 || docker build` pattern
+- **THEN** the prompt instructs `validate.sh` to `exit 1` when
+  `docker image inspect "$IMAGE"` fails, and explicitly forbids `docker build`,
+  `docker compose build`, `pip install`, and `apt-get` inside `validate.sh`
 
 #### Scenario: Prompt mandates stderr-only cleanup output
 

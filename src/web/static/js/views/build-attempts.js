@@ -548,11 +548,18 @@ function artifactLabel(value) {
 
 function failureSummary(attempt) {
   if (attempt.failure_summary) return attempt.failure_summary;
+  // Short-circuit on the newest validate/complete terminal — if it's passed
+  // (e.g. a successful revalidate), there is no failure to display even if
+  // older failed events are still in the timeline.
   const events = attempt.progress_events || [];
   for (const event of [...events].reverse()) {
-    if (event.stage === "validate" && event.status === "failed") {
-      return `校验失败：${failureMessageReason(event.message || "") || "未知原因"}`;
-    }
+    if (event.stage !== "validate" && event.stage !== "complete") continue;
+    if (event.status !== "passed" && event.status !== "failed") continue;
+    if (event.status === "passed") return "";
+    const reason = failureMessageReason(event.message || "") || "未知原因";
+    return event.stage === "validate"
+      ? `校验失败：${reason}`
+      : `构建执行失败：${reason}`;
   }
   if (attempt.error === "shard execution failed") return "构建执行失败";
   return attempt.error || "";

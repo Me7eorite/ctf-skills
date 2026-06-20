@@ -10,6 +10,8 @@
 - [x] 2.1 修改真实模板 `prompts/shard_prompt.md` 的 `Exploit Validation` 段落。
 - [x] 2.2 追加 stderr cleanup 和 stale-container pre-cleanup 硬要求。
 - [x] 2.3 扩展 `tests/app/test_hermes.py` 覆盖两个字面契约。
+- [x] 2.4 把"image 缺失 → fail-fast，禁止 `docker build` / `pip install` / `apt-get`"写进 `prompts/shard_prompt.md` 的 validate.sh 段落（offline-capable 验证契约）。
+- [x] 2.5 把 `tests/app/test_prompt_rendering.py::test_prompt_contains_image_inspect_pattern` 改名为 `test_prompt_forbids_in_script_image_build`，断言 prompt 包含 `validate.sh: required image '$IMAGE' is missing` 与 `MUST NOT contain \`docker build\``，且不再包含 `|| docker build -t "$IMAGE" .`。
 
 ## 3. Bug 3: 加固现有 per-attempt revalidate
 

@@ -590,14 +590,25 @@ def _derive_failure_summary(
     events: list[dict[str, Any]],
     fallback: str | None,
 ) -> str | None:
+    # The latest validate/complete terminal event is the source of truth — a
+    # successful revalidate appends new passed events after the old failed
+    # ones, so the summary MUST follow the newest result. Short-circuit on
+    # the first terminal event seen newest-first; if it's passed, there is
+    # no failure to report.
     for event in reversed(events):
-        if event.get("stage") == "validate" and event.get("status") == "failed":
-            reason = _failure_message_reason(event.get("message") or "")
+        stage = event.get("stage")
+        status = event.get("status")
+        if stage not in ("validate", "complete") or status not in (
+            "passed",
+            "failed",
+        ):
+            continue
+        if status == "passed":
+            return None
+        reason = _failure_message_reason(event.get("message") or "")
+        if stage == "validate":
             return f"校验失败：{reason}" if reason else "校验失败"
-    for event in reversed(events):
-        if event.get("stage") == "complete" and event.get("status") == "failed":
-            reason = _failure_message_reason(event.get("message") or "")
-            return f"构建执行失败：{reason}" if reason else "构建执行失败"
+        return f"构建执行失败：{reason}" if reason else "构建执行失败"
     if fallback and fallback != "shard execution failed":
         return fallback
     if fallback:
