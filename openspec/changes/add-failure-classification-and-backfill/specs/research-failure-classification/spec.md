@@ -24,12 +24,24 @@ The system SHALL provide a pure function `classify_last_error(text)` that maps a
 - **WHEN** `classify_last_error("url_shape_invalid:not-a-url")` or `classify_last_error("content_hash_shape_invalid:zzz")` is called
 - **THEN** the result's `category` equals `field_validation`
 
+#### Scenario: Current parser shape errors are classified as `field_validation`
+- **WHEN** `classify_last_error("source field 'url' must be a non-empty string")`, `classify_last_error("finding source_indices must be a list")`, or `classify_last_error("source index 2 is out of range")` is called
+- **THEN** the result's `category` equals `field_validation`
+
 #### Scenario: Binding errors are classified as `binding`
 - **WHEN** `classify_last_error("profile_not_bound")` or `classify_last_error("profile_disabled:default")` is called
 - **THEN** the result's `category` equals `binding`
 
+#### Scenario: Missing Hermes profile is classified as `binding`
+- **WHEN** `classify_last_error("Hermes profile 'ctf-research-bot' does not exist")` is called
+- **THEN** the result's `category` equals `binding`
+
 #### Scenario: Generic Hermes non-zero exit (not 124) is classified as `runtime`
 - **WHEN** `classify_last_error("Hermes exited with 137")` is called
+- **THEN** the result's `category` equals `runtime`
+
+#### Scenario: Missing parent request is classified as `runtime`
+- **WHEN** `classify_last_error("generation_request 00000000-0000-0000-0000-000000000000 does not exist")` is called
 - **THEN** the result's `category` equals `runtime`
 
 #### Scenario: Operator cancellation is classified as `cancelled`
@@ -58,7 +70,7 @@ The system SHALL ensure every category except `unknown` and `cancelled` resolves
 
 ### Requirement: Run DTOs expose derived classification fields
 
-The system SHALL include five derived fields on every research run DTO returned by HTTP APIs (`latest_run`, `runs[]` in `/api/research/requests/{id}`, list/detail run endpoints, and any other run view): `last_error_category` (enum string or null), `last_error_title` (string or null), `last_error_description` (string or null), `last_error_actions` (array of strings), and `recoverable` (boolean). For runs whose status is not `failed`, all four classification text/list fields MUST be null/null/null/empty-array and `recoverable` MUST be false.
+The system SHALL include five derived fields on every research run DTO returned by HTTP APIs (`latest_run`, `latest_completed_run`, and `runs[]` in `/api/research/requests/{id}`, rows in `GET /api/research/runs`, `latest_run` in the submit response, and any future run view): `last_error_category` (enum string or null), `last_error_title` (string or null), `last_error_description` (string or null), `last_error_actions` (array of strings), and `recoverable` (boolean). For runs whose status is not `failed`, all four classification text/list fields MUST be null/null/null/empty-array and `recoverable` MUST be false.
 
 #### Scenario: Failed run with classifiable error exposes category and title
 - **WHEN** a client requests `/api/research/requests/{id}` for a request whose `latest_run.status` is `failed` and `last_error` is `"Hermes exited with 124"`

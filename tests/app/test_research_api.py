@@ -135,6 +135,8 @@ def _make_run(
     request_id: UUID | None = None,
     attempt: int = 1,
     status: str = "queued",
+    last_error: str | None = None,
+    hermes_log_path: str | None = None,
 ) -> ResearchRun:
     return ResearchRun(
         id=run_id or uuid4(),
@@ -149,8 +151,8 @@ def _make_run(
         lease_expires_at=None,
         started_at=None,
         finished_at=None,
-        last_error=None,
-        hermes_log_path=None,
+        last_error=last_error,
+        hermes_log_path=hermes_log_path,
         profile_name_used=None,
         created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
     )
@@ -427,6 +429,117 @@ class RequestDetailEndpointTests(unittest.TestCase):
         finally:
             _close(client)
 
+    def test_failed_run_exposes_classification_fields_and_recoverable_true(self):
+        req = _make_request(status="failed")
+        repo = SimpleNamespace()
+        client = _client(repo)
+        log_path = Path(client._temp.name) / "work" / "research" / "logs" / "failed.log"  # type: ignore[attr-defined]
+        log_path.write_text(
+            "header\n--- stdout ---\n{\"sources\":[],\"findings\":[]}\n--- end stdout ---\n",
+            encoding="utf-8",
+        )
+        run = _make_run(
+            request_id=req.id,
+            status="failed",
+            last_error="Hermes exited with 124",
+            hermes_log_path=str(log_path),
+        )
+        repo.get_generation_request = lambda _: req
+        repo.list_runs = lambda **_kw: [run]
+        repo.get_latest_run_for_request = lambda _: run
+        repo.get_latest_completed_run_for_request = lambda _: None
+        repo.list_sources = lambda _run_id: []
+        repo.list_findings = lambda _run_id: []
+        try:
+            resp = client.get(f"/api/research/requests/{req.id}")
+            self.assertEqual(resp.status_code, 200)
+            latest = resp.json()["latest_run"]
+            self.assertEqual(latest["last_error"], "Hermes exited with 124")
+            self.assertEqual(latest["last_error_category"], "timeout")
+            self.assertTrue(latest["last_error_title"])
+            self.assertTrue(latest["last_error_description"])
+            self.assertTrue(latest["last_error_actions"])
+            self.assertTrue(latest["recoverable"])
+        finally:
+            _close(client)
+
+    def test_non_failed_run_exposes_empty_classification_fields(self):
+        req = _make_request(status="researching")
+        run = _make_run(
+            request_id=req.id,
+            status="running",
+            last_error="Hermes exited with 124",
+        )
+        repo = SimpleNamespace(
+            get_generation_request=lambda _: req,
+            list_runs=lambda **_kw: [run],
+            get_latest_run_for_request=lambda _: run,
+            get_latest_completed_run_for_request=lambda _: None,
+            list_sources=lambda _run_id: [],
+            list_findings=lambda _run_id: [],
+        )
+        client = _client(repo)
+        try:
+            resp = client.get(f"/api/research/requests/{req.id}")
+            self.assertEqual(resp.status_code, 200)
+            latest = resp.json()["latest_run"]
+            self.assertIsNone(latest["last_error_category"])
+            self.assertIsNone(latest["last_error_title"])
+            self.assertIsNone(latest["last_error_description"])
+            self.assertEqual(latest["last_error_actions"], [])
+            self.assertFalse(latest["recoverable"])
+        finally:
+            _close(client)
+
+    def test_failed_run_recoverable_false_for_bad_logs(self):
+        with tempfile.TemporaryDirectory() as outside_dir:
+            cases = [
+                ("missing", None),
+                ("truncated", "header\n--- stdout ---\n{}"),
+                ("non_utf8", b"\xff\xfe--- stdout ---"),
+                ("oversized", b"x" * (10 * 1024 * 1024 + 1)),
+            ]
+            outside_path = Path(outside_dir) / "escape.log"
+            outside_path.write_text("--- stdout ---\n{}\n--- end stdout ---", encoding="utf-8")
+            cases.append(("escape", outside_path))
+
+            for label, writer in cases:
+                with self.subTest(label=label):
+                    req = _make_request(status="failed")
+                    repo = SimpleNamespace()
+                    client = _client(repo)
+                    if isinstance(writer, Path):
+                        stored = str(writer)
+                    else:
+                        root = Path(client._temp.name)  # type: ignore[attr-defined]
+                        path = root / "work" / "research" / "logs" / f"{label}.log"
+                        if writer is None:
+                            stored = str(path)
+                        elif isinstance(writer, bytes):
+                            path.write_bytes(writer)
+                            stored = str(path)
+                        else:
+                            path.write_text(writer, encoding="utf-8")
+                            stored = str(path)
+                    run = _make_run(
+                        request_id=req.id,
+                        status="failed",
+                        last_error="lease expired",
+                        hermes_log_path=stored,
+                    )
+                    repo.get_generation_request = lambda _: req
+                    repo.list_runs = lambda **_kw: [run]
+                    repo.get_latest_run_for_request = lambda _: run
+                    repo.get_latest_completed_run_for_request = lambda _: None
+                    repo.list_sources = lambda _run_id: []
+                    repo.list_findings = lambda _run_id: []
+                    try:
+                        resp = client.get(f"/api/research/requests/{req.id}")
+                        self.assertEqual(resp.status_code, 200)
+                        self.assertFalse(resp.json()["latest_run"]["recoverable"])
+                    finally:
+                        _close(client)
+
 
 # ---------------------------------------------------------------------------
 # 10.7 GET /api/research/runs
@@ -435,7 +548,10 @@ class RequestDetailEndpointTests(unittest.TestCase):
 
 class RunsListEndpointTests(unittest.TestCase):
     def test_returns_runs_joined_with_category(self):
-        run = _make_run(status="running")
+        run = _make_run(
+            status="failed",
+            last_error="profile_not_bound",
+        )
         # Spec 10.7: real SQL JOIN — endpoint uses list_runs_with_category
         # which returns [(ResearchRun, category)] tuples, no extra get calls.
         repo = SimpleNamespace(
@@ -443,13 +559,15 @@ class RunsListEndpointTests(unittest.TestCase):
         )
         client = _client(repo)
         try:
-            resp = client.get("/api/research/runs?status=running")
+            resp = client.get("/api/research/runs?status=failed")
             self.assertEqual(resp.status_code, 200)
             payload = resp.json()
             self.assertEqual(len(payload), 1)
             self.assertEqual(payload[0]["id"], str(run.id))
-            self.assertEqual(payload[0]["status"], "running")
+            self.assertEqual(payload[0]["status"], "failed")
             self.assertEqual(payload[0]["category"], "web")
+            self.assertEqual(payload[0]["last_error_category"], "binding")
+            self.assertFalse(payload[0]["recoverable"])
         finally:
             _close(client)
 
@@ -737,6 +855,11 @@ class SubmitRequestEndpointTests(unittest.TestCase):
             self.assertEqual(payload["request"]["display_status"], "queued")
             self.assertEqual(payload["latest_run"]["id"], str(run.id))
             self.assertEqual(payload["latest_run"]["status"], "queued")
+            self.assertIsNone(payload["latest_run"]["last_error_category"])
+            self.assertIsNone(payload["latest_run"]["last_error_title"])
+            self.assertIsNone(payload["latest_run"]["last_error_description"])
+            self.assertEqual(payload["latest_run"]["last_error_actions"], [])
+            self.assertFalse(payload["latest_run"]["recoverable"])
             self.assertNotIn("request_id", payload)
             self.assertNotIn("run_id", payload)
             # 中文注释：seed_urls 与 distribution 必须原样进入 service。

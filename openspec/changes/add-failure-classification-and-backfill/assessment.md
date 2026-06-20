@@ -137,3 +137,19 @@ completed run 是否保留 `last_error` 与既有状态机互相冲突。
   展示具体错误，不得把按钮文案表述为必然成功。
 - 本提案没有持久化操作审计。若合规要求需要“谁在何时恢复了什么”，必须新增审计表
   与操作员身份体系，不能用 server log 冒充强审计。
+
+## 2026-06-21 当前实现复评增量整改
+
+本轮重新对照当前代码（`src/services/research_job_service.py`、`src/services/research_agent_executor.py`、`src/web/research_endpoints.py`、`src/web/static/js/views/research-requests.js`、`src/cli.py`）后，继续按评审-分析-整改跑满 10 轮以上，并把会影响实现落地的题案问题直接修正到 proposal/spec/tasks：
+
+1. **测试文件名漂移**：任务与 proposal 写 `tests/app/test_research_endpoints.py`，当前仓库没有该文件；已改为 `tests/app/test_research_api.py`。
+2. **DTO serializer 路径依赖不明确**：`recoverable` 需要 `paths.research_logs`，而当前 `_run_dict()` 没有 paths；已要求调用方显式传入 `ProjectPaths` / app paths，禁止 serializer 内隐式 discover。
+3. **旧前端错误翻译残留**：当前 alert 使用 `researchErrorMessage(latest.last_error)`；已要求新 alert 不再用前端函数推导分类文案，只消费 API title/description/actions。
+4. **HTTP surface 描述过宽**：spec 暗示存在 run detail endpoint；当前只有 request detail、submit response 和 `/api/research/runs` 列表；已改成实际 surfaces 与“未来 run view”。
+5. **批处理枚举可能被 `limit=100` 截断**：当前 `ResearchRepository.list_runs()` 默认上限 100；已要求 `--all-recoverable` 使用专用分页/流式枚举，不能继承默认 cap。
+6. **自动 rescue 日志安全边界漂移**：当前 `_try_rescue_from_log` 直接信任 `hermes_log_path` 并整文件读取；已要求 recoverable、manual backfill、lease-rescue 共用 safe-log helper。
+7. **taxonomy 覆盖不足**：当前 parser 会产生 `source field ...`、`finding source_indices ...`、`source index ... out of range`；已加入 field_validation 场景。
+8. **executor 失败文本遗漏**：当前 executor 会写 `Hermes profile ... does not exist` 与 `generation_request ... does not exist`；已补充 binding/runtime 分类场景。
+9. **HTTP 错误体协议矛盾**：spec 同时要求顶层 `{code,detail}` 和 FastAPI 默认 validation；已改为 backfill endpoint 对畸形请求也返回 `invalid_request` 422 顶层错误体。
+10. **tasks 未同步错误协议**：已把 5.6 改成明确断言畸形请求使用 `invalid_request`，并测试顶层错误体。
+11. **commit 失败补偿边界不清**：当前 staged completion 需要手动 session/commit 才能捕获 promote 后 commit 异常；已要求 backfill apply 使用同级手动 session 边界。

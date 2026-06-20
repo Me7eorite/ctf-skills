@@ -61,6 +61,8 @@
 **选择**：所有 run serializer 复用 `_is_run_recoverable`。它只对 `failed` run 执行，
 并通过统一 safe-log helper 检查：路径 resolve 后位于 `paths.research_logs` 下、是普通文件、
 不超过 10 MiB、可按 UTF-8 读取，且包含一对有序 stdout markers。
+同一个 safe-log helper 也要替换现有 `_try_rescue_from_log` 的直接 `Path.read_text`，否则自动
+lease-rescue 与手工 backfill 会对同一 `hermes_log_path` 采用不同安全边界。
 
 **理由**：
 - 不做完整 `_parse_research_output`——把 JSON 解析 + quality gate 留给"点击预览"那一步。

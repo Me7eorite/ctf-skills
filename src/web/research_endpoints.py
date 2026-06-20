@@ -18,12 +18,19 @@ from uuid import UUID
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 
+from core.paths import ProjectPaths
 from domain import challenge_designs as challenge_dto
 from domain import design_tasks as design_dto
 from domain import research as dto
 from domain.design_task_validators import DesignTaskValidationError
 from domain.research import GenerationRequestStatus, ResearchRunStatus
+from domain.research_failure_taxonomy import classify_last_error
 from domain.research_validators import ResearchValidationError, validate_runtime_constraints
+from services.research_log_utils import (
+    SafeResearchLogError,
+    has_ordered_stdout_markers,
+    read_safe_research_log,
+)
 
 
 def register_research_endpoints(app: FastAPI, worker_manager=None) -> None:
@@ -410,7 +417,11 @@ def _register_request_submit(app: FastAPI) -> None:
         return JSONResponse(
             {
                 "request": _request_dict(generation_request, latest_run=run),
-                "latest_run": _run_dict(run, category=generation_request.category),
+                "latest_run": _run_dict(
+                    run,
+                    category=generation_request.category,
+                    paths=_project_paths(app),
+                ),
             },
             status_code=HTTPStatus.CREATED
             if getattr(service, "last_submit_created", True)
@@ -509,16 +520,24 @@ def _register_request_detail(app: FastAPI) -> None:
         return JSONResponse(
             {
                 "request": _request_dict(request, latest_run=latest),
-                "latest_run": _run_dict(latest, category=request.category)
+                "latest_run": _run_dict(
+                    latest,
+                    category=request.category,
+                    paths=_project_paths(app),
+                )
                 if latest is not None
                 else None,
                 "latest_completed_run": _run_dict(
                     latest_completed,
                     category=request.category,
+                    paths=_project_paths(app),
                 )
                 if latest_completed is not None
                 else None,
-                "runs": [_run_dict(r, category=request.category) for r in runs],
+                "runs": [
+                    _run_dict(r, category=request.category, paths=_project_paths(app))
+                    for r in runs
+                ],
                 "sources": [_source_dict(s) for s in sources],
                 "findings_by_kind": findings_by_kind,
                 "design_tasks_summary": design_tasks_summary,
@@ -609,7 +628,10 @@ def _register_runs_list(app: FastAPI) -> None:
             )
 
         return JSONResponse(
-            [_run_dict(run, category=category) for run, category in rows]
+            [
+                _run_dict(run, category=category, paths=_project_paths(app))
+                for run, category in rows
+            ]
         )
 
 
@@ -745,8 +767,14 @@ def _request_dict(
     }
 
 
-def _run_dict(run: dto.ResearchRun, *, category: str | None = None) -> dict[str, Any]:
-    return {
+def _run_dict(
+    run: dto.ResearchRun,
+    *,
+    category: str | None = None,
+    paths: ProjectPaths,
+) -> dict[str, Any]:
+    failure = _failure_fields(run, paths)
+    row = {
         "id": str(run.id),
         "generation_request_id": str(run.generation_request_id),
         "parent_run_id": str(run.parent_run_id) if run.parent_run_id else None,
@@ -765,6 +793,37 @@ def _run_dict(run: dto.ResearchRun, *, category: str | None = None) -> dict[str,
         "created_at": _isofmt(run.created_at),
         "category": category,
     }
+    row.update(failure)
+    return row
+
+
+def _failure_fields(run: dto.ResearchRun, paths: ProjectPaths) -> dict[str, Any]:
+    if run.status != "failed":
+        return {
+            "last_error_category": None,
+            "last_error_title": None,
+            "last_error_description": None,
+            "last_error_actions": [],
+            "recoverable": False,
+        }
+    classification = classify_last_error(run.last_error)
+    return {
+        "last_error_category": classification.category,
+        "last_error_title": classification.title,
+        "last_error_description": classification.description,
+        "last_error_actions": list(classification.actions),
+        "recoverable": _is_run_recoverable(run, paths),
+    }
+
+
+def _is_run_recoverable(run: dto.ResearchRun, paths: ProjectPaths) -> bool:
+    if run.status != "failed":
+        return False
+    try:
+        safe_log = read_safe_research_log(paths, run.hermes_log_path)
+    except SafeResearchLogError:
+        return False
+    return has_ordered_stdout_markers(safe_log.text)
 
 
 def _source_dict(source: dto.ResearchSource) -> dict[str, Any]:

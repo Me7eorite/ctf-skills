@@ -33,6 +33,6 @@
 
 - 新增模块：`src/domain/research_failure_taxonomy.py`、`src/services/research_backfill_service.py`、`src/web/static/js/ui/backfill-dialog.js`。
 - 修改：`src/web/research_endpoints.py`（DTO 字段 + 新 POST 端点）、`src/services/research_job_service.py`（抽 `_persist_rescue_payload`）、`src/services/research_agent_executor.py` 间接复用、`src/web/static/js/views/research-requests.js`（alert 重渲染 + 历史表列）、`src/web/static/css/views/research-requests.css`、`src/cli.py`（精简 `research backfill` 子命令）。
-- 测试：`tests/app/test_research_failure_taxonomy.py`（单测）、`tests/app/test_research_endpoints.py`（扩展字段断言）、`tests/app/test_research_backfill_service.py`（PG 集成）、`tests/app/test_research_backfill_cli.py`（CLI）、`tests/app/test_research_requests_ui.py`（静态契约扩展）。
+- 测试：`tests/app/test_research_failure_taxonomy.py`（单测）、`tests/app/test_research_api.py`（扩展字段断言）、`tests/app/test_research_backfill_service.py`（PG 集成）、`tests/app/test_research_backfill_cli.py`（CLI）、`tests/app/test_research_requests_ui.py`（静态契约扩展）。
 - 数据库：**无迁移**——分类是纯派生，backfill 复用现有 sources/findings/runs 表。
 - 向后兼容：所有新 DTO 字段都是增量派生字段；旧 API 端点签名不变；新增 CLI 子命令不改变既有命令。

@@ -19,7 +19,7 @@ The system SHALL provide `ResearchBackfillService.preview(run_id)`. It SHALL rea
 
 ### Requirement: Backfill has stable eligibility and error semantics
 
-The service and endpoint SHALL use these stable codes/statuses: `run_not_found` (404); `already_completed`, `run_not_terminal`, `superseded_run`, `active_sibling_run`, `already_has_results`, and `preview_stale` (409); `no_log_file`, `unsafe_log_path`, `log_too_large`, `log_unreadable`, `parse_failed`, and `quality_gate_failed` (422). Every HTTP error body MUST be the top-level JSON object `{"code": <code>, "detail": <string>}`.
+The service and endpoint SHALL use these stable codes/statuses: `run_not_found` (404); `already_completed`, `run_not_terminal`, `superseded_run`, `active_sibling_run`, `already_has_results`, and `preview_stale` (409); `invalid_request`, `no_log_file`, `unsafe_log_path`, `log_too_large`, `log_unreadable`, `parse_failed`, and `quality_gate_failed` (422). Every HTTP error body from this endpoint, including request-shape validation errors, MUST be the top-level JSON object `{"code": <code>, "detail": <string>}`.
 
 #### Scenario: Missing or completed run is rejected
 
@@ -115,7 +115,7 @@ Apply SHALL only accept a failed run that is the request's highest attempt and h
 #### Scenario: Malformed apply request is rejected before service execution
 
 - **WHEN** apply is missing, an unknown field is present, or confirmed apply omits its digest
-- **THEN** FastAPI returns request validation status 422
+- **THEN** the endpoint returns status 422 with `{"code":"invalid_request","detail":...}`
 - **AND** the service is not called
 
 ### Requirement: UI previews and explicitly confirms candidate recovery
@@ -134,7 +134,7 @@ The dashboard SHALL show "尝试从日志恢复结果" exactly when a failed run
 
 ### Requirement: CLI supports single audit and independent batch recovery
 
-The system SHALL provide `challenge-factory research backfill --run-id <UUID> --dry-run` and `challenge-factory research backfill --all-recoverable --apply`. `--run-id` SHALL accept exactly one UUID. Dry-run MUST print preview without DB/filesystem mutation. Batch apply MUST enumerate failed safe-log candidates, preview each, pass its digest to apply, process each run in its own transaction, continue after per-run failures, and print a final recovered/skipped summary. Single-run apply MUST be rejected at CLI parse time.
+The system SHALL provide `challenge-factory research backfill --run-id <UUID> --dry-run` and `challenge-factory research backfill --all-recoverable --apply`. `--run-id` SHALL accept exactly one UUID. Dry-run MUST print preview without DB/filesystem mutation. Batch apply MUST enumerate all failed safe-log candidates through an unbounded, paginated, or streaming query path that does not inherit the current `list_runs(limit=100)` cap, preview each, pass its digest to apply, process each run in its own transaction, continue after per-run failures, and print a final recovered/skipped summary. Single-run apply MUST be rejected at CLI parse time.
 
 #### Scenario: Batch is independently committable and resumable
 
