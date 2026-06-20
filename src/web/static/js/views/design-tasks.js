@@ -9,7 +9,6 @@ import {
   designErrorMessage,
   designTaskStage,
   designTaskStatusLabel,
-  designTaskStatusMeta,
   designTaskStatusPill,
   difficultyLabel,
   escapeHtml,
@@ -150,7 +149,7 @@ async function poll() {
     render(state.data);
     initIcons();
   } catch (err) {
-    showToast(err.message, true);
+    showToast(designErrorMessage(err.message), true);
   } finally {
     state.poll.loading = false;
     schedulePoll(needsActivePolling() ? ACTIVE_POLL_MS : SETTLED_POLL_MS);
@@ -216,7 +215,7 @@ async function buildTaskNow(taskId) {
       await reloadList();
     }
   } catch (err) {
-    showToast(err.message, true);
+    showToast(designErrorMessage(err.message), true);
   } finally {
     state.flags.building = { ...(state.flags.building || {}), [taskId]: false };
     render(state.data);
@@ -244,7 +243,7 @@ async function buildSelectedTasks() {
       : "";
     window.location.hash = `#/build-attempts${suffix}`;
   } catch (err) {
-    showToast(err.message, true);
+    showToast(designErrorMessage(err.message), true);
   } finally {
     state.flags.bulkBuild = false;
     render(state.data);
@@ -272,7 +271,7 @@ async function deleteDesignTask(taskId) {
     state.list = null;
     await ensureList();
   } catch (err) {
-    showToast(err.message, true);
+    showToast(designErrorMessage(err.message), true);
   } finally {
     state.flags.deleting = false;
     render(state.data);
@@ -635,7 +634,7 @@ function renderTaskProgress(task) {
   const failed = ["failed", "build_failed"].includes(task.status);
   return `
     <div class="dt-progress" title="${escapeHtml(designTaskStatusLabel(task.status))}">
-      ${["规划", "设计", "构建"].map((label, index) => `<span class="${index < stageIndex ? "done" : index === stageIndex ? (failed ? "failed" : "active") : ""}"><i></i>${label}</span>`).join("")}
+      <div class="dt-progress-stages">${["规划", "设计", "构建"].map((label, index) => `<span class="${index < stageIndex ? "done" : index === stageIndex ? (failed ? "failed" : "active") : ""}"><i></i>${label}</span>`).join("")}</div>
       ${designTaskStatusPill(task.status)}
     </div>
   `;

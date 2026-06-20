@@ -1,0 +1,535 @@
+/* === 题目设计列表 === */
+
+.dt-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-lg);
+  margin-bottom: var(--space-lg);
+}
+
+.dt-page-title {
+  color: var(--ink-900);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.dt-page-desc {
+  margin-top: 4px;
+  color: var(--ink-500);
+  font-size: var(--font-sm);
+}
+
+.dt-context-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  margin-bottom: var(--space-md);
+  padding: 10px var(--space-md);
+  border: 1px solid var(--brand-200);
+  border-radius: var(--radius-md);
+  background: var(--brand-50);
+  color: var(--ink-700);
+  font-size: var(--font-sm);
+}
+
+.dt-context-banner > div {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.dt-context-banner svg {
+  width: 15px;
+  height: 15px;
+  color: var(--brand-600);
+}
+
+.dt-context-banner code {
+  font-family: var(--font-mono-family);
+  color: var(--brand-700);
+}
+
+.dt-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-md);
+  margin-bottom: var(--space-lg);
+}
+
+.dt-metric {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: 13px var(--space-md);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+
+.dt-metric > svg {
+  width: 18px;
+  height: 18px;
+  padding: 7px;
+  box-sizing: content-box;
+  border-radius: var(--radius-md);
+  background: var(--ink-100);
+  color: var(--ink-600);
+}
+
+.dt-metric > div {
+  display: grid;
+  gap: 1px;
+}
+
+.dt-metric strong {
+  color: var(--ink-900);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.dt-metric span {
+  color: var(--ink-500);
+  font-size: var(--font-xs);
+}
+
+.dt-metric-warning > svg { background: var(--accent-amber-50); color: var(--accent-amber); }
+.dt-metric-success > svg { background: var(--accent-green-50); color: var(--accent-green); }
+.dt-metric-danger > svg { background: var(--accent-red-50); color: var(--accent-red); }
+
+.dt-list-card .filter-bar {
+  border-bottom: 1px solid var(--line);
+}
+
+.dt-filters {
+  padding: var(--space-md) var(--space-lg);
+}
+
+.dt-table-wrap {
+  border: 0;
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+
+.dt-table {
+  min-width: 940px;
+}
+
+.dt-select-col {
+  width: 42px;
+}
+
+.dt-task-link {
+  display: block;
+  max-width: 280px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink-900);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dt-task-link:hover {
+  color: var(--brand-600);
+}
+
+.dt-task-meta,
+.dt-category-difficulty,
+.dt-evidence-count {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.dt-task-meta {
+  margin-top: 4px;
+  color: var(--ink-400);
+  font-size: var(--font-xs);
+}
+
+.dt-category-difficulty > span:last-child {
+  color: var(--ink-600);
+  font-size: var(--font-sm);
+}
+
+.dt-technique {
+  max-width: 190px;
+  color: var(--ink-700);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dt-evidence-count strong {
+  color: var(--ink-900);
+}
+
+.dt-evidence-count span {
+  color: var(--ink-500);
+  font-size: var(--font-xs);
+}
+
+.dt-progress {
+  display: grid;
+  gap: 6px;
+  min-width: 185px;
+}
+
+.dt-progress-stages {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.dt-progress-stages span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-400);
+  font-size: 10px;
+}
+
+.dt-progress-stages i {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: currentColor;
+}
+
+.dt-progress-stages .active { color: var(--brand-600); }
+.dt-progress-stages .done { color: var(--accent-green); }
+.dt-progress-stages .failed { color: var(--accent-red); }
+
+.dt-row-actions,
+.design-task-actions {
+  width: max-content;
+}
+
+.design-task-actions {
+  flex-wrap: nowrap;
+}
+
+.dt-bulk-bar {
+  position: sticky;
+  bottom: var(--space-md);
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-lg);
+  width: min(620px, calc(100% - 32px));
+  margin: var(--space-md) auto 0;
+  padding: 10px var(--space-md);
+  border: 1px solid var(--brand-200);
+  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: var(--shadow-elevated);
+  color: var(--ink-700);
+  font-size: var(--font-sm);
+}
+
+/* === 题目设计详情 === */
+
+.dt-back {
+  margin: -6px 0 var(--space-md) -10px;
+  color: var(--ink-500);
+}
+
+.dt-hero {
+  --dt-accent: var(--ink-600);
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-lg);
+  margin-bottom: var(--space-lg);
+  padding: var(--space-md) 18px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--dt-accent);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+
+.dt-hero-plan { --dt-accent: var(--ink-400); }
+.dt-hero-design { --dt-accent: var(--brand-600); }
+.dt-hero-build { --dt-accent: var(--accent-green); }
+
+.dt-hero-main {
+  min-width: 0;
+}
+
+.dt-hero-badges,
+.dt-hero-actions,
+.dt-hero-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+}
+
+.dt-hero h2 {
+  margin-top: 9px;
+  color: var(--ink-900);
+  font-size: clamp(20px, 2.4vw, 26px);
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+}
+
+.dt-hero-meta {
+  margin-top: 7px;
+  color: var(--ink-500);
+  font-size: var(--font-sm);
+}
+
+.dt-detail-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 290px;
+  gap: var(--space-xl);
+  align-items: start;
+}
+
+.dt-detail-main {
+  min-width: 0;
+}
+
+.dt-detail-side {
+  display: grid;
+  gap: var(--space-md);
+  position: sticky;
+  top: calc(var(--header-h) + var(--space-xl));
+}
+
+.dt-section-card + .dt-section-card {
+  margin-top: var(--space-lg);
+}
+
+.dt-brief-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-lg);
+  padding: var(--space-lg);
+}
+
+.dt-brief-grid > div {
+  min-width: 0;
+}
+
+.dt-brief-grid span,
+.dt-design-overview span {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--ink-400);
+  font-size: var(--font-xs);
+}
+
+.dt-brief-grid p,
+.dt-design-overview p {
+  color: var(--ink-700);
+  font-size: var(--font-md);
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.dt-brief-grid strong {
+  color: var(--ink-800);
+  font-size: var(--font-md);
+}
+
+.dt-brief-wide,
+.dt-design-wide {
+  grid-column: 1 / -1;
+}
+
+.dt-chip-list {
+  display: flex;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+}
+
+.dt-chip-list span {
+  margin: 0;
+  padding: 5px 9px;
+  border-radius: var(--radius-md);
+  background: var(--ink-50);
+  color: var(--ink-700);
+}
+
+.dt-evidence {
+  display: grid;
+  gap: var(--space-md);
+  padding: var(--space-lg);
+}
+
+.dt-evidence p {
+  color: var(--ink-700);
+  font-size: var(--font-md);
+  line-height: 1.65;
+}
+
+.dt-evidence .btn {
+  justify-self: start;
+}
+
+.design-summary {
+  display: grid;
+  gap: var(--space-md);
+}
+
+.dt-design-overview {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(160px, 0.35fr);
+  gap: var(--space-lg);
+}
+
+.dt-design-overview code {
+  color: var(--ink-800);
+  font-family: var(--font-mono-family);
+  font-size: var(--font-sm);
+}
+
+.design-json {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.design-json summary {
+  cursor: pointer;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--ink-50);
+  color: var(--ink-600);
+  font-size: var(--font-sm);
+  font-weight: 600;
+}
+
+.json-tree {
+  display: grid;
+  gap: 6px;
+  padding: var(--space-sm) var(--space-md);
+  color: var(--ink-700);
+  font-family: var(--font-mono-family);
+  font-size: var(--font-mono);
+}
+
+.json-list {
+  padding-left: var(--space-xl);
+}
+
+.json-pair {
+  display: grid;
+  grid-template-columns: minmax(90px, 180px) minmax(0, 1fr);
+  gap: var(--space-sm);
+}
+
+.json-pair dt {
+  color: var(--ink-500);
+  overflow-wrap: anywhere;
+}
+
+.json-pair dd,
+.json-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.dt-attempt-error {
+  max-width: 280px;
+  color: var(--ink-600);
+  font-size: var(--font-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dt-task-summary,
+.dt-related-actions {
+  padding: var(--space-lg);
+}
+
+.dt-side-title {
+  margin-bottom: var(--space-md);
+  color: var(--ink-900);
+  font-size: var(--font-md);
+  font-weight: 600;
+}
+
+.dt-task-summary dl {
+  display: grid;
+}
+
+.dt-task-summary dl > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding: 9px 0;
+  border-top: 1px solid var(--ink-100);
+  font-size: var(--font-sm);
+}
+
+.dt-task-summary dt { color: var(--ink-500); }
+.dt-task-summary dd { color: var(--ink-800); font-weight: 600; text-align: right; }
+
+.dt-related-actions {
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.dt-related-actions .dt-side-title {
+  margin-bottom: var(--space-xs);
+}
+
+.dt-related-actions .btn {
+  justify-content: flex-start;
+}
+
+@media (max-width: 1199px) {
+  .dt-detail-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .dt-detail-side {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    position: static;
+  }
+}
+
+@media (max-width: 767px) {
+  .dt-page-header,
+  .dt-context-banner,
+  .dt-hero,
+  .dt-bulk-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .dt-summary-grid,
+  .dt-brief-grid,
+  .dt-design-overview,
+  .dt-detail-side,
+  .json-pair {
+    grid-template-columns: 1fr;
+  }
+
+  .dt-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dt-hero-actions .btn,
+  .dt-bulk-bar {
+    width: 100%;
+  }
+
+  .dt-context-banner > div {
+    flex-wrap: wrap;
+  }
+}

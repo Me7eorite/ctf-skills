@@ -9,7 +9,7 @@ export function escapeHtml(value) {
 export const categoryMeta = {
   web: { label: "Web", tone: "text-cyan-700 bg-cyan-50" },
   pwn: { label: "Pwn", tone: "text-rose-700 bg-rose-50" },
-  re:  { label: "Reverse", tone: "text-amber-700 bg-amber-50" },
+  re:  { label: "RE", tone: "text-amber-700 bg-amber-50" },
 };
 
 export function categoryLabel(code) {
