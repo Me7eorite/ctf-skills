@@ -2,7 +2,6 @@
 
 - [ ] 0.1 用 `rg` 盘点所有 `last_error` 写入点和 `ResearchValidationError` 文本，形成可提交的 taxonomy fixture；生产样本只能作为补充，不得成为测试依赖。
 - [ ] 0.2 记录现有 `_parse_research_output` 的 staging 写副作用、`_apply_run_completed` 的终态不变量以及 transaction helper 的 commit 边界。
-- [ ] 0.3 如部署环境可用，可选导出 failed run 候选数量作上线对照；不得把固定 UUID、日志路径或 lab DB 作为实现前置条件。
 
 ## 1. R1 — 失败原因分类 taxonomy（后端纯函数 + 单测）
 

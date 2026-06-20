@@ -63,7 +63,7 @@ The service and endpoint SHALL use these stable codes/statuses: `run_not_found` 
 
 ### Requirement: Apply is bound to the previewed log bytes
 
-The system SHALL provide `ResearchBackfillService.apply(run_id, expected_log_sha256)`. Preview SHALL compute SHA-256 over the exact validated log bytes. Apply SHALL require that lowercase 64-hex digest, re-read the safe log while holding the apply lock, and compare before any materialization or write. A missing/malformed digest SHALL fail request validation with HTTP 422; a mismatch SHALL return `preview_stale` 409.
+The system SHALL provide `ResearchBackfillService.apply(run_id, expected_log_sha256)`. Preview SHALL compute SHA-256 over the exact validated log bytes. Apply SHALL require that lowercase 64-hex digest, re-read the safe log while holding the apply lock, and compare **before parsing, materialization, or any DB write**; mismatch SHALL return `preview_stale` 409 without consuming further CPU on parsing. A missing/malformed digest SHALL fail request validation with HTTP 422.
 
 #### Scenario: Log changes after preview
 

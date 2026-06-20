@@ -64,9 +64,10 @@ The system SHALL include five derived fields on every research run DTO returned 
 - **WHEN** a client requests `/api/research/requests/{id}` for a request whose `latest_run.status` is `failed` and `last_error` is `"Hermes exited with 124"`
 - **THEN** the response's `latest_run.last_error_category` equals `"timeout"`, `latest_run.last_error_title` is a non-empty Chinese string, and `latest_run.last_error` keeps the original raw value
 
-#### Scenario: Completed run has null classification fields
-- **WHEN** a client requests `/api/research/requests/{id}` for a request whose `latest_run.status` is `completed`
-- **THEN** the response's `latest_run.last_error_category`, `last_error_title`, and
+#### Scenario: Non-failed run has null classification fields
+- **GIVEN** the run's `status` is any of `queued`, `running`, or `completed`
+- **WHEN** a client requests `/api/research/requests/{id}` or any other run view
+- **THEN** the response's `last_error_category`, `last_error_title`, and
   `last_error_description` are `null`, `last_error_actions` is `[]`, and `recoverable` is `false`
 
 ### Requirement: `recoverable` flag is lazily computed from filesystem state
