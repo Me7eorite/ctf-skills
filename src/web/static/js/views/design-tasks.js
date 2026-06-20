@@ -617,6 +617,71 @@ function qualityGatePill(passed) {
   );
 }
 
+function summarizeTaskStages(rows) {
+  return {
+    pendingDesign: rows.filter((task) => ["draft", "queued", "designing"].includes(task.status)).length,
+    readyBuild: rows.filter((task) => task.status === "designed").length,
+    failed: rows.filter((task) => ["failed", "build_failed"].includes(task.status)).length,
+  };
+}
+
+function renderStageMetric(label, value, icon, tone) {
+  return `<div class="dt-metric dt-metric-${tone}"><i data-lucide="${icon}"></i><div><strong>${value}</strong><span>${label}</span></div></div>`;
+}
+
+function renderTaskProgress(task) {
+  const stage = designTaskStage(task.status);
+  const stageIndex = { plan: 0, design: 1, build: 2 }[stage] || 0;
+  const failed = ["failed", "build_failed"].includes(task.status);
+  return `
+    <div class="dt-progress" title="${escapeHtml(designTaskStatusLabel(task.status))}">
+      ${["规划", "设计", "构建"].map((label, index) => `<span class="${index < stageIndex ? "done" : index === stageIndex ? (failed ? "failed" : "active") : ""}"><i></i>${label}</span>`).join("")}
+      ${designTaskStatusPill(task.status)}
+    </div>
+  `;
+}
+
+function renderDetailPrimaryAction(task, isDesigning, isBuilding) {
+  if (task.status === "draft") {
+    return `<button class="btn btn-primary dt-queue"><i data-lucide="send"></i>提交设计</button>`;
+  }
+  if (task.status === "queued") {
+    return `<button class="btn btn-primary dt-design${isDesigning ? " btn-loading" : ""}"${isDesigning ? " disabled" : ""}><i data-lucide="sparkles"></i>开始设计</button>`;
+  }
+  if (task.status === "designing") {
+    return `<button class="btn btn-secondary" disabled><i data-lucide="loader-circle"></i>设计执行中</button>`;
+  }
+  if (eligibleForBuild(task)) {
+    return `<button class="btn btn-primary dt-build${isBuilding ? " btn-loading" : ""}"${isBuilding ? " disabled" : ""}><i data-lucide="hammer"></i>${task.status === "build_failed" ? "重试构建" : "开始构建"}</button>`;
+  }
+  if (["building", "built"].includes(task.status)) {
+    return `<button class="btn btn-primary dt-open-builds"><i data-lucide="hammer"></i>${task.status === "built" ? "查看题目" : "查看构建"}</button>`;
+  }
+  return `<button class="btn btn-secondary" disabled>${escapeHtml(designTaskStatusLabel(task.status))}</button>`;
+}
+
+function renderConstraintChips(constraints) {
+  const entries = Object.entries(constraints || {});
+  if (!entries.length) return `<p>未设置额外约束</p>`;
+  return `<div class="dt-chip-list">${entries.map(([key, value]) => `<span>${escapeHtml(key)}：${escapeHtml(typeof value === "object" ? JSON.stringify(value) : value)}</span>`).join("")}</div>`;
+}
+
+function renderTaskSummary(task, latestAttempt, latestDesign, attemptCount) {
+  return `
+    <section class="card dt-task-summary">
+      <div class="dt-side-title">任务摘要</div>
+      <dl>
+        <div><dt>当前状态</dt><dd>${designTaskStatusPill(task.status)}</dd></div>
+        <div><dt>所属需求</dt><dd class="mono">${escapeHtml(shortId(task.generation_request_id))}</dd></div>
+        <div><dt>研究引用</dt><dd>${(task.finding_ids || []).length} 条</dd></div>
+        <div><dt>设计尝试</dt><dd>${attemptCount} 次</dd></div>
+        <div><dt>最近尝试</dt><dd>${latestAttempt ? escapeHtml(runStatusLabel(latestAttempt.status)) : "暂无"}</dd></div>
+        <div><dt>质量检查</dt><dd>${latestDesign ? (latestDesign.quality_gate_passed ? "已通过" : "未通过") : "未执行"}</dd></div>
+      </dl>
+    </section>
+  `;
+}
+
 function eligibleForBuild(task) {
   return task?.status === "designed" || task?.status === "build_failed";
 }
@@ -677,6 +742,22 @@ export function bind() {
       state.filters = { generation_request_id: "", status: "", category: "" };
       state.selected.clear();
       state.list = null;
+      render(state.data);
+      return;
+    }
+    if (event.target.closest("#dt-clear-request-filter")) {
+      state.filters.generation_request_id = "";
+      state.selected.clear();
+      state.list = null;
+      render(state.data);
+      return;
+    }
+    if (event.target.closest(".dt-open-request-context")) {
+      openRequest(state.filters.generation_request_id);
+      return;
+    }
+    if (event.target.closest("#dt-clear-selection")) {
+      state.selected.clear();
       render(state.data);
       return;
     }
