@@ -9,6 +9,7 @@ handler opens its own short persistence transaction.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from http import HTTPStatus
 from pathlib import Path
@@ -46,6 +47,7 @@ def register_research_endpoints(app: FastAPI, worker_manager=None) -> None:
     _register_requests_list(app)
     _register_request_submit(app)
     _register_request_detail(app)
+    _register_run_backfill(app)
     _register_runs_list(app)
     _register_queue_stats(app)
     _register_bindings_list(app)
@@ -578,6 +580,89 @@ def _register_request_detail(app: FastAPI) -> None:
                 detail=str(exc),
             ) from exc
         return JSONResponse(result.to_dict())
+
+
+def _register_run_backfill(app: FastAPI) -> None:
+    @app.post("/api/research/runs/{run_id}/backfill")
+    async def backfill_run(run_id: str, request: Request) -> JSONResponse:
+        from services.research_backfill_service import (
+            ResearchBackfillError,
+            ResearchBackfillService,
+            preview_dict,
+            result_dict,
+        )
+
+        try:
+            run_uuid = UUID(run_id)
+        except ValueError:
+            return _backfill_error("run_not_found", "research run not found", HTTPStatus.NOT_FOUND)
+
+        try:
+            payload = await request.json()
+        except ValueError:
+            return _backfill_error(
+                "invalid_request",
+                "request body must be JSON",
+                HTTPStatus.UNPROCESSABLE_ENTITY,
+            )
+        try:
+            apply_requested, expected_digest = _parse_backfill_request(payload)
+        except ValueError as exc:
+            return _backfill_error("invalid_request", str(exc), HTTPStatus.UNPROCESSABLE_ENTITY)
+
+        try:
+            service = ResearchBackfillService(paths=_project_paths(app))
+            if apply_requested:
+                result = service.apply(run_uuid, expected_digest or "")
+                return JSONResponse(result_dict(result))
+            preview = service.preview(run_uuid)
+            return JSONResponse(preview_dict(preview))
+        except ResearchBackfillError as exc:
+            return _backfill_error(exc.code, exc.detail, _backfill_status(exc.code))
+
+
+def _parse_backfill_request(payload: Any) -> tuple[bool, str | None]:
+    if not isinstance(payload, dict):
+        raise ValueError("request body must be an object")
+    allowed = {"apply", "expected_log_sha256"}
+    extra = sorted(set(payload) - allowed)
+    if extra:
+        raise ValueError(f"unknown field(s): {extra}")
+    if "apply" not in payload:
+        raise ValueError("field 'apply' is required")
+    apply_requested = payload["apply"]
+    if not isinstance(apply_requested, bool):
+        raise ValueError("field 'apply' must be a boolean")
+    digest = payload.get("expected_log_sha256")
+    if apply_requested:
+        if not isinstance(digest, str):
+            raise ValueError("expected_log_sha256 is required for apply=true")
+        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ValueError("expected_log_sha256 must be 64 lowercase hex characters")
+        return True, digest
+    if "expected_log_sha256" in payload:
+        raise ValueError("expected_log_sha256 must be absent for apply=false")
+    return False, None
+
+
+def _backfill_status(code: str) -> HTTPStatus:
+    if code == "run_not_found":
+        return HTTPStatus.NOT_FOUND
+    if code in {
+        "invalid_request",
+        "no_log_file",
+        "unsafe_log_path",
+        "log_too_large",
+        "log_unreadable",
+        "parse_failed",
+        "quality_gate_failed",
+    }:
+        return HTTPStatus.UNPROCESSABLE_ENTITY
+    return HTTPStatus.CONFLICT
+
+
+def _backfill_error(code: str, detail: str, status: int | HTTPStatus) -> JSONResponse:
+    return JSONResponse({"code": code, "detail": detail}, status_code=status)
 
 
 # ---------------------------------------------------------------------------

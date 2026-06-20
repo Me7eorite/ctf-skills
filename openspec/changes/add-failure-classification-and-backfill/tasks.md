@@ -36,13 +36,13 @@
 
 ## 5. R5 — `ResearchBackfillService` + 新 API 端点
 
-- [ ] 5.1 新建 `src/services/research_backfill_service.py`：定义 `BackfillPreview` 与 `BackfillResult` dataclass，类 `ResearchBackfillService(paths, repository_factory=None)`。
-- [ ] 5.2 实现纯读 `preview(run_id)`：完整资格、安全日志、解析/质量门；返回 projected fields + `log_sha256`，不写 DB/FS。
-- [ ] 5.3 实现 `apply(run_id, expected_log_sha256)`：使用与 `complete_run_with_staged_results()` 同级的手动 session/commit 边界，以便捕获 commit 失败并补偿 final 文件；在同一事务先用 UUID bytes 的稳定 signed-64 key 取 advisory lock（禁止 Python `hash()`），再 `SELECT FOR UPDATE` 重判资格、摘要与结果计数。
-- [ ] 5.4 资格要求 failed + 最高 attempt + 无其他 queued/running/completed sibling + 无既有结果；分别映射 `run_not_terminal`、`superseded_run`、`active_sibling_run`、`already_has_results`。
-- [ ] 5.5 apply 执行 materialize、共享 persist、flush、promote、commit；所有失败按阶段清理 staging/final，并写结构化成功/失败日志。
-- [ ] 5.6 API 请求模型要求 `apply`、拒绝 extra；confirmed apply 强制 64-hex digest；包括畸形请求在内的 backfill endpoint 错误都显式返回顶层 `{code,detail}`，畸形请求使用 `invalid_request` 422。
-- [ ] 5.7 服务/endpoint 测试覆盖 happy path、纯 preview、running/superseded/active sibling、路径逃逸/超限/非 UTF-8、stale digest、并发、commit 补偿和错误体形状。
+- [x] 5.1 新建 `src/services/research_backfill_service.py`：定义 `BackfillPreview` 与 `BackfillResult` dataclass，类 `ResearchBackfillService(paths, repository_factory=None)`。
+- [x] 5.2 实现纯读 `preview(run_id)`：完整资格、安全日志、解析/质量门；返回 projected fields + `log_sha256`，不写 DB/FS。
+- [x] 5.3 实现 `apply(run_id, expected_log_sha256)`：使用与 `complete_run_with_staged_results()` 同级的手动 session/commit 边界，以便捕获 commit 失败并补偿 final 文件；在同一事务先用 UUID bytes 的稳定 signed-64 key 取 advisory lock（禁止 Python `hash()`），再 `SELECT FOR UPDATE` 重判资格、摘要与结果计数。
+- [x] 5.4 资格要求 failed + 最高 attempt + 无其他 queued/running/completed sibling + 无既有结果；分别映射 `run_not_terminal`、`superseded_run`、`active_sibling_run`、`already_has_results`。
+- [x] 5.5 apply 执行 materialize、共享 persist、flush、promote、commit；所有失败按阶段清理 staging/final，并写结构化成功/失败日志。
+- [x] 5.6 API 请求模型要求 `apply`、拒绝 extra；confirmed apply 强制 64-hex digest；包括畸形请求在内的 backfill endpoint 错误都显式返回顶层 `{code,detail}`，畸形请求使用 `invalid_request` 422。
+- [x] 5.7 服务/endpoint 测试覆盖 happy path、纯 preview、running/superseded/active sibling、路径逃逸/超限/非 UTF-8、stale digest、并发、commit 补偿和错误体形状。
 
 ## 6. R6 — 前端 backfill 弹窗 + alert 内入口
 

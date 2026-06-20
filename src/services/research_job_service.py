@@ -598,12 +598,12 @@ def _extract_stdout_block(log_text: str) -> str | None:
     if start == -1:
         return None
     start += len(STDOUT_START_MARKER)
-    if start < len(log_text) and log_text[start] == "\n":
+    while start < len(log_text) and log_text[start] in "\r\n":
         start += 1
     end = log_text.find(STDOUT_END_MARKER, start)
     if end == -1:
         return None
-    if end > start and log_text[end - 1] == "\n":
+    while end > start and log_text[end - 1] in "\r\n":
         end -= 1
     return log_text[start:end]
 

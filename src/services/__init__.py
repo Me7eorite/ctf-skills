@@ -18,6 +18,12 @@ from services.challenge_design_service import (
 )
 from services.design_task_planning_service import DesignTaskPlanningService
 from services.research_agent_executor import ResearchAgentExecutor
+from services.research_backfill_service import (
+    BackfillPreview,
+    BackfillResult,
+    ResearchBackfillError,
+    ResearchBackfillService,
+)
 from services.research_job_service import ResearchAttemptError, ResearchJobService, StaleClaimError
 from services.research_worker import ResearchWorker
 from services.resource_deletion_service import (
@@ -40,6 +46,10 @@ __all__ = [
     "ChallengeDesignServiceResult",
     "DesignTaskPlanningService",
     "ResearchAgentExecutor",
+    "BackfillPreview",
+    "BackfillResult",
+    "ResearchBackfillError",
+    "ResearchBackfillService",
     "ResearchAttemptError",
     "ResearchJobService",
     "ResearchWorker",
