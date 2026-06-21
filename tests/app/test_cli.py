@@ -63,6 +63,7 @@ class CLIHelpAndParserTests(unittest.TestCase):
         self.assertIn("--timeout", result.stdout)
         self.assertIn("--category", result.stdout)
         self.assertIn("--build-attempt", result.stdout)
+        self.assertIn("--build-attempt-sequence", result.stdout)
         self.assertIn("--build-attempts-only", result.stdout)
         self.assertNotIn("--validate", result.stdout)
 

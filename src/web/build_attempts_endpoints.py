@@ -252,6 +252,66 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
             )
         return _start_constrained_worker(app, attempt_uuid, category)
 
+    @app.post("/api/build-attempts/worker/start-sequential")
+    async def start_sequential_build_worker(request: Request) -> JSONResponse:
+        try:
+            payload = await request.json()
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail=f"request body must be JSON: {exc}",
+            ) from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail="request body must be a JSON object",
+            )
+        raw_ids = payload.get("build_attempt_ids")
+        if not isinstance(raw_ids, list) or not raw_ids:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail="build_attempt_ids must be a non-empty array of UUID strings",
+            )
+        attempt_ids = [_parse_uuid(value, "build_attempt_ids") for value in raw_ids]
+        if len(set(attempt_ids)) != len(attempt_ids):
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail="duplicate build attempt ids are not allowed",
+            )
+
+        BuildOrchestrationService(paths=_project_paths(app)).recover_staging()
+        for attempt_id in attempt_ids:
+            selected = _exact_eligible_attempt(app, attempt_id)
+            if selected is None:
+                raise HTTPException(
+                    status_code=HTTPStatus.NOT_FOUND,
+                    detail=f"build attempt {attempt_id} not found",
+                )
+            status, _category, matches_pending = selected
+            if status != "queued" or not matches_pending:
+                raise HTTPException(
+                    status_code=HTTPStatus.CONFLICT,
+                    detail=(
+                        f"build attempt {attempt_id} is not an eligible queued task"
+                    ),
+                )
+
+        tasks = app.state.dashboard_tasks
+        ok, message = tasks.start_sequential_worker(
+            build_attempt_ids=attempt_ids,
+        )
+        if not ok:
+            raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=message)
+        return JSONResponse(
+            {
+                "ok": True,
+                "message": message,
+                "build_attempt_ids": [str(item) for item in attempt_ids],
+                "queue_length": len(attempt_ids),
+            },
+            status_code=HTTPStatus.ACCEPTED,
+        )
+
     @app.post("/api/build-attempts/{attempt_id}/retry")
     def retry_build_attempt(attempt_id: str) -> JSONResponse:
         attempt_uuid = _parse_uuid(attempt_id, "build attempt id")

@@ -40,6 +40,10 @@ class _StubBuildTaskManager:
         self.calls.append((category, build_attempt_id))
         return self.response
 
+    def start_sequential_worker(self, *, build_attempt_ids: list[UUID]):
+        self.calls.extend(("sequence", attempt_id) for attempt_id in build_attempt_ids)
+        return self.response
+
 
 @pytest.fixture(scope="module")
 def session_factory() -> SessionFactory:
@@ -410,6 +414,33 @@ def test_category_worker_starts_first_eligible_db_attempt(
     assert response.json()["effective_timeout_seconds"] == 2700
     assert response.json()["timeout_source"] == "shard_policy"
     assert tasks.calls == [("web", first.id)]
+
+
+def test_sequential_worker_preserves_requested_attempt_order(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    first_task = _seed_designed_task(session_factory, task_no=1)
+    second_task = _seed_designed_task(session_factory, task_no=2)
+    with transaction(factory=session_factory) as session:
+        repo = BuildAttemptsRepository(session)
+        first = _create_canonical_attempt(repo, first_task)
+        second = _create_canonical_attempt(repo, second_task)
+
+    _write_pending_attempt(client, first)
+    _write_pending_attempt(client, second)
+    tasks = _StubBuildTaskManager()
+    client.app.state.dashboard_tasks = tasks
+
+    response = client.post(
+        "/api/build-attempts/worker/start-sequential",
+        json={"build_attempt_ids": [str(second.id), str(first.id)]},
+    )
+
+    assert response.status_code == 202
+    assert response.json()["build_attempt_ids"] == [str(second.id), str(first.id)]
+    assert response.json()["queue_length"] == 2
+    assert tasks.calls == [("sequence", second.id), ("sequence", first.id)]
 
 
 def test_category_worker_skips_mismatched_payload(

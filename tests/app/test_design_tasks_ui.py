@@ -74,3 +74,15 @@ def test_list_exposes_context_and_state_driven_primary_actions() -> None:
     assert "renderDetailPrimaryAction" in source
     assert "dt-bulk-bar" in source
     assert "开发者数据 · 原始 Payload" in source
+
+
+def test_bulk_build_exposes_enqueue_and_ordered_execution_modes() -> None:
+    source = (STATIC / "js" / "views" / "design-tasks.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "仅加入队列" in source
+    assert "按勾选顺序构建" in source
+    assert "顺序模式同一时间只运行一个" in source
+    assert "/api/build-attempts/worker/start-sequential" in source
+    assert "build_attempt_ids: result.build_attempt_ids" in source

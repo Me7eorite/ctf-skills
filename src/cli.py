@@ -78,6 +78,16 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--max-shards", type=int, default=0)
     run.add_argument("--category", choices=sorted(SUPPORTED_CATEGORIES))
     run.add_argument("--build-attempt", type=UUID)
+    run.add_argument(
+        "--build-attempt-sequence",
+        type=UUID,
+        action="append",
+        default=[],
+        help=(
+            "process these build attempts once in argument order; repeat the "
+            "option for each attempt"
+        ),
+    )
     run.add_argument("--build-attempts-only", action="store_true")
     run.add_argument(
         "--timeout",
@@ -944,35 +954,73 @@ def main() -> None:
             argument_parser.error("--dry-run and --loop are mutually exclusive")
         if args.build_attempt is not None and args.loop:
             argument_parser.error("--build-attempt and --loop are mutually exclusive")
+        if args.build_attempt_sequence and args.loop:
+            argument_parser.error(
+                "--build-attempt-sequence and --loop are mutually exclusive"
+            )
+        if args.build_attempt_sequence and args.dry_run:
+            argument_parser.error(
+                "--build-attempt-sequence and --dry-run are mutually exclusive"
+            )
+        if args.build_attempt_sequence and args.build_attempt is not None:
+            argument_parser.error(
+                "--build-attempt-sequence and --build-attempt are mutually exclusive"
+            )
         if args.build_attempts_only and args.category is None:
             argument_parser.error("--build-attempts-only requires --category")
         if args.build_attempts_only and args.build_attempt is not None:
             argument_parser.error(
                 "--build-attempts-only and --build-attempt are mutually exclusive"
             )
+        if args.build_attempts_only and args.build_attempt_sequence:
+            argument_parser.error(
+                "--build-attempts-only and --build-attempt-sequence are mutually exclusive"
+            )
         effective_timeout, source = _resolve_run_timeout(args.timeout)
         if effective_timeout is None:
             print("effective_timeout=shard-policy source=shard_policy", flush=True)
         else:
             print(f"effective_timeout={effective_timeout} source={source}", flush=True)
-        result = HermesRunner(
+        runner = HermesRunner(
             paths,
             progress=_progress_store_for_run(dry_run=args.dry_run),
             progress_write_exceptions=(
                 PersistenceConfigurationError,
                 PersistenceConnectionError,
             ),
-        ).run(
-            args.worker,
-            loop=args.loop,
-            dry_run=args.dry_run,
-            max_shards=args.max_shards,
-            timeout=effective_timeout,
-            timeout_source=source,
-            category=args.category,
-            build_attempt_id=args.build_attempt,
-            require_build_attempt=args.build_attempts_only,
         )
+        if args.build_attempt_sequence:
+            outcomes = []
+            processed = 0
+            failed = 0
+            for attempt_id in args.build_attempt_sequence:
+                item = runner.run(
+                    args.worker,
+                    timeout=effective_timeout,
+                    timeout_source=source,
+                    build_attempt_id=attempt_id,
+                )
+                outcomes.extend(item["outcomes"])
+                processed += item["processed"]
+                failed += item["failed"]
+            result = {
+                "processed": processed,
+                "failed": failed,
+                "outcomes": outcomes,
+                "requested": len(args.build_attempt_sequence),
+            }
+        else:
+            result = runner.run(
+                args.worker,
+                loop=args.loop,
+                dry_run=args.dry_run,
+                max_shards=args.max_shards,
+                timeout=effective_timeout,
+                timeout_source=source,
+                category=args.category,
+                build_attempt_id=args.build_attempt,
+                require_build_attempt=args.build_attempts_only,
+            )
         print(json.dumps(result, indent=2))
         if result["failed"]:
             sys.exit(1)

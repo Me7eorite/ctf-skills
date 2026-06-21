@@ -223,7 +223,7 @@ async function buildTaskNow(taskId) {
   }
 }
 
-async function buildSelectedTasks() {
+async function buildSelectedTasks({ startSequential = false } = {}) {
   const ids = [...state.selected];
   if (!ids.length) return;
   state.flags.bulkBuild = true;
@@ -236,7 +236,21 @@ async function buildSelectedTasks() {
     const requestIds = new Set(selectedTasks.map((task) => task.generation_request_id));
     const result = await postJson("/api/design-tasks/build", { design_task_ids: ids });
     state.selected.clear();
-    showToast(`已提交 ${result.build_attempt_ids.length} 个构建任务`);
+    if (startSequential) {
+      try {
+        await postJson("/api/build-attempts/worker/start-sequential", {
+          build_attempt_ids: result.build_attempt_ids,
+        });
+        showToast(`顺序队列已启动 · 共 ${result.build_attempt_ids.length} 个任务`);
+      } catch (workerError) {
+        showToast(
+          `任务已加入队列，但顺序 Worker 未启动：${designErrorMessage(workerError.message)}`,
+          true,
+        );
+      }
+    } else {
+      showToast(`已加入构建队列 · 共 ${result.build_attempt_ids.length} 个任务`);
+    }
     await reloadList();
     const suffix = requestIds.size === 1
       ? `?generation_request_id=${encodeURIComponent([...requestIds][0])}`
@@ -361,11 +375,17 @@ function renderList(root) {
 
     ${state.selected.size ? `
       <div class="dt-bulk-bar">
-        <span>已选择 <strong>${state.selected.size}</strong> 个可构建任务</span>
+        <span>
+          已选择 <strong>${state.selected.size}</strong> 个可构建任务
+          · 顺序模式同一时间只运行一个，并按勾选顺序继续
+        </span>
         <div class="btn-group">
           <button class="btn btn-ghost btn-sm" id="dt-clear-selection">取消选择</button>
+          <button id="dt-enqueue-selected" class="btn btn-secondary btn-sm${state.flags.bulkBuild ? " btn-loading" : ""}">
+            <i data-lucide="list-plus"></i> 仅加入队列
+          </button>
           <button id="dt-build-selected" class="btn btn-primary btn-sm${state.flags.bulkBuild ? " btn-loading" : ""}">
-            <i data-lucide="hammer"></i> 批量构建
+            <i data-lucide="list-ordered"></i> 按勾选顺序构建
           </button>
         </div>
       </div>
@@ -761,6 +781,10 @@ export function bind() {
       return;
     }
     if (event.target.closest("#dt-build-selected")) {
+      buildSelectedTasks({ startSequential: true });
+      return;
+    }
+    if (event.target.closest("#dt-enqueue-selected")) {
       buildSelectedTasks();
       return;
     }

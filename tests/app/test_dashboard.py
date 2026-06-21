@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from uuid import UUID
 
 from core.jsonio import write_json
 from core.paths import ProjectPaths
@@ -85,3 +86,25 @@ class DashboardTests(unittest.TestCase):
             ["run", "--worker", "dashboard-01", "--loop"],
         )
         self.assertNotIn("--validate", command)
+
+    def test_sequential_worker_preserves_explicit_attempt_order(self):
+        first = "11111111-1111-1111-1111-111111111111"
+        second = "22222222-2222-2222-2222-222222222222"
+        with (
+            patch("web.dashboard.subprocess.Popen") as popen,
+            patch("web.dashboard.time.sleep"),
+        ):
+            popen.return_value.poll.return_value = None
+
+            ok, _message = TaskManager(self.paths).start_sequential_worker(
+                build_attempt_ids=[UUID(first), UUID(second)],
+            )
+
+        self.assertTrue(ok)
+        command = popen.call_args.args[0]
+        sequence = [
+            command[index + 1]
+            for index, value in enumerate(command)
+            if value == "--build-attempt-sequence"
+        ]
+        self.assertEqual(sequence, [first, second])

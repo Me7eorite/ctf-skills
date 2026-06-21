@@ -86,6 +86,30 @@ class TaskManager:
             require_pending=False,
         )
 
+    def start_sequential_worker(
+        self,
+        *,
+        build_attempt_ids: list[UUID],
+    ) -> tuple[bool, str]:
+        """Run an explicit build-attempt list in the supplied order."""
+        if not build_attempt_ids:
+            return False, "顺序队列至少需要一个构建任务"
+        cli_script = Path(__file__).resolve().parents[1] / "cli.py"
+        command = [
+            sys.executable,
+            str(cli_script),
+            "run",
+            "--worker",
+            "dashboard-sequential-01",
+        ]
+        for attempt_id in build_attempt_ids:
+            command.extend(["--build-attempt-sequence", str(attempt_id)])
+        return self._start(
+            "sequential-worker",
+            command,
+            require_pending=False,
+        )
+
     def _start(
         self,
         kind: str,
