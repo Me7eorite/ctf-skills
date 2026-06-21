@@ -274,6 +274,80 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
             status_code=HTTPStatus.CREATED,
         )
 
+    @app.post("/api/build-attempts/{attempt_id}/restore")
+    def restore_build_attempt(attempt_id: str) -> JSONResponse:
+        """Restore a wrongly-marked-lost attempt back to queued.
+
+        Operator escape hatch for the known reconciler race: an attempt can
+        be marked `lost` even while its shard file is still in pending/. This
+        endpoint:
+          - verifies the row is currently `lost`
+          - verifies the shard file (or its claim sidecar) is physically
+            present somewhere in the queue
+          - resets row.status → queued, clears finished_at/error
+          - resets the parent design_task back to `building`
+        Anything else (succeeded/failed/queued/running) is rejected; this is
+        deliberately not a generic state-edit endpoint.
+        """
+        attempt_uuid = _parse_uuid(attempt_id, "build attempt id", not_found=True)
+        paths = _project_paths(app)
+        from persistence.session import transaction as _txn
+        from persistence.session import SessionFactory as _SF
+        with _txn(factory=_SF()) as session:
+            row = session.get(build_model.BuildAttempt, attempt_uuid)
+            if row is None:
+                raise HTTPException(
+                    status_code=HTTPStatus.NOT_FOUND,
+                    detail=f"build attempt {attempt_uuid} not found",
+                )
+            if row.status != "lost":
+                raise HTTPException(
+                    status_code=HTTPStatus.CONFLICT,
+                    detail=f"only lost attempts can be restored; current status: {row.status}",
+                )
+            # 物理存在性校验：避免恢复一个真没了的 shard。
+            shard_basename = row.shard_basename
+            located: Path | None = None
+            for state in ("pending", "done", "failed"):
+                candidate = paths.shards / state / shard_basename
+                if candidate.is_file():
+                    located = candidate
+                    break
+            if located is None:
+                # running/ 下文件名带 worker 后缀
+                expected = Path(shard_basename)
+                for candidate in (paths.shards / "running").glob(
+                    f"{expected.stem}.*{expected.suffix}"
+                ):
+                    if candidate.name.endswith(".claim.json"):
+                        continue
+                    located = candidate
+                    break
+            if located is None:
+                raise HTTPException(
+                    status_code=HTTPStatus.CONFLICT,
+                    detail=(
+                        f"cannot restore: shard file {shard_basename} not found in any "
+                        "queue directory. Resubmit via retry instead."
+                    ),
+                )
+            row.status = "queued"
+            row.finished_at = None
+            row.error = None
+            row.artifact_status = "unknown"
+            task = session.get(task_model.DesignTask, row.design_task_id)
+            if task is not None and task.status == "build_failed":
+                task.status = "building"
+                task.updated_at = datetime.now(timezone.utc)
+        return JSONResponse(
+            {
+                "build_attempt_id": str(attempt_uuid),
+                "restored_from": "lost",
+                "shard_found_at": str(located),
+            },
+            status_code=HTTPStatus.OK,
+        )
+
     @app.post("/api/build-attempts/{attempt_id}/revalidate")
     def revalidate_build_attempt(attempt_id: str) -> JSONResponse:
         attempt_uuid = _parse_uuid(attempt_id, "build attempt id", not_found=True)

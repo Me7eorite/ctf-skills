@@ -47,11 +47,11 @@ def create_app(
 
     @app.get("/api/state")
     def get_state() -> JSONResponse:
-        if app.state.build_reconciler is not None:
-            try:
-                app.state.build_reconciler.tick_once_sync()
-            except Exception as exc:
-                LOG.warning("synchronous build reconciliation failed: %s", exc)
+        # 中文注释：曾经在这里同步触发 reconciler tick，但前端高频 polling
+        # 会让 tick 频率超过文件系统稳定速度，加剧 lost 误判。后台线程
+        # 已经按 poll_interval 节奏在跑，前端拿到的状态是最新一次 tick 的
+        # 结果，足够使用；如果需要触发立即 tick，请显式调
+        # POST /api/actions/reconcile（如后续提供）。
         return JSONResponse(service.state())
 
     @app.get("/api/logs/{name:path}")

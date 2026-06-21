@@ -488,3 +488,91 @@ def test_exact_worker_recovers_staging_and_respects_busy_guard(
     assert not staged.exists()
     assert (paths.shards / "pending" / attempt.shard_basename).exists()
     assert tasks.calls == [("web", attempt.id)]
+
+
+# ============================================================================
+# Phase 0 restore endpoint — operator escape hatch for false-lost rows
+# ============================================================================
+
+
+def test_restore_brings_lost_attempt_back_when_shard_still_present(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    """Operator can restore a wrongly-marked-lost attempt if its shard file
+    is physically still in the queue."""
+    task_id = _seed_designed_task(session_factory)
+    paths = client.app.state.project_paths
+    with transaction(factory=session_factory) as session:
+        attempt = _create_canonical_attempt(BuildAttemptsRepository(session), task_id)
+        # Mark lost (simulating the race-condition victim)
+        row = session.get(build_model.BuildAttempt, attempt.id)
+        row.status = "lost"
+        row.finished_at = datetime.now(timezone.utc)
+        row.error = "attributed shard disappeared from all queue states"
+        session.get(task_model.DesignTask, task_id).status = "build_failed"
+    pending = paths.shards / "pending" / attempt.shard_basename
+    pending.parent.mkdir(parents=True, exist_ok=True)
+    write_json(
+        pending,
+        {
+            "build_attempt_id": str(attempt.id),
+            "design_task_id": str(attempt.design_task_id),
+            "challenges": [{"id": "web-0001", "category": "web"}],
+        },
+    )
+
+    response = client.post(f"/api/build-attempts/{attempt.id}/restore")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["build_attempt_id"] == str(attempt.id)
+    assert body["restored_from"] == "lost"
+    assert str(pending) in body["shard_found_at"]
+    with session_factory() as session:
+        restored = session.get(build_model.BuildAttempt, attempt.id)
+        assert restored.status == "queued"
+        assert restored.finished_at is None
+        assert restored.error is None
+        assert session.get(task_model.DesignTask, task_id).status == "building"
+
+
+def test_restore_rejects_non_lost_attempt(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory)
+    with transaction(factory=session_factory) as session:
+        attempt = _create_canonical_attempt(BuildAttemptsRepository(session), task_id)
+        # status='queued' (default)
+
+    response = client.post(f"/api/build-attempts/{attempt.id}/restore")
+
+    assert response.status_code == 409
+    assert "lost" in response.json()["detail"]
+    assert "queued" in response.json()["detail"]
+
+
+def test_restore_rejects_when_shard_file_truly_missing(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    """If the shard is genuinely gone, restore must refuse — operator must
+    use retry to create a fresh attempt instead."""
+    task_id = _seed_designed_task(session_factory)
+    with transaction(factory=session_factory) as session:
+        attempt = _create_canonical_attempt(BuildAttemptsRepository(session), task_id)
+        row = session.get(build_model.BuildAttempt, attempt.id)
+        row.status = "lost"
+        row.finished_at = datetime.now(timezone.utc)
+        row.error = "attributed shard disappeared from all queue states"
+
+    response = client.post(f"/api/build-attempts/{attempt.id}/restore")
+
+    assert response.status_code == 409
+    assert "not found" in response.json()["detail"]
+
+
+def test_restore_returns_404_for_missing_attempt(client: TestClient):
+    response = client.post(f"/api/build-attempts/{uuid4()}/restore")
+    assert response.status_code == 404

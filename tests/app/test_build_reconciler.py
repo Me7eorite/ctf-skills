@@ -78,10 +78,14 @@ def _clean(session_factory: SessionFactory) -> None:
 def _backdate_past_grace(
     session_factory: SessionFactory, attempt_id: UUID
 ) -> None:
-    """Move the attempt's created_at outside the lost-marking grace window."""
+    """Move the attempt's created_at outside the lost-marking grace window.
+
+    Grace was bumped to 300s in Phase 0 hot-fix; backdate to 10 minutes so the
+    test is robust to any future tweak as long as the window stays < 10min.
+    """
     with session_factory() as session:
         session.get(build_model.BuildAttempt, attempt_id).created_at = (
-            datetime.now(timezone.utc) - timedelta(seconds=120)
+            datetime.now(timezone.utc) - timedelta(minutes=10)
         )
         session.commit()
 
@@ -457,3 +461,87 @@ def test_run_forever_survives_persistence_failure(
 
     assert calls == 1
     assert "postgres unavailable" in caplog.text
+
+
+# ============================================================================
+# Phase 0 hot fixes — lost-race remediation
+# ============================================================================
+
+
+def test_grace_window_is_300_seconds_not_60(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    """Regression: production saw attempts marked lost at 61-65s after creation
+    while their shards were still in pending/. New grace gives the worker
+    enough time to claim+heartbeat before reconciler decides they're gone.
+    """
+    _task_id, attempt_id, _basename = _seed_attempt(session_factory)
+    reconciler = _reconciler(tmp_path, session_factory)
+    with session_factory() as session:
+        session.get(build_model.BuildAttempt, attempt_id).created_at = (
+            datetime.now(timezone.utc) - timedelta(seconds=120)
+        )
+        session.commit()
+
+    reconciler.tick_once_sync()
+
+    # 120s is well within the 300s grace window; status must remain queued.
+    assert _row(session_factory, attempt_id).status == "queued"
+
+
+def test_rescan_retry_prevents_false_lost_on_transient_glob_miss(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The first scan misses the shard (simulating a glob-iteration snapshot
+    artifact during a worker mv); the rescan inside _rescan_still_disappeared
+    sees it; the row must NOT be marked lost.
+
+    To isolate the rescan logic from `_payload_present_for_row` (which also
+    scans the filesystem), this test mocks both: _payload_present_for_row
+    returns False (as it would during the same race), but the second call to
+    _scan_attributed_shards finds the shard.
+    """
+    task_id, attempt_id, basename = _seed_attempt(session_factory)
+    reconciler = _reconciler(tmp_path, session_factory)
+    _backdate_past_grace(session_factory, attempt_id)
+
+    original_scan = reconciler._scan_attributed_shards
+    call_count = {"n": 0}
+    # Stage the shard in pending so the SECOND scan can see it via the
+    # original scan logic. Force _payload_present_for_row to mirror the
+    # transient miss so the test exercises the rescan path.
+    pending = reconciler.paths.shards / "pending" / basename
+    pending.parent.mkdir(parents=True, exist_ok=True)
+    write_json(pending, _payload(task_id, attempt_id, _challenge_id(session_factory, task_id)))
+    monkeypatch.setattr(reconciler, "_payload_present_for_row", lambda _row: False)
+
+    def flaky_scan() -> dict[UUID, Any]:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return {}  # transient miss
+        return original_scan()
+
+    monkeypatch.setattr(reconciler, "_scan_attributed_shards", flaky_scan)
+
+    reconciler.tick_once_sync()
+
+    assert call_count["n"] >= 2, "rescan must run after first miss"
+    assert _row(session_factory, attempt_id).status == "queued"
+
+
+def test_persistent_disappearance_still_marks_lost_after_rescan(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    """If both first scan AND rescan see nothing, the lost decision still
+    fires (rescan is for transient miss only, not a free pardon)."""
+    _task_id, attempt_id, _basename = _seed_attempt(session_factory)
+    reconciler = _reconciler(tmp_path, session_factory)
+    _backdate_past_grace(session_factory, attempt_id)
+
+    reconciler.tick_once_sync()
+
+    assert _row(session_factory, attempt_id).status == "lost"

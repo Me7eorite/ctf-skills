@@ -56,13 +56,22 @@ class WebserverTests(unittest.TestCase):
         self.assertIn("summary", payload)
         self.assertIn("shards", payload)
 
-    def test_state_endpoint_runs_synchronous_build_reconciliation(self):
+    def test_state_endpoint_does_not_trigger_synchronous_reconciliation(self):
+        """Phase 0 hot fix: /api/state no longer triggers tick_once_sync.
+
+        Frontend polling at high frequency was amplifying reconciler tick
+        rate above filesystem stability, causing the lost-race bug. Background
+        thread now owns the reconciler cadence.
+        """
         reconciler = _StubBuildReconciler()
         service = DashboardService(self.paths)
         with TestClient(create_app(service, build_reconciler=reconciler)) as client:
-            response = client.get("/api/state")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(reconciler.calls, 1)
+            for _ in range(3):
+                response = client.get("/api/state")
+                self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            reconciler.calls, 0, "GET /api/state must not call tick_once_sync"
+        )
 
     def test_logs_endpoint_returns_404_when_missing(self):
         with self._client() as client:

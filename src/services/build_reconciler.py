@@ -26,6 +26,13 @@ from services.build_orchestration_service import BuildOrchestrationService
 LOG = logging.getLogger(__name__)
 DEFAULT_POLL_INTERVAL_SECONDS = 5
 
+# 中文注释：lost 触发的 grace window。原值 60s 太短：
+#   - 工作子进程 claim shard 后 ~5s 才写 progress event
+#   - 频繁 /api/state 同步 tick 会让 reconciler 撞上文件系统切换中间状态
+#   - 真实事故：现网 5 条 attempt 在 61-65s 之间被误标 lost（shard 仍在 pending/running）
+# 300s 给真实 worker 完整一轮 design 阶段的最长容忍时间，仍能在 hang 时触发 lost 标记。
+LOST_GRACE_SECONDS = 300
+
 
 def _poll_interval_from_env() -> int:
     raw = os.environ.get("BUILD_RECONCILER_POLL_SECONDS")
@@ -130,8 +137,9 @@ class BuildReconciler:
             if observed is None:
                 if (
                     str(row.id) not in staged_id_texts
-                    and _as_utc(row.created_at) <= now - timedelta(seconds=60)
+                    and _as_utc(row.created_at) <= now - timedelta(seconds=LOST_GRACE_SECONDS)
                     and not self._payload_present_for_row(row)
+                    and self._rescan_still_disappeared(row)
                 ):
                     self._finish(
                         session,
@@ -261,6 +269,27 @@ class BuildReconciler:
                 if current is None or priority[state] > priority[current.state]:
                     observations[attempt_id] = observed
         return observations
+
+    def _rescan_still_disappeared(self, row: build_model.BuildAttempt) -> bool:
+        """Re-scan the filesystem before committing a lost row.
+
+        Returns True ONLY when the rescan also fails to see the shard, i.e.
+        it is genuinely gone. Returns False when the rescan finds a payload
+        for this attempt, meaning the first scan's empty result was likely a
+        glob-iteration snapshot artifact (worker mid-mv between
+        pending/running/failed) and we should not commit lost this tick —
+        next tick will pick the shard up cleanly.
+        """
+        observations = self._scan_attributed_shards()
+        observed = observations.get(row.id)
+        if observed is None:
+            return True  # confirmed gone in both scans
+        # Second scan found the shard. Trust it iff payload/design_task align.
+        payload_matches = (
+            str(observed.payload.get("design_task_id")) == str(row.design_task_id)
+            and self._basename_matches(row.shard_basename, observed)
+        )
+        return not payload_matches
 
     def _payload_present_for_row(self, row: build_model.BuildAttempt) -> bool:
         staged = self.paths.build_attempt_staging / f"{row.id}.json"
