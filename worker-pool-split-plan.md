@@ -1,6 +1,17 @@
 # Worker Pool 题案拆分方案
 
-> 起草日期: 2026-06-21（v3 修订：Git worktree 降级为开发调试可选项，运行时隔离改为项目侧 execution workspace）
+> 起草日期: 2026-06-21（v4 修订：题案 1 已落地为 OpenSpec change，其余 5 个子题案保持规划状态）
+>
+> 进度索引：
+> - 题案 1 `add-execution-workspace-and-profile-per-category` — ✅ **proposal 起草完成、validate --strict 通过**，等待实现
+> - 题案 2 `add-staged-publication-allowlist` — ⏳ 规划中
+> - 题案 3 `add-execution-lease-and-fencing` — ⏳ 规划中
+> - 题案 4 `add-project-agent-layer-over-hermes-profiles` — ⏳ 规划中
+> - 题案 5 `add-local-supervisor-and-slots` — ⏳ 规划中
+> - 题案 6 `add-execution-audit-snapshots` — ⏳ 规划中
+> - 收尾 `add-build-attempt-feedback-ui` — ⏳ 规划中（6 个子题案归档后再起）
+>
+> v3 修订原因（仍生效）: Git worktree 降级为开发调试可选项，运行时隔离改为项目侧 execution workspace
 >
 > 背景: 原题案 [add-agent-worker-pool-management](openspec/changes/add-agent-worker-pool-management/) scope 横跨 9 个 section（schema/lease/sandbox/supervisor/UI/审计/上线），一次性推进风险高、周期长。本文档把它拆成 6 个独立可交付的子题案，按事故复发风险与依赖关系排序。
 >
@@ -126,45 +137,84 @@
 
 ### 1. `add-execution-workspace-and-profile-per-category` — 项目侧 execution workspace + 按方向建 profile
 
-**一句话**: 每个方向一个 Hermes profile（`cf-web` / `cf-pwn` / `cf-re`），每次 build execution 创建项目侧 `work/executions/<workspace_id>/` 干净工作区；Hermes 的 prompt/runtime context 只暴露本次 materialize 的 `input/`、`references/` 和 `output/` 相对路径，调用前 preflight 验证 shard 可读、output 可写、category 一致，失败 fail-closed 不调 Hermes。
+> **提案已起草并通过 `openspec validate --strict`**：[openspec/changes/add-execution-workspace-and-profile-per-category/](openspec/changes/add-execution-workspace-and-profile-per-category/)（proposal/design 含 41 项 patch 记录 + spec 含 14 项 SHALL Requirement 与 24 个 scenario + tasks 6 章节 + operator runbook）。
 
-**v3 变化**: 从"采用 Hermes 原生 `-w` + 每方向一个 profile"改为"项目侧自建 `work/executions/<workspace_id>/` + 每方向一个 Hermes profile"。Git worktree 不作为核心隔离方案。
+**一句话**: 每个方向一个 Hermes profile（`cf-web` / `cf-pwn` / `cf-re`），每次 build execution 创建项目侧 `work/executions/<workspace_id>/` 干净工作区；Hermes 的 prompt/runtime context 只暴露本次 materialize 的 `input/`、`references/` 和 `output/` 相对路径，调用前 preflight 验证 profile 存在、shard 可读、output 可写、category 一致，失败 fail-closed 不调 Hermes。
 
-**命名边界**: 题案 1 不新增数据库表，因此这里使用本地 `workspace_id`，不是持久化的 `execution_id`。`workspace_id` 优先取 `build_attempt_id`；没有 build attempt 的 legacy shard 路径使用 `manual-<uuid>`。真正的 DB `execution_id` 从题案 3 开始引入。
+**关键设计选择（v4-v5 迭代后定型）**:
+- **不使用 Hermes `-w` / Git worktree** 作为核心隔离——worktree 是 git 分支工具，不适合 runtime artifact 隔离
+- **不新增数据库表**：`workspace_id` 优先取 `build_attempt_id`，legacy shard 用 `manual-<uuid>`；DB `execution_id` 从题案 3 引入
+- **Hermes Docker backend 假设显式化**：preflight 在主机视角执行；Docker backend 需要 operator 在 `cf-<category>` profile config 把 `work/executions/` 挂进容器，否则主机 preflight 通过但模型读不到。in-sandbox visibility probe 推迟到后续题案。上线后强制单题 smoke test 兜底
+- **写入隔离仍由题案 2 兜底**：本题案的 promotion 只是 narrow compatibility bridge，题案 2 publisher 落地时整段 REMOVED
 
-**IN scope**:
-- 创建 3 个 Hermes profile（执行命令）：
-  ```bash
-  hermes profile create cf-web --description "Generates web-category CTF challenges"
-  hermes profile create cf-pwn --description "Generates pwn-category CTF challenges"
-  hermes profile create cf-re  --description "Generates reverse-engineering CTF challenges"
-  ```
-- 每个 profile 配 SOUL.md（类别相关人格/约束）、共享底层模型配置；build runner 显式以 execution workspace 为 `cwd` 调用 Hermes，profile 的 `terminal.cwd` 仅作人工直接使用 profile 时的默认值
-- 所有 build Hermes 调用拼参数时强制加 `-p cf-<category>`，拒绝裸 `hermes chat` 调用；不强制 `-w`
-- 创建 `work/executions/<workspace_id>/input/`、`references/`、`output/`、`logs/`，只 materialize 本次执行需要的 `shard.json`、`manifest.json`、必要 reference 和 profile 摘要
-- Materialize 策略明确按内容分两类，避免无脑复制大量静态资源：
+**IN scope（结构化摘要）**:
 
-  | 内容 | 处理 | 理由 |
-  |---|---|---|
-  | `shard.json` / `manifest.json` / `generation-profile.json` | **copy** | claim 时刻快照，避免运行中被改 |
-  | `references/<category>/` / common guidance / SOUL 摘要 | **symlink**（或 read-only bind mount） | 静态、可能上 MB，复制浪费 |
-  | revision 用 `base-artifact/`（题案 3 引入） | symlink 或 read-only bind | 上一轮 output 的只读引用 |
-- Prompt 渲染改用 execution workspace 内相对路径（如 `./input/shard.json`、`./output/`），禁止嵌入宿主机绝对路径
-- 调 Hermes 前 preflight 校验（在 execution workspace 视角）: shard 文件可读 + output 区可写 + shard.category 与 profile 匹配 + workspace 不包含其他 challenge 产物
-- "其他 challenge 产物" 检测策略：preflight 递归扫描 workspace，拒绝任何匹配 `(web|pwn|re)-\d+` 模式但 challenge_id ≠ leased challenge_id 的目录条目；symlink target 也按指向路径检查
-- 任何一项失败 → 标记 **infrastructure-failed**，不消耗模型 attempt 配额，不启动 Hermes
-- 进度上报通道改造：从 prompt 让容器调宿主机 CLI，改为主机侧 runner 直接写或本地认证 side-channel
-- 回归测试: 在全局 `work/challenges/pwn/` 或旧 execution quarantine 中预置 `pwn-9999/` 残留 → 跑 Web execution → 断言 execution workspace 内不可见、未被改，且 prompt/log 不包含宿主绝对 shard 路径
+1. **Profile 准备（operator 一次性手动）**：
+   ```bash
+   hermes profile create cf-web  --description "Generates web-category CTF challenges"
+   hermes profile create cf-pwn  --description "Generates pwn-category CTF challenges"
+   hermes profile create cf-re   --description "Generates reverse-engineering CTF challenges"
+   ```
+2. **共享 `_build_arguments` helper**：把 `hermes/research.py` 和 `hermes/design.py` 重复的 chat-index 注入函数提取到 `hermes/process.py`，research/design/build 三处统一调用（顺手消掉一处旧债）
+3. **Workspace 布局**：
+   ```
+   work/executions/<workspace_id>/
+     input/{shard.json,manifest.json}            # copy（claim 快照）
+     references/                                  # symlink（静态资源不复制）
+     output/                                      # Hermes 写入区
+     bin/progress                                 # 进度蜘蛛（jq 或 python3）
+     logs/{hermes.log,report.json,progress-events.jsonl}
+     quarantine/<category>/<dirname>/             # promotion 时旧 canonical 的留存
+   ```
+4. **Materialize 策略**：
 
-**OUT scope**: agent 表、capability 强制、lease/fencing、写入 allowlist、supervisor、Dashboard。
+   | 内容 | 处理 | 理由 |
+   |---|---|---|
+   | `shard.json` / `manifest.json` / generation profile snapshot | **copy** | claim 时刻快照，避免运行中被改 |
+   | `references/<category>/` / common guidance | **symlink** | 静态、可能上 MB，复制浪费 |
+   | revision `base-artifact/`（题案 3 引入） | symlink read-only | 上一轮 output 引用 |
+   | resume 已有 canonical challenge dir | **copy** 到 `output/challenges/<cat>/<id>-<slug>/` | 模型编辑 workspace 副本，避免污染 canonical |
+5. **Prompt 路径全部相对** (`./input/shard.json` / `./output/` / `./logs/report.json` / `./bin/progress`)；禁止嵌入宿主机绝对路径
+6. **Preflight 7 步**：profile 存在性（`profile_exists()` 复用，缺失消息含 `hermes profile create cf-<category>`）→ shard 可读 → category 一致 → output 可写 → 无其他 challenge 残留（regex `(web|pwn|re)-\d+`，含 symlink target）→ reference symlink 不越界
+7. **Hermes argv**：`-p cf-<category>` 注入 + subprocess `cwd = workspace`；regression test 断言 cwd ≠ `paths.root`
+8. **Output promotion（compatibility bridge，题案 2 落地后 REMOVED）**：
+   - 仅 `input/shard.json` 中列出的 challenge_id 才 promote
+   - 必须匹配 `./output/challenges/<category>/<id>-<slug>/` 布局；非合规布局拒绝 promote
+   - 拒绝 symlink / `..` traversal / 缺 metadata.json / metadata id 或 category 不匹配 / 同一 id 多个 output dir
+   - 原子 rename；若 canonical 已存在则先 quarantine 到 `work/executions/<workspace_id>/quarantine/<category>/<dirname>/`
+   - 不删除非本次 claimed 的目录
+   - **validation 失败不自动回滚**：quarantine 保留供 operator 手动 recover；新 canonical 留在原地带 `solve_status=failed`
+9. **Report sync**：`./logs/report.json` import 到 `work/reports/<running-shard-stem>.report.json`，让 `domain.reports.merge_reports()` 和 DashboardService 不断链
+10. **进度蜘蛛 = JSONL spool + 实时尾随（必须）**：
+    - `./bin/progress` 必须用 `jq` 或 `python3` shebang（raw POSIX sh 因 JSON 转义脆弱被拒绝）；二者均不在 PATH 则 fail-closed
+    - host runner 后台 thread 以 ≤2s poll 周期 tail `./logs/progress-events.jsonl`，写入现有 `ProgressStore`，保留 dashboard 实时刷新
+    - Hermes 退出后强制 catch-up read 一次
+11. **Workspace GC（最小版本）**：每次创建 workspace 前扫 `work/executions/manual-*`，删除 >7 天或孤儿；UUID-attributed workspace 不动（归题案 2 publisher）；dry-run 禁止 GC
+12. **Hermes log redirect**：从 `paths.logs / f"{shard_name}.log"` 改到 `work/executions/<workspace_id>/logs/hermes.log`；research/design log 不动
+13. **回归测试包**：
+    - 残留题目不可见（核心串题事故复现测试）
+    - profile 缺失 fail-closed + 错误消息含恢复命令
+    - subprocess.Popen(cwd=...) 真等于 workspace
+    - GC 行为正确（删 manual 老的、保留 UUID 的，dry-run 不跑 GC）
+    - 进度蜘蛛处理特殊字符（`"` / `\` / `\n` / CJK / emoji）
+    - 实时 tailing 在 fake-Hermes 跑完前就能看到 ProgressStore 有记录
+    - validation 失败但 promotion 成功后 quarantine 留存、不自动回滚
+    - 进度蜘蛛在 jq/python3 都不在 PATH 时 fail-closed
+    - `domain.reports.merge_reports()` 能看到 workspace import 来的 report
+14. **Operator runbook**:
+    - 部署机一次性 `hermes profile create cf-{web,pwn,re}`
+    - Docker backend 要在 `cf-<category>` config 加 mount `./work/executions:/work/executions:rw`，并确保镜像里有 `jq` 或 `python3`
+    - 上线后强制单题 smoke test，看 Hermes log 里模型真能读到 `./input/shard.json` 再放量
 
-**涉及代码**: [src/hermes/process.py](src/hermes/process.py)（命令拼接）、[src/hermes/runner.py](src/hermes/runner.py)、[src/hermes/prompt.py](src/hermes/prompt.py)、[src/services/research_agent_executor.py](src/services/research_agent_executor.py)、[src/services/design_agent_executor.py](src/services/design_agent_executor.py)、[src/core/paths.py](src/core/paths.py)。
+**OUT scope**: agent 表、capability 强制、lease/fencing、写入 allowlist 完整版（仅 narrow promotion）、supervisor、Dashboard 视图改造、in-sandbox visibility probe、自动 rollback、Windows 平台。
 
-**DB schema**: 不动。题案 1 的 `workspace_id` 只存在于文件路径和日志中，不作为数据库外键或审计主键。
+**涉及代码**: [src/hermes/process.py](src/hermes/process.py)（共享 helper + 命令拼接）、[src/hermes/runner.py](src/hermes/runner.py)（workspace + cwd + log redirect + promotion + report sync + 进度 live tailer）、[src/hermes/prompt.py](src/hermes/prompt.py)（去主机绝对路径）、[src/services/research_agent_executor.py](src/services/research_agent_executor.py) + [src/services/design_agent_executor.py](src/services/design_agent_executor.py)（迁移到共享 helper）、[src/core/paths.py](src/core/paths.py)（新增 `executions` property + initialize 入口）。
 
-**Spec deltas**: 改造 `hermes-execution-protocol`，加 "Hermes profile + execution workspace 强制使用" 要求，并明确 Git worktree 不属于运行时隔离边界。
+**DB schema**: 不动。题案 1 的 `workspace_id` 只在文件路径和日志中，不作为数据库外键或审计主键。
 
-**Hermes 侧操作（一次性手动）**: 在部署机上跑 `hermes profile create` 3 次。
+**Spec deltas**: 改造 `hermes-execution-protocol`，加 5 个 Requirement + ~24 个 scenario；明确 Git worktree 不属于运行时隔离边界；narrow promotion bridge 标记为 "SHALL be REMOVED by add-staged-publication-allowlist"。
+
+**量级**: 比原估"1 PR"明显增加。proposal/design/tasks/spec 总计 ~1200 行；实现量预估 2-3 个 PR（共享 helper 提取 → workspace/preflight 主体 → 进度蜘蛛/live tailing/report sync 补丁链）。
 
 ---
 

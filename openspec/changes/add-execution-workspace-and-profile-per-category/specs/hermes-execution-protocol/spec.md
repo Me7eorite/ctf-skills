@@ -236,8 +236,13 @@ Promotion SHALL reject output symlinks, path traversal, missing
 directories for the same claimed id. Promotion SHALL copy to a temporary
 sibling under `work/challenges/<category>/` and atomically rename into place.
 If a canonical directory for the same claimed id already exists, it SHALL be
-quarantined under a workspace-scoped backup path before replacement; unrelated
-challenge directories SHALL NOT be moved or deleted.
+quarantined under the fixed path
+`work/executions/<workspace_id>/quarantine/<category>/<dirname>/` before
+replacement (where `<dirname>` is the original canonical directory basename,
+e.g. `web-0001-demo`). Unrelated challenge directories SHALL NOT be moved or
+deleted. Quarantined directories SHALL be retained until the workspace itself
+is GC'd by the rules in the workspace-reuse requirement; the runner MAY delete
+quarantine entries earlier as part of the same retention pass.
 
 This requirement SHALL NOT introduce execution rows, lease/fencing tokens,
 operator approval, or a general publisher allowlist. Unclaimed output
@@ -298,24 +303,56 @@ operator approval, or anything beyond the literal claimed challenge ids.
 - **GIVEN** a claimed output directory for `web-0001`
 - **AND** `work/challenges/web/web-0001-demo/` already exists
 - **WHEN** promotion succeeds
-- **THEN** the existing canonical directory is moved to a workspace-scoped
-  quarantine path
+- **THEN** the existing canonical directory is moved to
+  `work/executions/<workspace_id>/quarantine/web/web-0001-demo/`
 - **AND** the new claimed directory is atomically renamed into
   `work/challenges/web/web-0001-demo/`
+- **AND** unrelated directories under `work/challenges/web/` are not touched
+
+#### Scenario: Validation fails after successful promotion
+
+- **GIVEN** promotion succeeds for `web-0001`
+- **AND** the previous canonical version was quarantined under the workspace
+- **WHEN** subsequent validation runs and `validate.sh` returns non-zero
+- **THEN** the new canonical directory remains in place with
+  `metadata.solve_status = failed` written by the existing validator
+- **AND** the build_attempt is marked failed by the existing path
+- **AND** the quarantined previous version is retained for the workspace's
+  retention window for audit
+- **AND** the runner does NOT automatically roll back to the quarantined
+  version; rollback is an explicit operator action outside this change
 
 ### Requirement: Build prompts record progress through a workspace-local shim
 
-For non-dry-run build invocations, the runner SHALL materialize a POSIX shell
+For non-dry-run build invocations, the runner SHALL materialize a workspace
 shim at `./bin/progress` whose body appends one compact JSON object per
 invocation to `./logs/progress-events.jsonl`. The build prompt SHALL render
 the progress command as `./bin/progress ...` and SHALL NOT render the host
 Python path or absolute CLI path.
 
-The host runner SHALL import or live-tail `./logs/progress-events.jsonl`, read
-`input/manifest.json` for shard, worker, category, and workspace context, and
-write corresponding events through the existing `ProgressStore`. The minimum
-contract is import-before-validation; live tailing is allowed but not required
-by this change.
+**Shim implementation language**: the shim MUST use either `jq` or a
+`python3` shebang for the JSON encoding step. Hand-rolled POSIX-sh string
+concatenation SHALL NOT be used, because robust JSON escaping for
+`--message`/`--challenge` values containing `"`, `\`, control characters, or
+non-ASCII bytes is non-trivial in raw `/bin/sh` and would silently produce
+invalid JSONL that breaks the host import. The shim MUST fail closed (non-zero
+exit) when neither `jq` nor `python3` is on `PATH`.
+
+The host runner SHALL live-tail `./logs/progress-events.jsonl` from a
+background reader (poll interval ≤ 2s) and write corresponding events through
+the existing `ProgressStore` so dashboard progress remains near-real-time
+during long Hermes invocations. The runner SHALL also flush remaining records
+once Hermes exits (catch-up read) before validation events are written. Read
+`input/manifest.json` once at workspace creation for shard/worker/category
+context; combine with each tailed record.
+
+#### Scenario: Progress shim survives special-character values
+
+- **GIVEN** Hermes runs `./bin/progress --challenge web-0001 --stage build
+  --message 'fix \"quoted\" path / newline\\n'`
+- **WHEN** the shim writes the record
+- **THEN** the resulting JSONL line parses as a valid JSON object
+- **AND** the host import does not fail or skip the record
 
 #### Scenario: Build prompt uses local progress shim
 

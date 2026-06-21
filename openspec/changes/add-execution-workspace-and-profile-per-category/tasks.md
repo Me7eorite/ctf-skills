@@ -76,12 +76,19 @@
 - [ ] 3.5 Preserve research/design Hermes profile binding behavior unchanged.
 - [ ] 3.6 Keep `hermes -w` out of the required build invocation contract.
 - [ ] 3.7 Generate the workspace-local progress shim at `./bin/progress` as
-  described in Decision 9: a POSIX shell wrapper that appends compact JSON
-  records to `./logs/progress-events.jsonl`. Render the prompt's progress
-  command as `./bin/progress ...` only.
-- [ ] 3.8 Import (or live-tail) `./logs/progress-events.jsonl` from the host
-  runner, combine records with `input/manifest.json`, and write them through
-  the existing `ProgressStore` before validation events are written.
+  described in Decision 9. The shim MUST use either `jq` or a `python3`
+  shebang to encode JSONL; raw POSIX-sh string concatenation is NOT allowed
+  (silent invalid-JSON risk on special characters). The shim MUST fail closed
+  when neither `jq` nor `python3` is on PATH inside the Hermes terminal
+  backend. Render the prompt's progress command as `./bin/progress ...` only.
+- [ ] 3.8 Implement a live-tailing background reader (poll interval ≤ 2s) in
+  the host runner that reads `./logs/progress-events.jsonl` incrementally,
+  combines each record with `input/manifest.json` (shard/worker/category/
+  workspace_id), and writes events through the existing `ProgressStore`.
+  Background reader MUST start before Hermes is invoked and MUST flush any
+  remaining records (catch-up read) after Hermes exits but before validation
+  events are written. Background reader MUST be cleaned up on every exit
+  path (success / failure / preflight reject / KeyboardInterrupt).
 
 ## 3A. Output Promotion for Existing Validation
 
@@ -142,18 +149,38 @@
   `work/executions/<uuid>/` and assert it is never touched by GC.
 - [ ] 5.12 Add a progress-spool test proving `./bin/progress` writes JSONL
   without host absolute paths and the runner imports records into
-  `ProgressStore` with shard/worker context from `input/manifest.json`.
-- [ ] 5.13 Add report compatibility tests proving `./logs/report.json` is
-  imported to `work/reports/<running-shard-stem>.report.json` and
-  `merge-reports` still sees the build report.
+  `ProgressStore` with shard/worker context from `input/manifest.json`. The
+  test set MUST include `--message` values containing `"`, `\`, control
+  characters (`\n`), and non-ASCII (CJK / emoji) to prove the shim's chosen
+  encoder (jq or python3) escapes correctly and the host import parses the
+  resulting JSONL without skipping records.
+- [ ] 5.13 Add report compatibility tests asserting that after the runner
+  completes, `domain.reports.merge_reports()` (the Python function, not a
+  CLI) returns a merged report containing the entry imported from
+  `./logs/report.json`, and that `work/reports/<running-shard-stem>.report.json`
+  exists on disk with matching contents.
 - [ ] 5.14 Add resume promotion tests proving existing claimed canonical
   artifacts are copied into workspace output before Hermes and atomically
-  replaced/quarantined only for claimed ids.
+  replaced. Quarantine target path MUST be
+  `work/executions/<workspace_id>/quarantine/<category>/<dirname>/`;
+  unrelated dirs under `work/challenges/<category>/` are not touched.
 - [ ] 5.15 Add promotion security tests for output symlinks, path traversal,
   duplicate claimed-id directories, and metadata id/category mismatch.
-- [ ] 5.16 Run focused pytest coverage for the changed runner/prompt/workspace
+- [ ] 5.16 Add a "validation fails after successful promotion" test: assert
+  that when `validate.sh` returns non-zero after a successful promotion, the
+  new canonical directory stays in place with `solve_status=failed`, the
+  quarantined previous version is retained under the workspace, and the
+  runner does NOT auto-rollback.
+- [ ] 5.17 Add a shim-runtime test that simulates a Hermes terminal backend
+  without `jq` or `python3`: the shim MUST exit non-zero and the runner MUST
+  record an infrastructure failure rather than silently losing progress data.
+- [ ] 5.18 Add a live-tailing test: while a long-running fake-Hermes process
+  writes JSONL records over time, assert the runner's `ProgressStore` already
+  contains those records before the fake-Hermes process exits (proves live
+  tailing, not just post-exit catch-up).
+- [ ] 5.19 Run focused pytest coverage for the changed runner/prompt/workspace
   paths.
-- [ ] 5.17 Run `openspec validate add-execution-workspace-and-profile-per-category --strict`.
+- [ ] 5.20 Run `openspec validate add-execution-workspace-and-profile-per-category --strict`.
 
 ## 6. Operator Runbook and Rollout
 

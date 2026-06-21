@@ -182,8 +182,12 @@ Promotion must be atomic and conservative:
 - Copy to a temporary sibling under `work/challenges/<category>/` and then
   rename into place.
 - If an existing canonical directory for the claimed id exists, quarantine it
-  under a workspace-scoped backup path before replacement and keep it until
-  validation succeeds or fails. Do not delete unrelated challenge directories.
+  to the fixed path
+  `work/executions/<workspace_id>/quarantine/<category>/<dirname>/` before
+  replacement and retain it until the workspace itself is GC'd. Do not delete
+  unrelated challenge directories. Rollback to the quarantined version when
+  validation later fails is **not** automatic in this change; it is an
+  explicit operator action recovered from the quarantine path.
 - If promotion fails, mark the claimed shard failed before validation; do not
   let the reconciler observe a `done` shard with missing canonical artifacts.
 
@@ -256,26 +260,46 @@ to `python <cli_script_path> progress ...`. Inside an isolated workspace such
 a path is meaningless: the model would need to know the host's Python
 interpreter and the project root, neither of which we want in the prompt.
 
-The runner SHALL materialize a workspace-local shell shim at
-`./bin/progress` whose body appends one JSON object per invocation to
-`./logs/progress-events.jsonl`. The prompt renders only `./bin/progress`.
-The shim accepts the same agent-facing flags as the existing progress command:
+The runner SHALL materialize a workspace-local shim at `./bin/progress` whose
+body appends one JSON object per invocation to `./logs/progress-events.jsonl`.
+The prompt renders only `./bin/progress`. The shim accepts the same
+agent-facing flags as the existing progress command (`--challenge`/`--stage`/
+`--status`/`--message`).
+
+**Implementation language is constrained.** The shim MUST use either `jq` or a
+`python3` shebang to do the JSON encoding step. Hand-rolled POSIX `/bin/sh`
+string concatenation MUST NOT be used: robust escaping for `"`, `\`, control
+characters, and non-ASCII bytes in the `--message`/`--challenge` values is
+non-trivial in raw shell and would silently produce invalid JSONL that the
+host import cannot parse. Two acceptable shapes:
 
 ```sh
 #!/bin/sh
-stage=
-status=
-challenge=
-message=
-# parse --challenge/--stage/--status/--message, then append compact JSONL
+# Variant A: jq-based (requires jq in PATH)
+jq -nc --arg challenge "$CH" --arg stage "$ST" --arg status "$SS" \
+       --arg message "$MSG" \
+       '{ts:now, challenge:$challenge, stage:$stage, status:$status, message:$message}' \
+       >>"./logs/progress-events.jsonl"
 ```
 
-The host runner tails or imports `./logs/progress-events.jsonl`, combines each
-record with `input/manifest.json` (`shard_name`, `worker`, `category`, and
-workspace id), and writes the existing PostgreSQL progress events through the
-same `ProgressStore` used today. If live tailing is not implemented in the
-first patch, the runner must at least import the file immediately after Hermes
-returns, before validation events are written.
+```python
+#!/usr/bin/env python3
+# Variant B: python3-based (requires python3 in PATH)
+import json, sys, time, argparse, pathlib
+# parse args; pathlib.Path("./logs/progress-events.jsonl").open("a").write(json.dumps(...)+"\n")
+```
+
+The shim MUST fail closed (non-zero exit) when neither `jq` nor `python3` is
+available on `PATH` inside the Hermes terminal backend.
+
+The host runner SHALL live-tail `./logs/progress-events.jsonl` from a
+background reader (poll interval ≤ 2s) and write events through the existing
+`ProgressStore`. This restores the near-real-time dashboard behavior that
+exists today. The runner SHALL also flush remaining records once Hermes exits
+(catch-up read) before validation events are written. Without live tailing the
+dashboard would only see progress in bursts after each Hermes run completes,
+which is a user-visible regression and is therefore NOT acceptable as a final
+state for this change.
 
 Decisions on alternative transports (Unix socket / HTTP side-channel /
 direct CLI bridge) are deferred to a future change. The JSONL spool is the
@@ -452,6 +476,21 @@ second-pass re-evaluation against Docker terminal backend reality.
 37. Patch: canonical consumer paths are a compatibility boundary, not an
     implementation detail. Solution: D10 names the current consumers and
     forbids silent movement in this change.
+38. Patch: quarantine path was described as "workspace-scoped" but not
+    specified. Solution: D6/spec lock it to
+    `work/executions/<workspace_id>/quarantine/<category>/<dirname>/`.
+39. Patch: "live tailing is preferred but not required" was a wish, not a
+    contract; without it, dashboard real-time progress regresses. Solution:
+    D9/spec promote live tailing to SHALL with ≤2s poll interval.
+40. Patch: writing JSONL from raw `/bin/sh` is fragile; messages with `"`,
+    `\`, or non-ASCII bytes would silently produce invalid lines. Solution:
+    D9/spec require `jq` or `python3` shebang and fail closed when neither is
+    on PATH. Tests cover special-character messages.
+41. Patch: "what happens when validation fails after a successful promotion?"
+    was undefined. Solution: spec scenario "Validation fails after successful
+    promotion" clarifies: new canonical stays, validator marks
+    `solve_status=failed`, quarantine retained for audit, no automatic
+    rollback. Rollback becomes an explicit operator action.
 
 ## Risks / Trade-offs
 
@@ -479,7 +518,14 @@ second-pass re-evaluation against Docker terminal backend reality.
   loss. A configurable retention knob is deferred to the publisher change.
 - POSIX-only shim. Windows hosts cannot use the build runner under this
   change. This matches current project deployment.
-- JSONL progress spooling may delay dashboard progress if live tailing is not
-  implemented in the first patch. The minimum contract imports progress before
-  validation events; live tailing is preferred but not required for this
-  hardening step.
+- JSONL progress spooling requires live tailing to avoid a user-visible
+  dashboard regression (without live tailing, progress would only appear in
+  bursts after Hermes returns). This change therefore mandates live tailing as
+  part of the runner. The trade-off is that the runner now owns a background
+  reader thread per active workspace, with explicit cleanup at execution end.
+- The progress shim depends on `jq` OR `python3` being available inside the
+  Hermes terminal backend. For the `local` backend this is almost always true;
+  for Docker backends the operator MUST ensure the chosen interpreter is
+  present in the image. The shim fails closed if neither is found, so a
+  misconfigured image produces an early infrastructure failure rather than
+  silent data loss.

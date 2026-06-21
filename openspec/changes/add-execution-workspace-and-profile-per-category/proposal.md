@@ -94,6 +94,13 @@ None. This is a protocol hardening change for the existing runner.
   required before enabling this change; for Docker terminal backends, the
   profile config must also mount `work/executions/` into the container.
 - **Platform**: POSIX-only shim under `./bin/progress`. The shim writes
-  workspace-local JSONL progress records instead of executing host absolute
-  paths, so it works for both local and mounted Docker terminal backends.
-  Windows host support is not in scope (matches current project deployment).
+  workspace-local JSONL progress records using either `jq` or a `python3`
+  shebang (raw POSIX-sh is rejected because robust JSON escaping for special
+  characters is non-trivial). For Docker terminal backends, the operator MUST
+  ensure one of `jq` or `python3` is present in the image; the shim fails
+  closed otherwise. Windows host support is not in scope.
+- **Live progress**: the host runner runs a background reader that tails
+  `./logs/progress-events.jsonl` with ≤2s poll interval and writes events
+  through the existing `ProgressStore`. This preserves the current
+  near-real-time dashboard behavior and is required (not optional) by this
+  change.
