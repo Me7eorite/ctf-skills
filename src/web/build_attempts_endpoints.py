@@ -779,11 +779,54 @@ def _derive_failure_summary(
     return None
 
 
+# 中文注释：把 ChallengeValidator / hermes runner 写入 progress message 的
+# 英文状态码翻译成面向用户的中文描述。状态码本身保持英文（DB / 测试 / 日志
+# 仍按英文匹配），仅在面向 UI 的失败摘要里转换。新加状态码时记得同步这张表。
+_FAILURE_REASON_TRANSLATIONS: dict[str, str] = {
+    "contract_failed": "合约校验未通过（缺少必需文件、字段或不符约定）",
+    "nonzero_exit": "参考解题脚本执行失败（validate.sh 返回非 0）",
+    "flag_mismatch": "解题脚本输出的 flag 与 metadata 中声明的不一致",
+    "missing_validation": "缺少 validate.sh，无法执行解题校验",
+    "invalid_metadata": "metadata.json 不是合法的 JSON 对象",
+    "timeout": "参考解题脚本执行超时",
+    "no_shell": "校验所需的 shell 不可用（默认 bash）",
+    "skipped_resume": "断点恢复跳过本次校验",
+    # 基础设施类（来自 hermes/workspace + runner 的早期失败）
+    "no compiled ELF artifact found in attachments/ or dist/":
+        "未找到编译后的 ELF 产物（请放到 attachments/ 下）",
+    "shard execution failed": "Hermes 执行阶段失败",
+    "Workspace preflight failed": "执行 workspace 预检失败",
+    "Workspace materialization failed": "执行 workspace 物化失败",
+    "Workspace shim materialization failed": "进度蜘蛛生成失败",
+    "attributed shard disappeared from all queue states":
+        "shard 文件从队列中消失（可能是 reconciler 误判，参考 /restore 接口）",
+    "artifact directory missing": "构建产物目录缺失（worker 标记 done 但 work/challenges 下找不到）",
+}
+
+
+def _translate_failure_reason(reason: str) -> str:
+    """先按完整字符串查表；查不到再做"前缀"匹配（带 error= 详情的情况）。"""
+    stripped = reason.strip()
+    if stripped in _FAILURE_REASON_TRANSLATIONS:
+        return _FAILURE_REASON_TRANSLATIONS[stripped]
+    # 如果是 "validator: status=X" 这种带格式的，提取 status 再翻译
+    if stripped.startswith("validator: status="):
+        # validator: status=nonzero_exit elapsed=4.44s -> nonzero_exit
+        rest = stripped[len("validator: status="):]
+        status_code = rest.split(" ", 1)[0]
+        translated = _FAILURE_REASON_TRANSLATIONS.get(status_code)
+        if translated is not None:
+            return translated
+    return reason
+
+
 def _failure_message_reason(message: str) -> str:
     marker = "error="
     if marker in message:
-        return message.split(marker, 1)[1].strip(" ;,")
-    return message.strip()
+        raw = message.split(marker, 1)[1].strip(" ;,")
+    else:
+        raw = message.strip()
+    return _translate_failure_reason(raw)
 
 
 def _progress_event_dict(event: ProgressEvent) -> dict[str, Any]:

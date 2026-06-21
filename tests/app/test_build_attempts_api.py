@@ -607,3 +607,60 @@ def test_restore_rejects_when_shard_file_truly_missing(
 def test_restore_returns_404_for_missing_attempt(client: TestClient):
     response = client.post(f"/api/build-attempts/{uuid4()}/restore")
     assert response.status_code == 404
+
+
+# ============================================================================
+# Failure message translation (status codes → Chinese for UI)
+# ============================================================================
+
+
+def test_failure_message_reason_translates_known_status_codes():
+    """裸状态码 → 中文。"""
+    from web.build_attempts_endpoints import _failure_message_reason
+
+    cases = {
+        "nonzero_exit": "参考解题脚本执行失败",
+        "contract_failed": "合约校验未通过",
+        "flag_mismatch": "解题脚本输出的 flag 与 metadata 中声明的不一致",
+        "timeout": "参考解题脚本执行超时",
+        "missing_validation": "缺少 validate.sh",
+        "skipped_resume": "断点恢复跳过本次校验",
+    }
+    for code, expected_fragment in cases.items():
+        translated = _failure_message_reason(code)
+        assert expected_fragment in translated, (
+            f"code={code!r} expected '{expected_fragment}' in {translated!r}"
+        )
+
+
+def test_failure_message_reason_translates_validator_format_string():
+    """完整 "validator: status=X elapsed=..." 也能识别。"""
+    from web.build_attempts_endpoints import _failure_message_reason
+
+    msg = "validator: status=nonzero_exit elapsed=4.44s"
+    translated = _failure_message_reason(msg)
+    assert "参考解题脚本执行失败" in translated
+    # 原始的 elapsed=4.44s 不再 leak 到 UI
+    assert "elapsed=" not in translated
+
+
+def test_failure_message_reason_extracts_error_marker_then_translates():
+    """带 error= 详情时，提取 error 值并尝试翻译；翻译表没有就原样返回。"""
+    from web.build_attempts_endpoints import _failure_message_reason
+
+    # 命中翻译表的 error 值
+    msg = "validator: status=contract_failed error=no compiled ELF artifact found in attachments/ or dist/"
+    translated = _failure_message_reason(msg)
+    assert "未找到编译后的 ELF 产物" in translated
+
+    # 未命中翻译表 → 原样返回 error 值
+    msg = "infra: error=postgres connection refused"
+    translated = _failure_message_reason(msg)
+    assert translated == "postgres connection refused"
+
+
+def test_failure_message_reason_returns_original_for_unknown():
+    """未知状态码不破坏现有行为：原样返回（不假装翻译）。"""
+    from web.build_attempts_endpoints import _failure_message_reason
+
+    assert _failure_message_reason("some_brand_new_code") == "some_brand_new_code"
