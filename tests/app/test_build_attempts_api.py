@@ -407,6 +407,8 @@ def test_category_worker_starts_first_eligible_db_attempt(
 
     assert response.status_code == 202
     assert response.json()["build_attempt_id"] == str(first.id)
+    assert response.json()["effective_timeout_seconds"] == 2700
+    assert response.json()["timeout_source"] == "shard_policy"
     assert tasks.calls == [("web", first.id)]
 
 

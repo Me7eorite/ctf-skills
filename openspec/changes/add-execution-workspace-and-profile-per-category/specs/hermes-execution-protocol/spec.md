@@ -388,8 +388,12 @@ Python path or absolute CLI path.
 concatenation SHALL NOT be used, because robust JSON escaping for
 `--message`/`--challenge` values containing `"`, `\`, control characters, or
 non-ASCII bytes is non-trivial in raw `/bin/sh` and would silently produce
-invalid JSONL that breaks the host import. The shim MUST fail closed (non-zero
-exit) when neither `jq` nor `python3` is on `PATH`.
+invalid JSONL that breaks the host import. The implementation in this change
+uses a `python3` shebang and MUST fail closed (non-zero exit) when `python3` is
+not on `PATH`. The prompt SHALL require Hermes to stop and propagate that
+failure. Because an in-sandbox probe is explicitly deferred, the host runner
+classifies the propagated non-zero execution as infrastructure failure but
+does not independently inspect interpreter availability inside Docker.
 
 The host runner SHALL live-tail `./logs/progress-events.jsonl` from a
 background reader (poll interval ≤ 2s) and write corresponding events through

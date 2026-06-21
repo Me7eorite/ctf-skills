@@ -15,6 +15,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError
 
+from core.build_timeout import shard_timeout_policy
 from core.jsonio import read_json
 from core.queue import SUPPORTED_CATEGORIES
 from domain.build_attempts import BuildAttempt, BuildAttemptListItem, BuildAttemptStatus
@@ -176,6 +177,16 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
             attempt,
             failure_summary=_derive_failure_summary(event_payloads, attempt.error),
         )
+        timeout_manifest = read_json(
+            _project_paths(app).executions / str(attempt.id) / "input" / "manifest.json",
+            {},
+        )
+        if isinstance(timeout_manifest, dict):
+            if isinstance(timeout_manifest.get("effective_timeout_seconds"), int):
+                body["effective_timeout_seconds"] = timeout_manifest[
+                    "effective_timeout_seconds"
+                ]
+                body["timeout_source"] = timeout_manifest.get("timeout_source")
         body["sibling_attempts"] = [_attempt_dict(row) for row in siblings]
         body["progress_events"] = event_payloads
         return JSONResponse(body)
@@ -480,6 +491,9 @@ def _start_constrained_worker(
     attempt_id: UUID,
     category: str,
 ) -> JSONResponse:
+    effective_timeout, timeout_source = _effective_timeout_for_attempt(
+        _project_paths(app), attempt_id
+    )
     tasks = app.state.dashboard_tasks
     ok, message = tasks.start_worker(
         category=category,
@@ -492,9 +506,24 @@ def _start_constrained_worker(
             "ok": True,
             "message": message,
             "build_attempt_id": str(attempt_id),
+            "effective_timeout_seconds": effective_timeout,
+            "timeout_source": timeout_source,
         },
         status_code=HTTPStatus.ACCEPTED,
     )
+
+
+def _effective_timeout_for_attempt(paths, attempt_id: UUID) -> tuple[int, str]:
+    env_raw = os.environ.get("HERMES_TIMEOUT")
+    if env_raw:
+        try:
+            value = int(env_raw)
+        except ValueError:
+            value = 0
+        if value > 0:
+            return value, "env"
+    payload = read_json(paths.shards / "pending" / f"{attempt_id}.json", {})
+    return shard_timeout_policy(payload), "shard_policy"
 
 
 def _parse_uuid(value: Any, label: str, *, not_found: bool = False) -> UUID:

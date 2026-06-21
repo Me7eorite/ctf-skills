@@ -202,6 +202,10 @@ class RunnerDryRunIsolationTests(unittest.TestCase):
             rendered = log_path.read_text(encoding="utf-8")
             self.assertIn("0. Resume Check", rendered)
             self.assertIn("web-0001", rendered)
+            self.assertIn("./input/shard.json", rendered)
+            self.assertIn("./output/challenges", rendered)
+            self.assertNotIn(str(paths.root), rendered)
+            self.assertFalse((paths.root / "work" / "executions").exists())
 
 
 class RunnerRealRunTests(unittest.TestCase):
@@ -220,7 +224,7 @@ class RunnerRealRunTests(unittest.TestCase):
             profile_exists=lambda _: True,
         )  # type: ignore[arg-type]
 
-        def fake_invoke(prompt: str, log: Path, dry_run: bool, *, timeout=None) -> int:
+        def fake_invoke(prompt: str, log: Path, dry_run: bool, *, timeout=None, **_kwargs) -> int:
             log.parent.mkdir(parents=True, exist_ok=True)
             log.write_text("fake invoke\n", encoding="utf-8")
             return 0
@@ -271,10 +275,14 @@ class RunnerRealRunTests(unittest.TestCase):
             _make_shard(paths, "web-0001-0001.json", ["web-0001"])
             runner = self._make_runner_with_fake_invoke(paths)
 
-            def fake_invoke(prompt: str, log: Path, dry_run: bool, *, timeout=None) -> int:
+            def fake_invoke(prompt: str, log: Path, dry_run: bool, *, timeout=None, **kwargs) -> int:
                 log.parent.mkdir(parents=True, exist_ok=True)
                 log.write_text("fake invoke\n", encoding="utf-8")
-                _make_web_challenge(paths, "web-0001")
+                created = _make_web_challenge(paths, "web-0001")
+                workspace = kwargs["workspace"]
+                output = workspace.output / "challenges" / "web" / created.name
+                output.parent.mkdir(parents=True, exist_ok=True)
+                created.replace(output)
                 return 0
 
             runner._invoke = fake_invoke  # type: ignore[assignment]
@@ -406,7 +414,7 @@ class RunnerRealRunTests(unittest.TestCase):
             runner = self._make_runner_with_fake_invoke(paths)
             called = {"invoke": False}
 
-            def fake_invoke(prompt: str, log: Path, dry_run: bool, *, timeout=None) -> int:
+            def fake_invoke(prompt: str, log: Path, dry_run: bool, *, timeout=None, **_kwargs) -> int:
                 called["invoke"] = True
                 return 0
 
@@ -528,6 +536,11 @@ class RunnerRealRunTests(unittest.TestCase):
             failed_path = paths.shards / "failed"
             files = sorted(p.name for p in failed_path.glob("*.json"))
             self.assertTrue(any("web-0001-0001" in name for name in files))
+            workspace = next((paths.root / "work" / "executions").iterdir())
+            self.assertTrue(
+                (workspace / "quarantine" / "web" / "web-0001-demo").is_dir()
+            )
+            self.assertTrue((paths.challenges / "web" / "web-0001-demo").is_dir())
 
     def test_progress_write_failure_does_not_block_successful_shard(self):
         class RaisingWriteProgressStore(InMemoryProgressStore):
@@ -551,7 +564,7 @@ class RunnerRealRunTests(unittest.TestCase):
                 image_exists=lambda _: True,
                 profile_exists=lambda _: True,
             )  # type: ignore[arg-type]
-            runner._invoke = lambda prompt, log, dry_run, *, timeout=None: 0  # type: ignore[assignment]
+            runner._invoke = lambda prompt, log, dry_run, *, timeout=None, **_kwargs: 0  # type: ignore[assignment]
             runner.validator.validate_challenge = lambda cid: {  # type: ignore[assignment]
                 "challenge_id": cid,
                 "status": "passed",
@@ -584,7 +597,7 @@ class RunnerRealRunTests(unittest.TestCase):
             )  # type: ignore[arg-type]
             called = {"invoke": False}
 
-            def fake_invoke(prompt: str, log: Path, dry_run: bool, *, timeout=None) -> int:
+            def fake_invoke(prompt: str, log: Path, dry_run: bool, *, timeout=None, **_kwargs) -> int:
                 called["invoke"] = True
                 return 0
 
@@ -610,7 +623,7 @@ class ShardNameNormalizationTests(unittest.TestCase):
                 profile_exists=lambda _: True,
             )  # type: ignore[arg-type]
 
-            def fake_invoke(prompt: str, log: Path, dry_run: bool, *, timeout=None) -> int:
+            def fake_invoke(prompt: str, log: Path, dry_run: bool, *, timeout=None, **_kwargs) -> int:
                 log.parent.mkdir(parents=True, exist_ok=True)
                 log.write_text("ok", encoding="utf-8")
                 return 0

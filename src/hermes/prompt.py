@@ -57,27 +57,42 @@ def render_prompt(
     worker: str,
     *,
     report_runtime_path: str | None = None,
+    workspace_relative: bool = False,
     original_shard_name: str | None = None,
     resume_plan: ShardResumePlan | None = None,
 ) -> str:
     # 中文注释：读取分片执行模板，并替换路径、worker、进度命令等运行上下文。
     prompt_text = paths.prompt_template.read_text(encoding="utf-8")
-    cli_script_path = Path(__file__).resolve().parents[1] / "cli.py"
     progress_shard_name = original_shard_name or shard.name
     design_context_instruction = _design_context_instruction(shard)
+    if workspace_relative:
+        runtime_paths = {
+            "{shard_path}": "./input/shard.json",
+            "{challenge_dir}": "./output/challenges",
+            "{report_path}": "./logs/report.json",
+            "{generation_profile}": "./input/generation-profiles.json",
+            "{design_skill}": "./references/design-challenges/SKILL.md",
+            "{design_references}": "./references/design-challenges/references",
+            "{progress_command}": "./bin/progress",
+        }
+    else:
+        cli_script_path = Path(__file__).resolve().parents[1] / "cli.py"
+        runtime_paths = {
+            "{shard_path}": str(shard.resolve()),
+            "{challenge_dir}": str(paths.challenges.resolve()),
+            "{report_path}": report_runtime_path or str(report.resolve()),
+            "{generation_profile}": str(paths.generation_profile.resolve()),
+            "{design_skill}": str(paths.design_skill.resolve()),
+            "{design_references}": str(paths.design_references.resolve()),
+            "{progress_command}": (
+                f'"{sys.executable}" "{cli_script_path}" progress '
+                f'--shard "{progress_shard_name}" --worker "{worker}" --best-effort'
+            ),
+        }
     replacement_map = {
-        "{shard_path}": str(shard.resolve()),
-        "{challenge_dir}": str(paths.challenges.resolve()),
-        "{report_path}": report_runtime_path or str(report.resolve()),
-        "{generation_profile}": str(paths.generation_profile.resolve()),
-        "{design_skill}": str(paths.design_skill.resolve()),
-        "{design_references}": str(paths.design_references.resolve()),
+        **runtime_paths,
         "{worker}": worker,
         "{shard_name}": progress_shard_name,
-        "{progress_command}": (
-            f'"{sys.executable}" "{cli_script_path}" progress '
-            f'--shard "{progress_shard_name}" --worker "{worker}" --best-effort'
-        ),
         "{resume_plan}": _render_resume_plan_section(resume_plan),
         "{design_context_instruction}": design_context_instruction,
     }

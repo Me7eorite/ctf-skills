@@ -58,6 +58,21 @@ def hermes_arguments() -> list[str]:
     return shlex.split(DEFAULT_HERMES_COMMAND)
 
 
+def inject_profile_argument(profile_name: str) -> list[str]:
+    """Insert ``-p <profile>`` before the Hermes ``chat`` subcommand."""
+    base_arguments = hermes_arguments()
+    try:
+        chat_index = base_arguments.index("chat")
+    except ValueError:
+        chat_index = 1 if base_arguments else 0
+    return [
+        *base_arguments[:chat_index],
+        "-p",
+        profile_name,
+        *base_arguments[chat_index:],
+    ]
+
+
 def apply_legacy_custom_provider(
     hermes_home: Path, environment: dict[str, str]
 ) -> bool:
@@ -142,7 +157,9 @@ def invoke(
     with log_path.open("w", encoding="utf-8") as output:
         # 日志头：显示命令（prompt 用 <prompt> 占位避免泄露）
         output.write(
-            f"$ {' '.join(shlex.quote(arg) for arg in full_arguments[:-1])} <prompt>\n\n"
+            f"$ {' '.join(shlex.quote(arg) for arg in full_arguments[:-1])} <prompt>\n"
+            f"cwd: {cwd}\n"
+            f"timeout: {timeout}s\n\n"
         )
         try:
             process = subprocess.run(

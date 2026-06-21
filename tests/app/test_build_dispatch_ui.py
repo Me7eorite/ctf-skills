@@ -31,6 +31,15 @@ def test_detail_poll_supports_append_only_event_updates():
     assert "#ba-progress-event-count" in source
 
 
+def test_worker_start_and_detail_expose_effective_timeout():
+    source = BUILD_ATTEMPTS_JS.read_text(encoding="utf-8")
+
+    assert "result.effective_timeout_seconds" in source
+    assert "attempt.effective_timeout_seconds" in source
+    assert "timeout_source" in source
+    assert "Hermes 超时" in source
+
+
 def test_detail_poll_writes_no_dom_for_five_unchanged_cycles():
     source = BUILD_ATTEMPTS_JS.read_text(encoding="utf-8")
     start = source.index("function detailWithoutEvents")

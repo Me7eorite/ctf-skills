@@ -675,6 +675,9 @@ progress_snapshots (看板快照，每个 shard+challenge 只保留最新)
 
 ## 七、CLI 命令行参考
 
+构建执行 workspace、分类 Hermes Profile、Docker 挂载、分类超时和上线
+smoke test 见 [Build execution workspaces](docs/build-execution-workspaces.md)。
+
 ```bash
 # 初始化工作目录
 challenge-factory init

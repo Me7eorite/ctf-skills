@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from core.build_timeout import shard_timeout_policy
 from core.docker import image_exists as default_image_exists
 from core.jsonio import read_json
 from core.paths import ProjectPaths, category_of
@@ -51,10 +52,15 @@ from hermes.validation import (
 )
 from hermes.workspace import (
     WorkspacePreflightError,
+    WorkspacePromotionError,
     import_workspace_report,
+    materialize_resume_outputs,
     preflight_workspace,
     prepare_workspace,
+    promote_claimed_outputs,
+    record_effective_timeout,
 )
+from hermes.workspace_progress import WorkspaceProgressTailer, materialize_progress_shim
 
 __all__ = [
     "DEFAULT_HERMES_COMMAND",
@@ -179,6 +185,7 @@ class HermesRunner:
         worker: str,
         *,
         report_runtime_path: str | None = None,
+        workspace_relative: bool = False,
         original_shard_name: str | None = None,
         resume_plan: ShardResumePlan | None = None,
     ) -> str:
@@ -189,6 +196,7 @@ class HermesRunner:
             report,
             worker,
             report_runtime_path=report_runtime_path,
+            workspace_relative=workspace_relative,
             original_shard_name=original_shard_name,
             resume_plan=resume_plan,
         )
@@ -201,6 +209,7 @@ class HermesRunner:
         dry_run: bool = False,
         max_shards: int = 0,
         timeout: int | None = None,
+        timeout_source: str | None = None,
         category: str | None = None,
         build_attempt_id: UUID | str | None = None,
         require_build_attempt: bool = False,
@@ -227,6 +236,7 @@ class HermesRunner:
                 worker,
                 dry_run=dry_run,
                 timeout=timeout,
+                timeout_source=timeout_source,
                 category=category,
                 build_attempt_id=build_attempt_id,
                 require_build_attempt=require_build_attempt,
@@ -249,6 +259,7 @@ class HermesRunner:
         *,
         dry_run: bool,
         timeout: int | None = None,
+        timeout_source: str | None = None,
         category: str | None = None,
         build_attempt_id: UUID | str | None = None,
         require_build_attempt: bool = False,
@@ -299,6 +310,7 @@ class HermesRunner:
             log,
             challenge_ids,
             timeout=timeout,
+            timeout_source=timeout_source,
         )
 
     # ----------------------------------------------------------------
@@ -333,6 +345,7 @@ class HermesRunner:
                 shard,
                 report,
                 worker,
+                workspace_relative=True,
                 original_shard_name=original_shard_name,
                 resume_plan=plan,
             )
@@ -362,6 +375,7 @@ class HermesRunner:
         challenge_ids: list[str],
         *,
         timeout: int | None,
+        timeout_source: str | None,
     ) -> dict:
         """执行完整的分片处理管线。
 
@@ -467,7 +481,7 @@ class HermesRunner:
         category = manifest.get("category") if isinstance(manifest, dict) else None
         profile_name = f"cf-{category}"
         try:
-            preflight_workspace(
+            payload = preflight_workspace(
                 workspace,
                 profile_name=profile_name,
                 profile_exists=self._profile_exists,
@@ -490,17 +504,61 @@ class HermesRunner:
                 "returncode": 1,
                 "error": message,
             }
+        try:
+            materialize_resume_outputs(self.paths, workspace, payload)
+            materialize_progress_shim(workspace)
+        except (OSError, WorkspacePromotionError, ValueError) as exc:
+            message = f"Workspace materialization failed: {exc}"
+            self._mark_shard_failed(
+                shard,
+                original_shard_name,
+                worker,
+                challenge_ids,
+                report,
+                message,
+                1,
+            )
+            return {
+                "status": "failed",
+                "failure_type": "infrastructure",
+                "shard": original_shard_name,
+                "returncode": 1,
+                "error": message,
+            }
+        if timeout is not None:
+            if timeout <= 0:
+                raise ValueError("timeout must be positive")
+            effective_timeout = timeout
+            effective_timeout_source = timeout_source or "cli"
+        else:
+            effective_timeout = shard_timeout_policy(payload)
+            effective_timeout_source = "shard_policy"
+        record_effective_timeout(
+            workspace,
+            seconds=effective_timeout,
+            source=effective_timeout_source,
+        )
         log = workspace.hermes_log
         prompt = self.render_prompt(
-            shard,
+            workspace.input / "shard.json",
             report,
             worker,
             report_runtime_path="./logs/report.json",
+            workspace_relative=True,
             original_shard_name=original_shard_name,
             resume_plan=plan,
         )
+        tailer = WorkspaceProgressTailer(workspace, self._progress.record)
+        tailer.start()
         try:
-            returncode = self._invoke(prompt, log, dry_run=False, timeout=timeout)
+            returncode = self._invoke(
+                prompt,
+                log,
+                dry_run=False,
+                timeout=effective_timeout,
+                workspace=workspace,
+                profile_name=profile_name,
+            )
         except KeyboardInterrupt:
             # 被用户中断 → 记录失败并重新抛出
             import_workspace_report(workspace, report)
@@ -514,8 +572,32 @@ class HermesRunner:
                 130,  # 标准 POSIX 返回码：被信号中断
             )
             raise
+        finally:
+            tailer.stop_and_flush()
 
         import_workspace_report(workspace, report)
+
+        if returncode == 0 or returncode == HERMES_TIMEOUT_RETURNCODE:
+            try:
+                promote_claimed_outputs(self.paths, workspace, payload)
+            except (OSError, WorkspacePromotionError, ValueError) as exc:
+                message = f"Workspace output promotion failed: {exc}"
+                self._mark_shard_failed(
+                    shard,
+                    original_shard_name,
+                    worker,
+                    challenge_ids,
+                    report,
+                    message,
+                    returncode,
+                )
+                return {
+                    "status": "failed",
+                    "failure_type": "infrastructure",
+                    "shard": original_shard_name,
+                    "returncode": returncode,
+                    "error": message,
+                }
 
         # Hermes 返回非零 → 检查是否为超时 + 超时恢复通过
         if returncode != 0:
@@ -535,6 +617,7 @@ class HermesRunner:
                 )
                 return {
                     "status": "failed",
+                    "failure_type": "infrastructure",
                     "shard": original_shard_name,
                     "returncode": returncode,
                 }
@@ -738,13 +821,19 @@ class HermesRunner:
         dry_run: bool,
         *,
         timeout: int | None = None,
+        workspace=None,
+        profile_name: str | None = None,
     ) -> int:
         if dry_run:
             log.parent.mkdir(parents=True, exist_ok=True)
             log.write_text(prompt + "\n", encoding="utf-8")
             return 0
 
-        arguments = self._hermes_arguments()
+        arguments = (
+            hermes_process.inject_profile_argument(profile_name)
+            if profile_name is not None
+            else self._hermes_arguments()
+        )
         environment = os.environ.copy()
         if self.paths.hermes_home.exists() and not environment.get("HERMES_HOME"):
             environment["HERMES_HOME"] = str(self.paths.hermes_home)
@@ -760,7 +849,7 @@ class HermesRunner:
             prompt,
             arguments=arguments,
             log_path=log,
-            cwd=self.paths.root,
+            cwd=workspace.root if workspace is not None else self.paths.root,
             environment=environment,
             timeout=effective_timeout,
         )

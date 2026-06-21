@@ -29,7 +29,7 @@ def invoke_design_agent(
       - 返回 HermesProcessResult（包含 returncode/stdout/cancelled 标志）
     """
     # 组装带 profile 的 Hermes 命令参数
-    hermes_arguments = _build_arguments(profile_name)
+    hermes_arguments = hermes_process.inject_profile_argument(profile_name)
 
     # 准备环境变量：设置 HERMES_HOME（如果尚未设置）
     environment_map = os.environ.copy()
@@ -55,22 +55,3 @@ def invoke_design_agent(
         environment=environment_map,
         timeout=timeout,
     )
-
-
-def _build_arguments(profile_name: str) -> list[str]:
-    """在 Hermes 命令的 `chat` 子命令前注入 `-p <profile_name>`。
-
-    兼容多种命令格式:
-      - hermes chat -Q --yolo -q        → hermes -p my_profile chat -Q --yolo -q
-      - uvx --from hermes-agent hermes chat ... → uvx ... hermes -p my_profile chat ...
-      - 自定义 HERMES_CMD
-
-    如果命令中没有 `chat` 关键字，则在第一个参数后插入。
-    """
-    base_arguments = hermes_process.hermes_arguments()
-    try:
-        chat_index = base_arguments.index("chat")
-    except ValueError:
-        # 没有 chat 子命令 → 在命令名之后插入（索引 1）
-        chat_index = 1 if base_arguments else 0
-    return [*base_arguments[:chat_index], "-p", profile_name, *base_arguments[chat_index:]]

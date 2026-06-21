@@ -26,14 +26,14 @@
 
 ## 1A. Shared Profile-Injection Helper
 
-- [ ] 1A.1 Extract the duplicated `_build_arguments(profile_name)` from
+- [x] 1A.1 Extract the duplicated `_build_arguments(profile_name)` from
   [src/hermes/research.py](src/hermes/research.py) and
   [src/hermes/design.py](src/hermes/design.py) into a single public helper
   (e.g. `inject_profile_argument`) in
   [src/hermes/process.py](src/hermes/process.py).
-- [ ] 1A.2 Migrate research and design call sites to the shared helper; assert
+- [x] 1A.2 Migrate research and design call sites to the shared helper; assert
   no behavior change via existing research/design tests.
-- [ ] 1A.3 The new build runner MUST use the same shared helper (consumed in
+- [x] 1A.3 The new build runner MUST use the same shared helper (consumed in
   §3.3 below).
 
 ## 2. Input Materialization and Preflight
@@ -67,22 +67,22 @@
 
 ## 3. Prompt and Hermes Invocation
 
-- [ ] 3.1 Update build prompt rendering to accept workspace-relative paths for
+- [x] 3.1 Update build prompt rendering to accept workspace-relative paths for
   shard input, references, output, and logs.
-- [ ] 3.2 Remove host absolute shard/report/challenge-root paths from the build
+- [x] 3.2 Remove host absolute shard/report/challenge-root paths from the build
   prompt contract.
-- [ ] 3.3 Inject `-p cf-<category>` into build Hermes argv before `chat` using
+- [x] 3.3 Inject `-p cf-<category>` into build Hermes argv before `chat` using
   the shared helper extracted in §1A.
-- [ ] 3.4 Invoke Hermes with `cwd` set to the execution workspace.
-- [ ] 3.5 Preserve research/design Hermes profile binding behavior unchanged.
-- [ ] 3.6 Keep `hermes -w` out of the required build invocation contract.
-- [ ] 3.7 Generate the workspace-local progress shim at `./bin/progress` as
+- [x] 3.4 Invoke Hermes with `cwd` set to the execution workspace.
+- [x] 3.5 Preserve research/design Hermes profile binding behavior unchanged.
+- [x] 3.6 Keep `hermes -w` out of the required build invocation contract.
+- [x] 3.7 Generate the workspace-local progress shim at `./bin/progress` as
   described in Decision 9. The shim MUST use either `jq` or a `python3`
   shebang to encode JSONL; raw POSIX-sh string concatenation is NOT allowed
   (silent invalid-JSON risk on special characters). The shim MUST fail closed
   when neither `jq` nor `python3` is on PATH inside the Hermes terminal
   backend. Render the prompt's progress command as `./bin/progress ...` only.
-- [ ] 3.8 Implement a live-tailing background reader (poll interval ≤ 2s) in
+- [x] 3.8 Implement a live-tailing background reader (poll interval ≤ 2s) in
   the host runner that reads `./logs/progress-events.jsonl` incrementally,
   combines each record with `input/manifest.json` (shard/worker/category/
   workspace_id), and writes events through the existing `ProgressStore`.
@@ -90,135 +90,137 @@
   remaining records (catch-up read) after Hermes exits but before validation
   events are written. Background reader MUST be cleaned up on every exit
   path (success / failure / preflight reject / KeyboardInterrupt).
-- [ ] 3.9 Add a shared claimed-shard timeout policy: Re 1800s, Web 2700s,
+- [x] 3.9 Add a shared claimed-shard timeout policy: Re 1800s, Web 2700s,
   Pwn 3600s, and Pwn 5400s when any claimed challenge has
   `difficulty=expert`. Missing/unknown Pwn difficulty uses 3600s.
-- [ ] 3.10 Resolve the effective timeout after claim with precedence
+- [x] 3.10 Resolve the effective timeout after claim with precedence
   `CLI --timeout` > `HERMES_TIMEOUT` > claimed-shard policy. Preserve whether
   CLI/env values were explicitly supplied; do not eagerly substitute the old
   global 1500s default before the runner can inspect the shard.
-- [ ] 3.11 Apply the derived timeout to the actual Hermes subprocess and
+- [x] 3.11 Apply the derived timeout to the actual Hermes subprocess and
   include `effective_timeout_seconds` and its source (`cli`, `env`, or
   `shard_policy`) in the workspace manifest and Hermes log header.
-- [ ] 3.12 Update Web UI constrained worker dispatch (the primary entry) to
+- [x] 3.12 Update Web UI constrained worker dispatch (the primary entry) to
   use shard-policy timeout by default without requiring an editable timeout
   field. Return the effective timeout in the worker-start response and expose
   it in the build-attempt execution view/status output.
-- [ ] 3.13 Preserve explicit CLI `--timeout` and `HERMES_TIMEOUT` as
+- [x] 3.13 Preserve explicit CLI `--timeout` and `HERMES_TIMEOUT` as
   operational overrides; reject non-positive values with no behavior change
   to research/design timeout configuration.
 
 ## 3A. Output Promotion for Existing Validation
 
-- [ ] 3A.1 Require Hermes to write claimed challenge directories under
+- [x] 3A.1 Require Hermes to write claimed challenge directories under
   `./output/challenges/<category>/<id>-<slug>/` or an equivalent fixed
   workspace output layout.
-- [ ] 3A.2 For resume runs, copy the existing claimed canonical challenge
+- [x] 3A.2 For resume runs, copy the existing claimed canonical challenge
   directory into the workspace output layout before invoking Hermes.
-- [ ] 3A.3 Before existing validation runs, promote only directories whose
+- [x] 3A.3 Before existing validation runs, promote only directories whose
   challenge ids are present in `input/shard.json` into
   `work/challenges/<category>/`.
-- [ ] 3A.4 Reject output symlinks, path traversal, missing metadata, metadata
+- [x] 3A.4 Reject output symlinks, path traversal, missing metadata, metadata
   id/category mismatch, and more than one output directory per claimed id.
-- [ ] 3A.5 Promote claimed directories atomically via a temporary sibling and
+- [x] 3A.5 Promote claimed directories atomically via a temporary sibling and
   quarantine any existing canonical directory for the same claimed id under a
   workspace-scoped backup path.
-- [ ] 3A.6 Reject or ignore unclaimed output directories; do not publish them
+- [x] 3A.6 Reject or ignore unclaimed output directories; do not publish them
   to `work/challenges`.
-- [ ] 3A.7 Keep the later staged publisher allowlist, execution leases, and
+- [x] 3A.7 Keep the later staged publisher allowlist, execution leases, and
   operator approval out of this change.
 
 ## 4. Compatibility
 
-- [ ] 4.1 Preserve existing constrained claim behavior from
+- [x] 4.1 Preserve existing constrained claim behavior from
   `add-category-safe-build-dispatch`.
-- [ ] 4.2 Preserve legacy/manual shard execution using `manual-<uuid>`
+- [x] 4.2 Preserve legacy/manual shard execution using `manual-<uuid>`
   workspaces.
-- [ ] 4.3 Keep database schema unchanged.
-- [ ] 4.4 Do not add publisher allowlists, execution leases, agent registry,
+- [x] 4.3 Keep database schema unchanged.
+- [x] 4.4 Do not add publisher allowlists, execution leases, agent registry,
   supervisor, slots, feedback APIs, or dashboard pool controls in this change.
 
 ## 5. Verification
 
-- [ ] 5.1 Add unit tests for `workspace_id` derivation and workspace layout.
-- [ ] 5.2 Add prompt rendering tests proving build prompts use relative
+- [x] 5.1 Add unit tests for `workspace_id` derivation and workspace layout.
+- [x] 5.2 Add prompt rendering tests proving build prompts use relative
   workspace paths and omit host absolute shard paths.
-- [ ] 5.3 Add Hermes argv tests proving `-p cf-<category>` is injected for
+- [x] 5.3 Add Hermes argv tests proving `-p cf-<category>` is injected for
   build calls (and that research/design still inject correctly via the shared
   helper introduced in §1A).
-- [ ] 5.4 Add preflight tests for unreadable input, category mismatch,
+- [x] 5.4 Add preflight tests for unreadable input, category mismatch,
   unrelated challenge artifacts, and unsafe reference symlinks.
-- [ ] 5.5 Add a runner test proving preflight failure does not invoke Hermes.
-- [ ] 5.6 Add claimed-output promotion tests proving only claimed challenge ids
+- [x] 5.5 Add a runner test proving preflight failure does not invoke Hermes.
+- [x] 5.6 Add claimed-output promotion tests proving only claimed challenge ids
   are copied to the canonical challenge tree before validation.
-- [ ] 5.7 Add a regression test with stale `pwn-*` artifacts outside the Web
+- [x] 5.7 Add a regression test with stale `pwn-*` artifacts outside the Web
   workspace proving the Web prompt/log does not expose them.
-- [ ] 5.8 Add dry-run coverage proving the shard is requeued and no output is
+- [x] 5.8 Add dry-run coverage proving the shard is requeued and no output is
   promoted while the rendered prompt still uses workspace-relative paths.
-- [ ] 5.9 Add a preflight test that stubs `profile_exists()` to return False
+- [x] 5.9 Add a preflight test that stubs `profile_exists()` to return False
   and asserts: infrastructure-failed outcome, Hermes not invoked, error
   message contains the literal `hermes profile create cf-<category>`.
-- [ ] 5.10 Add a subprocess-level test asserting `subprocess.Popen(cwd=...)`
-  receives the workspace path (NOT `paths.root`) when the runner invokes
-  Hermes; covers the cwd-authority claim in Decision 4.
-- [ ] 5.11 Add a self-GC test: seed `work/executions/manual-old/` with mtime
+- [x] 5.10 Add a subprocess-level test asserting the actual subprocess call's
+  `cwd` receives the workspace path (NOT `paths.root`) when the runner invokes
+  Hermes; do not couple the contract to `run` versus `Popen`.
+- [x] 5.11 Add a self-GC test: seed `work/executions/manual-old/` with mtime
   > 7 days and `work/executions/manual-fresh/`; create a new workspace; assert
   `manual-old` is removed and `manual-fresh` is kept. Seed an attributed
   `work/executions/<uuid>/` and assert it is never touched by GC.
-- [ ] 5.12 Add a progress-spool test proving `./bin/progress` writes JSONL
+- [x] 5.12 Add a progress-spool test proving `./bin/progress` writes JSONL
   without host absolute paths and the runner imports records into
   `ProgressStore` with shard/worker context from `input/manifest.json`. The
   test set MUST include `--message` values containing `"`, `\`, control
   characters (`\n`), and non-ASCII (CJK / emoji) to prove the shim's chosen
   encoder (jq or python3) escapes correctly and the host import parses the
   resulting JSONL without skipping records.
-- [ ] 5.13 Add report compatibility tests asserting that after the runner
+- [x] 5.13 Add report compatibility tests asserting that after the runner
   completes, `domain.reports.merge_reports()` (the Python function, not a
   CLI) returns a merged report containing the entry imported from
   `./logs/report.json`, and that `work/reports/<running-shard-stem>.report.json`
   exists on disk with matching contents.
-- [ ] 5.14 Add resume promotion tests proving existing claimed canonical
+- [x] 5.14 Add resume promotion tests proving existing claimed canonical
   artifacts are copied into workspace output before Hermes and atomically
   replaced. Quarantine target path MUST be
   `work/executions/<workspace_id>/quarantine/<category>/<dirname>/`;
   unrelated dirs under `work/challenges/<category>/` are not touched.
-- [ ] 5.15 Add promotion security tests for output symlinks, path traversal,
+- [x] 5.15 Add promotion security tests for output symlinks, path traversal,
   duplicate claimed-id directories, and metadata id/category mismatch.
-- [ ] 5.16 Add a "validation fails after successful promotion" test: assert
+- [x] 5.16 Add a "validation fails after successful promotion" test: assert
   that when `validate.sh` returns non-zero after a successful promotion, the
   new canonical directory stays in place with `solve_status=failed`, the
   quarantined previous version is retained under the workspace, and the
   runner does NOT auto-rollback.
-- [ ] 5.17 Add a shim-runtime test that simulates a Hermes terminal backend
-  without `jq` or `python3`: the shim MUST exit non-zero and the runner MUST
-  record an infrastructure failure rather than silently losing progress data.
-- [ ] 5.18 Add a live-tailing test: while a long-running fake-Hermes process
+- [x] 5.17 Add a shim-runtime test with `python3` absent from `PATH`: the shim
+  MUST exit non-zero. The prompt MUST require Hermes to stop on that error;
+  when the non-zero result propagates, the runner records infrastructure
+  failure. Do not claim host-side interpreter detection without the deferred
+  in-sandbox probe.
+- [x] 5.18 Add a live-tailing test: while a long-running fake-Hermes process
   writes JSONL records over time, assert the runner's `ProgressStore` already
   contains those records before the fake-Hermes process exits (proves live
   tailing, not just post-exit catch-up).
-- [ ] 5.19 Run focused pytest coverage for the changed runner/prompt/workspace
+- [x] 5.19 Run focused pytest coverage for the changed runner/prompt/workspace
   paths.
-- [ ] 5.20 Run `openspec validate add-execution-workspace-and-profile-per-category --strict`.
-- [ ] 5.21 Add timeout-policy unit tests covering Re 1800s, Web 2700s, Pwn
+- [x] 5.20 Run `openspec validate add-execution-workspace-and-profile-per-category --strict`.
+- [x] 5.21 Add timeout-policy unit tests covering Re 1800s, Web 2700s, Pwn
   3600s, Pwn expert 5400s, mixed Pwn difficulty, missing Pwn difficulty, and
   mixed-category rejection.
-- [ ] 5.22 Add precedence tests for CLI override, environment override, and
+- [x] 5.22 Add precedence tests for CLI override, environment override, and
   shard-policy fallback, asserting the exact timeout passed to Hermes.
-- [ ] 5.23 Add Web API/UI tests proving constrained worker starts use and
+- [x] 5.23 Add Web API/UI tests proving constrained worker starts use and
   display the derived effective timeout without requiring manual input.
 
 ## 6. Operator Runbook and Rollout
 
-- [ ] 6.1 Document the one-time bootstrap commands in the project README or
+- [x] 6.1 Document the one-time bootstrap commands in the project README or
   `docs/`: `hermes profile create cf-web` (plus `cf-pwn`, `cf-re`), and
   optionally `hermes -p cf-<category> config set terminal.cwd "."` for
   consistent manual usage.
-- [ ] 6.2 Document the Docker backend mount requirement: operators using the
+- [x] 6.2 Document the Docker backend mount requirement: operators using the
   Docker terminal backend MUST ensure each `cf-<category>` profile mounts the
   host `work/executions/` path into the container at the same in-container
   path (e.g. `./work/executions:/work/executions:rw`). Without this mount,
   host-side preflight passes but the model cannot read `./input/shard.json`.
-- [ ] 6.3 Mandate a single controlled end-to-end smoke run after enabling this
+- [x] 6.3 Mandate a single controlled end-to-end smoke run after enabling this
   change: pick one queued Web shard, run the build runner, and confirm
   Hermes actually reads `./input/shard.json` inside its sandbox (check the
   Hermes log under `work/executions/<id>/logs/`). Only proceed to bulk runs

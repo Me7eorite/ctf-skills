@@ -55,7 +55,7 @@ def invoke_research_agent(
 ) -> HermesProcessResult:
     """使用指定 profile 运行 Hermes Research Agent，并捕获 stdout。"""
     # 中文注释：组装 Hermes Research Agent 的命令和环境，再委托通用捕获执行器运行。
-    hermes_arguments = _build_arguments(profile_name)
+    hermes_arguments = hermes_process.inject_profile_argument(profile_name)
     environment_map = _build_research_env(paths)
     if paths.hermes_home.exists() and not environment_map.get("HERMES_HOME"):
         environment_map["HERMES_HOME"] = str(paths.hermes_home)
@@ -91,19 +91,3 @@ def _build_research_env(paths: ProjectPaths) -> dict[str, str]:
     if paths.hermes_home.exists() and not environment_map.get("HERMES_HOME"):
         environment_map["HERMES_HOME"] = str(paths.hermes_home)
     return environment_map
-
-
-def _build_arguments(profile_name: str) -> list[str]:
-    """把 `-p <profile_name>` 注入到基础命令里的 `chat` 子命令之前。
-
-    兼容 `hermes chat ...`、`uvx --from hermes-agent hermes chat ...`，
-    以及通过 `HERMES_CMD` 覆盖的命令。若命令里没有 `chat`，则退回到
-    二进制名之后插入，尽量让 Hermes 尽早看到 profile 参数。
-    """
-    # 中文注释：在 Hermes 子命令 `chat` 前插入 profile 参数，兼容 uvx 包装命令。
-    base_arguments = hermes_process.hermes_arguments()
-    try:
-        chat_index = base_arguments.index("chat")
-    except ValueError:
-        chat_index = 1 if base_arguments else 0
-    return [*base_arguments[:chat_index], "-p", profile_name, *base_arguments[chat_index:]]

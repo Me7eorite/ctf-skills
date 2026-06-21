@@ -22,7 +22,6 @@ from domain.research import DIFFICULTY_LABELS, GenerationRequestStatus
 from domain.research_validators import ResearchValidationError, validate_runtime_constraints
 from domain.validation import ChallengeValidator
 from hermes import HermesRunner
-from hermes.runner import DEFAULT_HERMES_TIMEOUT
 from packing import Packer, PackerOptions
 from persistence import (
     PersistenceConfigurationError,
@@ -86,7 +85,7 @@ def parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Hermes subprocess wall-clock timeout in seconds. "
-            f"Precedence: --timeout > HERMES_TIMEOUT env var > default {DEFAULT_HERMES_TIMEOUT} = 25min."
+            "Precedence: --timeout > HERMES_TIMEOUT env var > claimed-shard policy."
         ),
     )
 
@@ -298,7 +297,7 @@ def _parse_runtime_constraints(items: list[str]) -> dict[str, object]:
     return validate_runtime_constraints(values)
 
 
-def _resolve_run_timeout(cli_value: int | None) -> tuple[int, str]:
+def _resolve_run_timeout(cli_value: int | None) -> tuple[int | None, str | None]:
     if cli_value is not None:
         return cli_value, "cli"
     env_raw = os.environ.get("HERMES_TIMEOUT")
@@ -318,7 +317,7 @@ def _resolve_run_timeout(cli_value: int | None) -> tuple[int, str]:
             )
             sys.exit(2)
         return env_value, "env"
-    return DEFAULT_HERMES_TIMEOUT, "default"
+    return None, None
 
 
 def _progress_store_for_run(*, dry_run: bool):
@@ -942,7 +941,10 @@ def main() -> None:
                 "--build-attempts-only and --build-attempt are mutually exclusive"
             )
         effective_timeout, source = _resolve_run_timeout(args.timeout)
-        print(f"effective_timeout={effective_timeout} source={source}", flush=True)
+        if effective_timeout is None:
+            print("effective_timeout=shard-policy source=shard_policy", flush=True)
+        else:
+            print(f"effective_timeout={effective_timeout} source={source}", flush=True)
         result = HermesRunner(
             paths,
             progress=_progress_store_for_run(dry_run=args.dry_run),
@@ -956,6 +958,7 @@ def main() -> None:
             dry_run=args.dry_run,
             max_shards=args.max_shards,
             timeout=effective_timeout,
+            timeout_source=source,
             category=args.category,
             build_attempt_id=args.build_attempt,
             require_build_attempt=args.build_attempts_only,

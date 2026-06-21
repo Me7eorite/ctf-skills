@@ -54,6 +54,8 @@ Do not report `passed` until the corresponding work or command has actually
 succeeded. On failure, report `failed` with the failing command or reason
 before attempting a repair. Progress reporting is part of the authoring
 contract, not optional narration.
+If `./bin/progress` exits non-zero, stop immediately and return a non-zero
+Hermes result; do not continue authoring with unreported progress.
 
 The shard fields are requirements, not suggestions. In particular, preserve
 Web runtime/framework choices and Re/Pwn target formats, architectures,

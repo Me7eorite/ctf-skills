@@ -37,6 +37,10 @@ class WorkspacePreflightError(ValueError):
     """Workspace is unsafe or incomplete for a Hermes build invocation."""
 
 
+class WorkspacePromotionError(ValueError):
+    """Workspace output cannot be safely promoted."""
+
+
 @dataclass(frozen=True)
 class ExecutionWorkspace:
     """Paths and identity for one build invocation."""
@@ -192,6 +196,117 @@ def import_workspace_report(workspace: ExecutionWorkspace, legacy_report: Path) 
     return True
 
 
+def record_effective_timeout(
+    workspace: ExecutionWorkspace,
+    *,
+    seconds: int,
+    source: str,
+) -> None:
+    manifest = read_json(workspace.manifest, None)
+    if not isinstance(manifest, dict):
+        raise WorkspacePreflightError("input/manifest.json is not readable JSON")
+    manifest["effective_timeout_seconds"] = seconds
+    manifest["timeout_source"] = source
+    write_json(workspace.manifest, manifest)
+
+
+def materialize_resume_outputs(
+    paths: ProjectPaths,
+    workspace: ExecutionWorkspace,
+    payload: Mapping[str, Any],
+) -> None:
+    """Copy existing claimed canonical artifacts into isolated workspace output."""
+    category, challenge_ids = _validate_challenges(payload.get("challenges"))
+    destination_root = workspace.output / "challenges" / category
+    destination_root.mkdir(parents=True, exist_ok=True)
+    for challenge_id in challenge_ids:
+        existing = _matching_directories(paths.challenges / category, challenge_id)
+        if len(existing) > 1:
+            raise WorkspacePromotionError(
+                f"multiple canonical directories for claimed id {challenge_id}"
+            )
+        if not existing:
+            continue
+        source = existing[0]
+        _reject_tree_symlinks(source)
+        shutil.copytree(source, destination_root / source.name)
+
+
+def promote_claimed_outputs(
+    paths: ProjectPaths,
+    workspace: ExecutionWorkspace,
+    payload: Mapping[str, Any],
+) -> list[Path]:
+    """Atomically publish only claimed, validated workspace challenge directories."""
+    category, challenge_ids = _validate_challenges(payload.get("challenges"))
+    output_root = workspace.output
+    expected_root = output_root / "challenges" / category
+    _reject_tree_symlinks(output_root)
+    _reject_nonconforming_output(output_root, expected_root, challenge_ids)
+    if not expected_root.is_dir():
+        raise WorkspacePromotionError(f"missing output category directory: {category}")
+
+    candidates: dict[str, Path] = {}
+    for entry in expected_root.iterdir():
+        if not entry.is_dir() or entry.is_symlink():
+            raise WorkspacePromotionError(f"invalid output entry: {entry.name}")
+        match = _CHALLENGE_ENTRY.match(entry.name)
+        if match is None or match.group(0) not in challenge_ids:
+            raise WorkspacePromotionError(f"unclaimed output directory: {entry.name}")
+        challenge_id = match.group(0)
+        if challenge_id in candidates:
+            raise WorkspacePromotionError(
+                f"multiple output directories for claimed id {challenge_id}"
+            )
+        metadata = read_json(entry / "metadata.json", None)
+        if not isinstance(metadata, dict):
+            raise WorkspacePromotionError(f"missing metadata.json for {challenge_id}")
+        if metadata.get("id") != challenge_id or metadata.get("category") != category:
+            raise WorkspacePromotionError(f"metadata mismatch for {challenge_id}")
+        candidates[challenge_id] = entry
+    missing = challenge_ids - candidates.keys()
+    if missing:
+        raise WorkspacePromotionError(
+            f"missing claimed output: {', '.join(sorted(missing))}"
+        )
+
+    canonical_root = paths.challenges / category
+    canonical_root.mkdir(parents=True, exist_ok=True)
+    quarantine_root = workspace.root / "quarantine" / category
+    promoted: list[Path] = []
+    for challenge_id in sorted(challenge_ids):
+        source = candidates[challenge_id]
+        existing = _matching_directories(canonical_root, challenge_id)
+        if len(existing) > 1:
+            raise WorkspacePromotionError(
+                f"multiple canonical directories for claimed id {challenge_id}"
+            )
+        temporary = canonical_root / f".workspace-{workspace.workspace_id}-{uuid.uuid4().hex}"
+        shutil.copytree(source, temporary)
+        quarantined: Path | None = None
+        try:
+            if existing:
+                quarantine_root.mkdir(parents=True, exist_ok=True)
+                quarantined = quarantine_root / existing[0].name
+                if quarantined.exists():
+                    raise WorkspacePromotionError(
+                        f"quarantine target already exists: {quarantined.name}"
+                    )
+                existing[0].replace(quarantined)
+            destination = canonical_root / source.name
+            if destination.exists():
+                raise WorkspacePromotionError(f"promotion destination exists: {destination}")
+            temporary.replace(destination)
+            promoted.append(destination)
+        except BaseException:
+            if temporary.exists():
+                shutil.rmtree(temporary)
+            if quarantined is not None and quarantined.exists() and not existing[0].exists():
+                quarantined.replace(existing[0])
+            raise
+    return promoted
+
+
 def _executions_path(paths: ProjectPaths) -> Path:
     # Preserve structural test doubles while ProjectPaths exposes the contract.
     return getattr(paths, "executions", paths.root / "work" / "executions")
@@ -331,6 +446,47 @@ def _is_relative_to(path: Path, root: Path) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _matching_directories(root: Path, challenge_id: str) -> list[Path]:
+    if not root.is_dir():
+        return []
+    return sorted(
+        entry
+        for entry in root.glob(f"{challenge_id}-*")
+        if entry.is_dir() and not entry.is_symlink()
+    )
+
+
+def _reject_tree_symlinks(root: Path) -> None:
+    if root.is_symlink():
+        raise WorkspacePromotionError(f"symlink is not allowed: {root}")
+    if not root.exists():
+        return
+    for entry in root.rglob("*"):
+        if entry.is_symlink():
+            raise WorkspacePromotionError(f"symlink is not allowed: {entry}")
+
+
+def _reject_nonconforming_output(
+    output_root: Path,
+    expected_root: Path,
+    challenge_ids: set[str],
+) -> None:
+    for entry in output_root.rglob("*"):
+        if not entry.is_dir():
+            continue
+        match = _CHALLENGE_ENTRY.match(entry.name)
+        if match is None:
+            continue
+        if match.group(0) not in challenge_ids:
+            raise WorkspacePromotionError(f"unclaimed output directory: {entry.name}")
+        try:
+            entry.relative_to(expected_root)
+        except ValueError as exc:
+            raise WorkspacePromotionError(
+                f"claimed output uses non-conforming layout: {entry}"
+            ) from exc
 
 
 def _sha256(path: Path) -> str:

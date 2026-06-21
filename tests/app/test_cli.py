@@ -147,7 +147,7 @@ class CLITimeoutPrecedenceTests(unittest.TestCase):
                 Path(tmp),
                 args=[],
                 env={"HERMES_TIMEOUT": ""},  # cleared
-                expected="effective_timeout=1500 source=default",
+                expected="effective_timeout=shard-policy source=shard_policy",
             )
 
     def test_env_used_when_no_cli_flag(self):

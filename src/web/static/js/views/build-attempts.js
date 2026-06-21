@@ -143,7 +143,7 @@ async function startBuildWorker() {
   if (!state.detailId) return;
   try {
     const result = await postJson(`/api/build-attempts/${encodeURIComponent(state.detailId)}/worker/start`, {});
-    showToast(result.message);
+    showToast(`${result.message}（超时 ${result.effective_timeout_seconds}s，${result.timeout_source}）`);
     appState.data = {
       ...(appState.data || {}),
       process: {
@@ -409,6 +409,7 @@ function renderDetail(root) {
         <div><dt>设计任务</dt><dd><button class="btn btn-ghost btn-sm ba-open-design-task">${escapeHtml(shortId(attempt.design_task_id))}</button></dd></div>
         <div><dt>分片</dt><dd class="mono">${escapeHtml(attempt.shard_basename)}</dd></div>
         <div><dt>worker</dt><dd>${escapeHtml(attempt.worker || "-")}</dd></div>
+        <div><dt>Hermes 超时</dt><dd>${attempt.effective_timeout_seconds ? `${attempt.effective_timeout_seconds}s (${escapeHtml(attempt.timeout_source || "-")})` : "-"}</dd></div>
         <div><dt>开始时间</dt><dd>${escapeHtml(formatDateTime(attempt.started_at))}</dd></div>
         <div><dt>完成时间</dt><dd>${escapeHtml(formatDateTime(attempt.finished_at))}</dd></div>
         <div><dt>产物目录</dt><dd class="mono">${escapeHtml(attempt.resulting_challenge_dir || "-")}</dd></div>

@@ -129,8 +129,9 @@ The runner sets subprocess `cwd` to the execution workspace. Profile
 `terminal.cwd` is separately controlled by the operator-managed
 `config.yaml` of the `cf-<category>` profile and is NOT mutated by the runner.
 The runner-supplied subprocess `cwd` is authoritative for path resolution.
-A regression test MUST assert the actual `subprocess.Popen(cwd=...)` argument
-equals the workspace path (and is not `paths.root`).
+A regression test MUST assert the actual subprocess invocation's `cwd`
+argument equals the workspace path (and is not `paths.root`), without coupling
+the contract to `subprocess.run` versus `subprocess.Popen`.
 
 Operator runbook (out of code, in `docs/` or `README`): the `cf-<category>`
 profile config SHOULD set `terminal.cwd: "."` so that operator-driven manual

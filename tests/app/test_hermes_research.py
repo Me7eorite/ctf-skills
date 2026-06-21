@@ -18,7 +18,7 @@ def test_build_arguments_injects_profile_before_chat(monkeypatch):
         lambda: ["hermes", "chat", "-Q", "--yolo", "-q"],
     )
 
-    hermes_arguments = hermes_research._build_arguments("research-bot")
+    hermes_arguments = hermes_process.inject_profile_argument("research-bot")
 
     assert hermes_arguments == [
         "hermes",
@@ -39,7 +39,7 @@ def test_build_arguments_handles_uvx_wrapped_command(monkeypatch):
         lambda: ["uvx", "--from", "hermes-agent", "hermes", "chat", "-Q", "-q"],
     )
 
-    hermes_arguments = hermes_research._build_arguments("research-bot")
+    hermes_arguments = hermes_process.inject_profile_argument("research-bot")
 
     assert hermes_arguments == [
         "uvx",

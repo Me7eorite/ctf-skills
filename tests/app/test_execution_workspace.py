@@ -3,23 +3,32 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
+from core.build_timeout import shard_timeout_policy
 from core.jsonio import write_json
 from core.paths import ProjectPaths
+from domain.reports import merge_reports
+from hermes import process as hermes_process
 from hermes.runner import HermesRunner
 from hermes.workspace import (
     WorkspacePreflightError,
+    WorkspacePromotionError,
     derive_workspace_id,
     import_workspace_report,
+    materialize_resume_outputs,
     preflight_workspace,
     prepare_workspace,
+    promote_claimed_outputs,
 )
+from hermes.workspace_progress import WorkspaceProgressTailer, materialize_progress_shim
 
 
 class ExecutionWorkspaceTests(unittest.TestCase):
@@ -49,6 +58,23 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         shard = self.paths.shards / "running" / name
         write_json(shard, payload)
         return shard
+
+    def _artifact(
+        self,
+        root: Path,
+        challenge_id: str = "web-0001",
+        category: str = "web",
+        slug: str = "demo",
+        marker: str = "new",
+    ) -> Path:
+        directory = root / category / f"{challenge_id}-{slug}"
+        directory.mkdir(parents=True, exist_ok=True)
+        write_json(
+            directory / "metadata.json",
+            {"id": challenge_id, "category": category, "marker": marker},
+        )
+        (directory / "artifact.txt").write_text(marker, encoding="utf-8")
+        return directory
 
     def test_initialize_creates_executions_root(self) -> None:
         self.assertEqual(self.paths.executions, self.paths.work / "executions")
@@ -351,8 +377,8 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         )
         observed: dict[str, object] = {}
 
-        def invoke(prompt: str, log: Path, dry_run: bool, *, timeout=None) -> int:
-            observed.update(prompt=prompt, log=log, dry_run=dry_run)
+        def invoke(prompt: str, log: Path, dry_run: bool, *, timeout=None, **_kwargs) -> int:
+            observed.update(prompt=prompt, log=log, dry_run=dry_run, timeout=timeout)
             return 2
 
         with patch.object(runner, "_invoke", side_effect=invoke):
@@ -360,10 +386,312 @@ class ExecutionWorkspaceTests(unittest.TestCase):
 
         self.assertEqual(outcome["status"], "failed")
         self.assertEqual(observed["prompt"], "./logs/report.json\n")
+        self.assertEqual(observed["timeout"], 2700)
         log = observed["log"]
         self.assertIsInstance(log, Path)
         self.assertEqual(log.name, "hermes.log")
         self.assertEqual(log.parent.parent.parent, self.paths.executions)
+        manifest = json.loads((log.parent.parent / "input" / "manifest.json").read_text())
+        self.assertEqual(manifest["timeout_source"], "shard_policy")
+
+    def test_timeout_policy_by_category_and_expert_difficulty(self) -> None:
+        def payload(category: str, difficulty: str | None = None) -> dict:
+            challenge = {"id": f"{category}-0001", "category": category}
+            if difficulty is not None:
+                challenge["difficulty"] = difficulty
+            return {"challenges": [challenge]}
+
+        self.assertEqual(shard_timeout_policy(payload("re")), 1800)
+        self.assertEqual(shard_timeout_policy(payload("web")), 2700)
+        self.assertEqual(shard_timeout_policy(payload("pwn")), 3600)
+        self.assertEqual(shard_timeout_policy(payload("pwn", "hard")), 3600)
+        self.assertEqual(shard_timeout_policy(payload("pwn", "expert")), 5400)
+        mixed = payload("pwn", "hard")
+        mixed["challenges"].append(
+            {"id": "pwn-0002", "category": "pwn", "difficulty": "expert"}
+        )
+        self.assertEqual(shard_timeout_policy(mixed), 5400)
+
+    def test_workspace_prompt_uses_only_relative_runtime_paths(self) -> None:
+        self.paths.prompt_template.parent.mkdir(parents=True, exist_ok=True)
+        self.paths.prompt_template.write_text(
+            "{shard_path}\n{challenge_dir}\n{report_path}\n{generation_profile}\n"
+            "{design_skill}\n{design_references}\n{progress_command}\n",
+            encoding="utf-8",
+        )
+        shard = self._running_shard(
+            {"challenges": [{"id": "web-0001", "category": "web"}]}
+        )
+        stale = self.paths.challenges / "pwn" / "pwn-9999-stale"
+        stale.mkdir(parents=True)
+
+        prompt = HermesRunner(self.paths).render_prompt(
+            shard,
+            self.paths.reports / "x.report.json",
+            "worker-1",
+            workspace_relative=True,
+        )
+
+        self.assertIn("./input/shard.json", prompt)
+        self.assertIn("./output/challenges", prompt)
+        self.assertIn("./logs/report.json", prompt)
+        self.assertIn("./bin/progress", prompt)
+        self.assertNotIn(str(self.paths.root), prompt)
+        self.assertNotIn("pwn-9999", prompt)
+
+    def test_timeout_policy_rejects_mixed_categories(self) -> None:
+        with self.assertRaisesRegex(ValueError, "one category"):
+            shard_timeout_policy(
+                {
+                    "challenges": [
+                        {"id": "web-0001", "category": "web"},
+                        {"id": "pwn-0001", "category": "pwn"},
+                    ]
+                }
+            )
+
+    def test_progress_shim_encodes_special_characters(self) -> None:
+        shard = self._running_shard(
+            {"challenges": [{"id": "web-0001", "category": "web"}]}
+        )
+        workspace = prepare_workspace(
+            self.paths,
+            shard=shard,
+            original_shard_name="web.json",
+            worker="worker-1",
+        )
+        shim = materialize_progress_shim(workspace)
+        message = 'fix "quoted" path \\ newline\n中文 🚀'
+
+        subprocess.run(
+            [
+                str(shim),
+                "--challenge",
+                "web-0001",
+                "--stage",
+                "build",
+                "--status",
+                "running",
+                "--message",
+                message,
+            ],
+            cwd=workspace.root,
+            check=True,
+        )
+
+        event = json.loads(
+            (workspace.logs / "progress-events.jsonl").read_text(encoding="utf-8")
+        )
+        self.assertEqual(event["message"], message)
+
+    def test_progress_shim_fails_when_python3_is_absent(self) -> None:
+        shard = self._running_shard(
+            {"challenges": [{"id": "web-0001", "category": "web"}]}
+        )
+        workspace = prepare_workspace(
+            self.paths,
+            shard=shard,
+            original_shard_name="web.json",
+            worker="worker-1",
+        )
+        shim = materialize_progress_shim(workspace)
+        result = subprocess.run(
+            [
+                str(shim),
+                "--challenge",
+                "web-0001",
+                "--stage",
+                "build",
+                "--status",
+                "running",
+                "--message",
+                "x",
+            ],
+            cwd=workspace.root,
+            env={"PATH": ""},
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_live_tailer_imports_before_stop(self) -> None:
+        shard = self._running_shard(
+            {"challenges": [{"id": "web-0001", "category": "web"}]}
+        )
+        workspace = prepare_workspace(
+            self.paths,
+            shard=shard,
+            original_shard_name="web.json",
+            worker="worker-1",
+        )
+        rows: list[dict] = []
+        tailer = WorkspaceProgressTailer(
+            workspace,
+            lambda **kwargs: rows.append(kwargs) or kwargs,
+            poll_interval=0.02,
+        )
+        tailer.start()
+        write_json(workspace.logs / "unused.json", {})
+        (workspace.logs / "progress-events.jsonl").write_text(
+            '{"challenge":"web-0001","stage":"build","status":"running","message":"live"}\n',
+            encoding="utf-8",
+        )
+        deadline = time.monotonic() + 1
+        while not rows and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(rows[0]["message"], "live")
+        tailer.stop_and_flush()
+
+    def test_promotion_quarantines_claimed_and_preserves_unrelated(self) -> None:
+        payload = {"challenges": [{"id": "web-0001", "category": "web"}]}
+        shard = self._running_shard(payload)
+        workspace = prepare_workspace(
+            self.paths,
+            shard=shard,
+            original_shard_name="web.json",
+            worker="worker-1",
+        )
+        old = self._artifact(self.paths.challenges, marker="old")
+        unrelated = self._artifact(
+            self.paths.challenges,
+            challenge_id="web-9999",
+            slug="keep",
+            marker="keep",
+        )
+        self._artifact(workspace.output / "challenges", marker="new")
+
+        promoted = promote_claimed_outputs(self.paths, workspace, payload)
+
+        self.assertEqual(len(promoted), 1)
+        self.assertEqual((promoted[0] / "artifact.txt").read_text(), "new")
+        quarantine = workspace.root / "quarantine" / "web" / old.name
+        self.assertEqual((quarantine / "artifact.txt").read_text(), "old")
+        self.assertTrue(unrelated.is_dir())
+
+    def test_promotion_rejects_unclaimed_and_output_symlink(self) -> None:
+        payload = {"challenges": [{"id": "web-0001", "category": "web"}]}
+        shard = self._running_shard(payload)
+        workspace = prepare_workspace(
+            self.paths,
+            shard=shard,
+            original_shard_name="web.json",
+            worker="worker-1",
+        )
+        self._artifact(workspace.output / "challenges")
+        self._artifact(
+            workspace.output / "challenges", challenge_id="web-9999", slug="bad"
+        )
+        with self.assertRaisesRegex(WorkspacePromotionError, "unclaimed"):
+            promote_claimed_outputs(self.paths, workspace, payload)
+
+        bad = workspace.output / "challenges" / "web" / "web-9999-bad"
+        __import__("shutil").rmtree(bad)
+        (workspace.output / "linked").symlink_to(self.paths.root)
+        with self.assertRaisesRegex(WorkspacePromotionError, "symlink"):
+            promote_claimed_outputs(self.paths, workspace, payload)
+
+    def test_promotion_rejects_duplicate_metadata_and_nonconforming_layout(self) -> None:
+        payload = {"challenges": [{"id": "web-0001", "category": "web"}]}
+
+        def fresh_workspace():
+            shard = self._running_shard(payload)
+            return prepare_workspace(
+                self.paths,
+                shard=shard,
+                original_shard_name="web.json",
+                worker="worker-1",
+            )
+
+        workspace = fresh_workspace()
+        self._artifact(workspace.output / "challenges", slug="one")
+        self._artifact(workspace.output / "challenges", slug="two")
+        with self.assertRaisesRegex(WorkspacePromotionError, "multiple output"):
+            promote_claimed_outputs(self.paths, workspace, payload)
+
+        workspace = fresh_workspace()
+        candidate = self._artifact(workspace.output / "challenges")
+        write_json(candidate / "metadata.json", {"id": "web-0002", "category": "web"})
+        with self.assertRaisesRegex(WorkspacePromotionError, "metadata mismatch"):
+            promote_claimed_outputs(self.paths, workspace, payload)
+
+        workspace = fresh_workspace()
+        self._artifact(workspace.output, slug="wrong-place")
+        with self.assertRaisesRegex(WorkspacePromotionError, "non-conforming"):
+            promote_claimed_outputs(self.paths, workspace, payload)
+
+    def test_resume_materialization_copies_claimed_only(self) -> None:
+        payload = {"challenges": [{"id": "web-0001", "category": "web"}]}
+        shard = self._running_shard(payload)
+        workspace = prepare_workspace(
+            self.paths,
+            shard=shard,
+            original_shard_name="web.json",
+            worker="worker-1",
+        )
+        claimed = self._artifact(self.paths.challenges, marker="old")
+        self._artifact(self.paths.challenges, challenge_id="web-9999", slug="keep")
+
+        materialize_resume_outputs(self.paths, workspace, payload)
+
+        self.assertTrue(
+            (workspace.output / "challenges" / "web" / claimed.name).is_dir()
+        )
+        self.assertFalse(
+            (workspace.output / "challenges" / "web" / "web-9999-keep").exists()
+        )
+
+    def test_report_import_remains_visible_to_merge_reports(self) -> None:
+        shard = self._running_shard(
+            {"challenges": [{"id": "web-0001", "category": "web"}]}
+        )
+        workspace = prepare_workspace(
+            self.paths,
+            shard=shard,
+            original_shard_name="web.json",
+            worker="worker-1",
+        )
+        write_json(workspace.report, {"status": "passed", "marker": "workspace"})
+        legacy = self.paths.reports / "web.report.json"
+        import_workspace_report(workspace, legacy)
+
+        summary = json.loads(merge_reports(self.paths.reports).read_text())
+
+        self.assertEqual(summary["reports"][0]["marker"], "workspace")
+
+    def test_build_invoke_uses_profile_and_workspace_cwd(self) -> None:
+        shard = self._running_shard(
+            {"challenges": [{"id": "web-0001", "category": "web"}]}
+        )
+        workspace = prepare_workspace(
+            self.paths,
+            shard=shard,
+            original_shard_name="web.json",
+            worker="worker-1",
+        )
+        captured: dict = {}
+
+        def fake_run(arguments, **kwargs):
+            captured["arguments"] = arguments
+            captured.update(kwargs)
+            return type("Result", (), {"returncode": 0})()
+
+        runner = HermesRunner(self.paths)
+        with (
+            patch.object(hermes_process, "hermes_arguments", return_value=["hermes", "chat", "-q"]),
+            patch.object(hermes_process.subprocess, "run", side_effect=fake_run),
+        ):
+            result = runner._invoke(
+                "prompt",
+                workspace.hermes_log,
+                False,
+                timeout=10,
+                workspace=workspace,
+                profile_name="cf-web",
+            )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(captured["arguments"][:4], ["hermes", "-p", "cf-web", "chat"])
+        self.assertEqual(captured["cwd"], workspace.root)
+        self.assertNotEqual(captured["cwd"], self.paths.root)
 
 
 if __name__ == "__main__":
