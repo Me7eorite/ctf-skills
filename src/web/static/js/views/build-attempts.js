@@ -157,6 +157,22 @@ async function startBuildWorker() {
   }
 }
 
+async function startCurrentQueue() {
+  const payload = {};
+  if (state.filters.category) payload.category = state.filters.category;
+  if (state.filters.generation_request_id) {
+    payload.generation_request_id = state.filters.generation_request_id;
+  }
+  try {
+    const result = await postJson("/api/build-attempts/queue/start", payload);
+    showToast(`顺序队列已启动 · 共 ${result.queue_length} 个任务`);
+    state.list = null;
+    await ensureList();
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
 async function revalidateAttempt(attemptId) {
   if (!attemptId) return;
   state.flags.revalidating = { ...(state.flags.revalidating || {}), [attemptId]: true };
@@ -268,6 +284,9 @@ function renderList(root) {
           <div class="card-title">构建记录</div>
           <div class="card-subtitle">${rows.length} 条最新构建运行</div>
         </div>
+        <button id="ba-start-queue" class="btn btn-primary btn-sm">
+          <i data-lucide="list-ordered"></i>启动当前队列
+        </button>
       </div>
       ${renderFilters()}
       ${rows.length ? renderTable(rows) : `<div class="empty card-body">没有匹配的构建记录</div>`}
@@ -657,6 +676,10 @@ export function bind() {
     }
     if (event.target.closest("#ba-refresh")) {
       refreshWithTick();
+      return;
+    }
+    if (event.target.closest("#ba-start-queue")) {
+      startCurrentQueue();
       return;
     }
     if (event.target.closest("#ba-worker")) {

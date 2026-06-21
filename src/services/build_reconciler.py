@@ -154,7 +154,7 @@ class BuildReconciler:
             started_at = observed.claimed_at or (claim.created_at if claim else None)
 
             if observed.state == "running":
-                if row.status == "queued" and claim is not None:
+                if row.status == "queued":
                     row.status = "running"
                     row.worker = worker
                     row.started_at = started_at or now

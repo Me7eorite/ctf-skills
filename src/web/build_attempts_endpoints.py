@@ -327,6 +327,67 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
             status_code=HTTPStatus.ACCEPTED,
         )
 
+    @app.post("/api/build-attempts/queue/start")
+    async def start_build_attempt_queue(request: Request) -> JSONResponse:
+        try:
+            payload = await request.json()
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail=f"request body must be JSON: {exc}",
+            ) from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail="request body must be a JSON object",
+            )
+        category = payload.get("category")
+        if category is not None and category not in SUPPORTED_CATEGORIES:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail=(
+                    f"unknown category {category!r}; "
+                    f"allowed: {sorted(SUPPORTED_CATEGORIES)}"
+                ),
+            )
+        request_uuid = _parse_optional_uuid(
+            payload.get("generation_request_id"),
+            "generation_request_id",
+        )
+        raw_limit = payload.get("limit")
+        limit = _parse_limit(str(raw_limit)) if raw_limit is not None else 100
+
+        BuildOrchestrationService(paths=_project_paths(app)).recover_staging()
+        attempts = _eligible_queued_attempts(
+            app,
+            category=category,
+            generation_request_id=request_uuid,
+            limit=limit,
+        )
+        if not attempts:
+            scope = f" {category}" if category else ""
+            raise HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail=f"no eligible{scope} queued build attempts have matching pending shards",
+            )
+        categories = [item[1] for item in attempts]
+        _require_build_profiles(app, categories)
+
+        attempt_ids = [item[0] for item in attempts]
+        tasks = app.state.dashboard_tasks
+        ok, message = tasks.start_sequential_worker(build_attempt_ids=attempt_ids)
+        if not ok:
+            raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=message)
+        return JSONResponse(
+            {
+                "ok": True,
+                "message": message,
+                "build_attempt_ids": [str(item) for item in attempt_ids],
+                "queue_length": len(attempt_ids),
+            },
+            status_code=HTTPStatus.ACCEPTED,
+        )
+
     @app.post("/api/build-attempts/{attempt_id}/retry")
     def retry_build_attempt(attempt_id: str) -> JSONResponse:
         attempt_uuid = _parse_uuid(attempt_id, "build attempt id")
@@ -367,8 +428,8 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
         """
         attempt_uuid = _parse_uuid(attempt_id, "build attempt id", not_found=True)
         paths = _project_paths(app)
-        from persistence.session import transaction as _txn
         from persistence.session import SessionFactory as _SF
+        from persistence.session import transaction as _txn
         with _txn(factory=_SF()) as session:
             row = session.get(build_model.BuildAttempt, attempt_uuid)
             if row is None:
@@ -585,35 +646,55 @@ def _parse_limit(raw: str | None) -> int:
 
 
 def _next_eligible_attempt(app: FastAPI, category: str) -> tuple[UUID, str] | None:
+    attempts = _eligible_queued_attempts(app, category=category, limit=1)
+    return attempts[0] if attempts else None
+
+
+def _eligible_queued_attempts(
+    app: FastAPI,
+    *,
+    category: str | None = None,
+    generation_request_id: UUID | None = None,
+    limit: int,
+) -> list[tuple[UUID, str]]:
     from persistence.session import transaction
 
     paths = _project_paths(app)
+    query = (
+        sa.select(build_model.BuildAttempt, task_model.DesignTask.category)
+        .join(
+            task_model.DesignTask,
+            task_model.DesignTask.id == build_model.BuildAttempt.design_task_id,
+        )
+        .where(build_model.BuildAttempt.status == "queued")
+        .order_by(
+            build_model.BuildAttempt.created_at.asc(),
+            build_model.BuildAttempt.id.asc(),
+        )
+    )
+    if category is not None:
+        query = query.where(task_model.DesignTask.category == category)
+    if generation_request_id is not None:
+        query = query.where(
+            task_model.DesignTask.generation_request_id == generation_request_id
+        )
+
+    selected: list[tuple[UUID, str]] = []
     with transaction() as session:
-        rows = session.execute(
-            sa.select(build_model.BuildAttempt, task_model.DesignTask.category)
-            .join(
-                task_model.DesignTask,
-                task_model.DesignTask.id == build_model.BuildAttempt.design_task_id,
-            )
-            .where(
-                build_model.BuildAttempt.status == "queued",
-                task_model.DesignTask.category == category,
-            )
-            .order_by(
-                build_model.BuildAttempt.created_at.asc(),
-                build_model.BuildAttempt.id.asc(),
-            )
-        ).all()
+        rows = session.execute(query).all()
         for attempt, row_category in rows:
-            if _pending_payload_matches(
+            if not _pending_payload_matches(
                 paths,
                 attempt_id=attempt.id,
                 design_task_id=attempt.design_task_id,
                 shard_basename=attempt.shard_basename,
                 category=row_category,
             ):
-                return attempt.id, row_category
-    return None
+                continue
+            selected.append((attempt.id, row_category))
+            if len(selected) >= limit:
+                break
+    return selected
 
 
 def _exact_eligible_attempt(

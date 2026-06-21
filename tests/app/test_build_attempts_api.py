@@ -469,6 +469,45 @@ def test_sequential_worker_preserves_requested_attempt_order(
     assert tasks.calls == [("sequence", second.id), ("sequence", first.id)]
 
 
+def test_queue_start_runs_all_eligible_attempts_in_created_order(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    first_task = _seed_designed_task(session_factory, task_no=1)
+    second_task = _seed_designed_task(session_factory, task_no=2)
+    third_task = _seed_designed_task(session_factory, task_no=3, category="pwn")
+    with transaction(factory=session_factory) as session:
+        repo = BuildAttemptsRepository(session)
+        first = _create_canonical_attempt(repo, first_task)
+        second = _create_canonical_attempt(repo, second_task)
+        third = _create_canonical_attempt(repo, third_task)
+        session.get(build_model.BuildAttempt, first.id).created_at = datetime(
+            2026, 1, 1, tzinfo=timezone.utc
+        )
+        session.get(build_model.BuildAttempt, second.id).created_at = datetime(
+            2026, 1, 2, tzinfo=timezone.utc
+        )
+        session.get(build_model.BuildAttempt, third.id).created_at = datetime(
+            2026, 1, 3, tzinfo=timezone.utc
+        )
+
+    _write_pending_attempt(client, first)
+    _write_pending_attempt(client, second)
+    _write_pending_attempt(client, third, category="pwn")
+    tasks = _StubBuildTaskManager()
+    client.app.state.dashboard_tasks = tasks
+
+    response = client.post(
+        "/api/build-attempts/queue/start",
+        json={"category": "web"},
+    )
+
+    assert response.status_code == 202
+    assert response.json()["build_attempt_ids"] == [str(first.id), str(second.id)]
+    assert response.json()["queue_length"] == 2
+    assert tasks.calls == [("sequence", first.id), ("sequence", second.id)]
+
+
 def test_category_worker_skips_mismatched_payload(
     client: TestClient,
     session_factory: SessionFactory,

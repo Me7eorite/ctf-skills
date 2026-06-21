@@ -6,6 +6,7 @@ import os
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -174,7 +175,7 @@ def _row(session_factory: SessionFactory, attempt_id: UUID):
         return row
 
 
-def test_queued_to_running_requires_claim_event(
+def test_queued_to_running_uses_running_shard_claim_sidecar(
     tmp_path: Path,
     session_factory: SessionFactory,
 ):
@@ -191,22 +192,6 @@ def test_queued_to_running_requires_claim_event(
         },
     )
 
-    reconciler.tick_once_sync()
-    assert _row(session_factory, attempt_id).status == "queued"
-
-    with session_factory() as session:
-        session.add(
-            ProgressEvent(
-                shard=basename,
-                challenge_id="",
-                worker="hermes-01",
-                stage="queued",
-                status="running",
-                percent=0,
-                message="claimed",
-            )
-        )
-        session.commit()
     reconciler.tick_once_sync()
 
     row = _row(session_factory, attempt_id)
