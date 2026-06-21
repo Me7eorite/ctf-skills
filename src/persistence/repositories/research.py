@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -17,6 +17,7 @@ from domain.research_validators import (
     validate_distribution,
     validate_finding,
 )
+from core.clock import utcnow as _utcnow
 from persistence.models import research as model
 
 
@@ -483,11 +484,6 @@ class ResearchRepository:
         exists = self.session.scalar(sa.select(sa.literal(True)).where(model.AgentRole.code == role))
         if not exists:
             raise ResearchValidationError(f"agent role {role!r} does not exist")
-
-
-def _utcnow() -> datetime:
-    """返回带 UTC 时区的当前时间。"""
-    return datetime.now(timezone.utc)
 
 
 def _category(row: model.ChallengeCategory) -> dto.ChallengeCategory:

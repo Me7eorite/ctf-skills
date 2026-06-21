@@ -178,3 +178,20 @@ class ProjectPaths:
         for directory in directories:
             directory.mkdir(parents=True, exist_ok=True)
         return directories
+
+
+def category_of(challenge_dir: Path, paths: "ProjectPaths") -> str:
+    """从题目目录路径中推断类别。
+
+    逻辑: 相对于 `paths.challenges` 根目录的路径的第一段即为类别名。
+    例如: `work/challenges/web/web-0001-sqli/` → `"web"`。
+    当目录不在 `challenges` 树下或处于根本身时返回空字符串。
+
+    实现为模块级函数（而非 ProjectPaths 方法），让测试中的 paths 替身可以
+    用结构化鸭子类型（只需 `.challenges` 属性）参与，而不必实现新方法。
+    """
+    try:
+        relative = challenge_dir.resolve().relative_to(paths.challenges.resolve())
+    except ValueError:
+        return ""
+    return relative.parts[0] if relative.parts else ""

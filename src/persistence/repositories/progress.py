@@ -4,18 +4,17 @@ from __future__ import annotations
 
 from collections.abc import Collection, Sequence
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from core.state import (
-    STAGES,
-    STATUSES,
     ProgressEventInput,
     ProgressStore,
+    _normalize_shard,
     _percent,
+    _prepare_event,
 )
 from persistence.models.progress import ProgressEvent, ProgressSnapshot
 from persistence.session import (
@@ -246,25 +245,6 @@ class PostgresProgressStore(ProgressStore):
 
     def _redacted_url(self) -> str:
         return self._factory.engine.url.render_as_string(hide_password=True)
-
-
-def _prepare_event(event: ProgressEventInput) -> ProgressEventInput:
-    if event.stage not in STAGES:
-        raise ValueError(f"invalid progress stage: {event.stage}")
-    if event.status not in STATUSES:
-        raise ValueError(f"invalid progress status: {event.status}")
-    return ProgressEventInput(
-        shard=_normalize_shard(event.shard),
-        challenge_id=event.challenge_id,
-        worker=event.worker,
-        stage=event.stage,
-        status=event.status,
-        message=event.message,
-    )
-
-
-def _normalize_shard(shard: str) -> str:
-    return Path(shard).name
 
 
 def _event_result(event: ProgressEvent, *, updated_at: datetime) -> dict:

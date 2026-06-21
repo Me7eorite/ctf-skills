@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from core.paths import ProjectPaths
+from core.paths import ProjectPaths, category_of
 from core.state import ProgressStore
 from domain.resume import (
     ChallengeResumePlan,
@@ -192,7 +192,7 @@ def validate_gate(
     if plan.directory is None:
         return plan.lookup_status
 
-    category = _category_of(plan.directory, paths)
+    category = category_of(plan.directory, paths)
 
     # 按阶段顺序检查证据
     if not design_evidence(plan.directory, challenge_id):
@@ -237,14 +237,3 @@ def record_per_challenge_complete(
         )
 
 
-def _category_of(challenge_dir, paths: ProjectPaths) -> str:
-    """从题目目录路径中推断类别。
-
-    逻辑: 相对于 challenges 根目录的路径的第一段即为类别名。
-    例如: work/challenges/web/web-0001-sqli/ → "web"
-    """
-    try:
-        relative = challenge_dir.resolve().relative_to(paths.challenges.resolve())
-    except ValueError:
-        return ""
-    return relative.parts[0] if relative.parts else ""

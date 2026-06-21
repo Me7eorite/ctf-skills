@@ -21,7 +21,7 @@ from uuid import UUID
 
 from core.docker import image_exists as default_image_exists
 from core.jsonio import read_json
-from core.paths import ProjectPaths
+from core.paths import ProjectPaths, category_of
 from core.queue import ShardQueue
 from core.state import InMemoryProgressStore, ProgressEventInput, ProgressStore
 from domain.resume import (
@@ -574,7 +574,7 @@ class HermesRunner:
         for cp in recovery_plan.challenges:
             if cp.directory is None:
                 return False
-            category = _category_of(cp.directory, self.paths)
+            category = category_of(cp.directory, self.paths)
             if not design_evidence(cp.directory, cp.challenge_id):
                 return False
             if not implement_evidence(cp.directory, category):
@@ -709,14 +709,6 @@ class HermesRunner:
     @staticmethod
     def _hermes_arguments() -> list[str]:
         return hermes_process.hermes_arguments()
-
-
-def _category_of(challenge_dir: Path, paths: ProjectPaths) -> str:
-    try:
-        relative = challenge_dir.resolve().relative_to(paths.challenges.resolve())
-    except ValueError:
-        return ""
-    return relative.parts[0] if relative.parts else ""
 
 
 def _resume_source_shard_name(shard: Path, current_original_name: str) -> str:

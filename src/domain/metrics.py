@@ -16,27 +16,14 @@ import calendar
 import time
 from typing import Any
 
-from core.state import ProgressStore
-
-# 五个执行阶段（按顺序），排除 queued 和 complete
-STAGE_ORDER: tuple[str, ...] = (
-    "design",     # 设计
-    "implement",  # 编码
-    "build",      # 构建
-    "validate",   # 校验
-    "document",   # 文档
-)
+from core.state import EXECUTION_STAGES as STAGE_ORDER, ProgressStore
 
 # UTC 时间戳格式
 _TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
 
 def _parse_timestamp(value: str) -> float | None:
-    """将 ISO 8601 格式的 UTC 时间戳字符串解析为 epoch 秒数。
-
-    【注意】: 当前实现使用 time.mktime，它会把输入当作本地时间解析，
-    而非 UTC 时间。在夏令时切换日期附近可能导致 duration 计算误差。
-    """
+    """将 ISO 8601 格式的 UTC 时间戳字符串解析为 epoch 秒数。"""
     try:
         return float(calendar.timegm(time.strptime(value, _TIMESTAMP_FORMAT)))
     except (TypeError, ValueError):

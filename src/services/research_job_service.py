@@ -8,13 +8,14 @@ import logging
 import os
 import shutil
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol, cast
 from uuid import UUID, uuid4
 
 import sqlalchemy as sa
 
+from core.clock import utcnow as _utcnow
 from domain import research as dto
 from domain.research_validators import ResearchValidationError, validate_runtime_constraints
 from persistence.models import research as model
@@ -711,11 +712,6 @@ def _get_request(session, request_id: UUID) -> model.GenerationRequest:
     if request is None:
         raise ResearchValidationError(f"generation_request {request_id} does not exist")
     return request
-
-
-def _utcnow() -> datetime:
-    """返回带 UTC 时区的当前时间。"""
-    return datetime.now(timezone.utc)
 
 
 def _coerce_datetime(value: Any) -> datetime:

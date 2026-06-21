@@ -155,9 +155,9 @@ def invoke(
                 timeout=timeout,
                 check=False,              # 不抛异常，由调用方处理返回码
             )
-        except FileNotFoundError:
+        except (FileNotFoundError, PermissionError):
             output.write(
-                "Hermes command not found. Set HERMES_CMD or install Hermes.\n"
+                "Hermes command not found or not executable. Set HERMES_CMD or install Hermes.\n"
             )
             return 127  # 标准 POSIX 返回码：命令未找到
         except subprocess.TimeoutExpired:
@@ -215,9 +215,9 @@ def invoke_capture(
             start_new_session=os.name != "nt",
             errors="replace",             # 编码错误用替换字符，不崩溃
         )
-    except FileNotFoundError:
+    except (FileNotFoundError, PermissionError):
         log_path.write_text(
-            header + "\nHermes command not found. Set HERMES_CMD or install Hermes.\n",
+            header + "\nHermes command not found or not executable. Set HERMES_CMD or install Hermes.\n",
             encoding="utf-8",
         )
         return HermesProcessResult(returncode=127, stdout="", cancelled=False)

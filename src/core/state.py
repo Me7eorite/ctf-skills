@@ -28,6 +28,15 @@ STAGES = (
 STATUSES = {"pending", "running", "passed", "failed"}
 #               待处理     执行中      通过      失败
 
+# 五个可执行阶段（排除 queued 排队和 complete 终态），用于阶段耗时/恢复计划等场景。
+EXECUTION_STAGES: tuple[str, ...] = (
+    "design",
+    "implement",
+    "build",
+    "validate",
+    "document",
+)
+
 
 # ========== 数据结构 ==========
 

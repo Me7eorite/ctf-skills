@@ -19,16 +19,7 @@ from typing import Any
 
 from core.docker import image_exists as default_image_exists
 from core.paths import ProjectPaths
-from core.state import ProgressStore
-
-# 五个执行阶段（按顺序，与 core.state.STAGES 相比排除 queued 和 complete）
-STAGE_ORDER: tuple[str, ...] = (
-    "design",     # 设计
-    "implement",  # 编码
-    "build",      # 构建
-    "validate",   # 校验
-    "document",   # 文档
-)
+from core.state import EXECUTION_STAGES as STAGE_ORDER, ProgressStore
 
 # 文档检查参数：最小字节数、最小标题数
 _DOCUMENT_HEADING_PREFIX = "## "
