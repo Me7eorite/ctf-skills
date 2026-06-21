@@ -43,7 +43,7 @@ from hermes.process import (
     HERMES_TIMEOUT_RETURNCODE,
 )
 from hermes.progress import ensure_report, update_report
-from hermes.prompt import render_prompt
+from hermes.prompt import render_prompt, render_validation_repair_prompt
 from hermes.report import merge_validation_into_report
 from hermes.validation import (
     record_per_challenge_complete,
@@ -77,6 +77,7 @@ def _carry_forward_pending_message(stage: str) -> str:
 
 
 _LOGGER = logging.getLogger(__name__)
+DEFAULT_VALIDATION_REPAIR_ATTEMPTS = 2
 
 
 class _BestEffortProgressStore:
@@ -159,6 +160,7 @@ class HermesRunner:
         progress_write_exceptions: tuple[type[Exception], ...] = (),
         image_exists: Callable[[str], bool] | None = None,
         profile_exists: Callable[[str], bool] | None = None,
+        validation_repair_attempts: int | None = None,
     ):
         self.paths = paths
         # 分片队列（管理 pending/running/done/failed 目录）
@@ -173,6 +175,19 @@ class HermesRunner:
         self.validator = ChallengeValidator(paths)
         self._image_exists = image_exists or default_image_exists
         self._profile_exists = profile_exists or hermes_process.profile_exists
+        configured_repairs = validation_repair_attempts
+        if configured_repairs is None:
+            raw_repairs = os.environ.get(
+                "HERMES_VALIDATION_REPAIR_ATTEMPTS",
+                str(DEFAULT_VALIDATION_REPAIR_ATTEMPTS),
+            )
+            try:
+                configured_repairs = int(raw_repairs)
+            except ValueError:
+                configured_repairs = DEFAULT_VALIDATION_REPAIR_ATTEMPTS
+        if configured_repairs < 0:
+            raise ValueError("validation_repair_attempts must be non-negative")
+        self.validation_repair_attempts = configured_repairs
 
     # ----------------------------------------------------------------
     # 公有入口方法
@@ -652,6 +667,66 @@ class HermesRunner:
             original_shard_name, worker, challenge_ids, plan_by_id
         )
         merge_validation_into_report(report, per_results)
+
+        # Host validation is authoritative, but a generated exploit frequently needs
+        # runtime feedback (container logs, traceback, leak parsing, libc offsets) that
+        # was unavailable during the initial authoring pass. Feed deterministic failure
+        # diagnostics back to Hermes and revalidate a bounded number of times.
+        for repair_attempt in range(1, self.validation_repair_attempts + 1):
+            if not any(
+                result.get("solve_status") == "failed" for result in per_results
+            ):
+                break
+            self._progress.record(
+                shard=original_shard_name,
+                worker=worker,
+                stage="validate",
+                status="running",
+                message=(
+                    "validation repair: sending host diagnostics to Hermes "
+                    f"({repair_attempt}/{self.validation_repair_attempts})"
+                ),
+            )
+            repair_prompt = render_validation_repair_prompt(
+                attempt=repair_attempt,
+                max_attempts=self.validation_repair_attempts,
+                validation_results=per_results,
+            )
+            repair_log = workspace.logs / f"hermes-validation-repair-{repair_attempt}.log"
+            repair_tailer = WorkspaceProgressTailer(workspace, self._progress.record)
+            repair_tailer.start()
+            try:
+                repair_returncode = self._invoke(
+                    repair_prompt,
+                    repair_log,
+                    dry_run=False,
+                    timeout=effective_timeout,
+                    workspace=workspace,
+                    profile_name=profile_name,
+                )
+            finally:
+                repair_tailer.stop_and_flush()
+            import_workspace_report(workspace, report)
+            if repair_returncode != 0:
+                _LOGGER.warning(
+                    "validation repair attempt %s exited with %s",
+                    repair_attempt,
+                    repair_returncode,
+                )
+                break
+            try:
+                promote_claimed_outputs(self.paths, workspace, payload)
+            except (OSError, WorkspacePromotionError, ValueError) as exc:
+                _LOGGER.warning(
+                    "validation repair attempt %s promotion failed: %s",
+                    repair_attempt,
+                    exc,
+                )
+                break
+            per_results = self._run_validation(
+                original_shard_name, worker, challenge_ids, plan_by_id
+            )
+            merge_validation_into_report(report, per_results)
 
         # 步骤 10: 根据校验结果判定最终状态
         any_failed = any(

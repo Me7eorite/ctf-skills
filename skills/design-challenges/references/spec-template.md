@@ -51,9 +51,9 @@ When the user asks for deliverable-ready output, package plans, handoff manifest
 - Compose rule: exactly one service; databases/dependencies must be installed in the same image/service
 - Compose identity: `image` and `container_name` use the same Docker-safe,
   lowercase challenge name
-- Flag injection: Compose defines `environment.FLAG` as `${FLAG}`; validation
-  sets the host-side value, and the service does not bake plaintext into image
-  layers, the Compose file, or source
+- Flag injection: Compose defines a literal `- FLAG=flag{xxxx}` list entry
+  equal to `metadata.flag`; validation does not override it, and the service
+  does not bake plaintext into image layers, business source, or attachments
 - Runtime identity: Pwn defaults to `ctf` under `/home/ctf`; Web reuses an
   appropriate base-image service user and standard Web directory (for example
   `www-data:/var/www/html` or the Tomcat image's `tomcat` account/directory)

@@ -97,6 +97,13 @@ class ValidationTests(unittest.TestCase):
             header = bytearray(b"\x7fELF" + b"\x00" * 16)
             header[18:20] = x86_64
             (challenge / "attachments" / name).write_bytes(header)
+        deploy = challenge / "deploy"
+        (deploy / "src").mkdir(parents=True)
+        (deploy / "src" / "challenge.c").write_text("int main(void) { return 0; }\n")
+        (deploy / "Dockerfile").write_text("FROM scratch\n")
+        (deploy / "docker-compose.yml").write_text(
+            "services:\n  challenge:\n    environment:\n      - FLAG=flag{demo}\n"
+        )
         metadata = {
             "id": "pwn-attach-001",
             "title": "Demo",
@@ -108,6 +115,35 @@ class ValidationTests(unittest.TestCase):
             "target_platform": "linux/amd64",
         }
 
+        self.assertEqual(self.validator.contract_errors(challenge, metadata), [])
+
+    def test_web_contract_requires_literal_compose_flag_matching_metadata(self):
+        challenge = self.paths.challenges / "web" / "web-flag-001"
+        deploy = challenge / "deploy"
+        (deploy / "src").mkdir(parents=True)
+        (deploy / "src" / "app.js").write_text("console.log(process.env.FLAG)\n")
+        (deploy / "Dockerfile").write_text("FROM scratch\n")
+        (deploy / "docker-compose.yml").write_text(
+            "services:\n  challenge:\n    environment:\n      - FLAG=${FLAG}\n"
+        )
+        metadata = {
+            "id": "web-flag-001",
+            "title": "Demo",
+            "category": "web",
+            "difficulty": "easy",
+            "build_status": "passed",
+            "flag": "flag{demo}",
+            "runtime": "node",
+            "framework": "Express",
+        }
+
+        errors = self.validator.contract_errors(challenge, metadata)
+
+        self.assertTrue(any("FLAG=<metadata.flag>" in error for error in errors))
+
+        (deploy / "docker-compose.yml").write_text(
+            "services:\n  challenge:\n    environment:\n      - FLAG=flag{demo}\n"
+        )
         self.assertEqual(self.validator.contract_errors(challenge, metadata), [])
 
     def test_reverse_contract_missing_elf_reports_attachments_and_dist(self):

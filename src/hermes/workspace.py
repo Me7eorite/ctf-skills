@@ -322,8 +322,11 @@ def promote_claimed_outputs(
                 quarantine_root.mkdir(parents=True, exist_ok=True)
                 quarantined = quarantine_root / existing[0].name
                 if quarantined.exists():
-                    raise WorkspacePromotionError(
-                        f"quarantine target already exists: {quarantined.name}"
+                    # A validation-repair invocation can promote the same claimed
+                    # challenge more than once. Preserve every prior canonical version
+                    # instead of blocking the repair loop on the first quarantine.
+                    quarantined = quarantine_root / (
+                        f"{existing[0].name}.repair-{uuid.uuid4().hex}"
                     )
                 existing[0].replace(quarantined)
             destination = canonical_root / source.name

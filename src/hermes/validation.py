@@ -11,10 +11,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Protocol
 
 from core.paths import ProjectPaths, category_of
-from core.state import ProgressStore
 from domain.resume import (
     ChallengeResumePlan,
     build_evidence,
@@ -27,9 +26,22 @@ from domain.resume import (
 from domain.validation import ChallengeValidator
 
 
+class ProgressRecorder(Protocol):
+    def record(
+        self,
+        *,
+        shard: str,
+        stage: str,
+        status: str,
+        challenge_id: str = "",
+        worker: str = "",
+        message: str = "",
+    ) -> dict: ...
+
+
 def run_validation(
     *,
-    state: ProgressStore,
+    state: ProgressRecorder,
     validator: ChallengeValidator,
     paths: ProjectPaths,
     image_exists: Callable[[str], bool],
@@ -147,6 +159,10 @@ def run_validation(
                     "validation_status": status,
                     "validation_elapsed": elapsed,
                     "validation_error": error,
+                    "validation_returncode": outcome.get("returncode"),
+                    "validation_stdout_tail": outcome.get("stdout_tail"),
+                    "validation_stderr_tail": outcome.get("stderr_tail"),
+                    "validation_contract_errors": outcome.get("contract_errors"),
                 }
             )
     return results
@@ -214,7 +230,7 @@ def validate_gate(
 
 
 def record_per_challenge_complete(
-    state: ProgressStore,
+    state: ProgressRecorder,
     original_shard_name: str,
     worker: str,
     per_results: list[dict[str, Any]],
@@ -235,5 +251,3 @@ def record_per_challenge_complete(
             status=status,
             message=str(result.get("validation_status", "")),
         )
-
-

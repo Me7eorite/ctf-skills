@@ -16,6 +16,58 @@ RESEARCH_PROMPT_TEMPLATE_PATH = (
 )
 
 
+def render_validation_repair_prompt(
+    *,
+    attempt: int,
+    max_attempts: int,
+    validation_results: list[dict],
+) -> str:
+    """Render a focused prompt for repairing host-observed validation failures."""
+    diagnostics = []
+    for result in validation_results:
+        if result.get("solve_status") == "passed":
+            continue
+        diagnostics.append(
+            {
+                key: result[key]
+                for key in (
+                    "challenge_id",
+                    "validation_status",
+                    "validation_error",
+                    "validation_returncode",
+                    "validation_stdout_tail",
+                    "validation_stderr_tail",
+                    "validation_contract_errors",
+                    "validation_elapsed",
+                )
+                if result.get(key) not in (None, "", [])
+            }
+        )
+    rendered = json.dumps(diagnostics, ensure_ascii=False, indent=2)
+    return f"""You are repairing CTF challenge artifacts after authoritative host validation failed.
+
+Repair attempt {attempt} of {max_attempts}. Work only inside the existing claimed challenge
+directories under `./output/challenges`. Read `./input/shard.json` and inspect the current
+source, Docker/Compose files, built artifact metadata, `validate.sh`, and `writenup/exp.py`.
+
+Host validation diagnostics:
+```json
+{rendered}
+```
+
+Find and fix the root cause. For Web/Pwn, rebuild the exact image named by
+`metadata.docker_image` whenever deploy source, Dockerfile, binary, or runtime dependencies
+change. The Compose service must contain the literal list entry
+`- FLAG=flag{{...}}`, equal to `metadata.flag`, and service code must read `FLAG`.
+
+Run `validate.sh` yourself and iterate until it exits 0 and its last recovered flag equals
+`metadata.flag`. Do not hardcode or merely echo the expected flag in the exploit. The exploit
+must recover it through the intended vulnerability. Do not write `validate/*` progress events;
+the host runner will perform and record the authoritative validation again after you return.
+Update documentation and metadata when the repaired implementation changes them.
+"""
+
+
 def _render_resume_plan_section(resume_plan: ShardResumePlan | None) -> str:
     # 中文注释：把断点续跑计划整理成提示词片段，帮助 Agent 判断每道题的下一步。
     if resume_plan is None or not resume_plan.challenges:

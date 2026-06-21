@@ -97,9 +97,18 @@
   --transition-fast: 120ms;
   --transition-normal: 200ms;
 
-  /* === 字体族 === */
-  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --font-mono-family: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  /* === 字体族 ===
+   * 中文注释：用系统字体栈，避免引用 fonts.googleapis.com / fonts.gstatic.com。
+   * 内网部署机访问外网字体 CDN 经常 5-15 秒甚至 timeout，会阻塞首屏渲染。
+   * 系统字体栈在 macOS / Windows / Linux / iOS / Android 都有合理回退，
+   * 中文用 PingFang SC / Microsoft YaHei / Noto Sans CJK 自动覆盖。 */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    'PingFang SC', 'Microsoft YaHei', 'Hiragino Sans GB', 'Noto Sans CJK SC',
+    sans-serif;
+  --font-mono-family: ui-monospace, 'SFMono-Regular', 'Menlo', 'Monaco',
+    'Cascadia Mono', 'Consolas', 'Liberation Mono', 'DejaVu Sans Mono',
+    monospace;
 
   /* === 右侧面板 === */
   --right-panel-w: 320px;

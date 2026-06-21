@@ -542,6 +542,53 @@ class RunnerRealRunTests(unittest.TestCase):
             )
             self.assertTrue((paths.challenges / "web" / "web-0001-demo").is_dir())
 
+    def test_failed_validation_is_fed_back_to_hermes_and_retried(self):
+        with TemporaryDirectory() as tmp:
+            paths = _Paths(root=Path(tmp))
+            paths.initialize()
+            _copy_real_prompt(paths)
+            _make_web_challenge(paths, "web-0001")
+            _make_shard(paths, "web-0001-0001.json", ["web-0001"])
+            runner = self._make_runner_with_fake_invoke(
+                paths,
+                validator_status="passed",
+            )
+            runner.validation_repair_attempts = 2
+            validation_calls = 0
+
+            def validate(_challenge_id: str) -> dict:
+                nonlocal validation_calls
+                validation_calls += 1
+                if validation_calls == 1:
+                    return {
+                        "status": "nonzero_exit",
+                        "elapsed": 1.2,
+                        "returncode": 1,
+                        "stdout_tail": "leak=0x0",
+                        "stderr_tail": "EOFError",
+                    }
+                return {"status": "passed", "elapsed": 0.4}
+
+            runner.validator.validate_challenge = validate  # type: ignore[assignment]
+            prompts: list[str] = []
+
+            def invoke(prompt: str, log: Path, dry_run: bool, *, timeout=None, **_kwargs) -> int:
+                prompts.append(prompt)
+                log.parent.mkdir(parents=True, exist_ok=True)
+                log.write_text("fake invoke\n", encoding="utf-8")
+                return 0
+
+            runner._invoke = invoke  # type: ignore[assignment]
+
+            outcome = runner.process_one("worker-01", dry_run=False)
+
+            self.assertEqual(outcome["status"], "done")
+            self.assertEqual(validation_calls, 2)
+            self.assertEqual(len(prompts), 2)
+            self.assertIn("nonzero_exit", prompts[1])
+            self.assertIn("leak=0x0", prompts[1])
+            self.assertIn("EOFError", prompts[1])
+
     def test_progress_write_failure_does_not_block_successful_shard(self):
         class RaisingWriteProgressStore(InMemoryProgressStore):
             def record(self, **kwargs):

@@ -14,6 +14,7 @@ import subprocess
 import time
 from collections import Counter
 from pathlib import Path
+from typing import Any
 
 from core.jsonio import read_json, write_json
 from core.paths import ProjectPaths
@@ -35,6 +36,50 @@ ARCH_ACCEPTS: dict[str, tuple[str, ...]] = {
 FLAG_TOKEN_RE = re.compile(
     r"(?<![A-Za-z0-9_])flag\{[^\r\n{}]+\}(?![A-Za-z0-9_])"
 )
+
+
+def compose_literal_flag(compose_path: Path) -> str | None:
+    """Return a literal FLAG value from an environment list entry.
+
+    The factory intentionally requires the unambiguous Compose list form
+    ``- FLAG=flag{...}``. Variable interpolation such as ``${FLAG}`` is rejected
+    because a generated challenge must carry one deterministic organizer flag.
+    """
+    try:
+        lines = compose_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+
+    environment_indent: int | None = None
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(raw_line) - len(raw_line.lstrip())
+        if environment_indent is None:
+            if stripped == "environment:":
+                environment_indent = indent
+            continue
+        if indent <= environment_indent:
+            environment_indent = None
+            if stripped == "environment:":
+                environment_indent = indent
+            continue
+        if not stripped.startswith("-"):
+            continue
+        item = stripped[1:].strip()
+        if len(item) >= 2 and item[0] == item[-1] and item[0] in {"'", '"'}:
+            item = item[1:-1].strip()
+        if "=" not in item:
+            continue
+        key, value = item.split("=", 1)
+        if key.strip() != "FLAG":
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        return value
+    return None
 
 
 def is_elf(path: Path) -> bool:
@@ -167,7 +212,10 @@ class ChallengeValidator:
         """
         metadata_path = challenge_dir / "metadata.json"
         metadata = read_json(metadata_path)
-        record = {"id": challenge_dir.name, "path": str(challenge_dir)}
+        record: dict[str, Any] = {
+            "id": challenge_dir.name,
+            "path": str(challenge_dir),
+        }
         if not isinstance(metadata, dict):
             return {**record, "status": "invalid_metadata"}
 
@@ -252,8 +300,8 @@ class ChallengeValidator:
             errors.append("metadata.build_status is not passed")
 
         category = metadata.get("category")
-        if category == "web":
-            # Web 类别必须有 Docker 部署文件
+        if category in {"web", "pwn"}:
+            # Web/Pwn 类别必须有完整 Docker 部署文件和确定性 flag 注入。
             required = (
                 challenge_dir / "deploy" / "Dockerfile",
                 challenge_dir / "deploy" / "docker-compose.yml",
@@ -264,7 +312,17 @@ class ChallengeValidator:
                 for path in required
                 if not path.exists()
             )
-            if not metadata.get("runtime") or not metadata.get("framework"):
+            compose_path = challenge_dir / "deploy" / "docker-compose.yml"
+            if compose_path.is_file():
+                compose_flag = compose_literal_flag(compose_path)
+                if compose_flag != metadata.get("flag"):
+                    errors.append(
+                        "deploy/docker-compose.yml must define environment list entry "
+                        "FLAG=<metadata.flag> with a literal matching value"
+                    )
+            if category == "web" and (
+                not metadata.get("runtime") or not metadata.get("framework")
+            ):
                 errors.append("Web metadata must record runtime and framework")
 
         if category in {"re", "pwn"} and metadata.get("target_format", "elf") == "elf":

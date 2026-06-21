@@ -47,8 +47,8 @@ Example:
 
 **Do not write `validate` stage progress events yourself.** The runner owns
 all `validate/*` events and writes them after invoking the host-side
-validator. Generate `validate.sh` and `writenup/exp.py` as part of Stage 4 but
-do not execute them.
+validator. Generate and test `validate.sh` and `writenup/exp.py` as part of Stage 4,
+but do not emit authoritative validation progress yourself.
 
 Do not report `passed` until the corresponding work or command has actually
 succeeded. On failure, report `failed` with the failing command or reason
@@ -119,11 +119,11 @@ Web rules:
 Container rules for Web and Pwn:
 
 - `deploy/docker-compose.yml` must define exactly one service.
-- Inject the challenge flag through that service's `environment` as
-  `FLAG: ${FLAG}`. `validate.sh` must set/export the host-side `FLAG` before
-  Compose starts, and service code must read `FLAG` at runtime. Do not write
-  the plaintext flag into the Compose file, Dockerfile, image layer, source
-  tree, or player attachment.
+- Inject the challenge's deterministic organizer flag through that service's
+  `environment` using the literal Compose list form `- FLAG=flag{xxxx}`. The
+  value MUST exactly equal `metadata.flag`, and service code must read `FLAG`
+  at runtime. Do not use `${FLAG}` interpolation. Do not write the plaintext
+  flag into the Dockerfile, image layer, business source, or player attachment.
 - Set both Compose `image` and `container_name` to the challenge name,
   normalized to a stable lowercase Docker-safe identifier using only
   `[a-z0-9][a-z0-9_.-]`. Use the same identifier for the built image tag,
@@ -187,7 +187,7 @@ Pwn rules:
 
 - Run the real build command.
 - Web/Pwn: run `docker build` and record the image tag.
-- Web/Pwn: confirm Compose resolves `FLAG`, `image`, and `container_name`,
+- Web/Pwn: confirm Compose resolves the literal `FLAG=flag{...}`, `image`, and `container_name`,
   defines no `volumes`, and runs with the intended non-root account (`ctf` for
   ordinary Pwn, or the selected Web base image's service user); then build and
   run that exact Compose configuration.
@@ -209,11 +209,12 @@ Do not mark `build_status` as passed unless the command succeeded.
 
 ## 4. Exploit Validation
 
-Your responsibility in this stage is to **generate** validation artifacts.
-**Do not execute `validate.sh` yourself, and do not write `validate/*`
-progress events.** The host runner will execute `validate.sh` after you
-return, observe its exit code and recovered flag, and write the authoritative
-`validate/passed` or `validate/failed` event.
+Your responsibility in this stage is to generate and test validation artifacts.
+Execute `validate.sh` yourself and iteratively repair the implementation,
+container, and exploit until it exits 0 and recovers the exact `metadata.flag`.
+Do not write `validate/*` progress events: after you return, the host runner
+will independently execute `validate.sh`, observe its exit code and recovered
+flag, and write the authoritative `validate/passed` or `validate/failed` event.
 
 - Write `writenup/exp.py` as a real reference exploit/solver.
 - Write `validate.sh` as the single reproducible validation entrypoint.
@@ -240,6 +241,8 @@ network-fetching dependency installation. Validation is offline-capable.
 
 After that gate, `validate.sh` must start the service, wait for
 health/readiness, run `writenup/exp.py`, and always clean up with a shell trap.
+The fixed flag comes from `deploy/docker-compose.yml`; `validate.sh` must not
+override it with a host-side `FLAG` environment variable.
 Every command and diagnostic in a function invoked by an `EXIT` or `ERR` trap
 MUST redirect its output to stderr (`>&2`); cleanup must never write to stdout.
 Before starting a container named `"$CONTAINER_NAME"`, remove a stale

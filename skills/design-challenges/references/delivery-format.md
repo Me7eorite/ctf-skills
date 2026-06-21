@@ -46,11 +46,11 @@ deploy/
 
 Container authoring conventions:
 
-- Define the flag in the single Compose service as `FLAG: ${FLAG}` under
-  `environment`. Validation or orchestration must set the host-side `FLAG`
-  before Compose starts, and the service must read it from its runtime
-  environment. Do not bake the plaintext flag into the Compose file,
-  Dockerfile, image layer, source code, or attachment.
+- Define the deterministic organizer flag in the single Compose service under
+  `environment` using the literal list form `- FLAG=flag{xxxx}`. It must equal
+  `metadata.flag`, and the service must read `FLAG` from its runtime
+  environment. Do not use `${FLAG}` interpolation or bake the flag into the
+  Dockerfile, image layer, business source, or attachment.
 - Set both `image` and `container_name` to the challenge name normalized as a
   stable lowercase Docker identifier (`[a-z0-9][a-z0-9_.-]`). Use that same
   name for build tags, validation commands, `metadata.docker_image`, and

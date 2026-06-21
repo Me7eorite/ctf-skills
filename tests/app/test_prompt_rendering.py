@@ -189,7 +189,7 @@ class RenderPromptTests(unittest.TestCase):
             self.assertNotIn("Never leave the service running as root", rendered)
             self.assertNotIn("Do not use root execution", rendered)
 
-    def test_prompt_drops_hermes_validate_execution_instructions(self):
+    def test_prompt_requires_hermes_validation_iterations(self):
         with TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             paths = _seed_paths(tmp_path)
@@ -202,13 +202,9 @@ class RenderPromptTests(unittest.TestCase):
                 worker="dry-01",
                 original_shard_name="s.json",
             )
-            # Old execution instructions must be gone.
-            self.assertNotIn(
-                "Start the built service when required, run the exploit",
-                rendered,
-            )
-            # New ownership statement must be present.
-            self.assertIn("Do not execute `validate.sh` yourself", rendered)
+            self.assertIn("Execute `validate.sh` yourself", rendered)
+            self.assertIn("host runner", rendered)
+            self.assertIn("- FLAG=flag{xxxx}", rendered)
             # Progress reporting must list four stages only.
             self.assertIn(
                 "--stage <design|implement|build|document>",
