@@ -56,6 +56,7 @@ def render_prompt(
     report: Path,
     worker: str,
     *,
+    report_runtime_path: str | None = None,
     original_shard_name: str | None = None,
     resume_plan: ShardResumePlan | None = None,
 ) -> str:
@@ -67,7 +68,7 @@ def render_prompt(
     replacement_map = {
         "{shard_path}": str(shard.resolve()),
         "{challenge_dir}": str(paths.challenges.resolve()),
-        "{report_path}": str(report.resolve()),
+        "{report_path}": report_runtime_path or str(report.resolve()),
         "{generation_profile}": str(paths.generation_profile.resolve()),
         "{design_skill}": str(paths.design_skill.resolve()),
         "{design_references}": str(paths.design_references.resolve()),

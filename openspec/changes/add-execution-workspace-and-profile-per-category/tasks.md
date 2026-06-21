@@ -1,25 +1,25 @@
 ## 1. Workspace Path Contract
 
-- [ ] 1.1 Add `ProjectPaths.executions` returning `work/executions` and include
+- [x] 1.1 Add `ProjectPaths.executions` returning `work/executions` and include
   it in `ProjectPaths.initialize()`.
-- [ ] 1.2 Add a helper that derives `workspace_id` from build-attempt payloads
+- [x] 1.2 Add a helper that derives `workspace_id` from build-attempt payloads
   or creates `manual-<uuid>` for legacy shards.
-- [ ] 1.3 Create the fixed workspace directories: `input/`, `references/`,
+- [x] 1.3 Create the fixed workspace directories: `input/`, `references/`,
   `output/`, `logs/`, and the `bin/` helper shim directory.
-- [ ] 1.4 Write `input/manifest.json` with shard identity, category,
+- [x] 1.4 Write `input/manifest.json` with shard identity, category,
   build-attempt/design-task attribution when present, worker, timestamps, and
   hashes.
-- [ ] 1.5 If the derived workspace already exists, remove only the owned
+- [x] 1.5 If the derived workspace already exists, remove only the owned
   workspace subtree and recreate it, or fail preflight before Hermes.
-- [ ] 1.6 Before creating a new workspace, run a minimal self-GC pass over
+- [x] 1.6 Before creating a new workspace, run a minimal self-GC pass over
   `work/executions/manual-*`: delete subtrees with mtime older than 7 days or
   empty/orphaned; never touch attributed `build_attempt_id` workspaces (those
   are owned by the later publisher change). GC errors log a warning and do
   not block workspace creation.
-- [ ] 1.7 Redirect Hermes per-shard `log_path` from `paths.logs /
+- [x] 1.7 Redirect Hermes per-shard `log_path` from `paths.logs /
   f"{shard_name}.log"` to `work/executions/<workspace_id>/logs/hermes.log`.
   Preserve research/design log paths unchanged.
-- [ ] 1.8 Render the structured report path as `./logs/report.json` in the
+- [x] 1.8 Render the structured report path as `./logs/report.json` in the
   prompt, then import/sync it to the legacy
   `work/reports/<running-shard-stem>.report.json` path before existing report
   consumers run.
@@ -38,31 +38,32 @@
 
 ## 2. Input Materialization and Preflight
 
-- [ ] 2.1 Copy the claimed running shard to `input/shard.json`. Apply the
+- [x] 2.1 Copy the claimed running shard to `input/shard.json`. Apply the
   materialize strategy: dynamic per-claim files (`shard.json`, `manifest.json`,
-  generation profile snapshot) are copied; large static references (skills,
-  common guidance) are symlinked into `references/` (or read-only bind-mounted)
-  to avoid disk waste on bulk runs.
-- [ ] 2.2 Materialize the minimal generation/profile/reference context needed
+  generation profile snapshot) are copied. Copy only the current category's
+  required Markdown guidance into `references/`; do not create external
+  symlinks that break when Docker mounts only `work/executions/`.
+- [x] 2.2 Materialize the minimal generation/profile/reference context needed
   by the build prompt.
-- [ ] 2.3 Reject unreadable or malformed `input/shard.json` before invoking
+- [x] 2.3 Reject unreadable or malformed `input/shard.json` before invoking
   Hermes.
-- [ ] 2.4 Reject category/profile mismatches.
-- [ ] 2.5 Reject workspaces containing unrelated challenge artifact names
+- [x] 2.4 Reject category/profile mismatches.
+- [x] 2.5 Reject workspaces containing unrelated challenge artifact names
   (regex `(web|pwn|re)-\d+` with id not in the claimed shard; resolve symlinks
   before matching).
-- [ ] 2.6 Reject reference symlinks that resolve outside allowed static roots.
-- [ ] 2.7 Return an infrastructure-failed outcome on preflight failure without
-  invoking Hermes.
-- [ ] 2.8 Ensure preflight failure moves only the already claimed shard through
+- [x] 2.6 Reject reference symlinks that resolve outside allowed static roots.
+- [x] 2.7 Return `status=failed` with `failure_type=infrastructure` on
+  preflight failure without invoking Hermes.
+- [x] 2.8 Ensure preflight failure moves only the already claimed shard through
   the existing failure path and does not move unrelated pending/running shards.
-- [ ] 2.9 Preflight MUST verify the selected `cf-<category>` profile exists in
+- [x] 2.9 Preflight MUST verify the selected `cf-<category>` profile exists in
   Hermes via `profile_exists()` (reuse the helper already used by
   [research_agent_executor.py](src/services/research_agent_executor.py)).
   Missing profile returns infrastructure-failed with a message that includes
   the literal recovery command `hermes profile create cf-<category>`.
-- [ ] 2.10 Manifest allowed static reference roots; preflight resolves every
-  reference symlink and rejects targets outside those roots.
+- [x] 2.10 Manifest `allowed_static_reference_roots` as empty for the copy-only
+  strategy; preflight rejects every injected reference symlink. A future
+  read-only-mount implementation may populate and validate allowed roots.
 
 ## 3. Prompt and Hermes Invocation
 
@@ -89,6 +90,23 @@
   remaining records (catch-up read) after Hermes exits but before validation
   events are written. Background reader MUST be cleaned up on every exit
   path (success / failure / preflight reject / KeyboardInterrupt).
+- [ ] 3.9 Add a shared claimed-shard timeout policy: Re 1800s, Web 2700s,
+  Pwn 3600s, and Pwn 5400s when any claimed challenge has
+  `difficulty=expert`. Missing/unknown Pwn difficulty uses 3600s.
+- [ ] 3.10 Resolve the effective timeout after claim with precedence
+  `CLI --timeout` > `HERMES_TIMEOUT` > claimed-shard policy. Preserve whether
+  CLI/env values were explicitly supplied; do not eagerly substitute the old
+  global 1500s default before the runner can inspect the shard.
+- [ ] 3.11 Apply the derived timeout to the actual Hermes subprocess and
+  include `effective_timeout_seconds` and its source (`cli`, `env`, or
+  `shard_policy`) in the workspace manifest and Hermes log header.
+- [ ] 3.12 Update Web UI constrained worker dispatch (the primary entry) to
+  use shard-policy timeout by default without requiring an editable timeout
+  field. Return the effective timeout in the worker-start response and expose
+  it in the build-attempt execution view/status output.
+- [ ] 3.13 Preserve explicit CLI `--timeout` and `HERMES_TIMEOUT` as
+  operational overrides; reject non-positive values with no behavior change
+  to research/design timeout configuration.
 
 ## 3A. Output Promotion for Existing Validation
 
@@ -181,6 +199,13 @@
 - [ ] 5.19 Run focused pytest coverage for the changed runner/prompt/workspace
   paths.
 - [ ] 5.20 Run `openspec validate add-execution-workspace-and-profile-per-category --strict`.
+- [ ] 5.21 Add timeout-policy unit tests covering Re 1800s, Web 2700s, Pwn
+  3600s, Pwn expert 5400s, mixed Pwn difficulty, missing Pwn difficulty, and
+  mixed-category rejection.
+- [ ] 5.22 Add precedence tests for CLI override, environment override, and
+  shard-policy fallback, asserting the exact timeout passed to Hermes.
+- [ ] 5.23 Add Web API/UI tests proving constrained worker starts use and
+  display the derived effective timeout without requiring manual input.
 
 ## 6. Operator Runbook and Rollout
 

@@ -26,14 +26,16 @@ import or sync that workspace report to the legacy
 `work/reports/<running-shard-stem>.report.json` path. Existing report summary
 behavior that scans `work/reports/*.report.json` SHALL continue to work.
 
-**Materialization strategy** SHALL distinguish per-claim files from static
-references. Per-claim files MUST be copied so that claim-time snapshots cannot
-be modified retroactively: `input/shard.json`, `input/manifest.json`, and any
-small per-claim configuration/profile snapshot. Static reference material
-(skills directories, common guidance) MAY be symlinked (or read-only
-bind-mounted) into `references/` to avoid duplicating multi-MB data per
-execution; preflight MUST reject symlinks resolving outside the allowed static
-reference roots (see preflight requirement below).
+**Materialization strategy** SHALL copy per-claim files so claim-time snapshots
+cannot be modified retroactively: `input/shard.json`, `input/manifest.json`,
+and the generation-profile snapshot. It SHALL also copy only the selected
+category's required Markdown guidance into `references/`. This change SHALL
+NOT create repository-external reference symlinks because Docker profiles are
+only required to mount `work/executions/`; such symlinks would be broken in
+that backend. `input/manifest.json` SHALL record
+`allowed_static_reference_roots: []`, and preflight SHALL reject any injected
+reference symlink. A future read-only-mount implementation may define a
+non-empty allowlist with an equivalent visibility contract.
 
 The workspace id is not a database id. This change SHALL NOT add an
 `executions` table or require persistent execution rows.
@@ -155,6 +157,56 @@ output.
 - **THEN** they invoke the same shared helper in `hermes/process.py`
 - **AND** the `chat`-index insertion semantics are preserved for all three
 
+### Requirement: Build Hermes hard timeout follows the claimed shard
+
+When no explicit operational override is supplied, the runner SHALL derive
+the Hermes hard timeout after claiming and parsing the shard: Re SHALL use
+1800 seconds, Web SHALL use 2700 seconds, Pwn SHALL use 3600 seconds, and a
+Pwn shard containing any challenge with `difficulty=expert` SHALL use 5400
+seconds. A Pwn challenge with missing or unknown difficulty SHALL use 3600
+seconds. Mixed-category shards remain invalid and SHALL fail preflight.
+
+Timeout precedence SHALL be explicit CLI `--timeout`, then the existing
+`HERMES_TIMEOUT` environment variable, then claimed-shard policy. A direct
+runner caller supplying a positive timeout is equivalent to an explicit CLI
+override. Research and design timeout behavior SHALL remain unchanged.
+
+Web UI constrained worker dispatch SHALL use claimed-shard policy by default
+without requiring an editable timeout field. The effective timeout and its
+source (`cli`, `env`, or `shard_policy`) SHALL be visible in the workspace
+manifest, Hermes log, worker-start API result, and build-attempt execution
+view/status output.
+
+#### Scenario: Web UI starts a Web build with policy timeout
+
+- **GIVEN** a queued Web build attempt
+- **AND** neither CLI nor environment supplies a timeout override
+- **WHEN** the operator starts its worker from the Web UI
+- **THEN** Hermes receives a hard timeout of 2700 seconds
+- **AND** the UI/API reports 2700 seconds with source `shard_policy`
+
+#### Scenario: Re uses the shorter non-Docker build budget
+
+- **GIVEN** a claimed Re shard
+- **AND** no explicit timeout override
+- **WHEN** Hermes is invoked
+- **THEN** its hard timeout is 1800 seconds
+
+#### Scenario: Expert Pwn raises the whole shard budget
+
+- **GIVEN** a claimed Pwn shard containing at least one expert challenge
+- **AND** no explicit timeout override
+- **WHEN** Hermes is invoked
+- **THEN** its hard timeout is 5400 seconds
+
+#### Scenario: Explicit override wins over shard policy
+
+- **GIVEN** a claimed Web shard
+- **AND** the CLI explicitly supplies `--timeout 4200`
+- **WHEN** Hermes is invoked
+- **THEN** its hard timeout is 4200 seconds
+- **AND** the recorded timeout source is `cli`
+
 ### Requirement: Build preflight fails closed before model invocation
 
 Before invoking Hermes, the build runner SHALL preflight the workspace. The
@@ -169,11 +221,12 @@ preflight SHALL verify in order:
 6. The workspace contains no unrelated challenge artifact names. Unrelated
    names are directory entries matching `(web|pwn|re)-\d+` whose challenge id
    is not present in the claimed shard; symlinks are resolved before matching.
-7. Reference symlinks SHALL resolve only to allowed static reference roots.
+7. Reference symlinks SHALL resolve only to roots listed in the manifest. The
+   copy-only strategy records an empty list, so every reference symlink fails.
 
-When preflight fails, the runner SHALL return an infrastructure-failed outcome
-and SHALL NOT invoke Hermes. The infrastructure-failed message for a missing
-profile SHALL include the literal recovery command
+When preflight fails, the runner SHALL return `status=failed` with
+`failure_type=infrastructure` and SHALL NOT invoke Hermes. The failure message
+for a missing profile SHALL include the literal recovery command
 `hermes profile create cf-<category>`. It MAY move the already claimed shard
 through the existing failed-shard path so build-attempt reconciliation can
 observe the failure, but it SHALL NOT move unrelated shards or publish

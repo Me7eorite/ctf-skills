@@ -70,6 +70,17 @@ def _copy_real_prompt(target: _Paths) -> None:
     target.design_skill.parent.mkdir(parents=True, exist_ok=True)
     target.design_skill.write_text("# s\n", encoding="utf-8")
     target.design_references.mkdir(parents=True, exist_ok=True)
+    for filename in (
+        "web-design.md",
+        "pwn-design.md",
+        "reverse-design.md",
+        "quality-gate.md",
+        "spec-template.md",
+        "delivery-format.md",
+    ):
+        (target.design_references / filename).write_text(
+            f"# {filename}\n", encoding="utf-8"
+        )
 
 
 def _make_shard(
@@ -83,7 +94,8 @@ def _make_shard(
     payload = {
         **(envelope or {}),
         "challenges": [
-            {"id": cid, **(challenge_extra or {})} for cid in challenge_ids
+            {"id": cid, "category": cid.split("-", 1)[0], **(challenge_extra or {})}
+            for cid in challenge_ids
         ],
     }
     pending = paths.shards / "pending" / shard_name
@@ -205,6 +217,7 @@ class RunnerRealRunTests(unittest.TestCase):
             paths,
             progress=progress,
             image_exists=lambda _: image_exists_value,
+            profile_exists=lambda _: True,
         )  # type: ignore[arg-type]
 
         def fake_invoke(prompt: str, log: Path, dry_run: bool, *, timeout=None) -> int:
@@ -536,6 +549,7 @@ class RunnerRealRunTests(unittest.TestCase):
                 progress=RaisingWriteProgressStore(),
                 progress_write_exceptions=(PersistenceConnectionError,),
                 image_exists=lambda _: True,
+                profile_exists=lambda _: True,
             )  # type: ignore[arg-type]
             runner._invoke = lambda prompt, log, dry_run, *, timeout=None: 0  # type: ignore[assignment]
             runner.validator.validate_challenge = lambda cid: {  # type: ignore[assignment]
@@ -566,6 +580,7 @@ class RunnerRealRunTests(unittest.TestCase):
                 progress=RaisingReadProgressStore(),
                 progress_write_exceptions=(PersistenceConnectionError,),
                 image_exists=lambda _: True,
+                profile_exists=lambda _: True,
             )  # type: ignore[arg-type]
             called = {"invoke": False}
 
@@ -589,7 +604,11 @@ class ShardNameNormalizationTests(unittest.TestCase):
             _make_web_challenge(paths, "web-0001")
             _make_shard(paths, "web-0001-0001.json", ["web-0001"])
 
-            runner = HermesRunner(paths, image_exists=lambda _: True)  # type: ignore[arg-type]
+            runner = HermesRunner(
+                paths,
+                image_exists=lambda _: True,
+                profile_exists=lambda _: True,
+            )  # type: ignore[arg-type]
 
             def fake_invoke(prompt: str, log: Path, dry_run: bool, *, timeout=None) -> int:
                 log.parent.mkdir(parents=True, exist_ok=True)

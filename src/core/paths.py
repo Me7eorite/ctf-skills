@@ -80,6 +80,11 @@ class ProjectPaths:
         """通用日志目录。"""
         return self.work / "logs"
 
+    @property
+    def executions(self) -> Path:
+        """Build execution workspaces, isolated by workspace id."""
+        return self.work / "executions"
+
     # ========== Research 研究流程路径 ==========
 
     @property
@@ -168,6 +173,7 @@ class ProjectPaths:
             *(self.challenges / category for category in ("web", "pwn", "re")),
             self.reports,
             self.logs,
+            self.executions,
             self.research_sources,
             self.research_sources_staging,
             self.research_logs,

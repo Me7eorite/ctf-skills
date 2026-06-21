@@ -49,6 +49,12 @@ from hermes.validation import (
     run_validation,
     validate_gate,
 )
+from hermes.workspace import (
+    WorkspacePreflightError,
+    import_workspace_report,
+    preflight_workspace,
+    prepare_workspace,
+)
 
 __all__ = [
     "DEFAULT_HERMES_COMMAND",
@@ -146,6 +152,7 @@ class HermesRunner:
         progress: ProgressStore | None = None,
         progress_write_exceptions: tuple[type[Exception], ...] = (),
         image_exists: Callable[[str], bool] | None = None,
+        profile_exists: Callable[[str], bool] | None = None,
     ):
         self.paths = paths
         # 分片队列（管理 pending/running/done/failed 目录）
@@ -159,6 +166,7 @@ class HermesRunner:
         )
         self.validator = ChallengeValidator(paths)
         self._image_exists = image_exists or default_image_exists
+        self._profile_exists = profile_exists or hermes_process.profile_exists
 
     # ----------------------------------------------------------------
     # 公有入口方法
@@ -170,6 +178,7 @@ class HermesRunner:
         report: Path,
         worker: str,
         *,
+        report_runtime_path: str | None = None,
         original_shard_name: str | None = None,
         resume_plan: ShardResumePlan | None = None,
     ) -> str:
@@ -179,6 +188,7 @@ class HermesRunner:
             shard,
             report,
             worker,
+            report_runtime_path=report_runtime_path,
             original_shard_name=original_shard_name,
             resume_plan=resume_plan,
         )
@@ -428,10 +438,64 @@ class HermesRunner:
                 )
 
         # 步骤 7: 渲染 prompt 并调用 Hermes AI
+        try:
+            workspace = prepare_workspace(
+                self.paths,
+                shard=shard,
+                original_shard_name=original_shard_name,
+                worker=worker,
+            )
+        except (OSError, ValueError) as exc:
+            message = f"Workspace preparation failed: {exc}"
+            self._mark_shard_failed(
+                shard,
+                original_shard_name,
+                worker,
+                challenge_ids,
+                report,
+                message,
+                1,
+            )
+            return {
+                "status": "failed",
+                "failure_type": "infrastructure",
+                "shard": original_shard_name,
+                "returncode": 1,
+                "error": message,
+            }
+        manifest = read_json(workspace.manifest, {})
+        category = manifest.get("category") if isinstance(manifest, dict) else None
+        profile_name = f"cf-{category}"
+        try:
+            preflight_workspace(
+                workspace,
+                profile_name=profile_name,
+                profile_exists=self._profile_exists,
+            )
+        except WorkspacePreflightError as exc:
+            message = f"Workspace preflight failed: {exc}"
+            self._mark_shard_failed(
+                shard,
+                original_shard_name,
+                worker,
+                challenge_ids,
+                report,
+                message,
+                1,
+            )
+            return {
+                "status": "failed",
+                "failure_type": "infrastructure",
+                "shard": original_shard_name,
+                "returncode": 1,
+                "error": message,
+            }
+        log = workspace.hermes_log
         prompt = self.render_prompt(
             shard,
             report,
             worker,
+            report_runtime_path="./logs/report.json",
             original_shard_name=original_shard_name,
             resume_plan=plan,
         )
@@ -439,6 +503,7 @@ class HermesRunner:
             returncode = self._invoke(prompt, log, dry_run=False, timeout=timeout)
         except KeyboardInterrupt:
             # 被用户中断 → 记录失败并重新抛出
+            import_workspace_report(workspace, report)
             self._mark_shard_failed(
                 shard,
                 original_shard_name,
@@ -449,6 +514,8 @@ class HermesRunner:
                 130,  # 标准 POSIX 返回码：被信号中断
             )
             raise
+
+        import_workspace_report(workspace, report)
 
         # Hermes 返回非零 → 检查是否为超时 + 超时恢复通过
         if returncode != 0:

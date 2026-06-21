@@ -33,6 +33,21 @@ class HermesRunnerTests(unittest.TestCase):
             "{design_skill}\n{progress_command}\n{shard_name}\n{worker}\n",
             encoding="utf-8",
         )
+        self.paths.generation_profile.write_text("{}\n", encoding="utf-8")
+        self.paths.design_skill.parent.mkdir(parents=True, exist_ok=True)
+        self.paths.design_skill.write_text("# Design\n", encoding="utf-8")
+        self.paths.design_references.mkdir(parents=True, exist_ok=True)
+        for filename in (
+            "web-design.md",
+            "pwn-design.md",
+            "reverse-design.md",
+            "quality-gate.md",
+            "spec-template.md",
+            "delivery-format.md",
+        ):
+            (self.paths.design_references / filename).write_text(
+                f"# {filename}\n", encoding="utf-8"
+            )
 
     def test_prompt_contains_skill_and_progress_command(self):
         shard = self.paths.shards / "running" / "web-0001-0001.worker.json"
@@ -160,7 +175,11 @@ class HermesRunnerTests(unittest.TestCase):
             [{"id": "web-0002", "category": "web"}],
         )
 
-        runner = HermesRunner(self.paths, image_exists=lambda _: True)
+        runner = HermesRunner(
+            self.paths,
+            image_exists=lambda _: True,
+            profile_exists=lambda _: True,
+        )
         with (
             patch.object(runner, "_invoke", return_value=124),
             patch.object(runner, "render_prompt", return_value="prompt"),
@@ -183,7 +202,11 @@ class HermesRunnerTests(unittest.TestCase):
         self._write_metadata("web-0003", "web", "passed")
         self._write_metadata("web-0004", "web", "failed")
 
-        runner = HermesRunner(self.paths, image_exists=lambda _: True)
+        runner = HermesRunner(
+            self.paths,
+            image_exists=lambda _: True,
+            profile_exists=lambda _: True,
+        )
         with (
             patch.object(runner, "_invoke", return_value=124),
             patch.object(runner, "render_prompt", return_value="prompt"),

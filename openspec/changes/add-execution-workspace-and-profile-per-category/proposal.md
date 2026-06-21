@@ -29,8 +29,9 @@ can actually read its claimed shard inside its sandbox.
 - Materialize only the current input bundle into the workspace:
   `input/shard.json`, `input/manifest.json`, selected reference material,
   `output/`, `logs/`, and a workspace-local `bin/progress` shim. Dynamic
-  per-claim files are copied; large static references are symlinked to avoid
-  disk waste on bulk runs.
+  per-claim files are copied. Only the current category's required Markdown
+  references are copied, avoiding external symlinks that would break when a
+  Docker backend mounts only `work/executions/`.
 - Render the build prompt with workspace-relative paths such as
   `./input/shard.json`, `./output/`, `./logs/report.json`, and
   `./bin/progress`; never host absolute shard/report/CLI paths.
@@ -40,6 +41,11 @@ can actually read its claimed shard inside its sandbox.
   it.
 - Invoke build Hermes calls with `-p cf-<category>` inserted before the
   `chat` subcommand via that shared helper, and `cwd` set to the workspace.
+- Select the build Hermes hard timeout from the claimed shard when the caller
+  does not explicitly override it: Re 1800s, Web 2700s, Pwn 3600s, and Pwn
+  5400s when any claimed challenge has `difficulty=expert`. Web UI worker
+  dispatch is the primary consumer; explicit CLI `--timeout` and the existing
+  `HERMES_TIMEOUT` environment override remain supported for operations.
 - Run preflight before Hermes: verify `cf-<category>` profile exists
   (`profile_exists()` reuse), input readability, output writability,
   category/profile consistency, and absence of unrelated challenge artifacts
@@ -83,8 +89,11 @@ None. This is a protocol hardening change for the existing runner.
   `references`, `output`, `logs`, and required `bin/progress` shim. A reused
   workspace id must start from an empty owned workspace or fail preflight.
 - **Hermes**: build execution uses `cf-web`, `cf-pwn`, or `cf-re` according to
-  the claimed shard category. Git worktree is not part of the runtime
-  isolation contract.
+  the claimed shard category, with category/difficulty-aware hard timeouts.
+  Git worktree is not part of the runtime isolation contract.
+- **Web UI**: constrained build-worker starts use the timeout derived from the
+  selected attempt/shard and expose the effective timeout in the start result
+  and build-attempt execution view; no operator text entry is required.
 - **Compatibility**: legacy/manual shard execution remains available; manual
   shards receive a `manual-<uuid>` workspace id.
 - **Tests**: cover workspace creation/materialization, relative prompt paths,

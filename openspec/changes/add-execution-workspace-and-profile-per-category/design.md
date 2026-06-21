@@ -75,9 +75,12 @@ running shard basename, worker, category, build attempt id when present,
 design task id when present, created timestamp, and input hashes.
 
 Reference material is limited to what prompt rendering needs. Small
-configuration snapshots are copied. Large static references may be symlinked
-or read-only mounted, but preflight must reject symlinks pointing outside the
-allowed reference roots.
+configuration snapshots and only the selected category's required Markdown
+references are copied. Workspace reference symlinks are not created by this
+change because a Docker backend that mounts only `work/executions/` cannot
+resolve host-repository symlink targets. The manifest records an empty allowed
+static-reference-root list, so preflight rejects any injected reference
+symlink. A future read-only mount implementation may populate that allowlist.
 
 If the prompt needs an executable helper, such as the current progress command,
 the prompt should point at a workspace-local shim such as `./bin/progress`.
@@ -154,8 +157,11 @@ Before invoking Hermes, the runner verifies in this order:
    shard is rejected. Symlink entries are checked by their resolved target.
 7. Symlinks in `references/` resolve only to allowed static reference roots.
 
-Preflight failure returns an infrastructure failure outcome and does not call
-Hermes. It must not move unrelated shard files or publish artifacts.
+Preflight failure returns the existing runner status `failed` with
+`failure_type="infrastructure"` and does not call Hermes. This preserves the
+current run summary and build reconciler contract while distinguishing an
+environment/input failure from model or validation failure. It must not move
+unrelated shard files or publish artifacts.
 
 ### Decision 6: output is staged, then claimed output is promoted
 
@@ -327,6 +333,38 @@ and promotes claimed artifacts into the existing canonical surfaces before
 legacy consumers run. If a future change moves these consumers, it must do so
 as an explicit compatibility migration with its own tests.
 
+### Decision 11: build timeout follows category and Pwn expert difficulty
+
+The build hard timeout is derived only after a shard is claimed and parsed,
+because Pwn expert selection depends on the claimed challenge payload:
+
+| Claimed shard | Hard timeout |
+| --- | ---: |
+| Re | 1800 seconds |
+| Web | 2700 seconds |
+| Pwn without expert difficulty | 3600 seconds |
+| Pwn with any `difficulty=expert` challenge | 5400 seconds |
+
+For a multi-challenge Pwn shard, any expert challenge selects 5400 seconds for
+the whole Hermes invocation. Missing or unknown Pwn difficulty uses 3600
+seconds. Mixed-category shards remain invalid and fail preflight; timeout
+selection does not make them executable.
+
+Timeout precedence is `CLI --timeout` > `HERMES_TIMEOUT` > claimed-shard
+policy. The CLI must therefore preserve whether a value was explicitly
+provided instead of eagerly replacing an absent value with the old global
+1500-second default before claim. Direct runner callers that pass a positive
+timeout receive the same explicit-override behavior.
+
+The Web UI is the primary operational entry. Its constrained build-worker
+endpoint does not require an editable timeout field: it starts the worker
+without an override, the runner derives the policy after claim, and the API/UI
+show the effective timeout for observability. This keeps routine dispatch
+consistent while retaining CLI/environment escape hatches for incident
+response. This decision introduces hard timeouts only; activity/idle timeout
+extension is deferred because the current Hermes process log has no reliable
+structured activity signal.
+
 ## Iterative Review Log
 
 The proposal was reviewed against the live repo in 15 passes before this
@@ -491,6 +529,13 @@ second-pass re-evaluation against Docker terminal backend reality.
     promotion" clarifies: new canonical stays, validator marks
     `solve_status=failed`, quarantine retained for audit, no automatic
     rollback. Rollback becomes an explicit operator action.
+42. Patch: repository-external reference symlinks are not visible when the
+    Docker profile mounts only `work/executions/`. Solution: copy the minimal
+    selected-category Markdown set, record an empty reference-root allowlist,
+    and reject any injected reference symlink.
+43. Patch: `infrastructure-failed` was not a valid runner status and would be
+    omitted from the existing failed counter. Solution: retain `status=failed`
+    and add `failure_type=infrastructure` to the outcome.
 
 ## Risks / Trade-offs
 
