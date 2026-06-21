@@ -18,16 +18,21 @@ and invokes Hermes with the category profile that matches the claimed shard.
 - Derive `workspace_id` without a schema change: use `build_attempt_id` for
   attributed build shards and `manual-<uuid>` for legacy/manual shards.
 - Materialize only the current input bundle into the workspace:
-  `input/shard.json`, `input/manifest.json`, selected reference material, and
-  an empty `output/` plus `logs/`.
+  `input/shard.json`, `input/manifest.json`, selected reference material,
+  `output/`, `logs/`, and any workspace-local helper shims explicitly rendered
+  into the prompt.
 - Render the build prompt with workspace-relative paths such as
   `./input/shard.json` and `./output/`, not host absolute shard/report paths.
-- Invoke build Hermes calls with `-p cf-<category>` and `cwd` set to the
-  workspace.
+- Invoke build Hermes calls with `-p cf-<category>` inserted before the
+  `chat` subcommand and `cwd` set to the workspace.
 - Run preflight before Hermes: verify input readability, output writability,
   category/profile consistency, and absence of unrelated challenge artifacts
   inside the workspace.
 - Fail closed on preflight errors without invoking Hermes.
+- Promote only claimed challenge output from `./output/` back to the canonical
+  `work/challenges/<category>/...` tree before the existing validation path
+  runs; this is a narrow compatibility bridge, not the later publisher
+  allowlist.
 - Keep existing file-backed shard claim behavior and build-attempt dispatch
   semantics unchanged.
 
@@ -51,13 +56,13 @@ None. This is a protocol hardening change for the existing runner.
   only; persistent `execution_id` is reserved for the later lease/fencing
   change.
 - **Filesystem**: add `work/executions/<workspace_id>/input`,
-  `references`, `output`, and `logs`.
+  `references`, `output`, `logs`, and optional `bin` helper shims. A reused
+  workspace id must start from an empty owned workspace or fail preflight.
 - **Hermes**: build execution uses `cf-web`, `cf-pwn`, or `cf-re` according to
   the claimed shard category. Git worktree is not part of the runtime
   isolation contract.
 - **Compatibility**: legacy/manual shard execution remains available; manual
   shards receive a `manual-<uuid>` workspace id.
 - **Tests**: cover workspace creation/materialization, relative prompt paths,
-  profile argument injection, preflight failure, and stale cross-category
-  artifact invisibility.
-
+  profile argument injection, preflight failure, claimed-output promotion, and
+  stale cross-category artifact invisibility.

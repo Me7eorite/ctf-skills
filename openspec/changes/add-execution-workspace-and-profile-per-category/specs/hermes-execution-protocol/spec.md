@@ -8,7 +8,8 @@ prompt or invoking Hermes. `workspace_id` SHALL be the shard payload's
 top-level `build_attempt_id` when present and valid. For legacy/manual shards
 without build-attempt attribution, the runner SHALL use `manual-<uuid>`.
 
-The workspace SHALL contain `input/`, `references/`, `output/`, and `logs/`.
+The workspace SHALL contain `input/`, `references/`, `output/`, `logs/`, and
+any `bin/` helper shim directory needed by the rendered build prompt.
 The runner SHALL copy the claimed running shard to `input/shard.json` and
 SHALL write `input/manifest.json` with the workspace id, original shard
 basename, running shard basename, worker, category, build attempt id when
@@ -16,6 +17,11 @@ present, design task id when present, creation timestamp, and input hashes.
 
 The workspace id is not a database id. This change SHALL NOT add an
 `executions` table or require persistent execution rows.
+
+If a workspace already exists for the derived workspace id, the runner SHALL
+either recreate only that owned workspace subtree from an empty fixed layout or
+fail preflight before invoking Hermes. It SHALL NOT merge a new invocation with
+stale workspace input, output, logs, or references.
 
 #### Scenario: Build-attempt shard gets stable workspace id
 
@@ -35,9 +41,9 @@ The workspace id is not a database id. This change SHALL NOT add an
 ### Requirement: Build prompts use workspace-relative paths
 
 The build prompt SHALL expose only workspace-relative runtime paths for the
-claimed shard, reference context, output directory, and workspace logs. It
-SHALL refer to the shard as `./input/shard.json` and the candidate output root
-as `./output/`.
+claimed shard, reference context, output directory, workspace logs, and helper
+shims controlled by this change. It SHALL refer to the shard as
+`./input/shard.json` and the candidate output root as `./output/`.
 
 The build prompt SHALL NOT embed host absolute paths for the running shard,
 report path, challenge output root, generation profile, design skill, or design
@@ -57,12 +63,22 @@ requirement.
 - **THEN** those references are under `./logs/`
 - **AND** no host absolute report path is rendered
 
+#### Scenario: Dry-run preserves preview semantics
+
+- **WHEN** a build dry-run prompt is rendered from a workspace context
+- **THEN** Hermes is not invoked
+- **AND** no workspace output is promoted
+- **AND** the claimed shard is returned to pending using the existing dry-run
+  requeue behavior
+
 ### Requirement: Build Hermes calls use category profiles and workspace cwd
 
 The build runner SHALL derive the category from the claimed shard payload and
-SHALL invoke Hermes with profile `cf-<category>`. The profile argument SHALL be
-inserted into argv before the `chat` subcommand, following the existing
-research/design profile invocation style.
+SHALL invoke Hermes with profile `cf-<category>` for categories supported by
+the build shard queue. The profile argument SHALL be inserted into argv
+immediately before the `chat` subcommand, following the existing research
+profile invocation style, with the same fallback behavior when `chat` is not
+present.
 
 The Hermes subprocess `cwd` SHALL be the execution workspace. The build runner
 SHALL NOT require Git worktree mode (`-w`) for this contract. Existing
@@ -95,7 +111,9 @@ Unrelated challenge artifact names are directory entries matching
 Reference symlinks SHALL resolve only to allowed static reference roots.
 
 When preflight fails, the runner SHALL return an infrastructure-failed outcome
-and SHALL NOT invoke Hermes.
+and SHALL NOT invoke Hermes. It MAY move the already claimed shard through the
+existing failed-shard path so build-attempt reconciliation can observe the
+failure, but it SHALL NOT move unrelated shards or publish workspace output.
 
 #### Scenario: Category/profile mismatch blocks invocation
 
@@ -117,10 +135,38 @@ and SHALL NOT invoke Hermes.
 - **WHEN** preflight runs
 - **THEN** it fails before invoking Hermes
 
-#### Scenario: Preflight failure does not mutate queue terminal state
+#### Scenario: Preflight failure only affects the claimed shard
 
 - **WHEN** preflight fails after a shard is claimed
 - **THEN** Hermes is not invoked
 - **AND** no unrelated pending shard is moved
 - **AND** no candidate artifact is published
 
+### Requirement: Claimed workspace output is promoted for existing validation
+
+Hermes SHALL write candidate challenge artifacts under the workspace output
+tree. Before running the existing validator, the runner SHALL promote only
+output directories whose challenge ids are present in `input/shard.json` into
+the canonical `work/challenges/<category>/` tree expected by current resume and
+validation code.
+
+This requirement SHALL NOT introduce execution rows, lease/fencing tokens,
+operator approval, or a general publisher allowlist. Unclaimed output
+directories SHALL NOT be copied to `work/challenges`.
+
+#### Scenario: Claimed Web output reaches validation
+
+- **GIVEN** `input/shard.json` contains challenge id `web-0001`
+- **AND** Hermes writes `./output/challenges/web/web-0001-demo/metadata.json`
+- **WHEN** the runner prepares to validate
+- **THEN** it promotes that directory to
+  `work/challenges/web/web-0001-demo/`
+- **AND** the existing validator can inspect it
+
+#### Scenario: Unclaimed output is not promoted
+
+- **GIVEN** `input/shard.json` contains only `web-0001`
+- **AND** Hermes writes `./output/challenges/web/web-9999-extra/`
+- **WHEN** output promotion runs
+- **THEN** `web-9999-extra` is not copied to `work/challenges`
+- **AND** the runner records an infrastructure or quality-gate failure
