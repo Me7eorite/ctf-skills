@@ -38,6 +38,6 @@
 
 ## 5. Verification
 
-- [ ] 5.1 Run focused tests for build attempts API, revalidation service, build reconciler, and runner validation.
-- [ ] 5.2 Run frontend syntax checks for changed JS.
-- [ ] 5.3 If available, run `openspec validate add-build-attempt-revalidation-ui --strict`; otherwise record that the tool is unavailable and list the file/static checks performed.
+- [x] 5.1 Run focused tests for build attempts API, revalidation service, build reconciler, and runner validation (53 passed).
+- [x] 5.2 Run frontend syntax checks for changed JS (`node --check` passed for the Build Attempts view and router).
+- [x] 5.3 Run `openspec validate add-build-attempt-revalidation-ui --strict` successfully after aligning modified requirements with the current base specs.

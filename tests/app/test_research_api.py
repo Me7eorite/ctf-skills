@@ -540,6 +540,31 @@ class RequestDetailEndpointTests(unittest.TestCase):
                     finally:
                         _close(client)
 
+    def test_parse_failure_is_classified_without_recovery_action(self):
+        req = _make_request(status="failed")
+        run = _make_run(
+            request_id=req.id,
+            status="failed",
+            last_error="unparseable_output:no_terminal_json_object",
+        )
+        repo = SimpleNamespace(
+            get_generation_request=lambda _: req,
+            list_runs=lambda **_kw: [run],
+            get_latest_run_for_request=lambda _: run,
+            get_latest_completed_run_for_request=lambda _: None,
+            list_sources=lambda _run_id: [],
+            list_findings=lambda _run_id: [],
+        )
+        client = _client(repo)
+        try:
+            resp = client.get(f"/api/research/requests/{req.id}")
+            self.assertEqual(resp.status_code, 200)
+            latest = resp.json()["latest_run"]
+            self.assertEqual(latest["last_error_category"], "parse_failure")
+            self.assertFalse(latest["recoverable"])
+        finally:
+            _close(client)
+
 
 # ---------------------------------------------------------------------------
 # 10.7 GET /api/research/runs

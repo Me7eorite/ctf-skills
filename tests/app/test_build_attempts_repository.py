@@ -262,3 +262,77 @@ def test_folded_list_joins_progress_snapshot_without_duplicate_rows(
         assert rows[0].percent == 64
         assert rows[0].generation_request_id == task.generation_request_id
         assert rows[0].category == "web"
+
+
+def test_folded_list_limits_progress_scan_to_selected_shards(
+    session_factory: SessionFactory,
+):
+    with session_factory() as session:
+        repo = BuildAttemptsRepository(session)
+        selected_task = _seed_task(session, task_no=1, title="Selected")
+        limited_out_task = _seed_task(session, task_no=2, title="Limited out")
+        filtered_out_task = _seed_task(
+            session,
+            task_no=3,
+            category="pwn",
+            title="Filtered out",
+        )
+        selected = repo.create_attempt(selected_task.id, "selected.json")
+        limited_out = repo.create_attempt(limited_out_task.id, "limited-out.json")
+        filtered_out = repo.create_attempt(filtered_out_task.id, "filtered-out.json")
+        now = datetime.now(timezone.utc)
+        session.get(build_model.BuildAttempt, selected.id).created_at = now
+        session.get(build_model.BuildAttempt, limited_out.id).created_at = now - timedelta(minutes=1)
+        session.get(build_model.BuildAttempt, filtered_out.id).created_at = now + timedelta(minutes=1)
+        session.add_all(
+            [
+                ProgressSnapshot(
+                    shard="selected.json",
+                    challenge_id=selected_task.challenge_id,
+                    stage="build",
+                    status="running",
+                    percent=64,
+                ),
+                ProgressSnapshot(
+                    shard="limited-out.json",
+                    challenge_id=limited_out_task.challenge_id,
+                    stage="validate",
+                    status="running",
+                    percent=90,
+                ),
+                ProgressSnapshot(
+                    shard="filtered-out.json",
+                    challenge_id=filtered_out_task.challenge_id,
+                    stage="complete",
+                    status="passed",
+                    percent=100,
+                ),
+            ]
+        )
+        session.flush()
+
+        captured: dict[str, object] = {}
+
+        def capture_list_query(_conn, _cursor, statement, parameters, _context, _many):
+            if "selected_build_attempts" in statement and "build_attempt_progress" in statement:
+                captured["statement"] = statement
+                captured["parameters"] = parameters
+
+        sa.event.listen(session.bind, "before_cursor_execute", capture_list_query)
+        try:
+            rows = repo.list_attempts(category="web", limit=1)
+        finally:
+            sa.event.remove(session.bind, "before_cursor_execute", capture_list_query)
+
+        assert [(row.title, row.percent) for row in rows] == [("Selected", 64)]
+        statement = str(captured["statement"])
+        assert "progress_snapshots.shard IN (SELECT selected_build_attempts.shard_basename" in statement
+
+        # Record the real PostgreSQL plan and force index consideration so the
+        # assertion remains deterministic even for this deliberately tiny fixture.
+        session.execute(sa.text("SET LOCAL enable_seqscan = off"))
+        plan = session.connection().exec_driver_sql(
+            f"EXPLAIN (ANALYZE, COSTS OFF) {statement}",
+            captured["parameters"],
+        ).scalars().all()
+        assert "progress_snapshots_pkey" in "\n".join(plan)

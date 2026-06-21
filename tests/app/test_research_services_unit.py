@@ -11,7 +11,11 @@ import pytest
 
 from core.paths import ProjectPaths
 from domain.research import GenerationRequest, ResearchRun
-from domain.research_validators import ResearchValidationError
+from domain.research_validators import (
+    ResearchValidationError,
+    apply_research_quality_gate,
+    extract_terminal_json_object,
+)
 from hermes.process import HermesProcessResult
 from services.research_agent_executor import ResearchAgentExecutor, _parse_research_output
 from services.research_job_service import _finding_source_ids
@@ -179,6 +183,38 @@ def test_finding_source_ids_rejects_negative_index():
     # 中文注释：source_indices 必须是 0-based 非负索引，不能使用 Python 负索引语义。
     with pytest.raises(ResearchValidationError, match="out of range"):
         _finding_source_ids({"source_indices": [-1]}, [uuid4()])
+
+
+def test_terminal_json_extraction_and_quality_gate_contracts():
+    parsed = extract_terminal_json_object(
+        'debug {not json}\n```json\n{"sources": [], "findings": [{"summary": "brace } in text"}]}\n```'
+    )
+    assert parsed == {
+        "sources": [],
+        "findings": [{"summary": "brace } in text"}],
+    }
+    assert extract_terminal_json_object("no object here") is None
+
+    valid_source = {
+        "url": "https://example.com/source",
+        "content_hash": "a" * 64,
+    }
+    assert apply_research_quality_gate(
+        {"sources": [{**valid_source, "url": "not-a-url"}], "findings": [{}]},
+        1,
+    ) == (False, "url_shape_invalid:not-a-url")
+    assert apply_research_quality_gate(
+        {"sources": [{**valid_source, "content_hash": "bad"}], "findings": [{}]},
+        1,
+    ) == (False, "content_hash_shape_invalid:bad")
+    assert apply_research_quality_gate(
+        {"sources": [valid_source, valid_source], "findings": [{}]},
+        1,
+    ) == (False, f"content_hash_dup:{'a' * 64}")
+    assert apply_research_quality_gate(
+        {"sources": [valid_source], "findings": []},
+        3,
+    ) == (False, "insufficient_findings:got=0,need=2")
 
 
 class _FakeBinding:

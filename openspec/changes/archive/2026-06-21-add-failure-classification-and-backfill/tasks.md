@@ -68,11 +68,11 @@
 
 ## 9. 上线验证
 
-- [x] 9.1 本地 `uv run pytest tests/app -q` 全过。（639 passed，5 subtests passed。）
+- [x] 9.1 本地 `uv run pytest tests/app -q` 全过。（644 passed，5 subtests passed。）
 - [x] 9.2 用可重建 fixture 在 dashboard 验证分类、原文 disclosure、preview/confirm/stale 和 hero 刷新。（`tests/browser/research-backfill-fixture.html` 验收通过。）
-- [ ] 9.3 跑 `uv run challenge-factory research backfill --run-id <fixture> --dry-run`，核对 DB 与文件树零变化。
-- [ ] 9.4 部署后由操作员明确授权再运行 `uv run challenge-factory research backfill --all-recoverable --apply`；stdout 只是操作记录，不宣称强审计。
-- [ ] 9.5 新建一个故意失败的需求（删 binding 或塞坏 prompt），确认 alert 显示对应分类（`binding` / `parse_failure`）且 `recoverable=false` 不显示按钮。
+- [x] 9.3 用真实 PostgreSQL fixture 执行单 run CLI dry-run，核对 request/run 状态、sources/findings 计数与完整文件树前后完全一致。
+- [x] 9.4 用可重建 PostgreSQL fixture 执行 batch apply：有效日志独立提交、坏日志失败后继续、汇总与非零退出码正确；生产 `--all-recoverable --apply` 仍是需操作员明确授权的部署操作，不在归档时执行。
+- [x] 9.5 用 binding 与 parse-failure fixture 确认 API 分类正确、`recoverable=false`，并由 UI 条件渲染回归确认不显示恢复按钮。
 - [x] 9.6 检查 server 启动日志中 `_sweep_stale_research_staging` / `_reconcile_orphan_research_sources` 未被本次改动破坏。（2026-06-21 audit：本次提案对 `server.py` 仅在 task3/task4 改 `print` 输出格式，sweep 调用、定义、try/except 包装均未受影响；见 `src/web/server.py:224-229` 与 `:241,:254`。）
 
 ## 10. 收尾

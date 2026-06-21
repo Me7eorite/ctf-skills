@@ -83,7 +83,53 @@ cause an older sibling attempt to be exposed as the folded row.
 - **AND** no queue files move
 - **AND** no new attempt is created
 
-### Requirement: 构建记录 view follows attempt-scoped actions
+#### Scenario: Status filter applies only to the latest attempt
+
+- **GIVEN** task T has attempt #1 `failed` and latest attempt #2 `queued`
+- **WHEN** `GET /api/build-attempts?status=failed` is invoked
+- **THEN** task T is not returned
+- **AND** attempt #1 is not substituted for the latest row
+
+#### Scenario: Batch submit returns ordered ids
+
+- **WHEN** `POST /api/design-tasks/build` is invoked with
+  `{"design_task_ids": [A, B, C]}` where all three are `designed`
+- **THEN** the response status is `201`
+- **AND** `build_attempt_ids` has length 3 in the same A-B-C order
+
+#### Scenario: List is folded by design task
+
+- **GIVEN** design task T has attempts #1 (failed), #2 (succeeded),
+  and #3 (queued)
+- **WHEN** `GET /api/build-attempts?design_task_id=T` is invoked
+- **THEN** the response contains exactly one row
+- **AND** that row's `attempt_no` is 3 and `status` is `queued`
+
+#### Scenario: Detail exposes sibling attempts in order
+
+- **WHEN** `GET /api/build-attempts/{id}` is invoked for attempt
+  #2 of design task T
+- **THEN** the response includes `sibling_attempts` containing
+  attempts #1, #2, #3 ordered by `attempt_no` ascending
+- **AND** `progress_events` includes events whose `shard` matches
+  the row's `shard_basename`, including any `carry-forward:`
+  entries written by the runner
+
+#### Scenario: Limit cap is honored
+
+- **WHEN** `GET /api/build-attempts?limit=10000` is invoked with
+  `BUILD_ATTEMPTS_LIST_MAX_LIMIT=500`
+- **THEN** at most 500 rows are returned
+- **AND** the response header `X-Limit-Capped: 500` is set
+
+#### Scenario: Stale retry is an HTTP conflict
+
+- **WHEN** `POST /api/build-attempts/{id}/retry` names a failed attempt that
+  has a newer sibling
+- **THEN** the response status is `409`
+- **AND** no new attempt is created
+
+### Requirement: 构建任务 view follows the Design Tasks layout
 
 The dashboard SHALL expose a top-level navigation entry `构建记录`
 (slug `build-attempts`). The list view SHALL render a filter bar above a table.
@@ -91,6 +137,8 @@ Filter bar fields SHALL include `状态`, `Worker`, `分类` (web/pwn/re),
 `设计任务` (UUID input), and `生成请求` (UUID input). The list filter bar SHALL
 include `应用筛选`, `清空`, and `刷新`; it SHALL NOT include global
 `Start Worker`, `Validate`, `启动 Worker`, or `重新验证` actions.
+The `生成请求` filter SHALL initialize from the route's
+`generation_request_id` query parameter and remain editable.
 
 The list table SHALL use Chinese column labels: `题目`, `分类`, `难度`, `状态`,
 `产物`, `进度`, `Worker`, `次数`, `创建时间`, and `操作`. Row actions SHALL include
@@ -110,6 +158,15 @@ the inspected attempt:
 
 The detail view SHALL keep the existing sibling-attempt history and progress
 events sections, with Chinese section titles `尝试历史` and `进度事件`.
+The queued-attempt `运行` action SHALL call the constrained
+`POST /api/build-attempts/{id}/worker/start` endpoint for the inspected attempt
+and SHALL NOT call the legacy global `POST /api/actions/worker` endpoint.
+
+The application-wide header SHALL NOT expose worker, validation, refresh, or
+sync-time controls. The list-level `刷新` action SHALL call `/api/state` first
+to trigger a synchronous reconciler tick, then refetch `/api/build-attempts`.
+The legacy global worker and validation endpoints SHALL remain available to
+explicit API clients.
 
 The UI SHALL localize build attempt status labels as `待运行`, `运行中`, `成功`,
 `失败`, and `丢失`. It SHALL localize artifact labels as `已生成`, `缺失`, and
@@ -127,7 +184,25 @@ The UI SHALL localize build attempt status labels as `待运行`, `运行中`, `
 - **GIVEN** build attempt A has `status = queued`
 - **WHEN** the operator opens `#/build-attempts/{A.id}`
 - **THEN** the detail action bar shows `运行`
-- **AND** activating it starts the worker constrained to A
+- **AND** activating it calls `/api/build-attempts/{A.id}/worker/start`
+- **AND** no unrelated shard may be claimed
+
+#### Scenario: Generation request route initializes the editable filter
+
+- **WHEN** the operator opens `#/build-attempts?generation_request_id=R`
+- **THEN** the `生成请求` filter is initialized to R
+- **AND** the operator can edit or clear it
+
+#### Scenario: Global header does not expose build actions
+
+- **WHEN** the dashboard renders any view
+- **THEN** the application-wide header contains no worker, validation, refresh,
+  or sync-time action
+
+#### Scenario: Refresh triggers reconciliation before refetch
+
+- **WHEN** the operator clicks `刷新` in the build-attempt list
+- **THEN** the frontend calls `/api/state` before `/api/build-attempts`
 
 #### Scenario: Failed attempt detail distinguishes revalidate from retry
 

@@ -48,3 +48,18 @@ SHALL be rejected with a `409` carrying a machine-readable reason code:
 - **WHEN** the operator generates design tasks
 - **THEN** the response is `409` with reason code `insufficient_findings`
 - **AND** no `design_tasks` row is created
+
+#### Scenario: Difficulty distribution is preserved
+
+- **GIVEN** a generation request with
+  `difficulty_distribution = {"easy": 1, "medium": 2}`
+- **WHEN** three design tasks are generated
+- **THEN** exactly one generated task has `difficulty = "easy"`
+- **AND** exactly two generated tasks have `difficulty = "medium"`
+
+#### Scenario: Cross-category task is rejected
+
+- **GIVEN** a parent request with `category = "web"`
+- **WHEN** the planner proposes a design task with `category = "pwn"`
+- **THEN** the generation operation is rejected
+- **AND** no task rows from that planner output are persisted

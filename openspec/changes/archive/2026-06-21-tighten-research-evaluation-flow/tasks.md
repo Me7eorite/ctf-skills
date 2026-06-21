@@ -132,7 +132,7 @@
 
 ## 10. 上线 & 验证
 
-- [x] 10.1 本地 `pytest tests/app -q` 全过。
+- [x] 10.1 本地 `pytest tests/app -q` 全过。（651 passed，5 subtests passed；补齐环境隔离、质量门、handshake 与 idempotency 缺失回归。）
 - [x] 10.2 dry-run 部署：运维跑 `tools/scripts/dedup_research_sources.py` 确认影响范围。
 - [x] 10.3 运维实际跑 `--apply`，提交一次 audit log 截图。
 - [x] 10.4 `alembic upgrade head` 在 lab DB 跑通；`0009` 的 sanity check 不报错。

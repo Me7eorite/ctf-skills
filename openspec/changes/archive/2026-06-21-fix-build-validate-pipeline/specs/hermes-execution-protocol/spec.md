@@ -48,6 +48,8 @@ result status is `passed`.
 - **WHEN** `validate_challenge` runs
 - **THEN** the result status is `flag_mismatch` with `printed_flag = ""`
 
+## ADDED Requirements
+
 ### Requirement: validate.sh prompt contract forbids in-script image builds
 
 The Docker image SHALL be a Stage 3 (`build`) deliverable. By the time the

@@ -97,6 +97,39 @@ def test_invoke_research_agent_forwards_capture_arguments(monkeypatch, tmp_path)
     assert captured_call_map["timeout"] == 30
 
 
+def test_subprocess_env_excludes_database_url_and_passwords(monkeypatch, tmp_path):
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    monkeypatch.setenv("DATABASE_URL", "postgresql://secret")
+    monkeypatch.setenv("FOO_PASSWORD", "secret")
+    monkeypatch.setenv("OPENAI_API_KEY", "allowed-provider-key")
+
+    environment = hermes_research._build_research_env(
+        ProjectPaths(root=tmp_path, repository=tmp_path)
+    )
+
+    assert environment["PATH"] == "/usr/bin"
+    assert environment["HERMES_HOME"] == str(tmp_path / ".hermes")
+    assert environment["OPENAI_API_KEY"] == "allowed-provider-key"
+    assert "DATABASE_URL" not in environment
+    assert "FOO_PASSWORD" not in environment
+
+
+def test_deny_keyword_survives_allowlist_addition(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATABASE_TIMEOUT", "30")
+    monkeypatch.setattr(
+        hermes_research,
+        "RESEARCH_ENV_ALLOWLIST",
+        {*hermes_research.RESEARCH_ENV_ALLOWLIST, "DATABASE_TIMEOUT"},
+    )
+
+    environment = hermes_research._build_research_env(
+        ProjectPaths(root=tmp_path, repository=tmp_path)
+    )
+
+    assert "DATABASE_TIMEOUT" not in environment
+
+
 def test_profile_exists_uses_profile_show_command(monkeypatch):
     # 中文注释：验证 profile 存在性检查会把 chat 命令改写成 profile show 命令。
     captured_command_map = {}

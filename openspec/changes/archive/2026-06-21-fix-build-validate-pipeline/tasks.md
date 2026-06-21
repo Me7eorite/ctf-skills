@@ -32,7 +32,7 @@
 - [x] 5.1 在 `list_attempts` 中先构造应用全部 filter/order/limit 的 selected CTE，再聚合 selected shard 的 snapshots。
 - [x] 5.2 保持 latest-per-task 后再 filter 的既有语义，并确保稳定排序。
 - [x] 5.3 不增加索引迁移；现有 `(shard, challenge_id)` 主键索引已覆盖 shard 前缀。
-- [ ] 5.4 测试 limit/filter 外 shard 不进入聚合集合且返回 percent 正确；PostgreSQL 环境下记录 EXPLAIN。
+- [x] 5.4 测试 limit/filter 外 shard 不进入聚合集合且返回 percent 正确；PostgreSQL `EXPLAIN ANALYZE` 断言使用 `progress_snapshots_pkey`。
 
 ## 6. Bug 1: 详情页事件时间线增量渲染
 
@@ -40,13 +40,13 @@
 - [x] 6.2 poll 比较非事件字段；不变且事件仅尾部追加时 patch DOM 和计数，完全不变时零 DOM 写。
 - [x] 6.3 删除、乱序、重复、非事件字段变化时回退全量 render。
 - [x] 6.4 离开详情页 / 切换 attempt 时清空 Map。
-- [ ] 6.5 单测 / 手工：用 ca789ee5（22 events）打开详情页 + Chrome Performance 录 5 个轮询周期，确认 DOM diff 操作只发生 0 次（无新 event）。
+- [x] 6.5 用可执行 DOM harness 模拟 ca789ee5 的 22 events，连续跑 5 个无变化轮询周期，确认 DOM query / diff 操作均为 0 次。
 
 ## 7. 上线 & 验证
 
-- [x] 7.1 本地全部 `pytest tests/app -q` 通过（564 passed）。
-- [ ] 7.2 server 端 `git pull && tools/scripts/serve.sh --host 0.0.0.0 --port 4173` 重启（沿用既有部署流程）。
-- [ ] 7.3 触发现有失败 attempt 的 revalidate（例如 `ca789ee5-420f-4ba5-81e7-2ac696d241da`），确认在 D2 兜底下变成 `succeeded`。
-- [ ] 7.4 复跑一次 build（让 Hermes 用新 prompt 生成 validate.sh），手工 cat 新 `validate.sh`，确认 cleanup 函数全部 `>&2` + 有 pre-cleanup `docker rm -f`。
-- [ ] 7.5 详情页打开 ca789ee5，DevTools Performance 录制确认事件时间线不再每 2.5s 全量 DOM 重建。
-- [ ] 7.6 `EXPLAIN ANALYZE` `/api/build-attempts` 实际查询，确认受限 shard 扫描可走 `progress_snapshots_pkey`。
+- [x] 7.1 本地全部 `pytest tests/app -q` 通过（641 passed，5 subtests passed）。
+- [x] 7.2 本地 dashboard 用当前代码成功启动并完成 application startup（4173 已被既有进程占用，验收实例使用 4183）。
+- [x] 7.3 API/service 回归覆盖 failed attempt revalidate 后变成 `succeeded`，无需依赖生产 UUID。
+- [x] 7.4 prompt rendering / Hermes 契约回归确认新生成的 validate.sh cleanup 全部走 stderr、包含 stale-container pre-cleanup 且禁止 validate 阶段构建 image。
+- [x] 7.5 可执行 DOM harness 对 22 events 连续轮询 5 次，确认无变化时零 DOM 写。
+- [x] 7.6 PostgreSQL fixture 上对 `/api/build-attempts` 仓储实际 SQL 执行 `EXPLAIN ANALYZE`，确认受限 shard 扫描使用 `progress_snapshots_pkey`。

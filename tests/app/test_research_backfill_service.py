@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from uuid import uuid4
@@ -14,11 +16,13 @@ import sqlalchemy as sa
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 
+import cli
 from core.paths import ProjectPaths
 from persistence.models import research as model
 from persistence.repositories import ResearchRepository
 from persistence.session import SessionFactory
 from services import ResearchJobService
+from services import research_backfill_service as backfill_module
 from services.research_backfill_service import ResearchBackfillError, ResearchBackfillService
 from web.dashboard import DashboardService
 from web.server import create_app
@@ -167,6 +171,110 @@ def test_preview_is_pure_and_apply_persists_results(
         assert parent.status == "researched"
         assert len(ResearchRepository(session).list_sources(run.id)) == 1
         assert len(ResearchRepository(session).list_findings(run.id)) == 1
+
+
+def test_single_run_cli_dry_run_is_end_to_end_and_read_only(
+    session_factory: SessionFactory,
+    paths: ProjectPaths,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    request, run, _log_path = _failed_run(session_factory, paths)
+
+    with session_factory() as session:
+        before = (
+            session.get(model.GenerationRequest, request.id).status,
+            session.get(model.ResearchRun, run.id).status,
+            session.scalar(sa.select(sa.func.count()).select_from(model.ResearchSource)),
+            session.scalar(sa.select(sa.func.count()).select_from(model.ResearchFinding)),
+        )
+    before_tree = sorted(
+        (path.relative_to(paths.root).as_posix(), path.read_bytes())
+        for path in paths.root.rglob("*")
+        if path.is_file()
+    )
+    monkeypatch.setattr(cli, "_check_category_consistency", lambda: None)
+    monkeypatch.setattr(cli.ProjectPaths, "discover", lambda: paths)
+    monkeypatch.setattr(backfill_module, "SessionFactory", lambda: session_factory)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "challenge-factory",
+            "research",
+            "backfill",
+            "--run-id",
+            str(run.id),
+            "--dry-run",
+        ],
+    )
+
+    cli.main()
+
+    assert capsys.readouterr().out.startswith(f"[backfill] {run.id} preview")
+    with session_factory() as session:
+        after = (
+            session.get(model.GenerationRequest, request.id).status,
+            session.get(model.ResearchRun, run.id).status,
+            session.scalar(sa.select(sa.func.count()).select_from(model.ResearchSource)),
+            session.scalar(sa.select(sa.func.count()).select_from(model.ResearchFinding)),
+        )
+    after_tree = sorted(
+        (path.relative_to(paths.root).as_posix(), path.read_bytes())
+        for path in paths.root.rglob("*")
+        if path.is_file()
+    )
+    assert after == before
+    assert after_tree == before_tree
+
+
+def test_batch_cli_applies_valid_fixture_and_continues_after_failure(
+    session_factory: SessionFactory,
+    paths: ProjectPaths,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    valid_request, valid_run, _ = _failed_run(session_factory, paths)
+    failed_request, failed_run, failed_log = _failed_run(session_factory, paths)
+    failed_log.write_text(
+        "header\n--- stdout ---\nnot-json\n--- end stdout ---\n",
+        encoding="utf-8",
+    )
+
+    @contextlib.contextmanager
+    def test_transaction():
+        with session_factory() as session:
+            yield session
+
+    monkeypatch.setattr(cli, "_check_category_consistency", lambda: None)
+    monkeypatch.setattr(cli.ProjectPaths, "discover", lambda: paths)
+    monkeypatch.setattr(backfill_module, "SessionFactory", lambda: session_factory)
+    monkeypatch.setattr("persistence.session.transaction", test_transaction)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "challenge-factory",
+            "research",
+            "backfill",
+            "--all-recoverable",
+            "--apply",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main()
+
+    assert excinfo.value.code == 1
+    output = capsys.readouterr().out
+    assert f"[backfill] {valid_run.id} applied sources=1 findings=1" in output
+    assert f"[backfill] {failed_run.id} error=parse_failed" in output
+    assert "summary succeeded=1 skipped=0 failed=1" in output
+    with session_factory() as session:
+        assert session.get(model.ResearchRun, valid_run.id).status == "completed"
+        assert session.get(model.GenerationRequest, valid_request.id).status == "researched"
+        assert session.get(model.ResearchRun, failed_run.id).status == "failed"
+        assert session.get(model.GenerationRequest, failed_request.id).status == "failed"
 
 
 def test_apply_rejects_stale_digest_without_materializing(

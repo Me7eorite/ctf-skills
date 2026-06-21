@@ -465,16 +465,23 @@ catch-all in `web/server.py`:
   returns `200` with a JSON array of "folded" rows (one per design
   task, exposing only its highest-`attempt_no` row) joined with the
   parent design task title/category and the latest derived percent
-  from `progress_snapshots`. Rows SHALL include `artifact_status`.
+  from `progress_snapshots`. Rows SHALL include `artifact_status` and SHOULD
+  include a concise failure summary derived from progress evidence.
 - `GET /api/build-attempts/{id}`; returns `200` with the row plus
   `sibling_attempts` (all attempts for the same design task ordered
   by `attempt_no` ascending), `progress_events` (for the row's
   shard, with `carry-forward:` events preserved), and
-  `resulting_challenge_dir` and `artifact_status` when present.
+  `resulting_challenge_dir`, `artifact_status`, and a concise failure summary
+  when present.
 - `POST /api/build-attempts/{id}/retry` with empty body; returns
   `201` with body `{"build_attempt_id": UUID}` (the new attempt), or `409`
   when the attempt is not the latest failed/lost sibling or its parent is not
   `build_failed`.
+- `POST /api/build-attempts/{id}/revalidate` with empty body; re-runs host
+  validation for the same failed attempt without creating a new attempt or
+  invoking Hermes. It returns `200` with the repaired attempt payload when the
+  same attempt becomes `succeeded`, or `409` with a precise error when the
+  attempt is ineligible or validation still fails.
 
 The list endpoint SHALL apply `BUILD_ATTEMPTS_LIST_DEFAULT_LIMIT`
 (default 100) when no `limit` is given, SHALL cap at
@@ -491,6 +498,40 @@ The list query SHALL fold before filtering: first select the highest-
 `design_task_id`, `generation_request_id`, and `category` filters to that
 latest-row relation, then order and limit the result. A filter SHALL never
 cause an older sibling attempt to be exposed as the folded row.
+
+#### Scenario: Revalidate repairs a failed attempt without creating a sibling
+
+- **GIVEN** build attempt A is the latest attempt for design task T
+- **AND** A has `status = failed`
+- **AND** `work/shards/failed/{A.shard_basename}` is an attributed shard for A
+- **AND** the challenge directory now exists with complete validation evidence
+- **WHEN** `POST /api/build-attempts/{A.id}/revalidate` is invoked
+- **THEN** no new `build_attempts` row is created
+- **AND** A becomes `succeeded`
+- **AND** T becomes `built`
+- **AND** the shard file moves from `failed/` to `done/`
+- **AND** fresh `validate/passed` and `complete/passed` progress events are
+  recorded for A's shard basename
+
+#### Scenario: Revalidate failure keeps the same failed attempt
+
+- **GIVEN** latest build attempt A has `status = failed`
+- **AND** its failed shard is present
+- **WHEN** `POST /api/build-attempts/{A.id}/revalidate` is invoked but the
+  challenge directory is missing or validation fails
+- **THEN** the response status is `409`
+- **AND** no new build attempt is created
+- **AND** A remains `failed`
+- **AND** the failed shard remains under `failed/`
+- **AND** A.error contains the precise validation reason
+
+#### Scenario: Revalidate rejects non-failed or stale attempts
+
+- **WHEN** `POST /api/build-attempts/{id}/revalidate` names a queued, running,
+  succeeded, lost, or stale older failed attempt
+- **THEN** the response status is `409`
+- **AND** no queue files move
+- **AND** no new attempt is created
 
 #### Scenario: Status filter applies only to the latest attempt
 
@@ -562,101 +603,96 @@ the supported retry path.
 
 ### Requirement: 构建任务 view follows the Design Tasks layout
 
-The dashboard SHALL expose a top-level navigation entry "构建任务"
-(slug `build-attempts`) under its own sidebar group. The list view SHALL render
-a filter bar above a table. Filter bar fields SHALL include `状态`
-(build-attempts statuses), `Worker`, `分类` (web/pwn/re), `Design Task` (UUID
-input), and `Generation Request` (UUID input). The view SHALL initialize
-`Generation Request` from the route's `generation_request_id` query parameter
-and display it as an active, editable filter. The filter bar's right side SHALL
-present five action buttons: `Apply`, `Clear`, `⟳ 刷新`, `▶ 启动 Worker`,
-`☑ 重新验证`.
+The dashboard SHALL expose a top-level navigation entry `构建记录`
+(slug `build-attempts`). The list view SHALL render a filter bar above a table.
+Filter bar fields SHALL include `状态`, `Worker`, `分类` (web/pwn/re),
+`设计任务` (UUID input), and `生成请求` (UUID input). The list filter bar SHALL
+include `应用筛选`, `清空`, and `刷新`; it SHALL NOT include global
+`Start Worker`, `Validate`, `启动 Worker`, or `重新验证` actions.
+The `生成请求` filter SHALL initialize from the route's
+`generation_request_id` query parameter and remain editable.
 
-The table SHALL have one row per design task that has at least one
-`build_attempts` row, showing the title, category, difficulty, latest attempt
-status, derived percent (from `progress_snapshots`, `-` if absent), worker,
-attempt count, artifact availability, created-at, and an action area with
-`详情` (always) and `重试` (only when the latest attempt is in `failed` or
-`lost`).
+The list table SHALL use Chinese column labels: `题目`, `分类`, `难度`, `状态`,
+`产物`, `进度`, `Worker`, `次数`, `创建时间`, and `操作`. Row actions SHALL include
+`详情` and `删除`; rows whose latest attempt is `failed` or `lost` SHALL also
+show `重试构建`. `重试构建` SHALL continue to call the retry endpoint and create a
+new attempt.
 
-The detail view SHALL show, for the inspected attempt: basic info, a link to
-its parent design task, the related shard path, the
-`resulting_challenge_dir` and `artifact_status` (when set), a table of all
-sibling attempts ordered by `attempt_no`, and a list of progress events
-preserving `carry-forward:` styling. The detail action area SHALL expose
-`▶ 启动 Worker` for that exact attempt.
+The detail view SHALL be titled `构建运行 #N`, where `N` is the attempt number.
+It SHALL show Chinese field labels including `设计任务`, `分片`, `Worker`,
+`开始时间`, `完成时间`, `产物目录`, and `失败原因`. Detail actions SHALL be scoped to
+the inspected attempt:
 
-The application-wide `<header>` toolbar's `重新验证`, `启动 Worker`, update
-timestamp, and refresh icon SHALL be removed; the mobile bottom action bar
-SHALL be removed. The `重新验证` and `启动 Worker` actions SHALL be reachable
-only from the build-attempts view. `POST /api/actions/worker` and
-`POST /api/actions/validate` SHALL remain unchanged at the HTTP level.
+- `queued`: show `运行`.
+- `failed`: show `重新校验`, `重试构建`, and `删除`.
+- `lost`: show `重试构建` and `删除`.
+- `succeeded`: show `删除`.
 
-The build-attempts dashboard view SHALL NOT use the legacy global
-`POST /api/actions/worker` endpoint for category-filtered or attempt-specific
-build work. A list action SHALL require an explicit category filter and SHALL
-call the constrained category endpoint, which resolves to one DB-known queued
-attempt and launches by build-attempt id. A detail action SHALL call the
-constrained single-build-attempt endpoint for the inspected attempt.
+The detail view SHALL keep the existing sibling-attempt history and progress
+events sections, with Chinese section titles `尝试历史` and `进度事件`.
+The queued-attempt `运行` action SHALL call the constrained
+`POST /api/build-attempts/{id}/worker/start` endpoint for the inspected attempt
+and SHALL NOT call the legacy global `POST /api/actions/worker` endpoint.
 
-The legacy global worker endpoint SHALL NOT be wired to another dashboard
-control by this change; it remains available only to explicit API clients.
+The application-wide header SHALL NOT expose worker, validation, refresh, or
+sync-time controls. The list-level `刷新` action SHALL call `/api/state` first
+to trigger a synchronous reconciler tick, then refetch `/api/build-attempts`.
+The legacy global worker and validation endpoints SHALL remain available to
+explicit API clients.
 
-Constrained build-worker starts SHALL preserve the existing dashboard local
-task guard: a server process may not start a constrained worker while another
-local worker or validation subprocess is still running.
+The UI SHALL localize build attempt status labels as `待运行`, `运行中`, `成功`,
+`失败`, and `丢失`. It SHALL localize artifact labels as `已生成`, `缺失`, and
+`未知`.
 
-#### Scenario: List worker action requires an explicit category
+#### Scenario: List view no longer exposes global execution actions
 
-- **GIVEN** the operator is on the Build Attempts list with category filter
-  unset
-- **WHEN** the operator clicks Start Worker
-- **THEN** no worker process is started
-- **AND** the UI asks the operator to choose a category
+- **WHEN** the operator opens `#/build-attempts`
+- **THEN** the list filter bar shows filters and `刷新`
+- **AND** it does not show `Start Worker`, `Validate`, `启动 Worker`, or
+  `重新验证`
 
-#### Scenario: Sidebar exposes build-attempts entry
+#### Scenario: Queued attempt detail can be run
 
-- **WHEN** the dashboard loads
-- **THEN** the sidebar shows a "构建任务" entry that opens the list view at
-  route `#/build-attempts`
-
-#### Scenario: List worker action starts constrained category execution
-
-- **GIVEN** the operator is on the Build Attempts list with category filter
-  `web`
-- **WHEN** the operator clicks Start Worker
-- **THEN** the frontend calls the constrained build-worker endpoint with
-  `category = web`
-- **AND** it does not call `POST /api/actions/worker`
-
-#### Scenario: Detail worker action starts constrained attempt execution
-
-- **GIVEN** the operator is viewing build attempt `A`
-- **WHEN** the operator clicks Start Worker
-- **THEN** the frontend calls the constrained build-worker endpoint with
-  `build_attempt_id = A`
+- **GIVEN** build attempt A has `status = queued`
+- **WHEN** the operator opens `#/build-attempts/{A.id}`
+- **THEN** the detail action bar shows `运行`
+- **AND** activating it calls `/api/build-attempts/{A.id}/worker/start`
 - **AND** no unrelated shard may be claimed
 
-#### Scenario: Constrained worker respects local process guard
+#### Scenario: Generation request route initializes the editable filter
 
-- **GIVEN** the dashboard task manager already has a running worker or
-  validation subprocess
-- **WHEN** the operator starts a category- or attempt-constrained build worker
-- **THEN** the endpoint returns a conflict
-- **AND** no second worker process is started
+- **WHEN** the operator opens `#/build-attempts?generation_request_id=R`
+- **THEN** the `生成请求` filter is initialized to R
+- **AND** the operator can edit or clear it
 
-#### Scenario: Global header no longer exposes build actions
+#### Scenario: Global header does not expose build actions
 
-- **WHEN** the dashboard renders any view other than `build-attempts`
-- **THEN** the `<header class="layout-header">` element contains no
-  `启动 Worker`, `重新验证`, refresh icon, or sync-time element
+- **WHEN** the dashboard renders any view
+- **THEN** the application-wide header contains no worker, validation, refresh,
+  or sync-time action
 
-#### Scenario: Refresh button triggers a synchronous reconciler tick
+#### Scenario: Refresh triggers reconciliation before refetch
 
-- **WHEN** the operator clicks `⟳ 刷新` in the build-tasks view
-- **THEN** the frontend calls `/api/state` first, which triggers a reconciler
-  tick
-- **AND** the frontend then refetches `/api/build-attempts`
+- **WHEN** the operator clicks `刷新` in the build-attempt list
+- **THEN** the frontend calls `/api/state` before `/api/build-attempts`
+
+#### Scenario: Failed attempt detail distinguishes revalidate from retry
+
+- **GIVEN** build attempt A has `status = failed`
+- **WHEN** the operator opens `#/build-attempts/{A.id}`
+- **THEN** the detail action bar shows both `重新校验` and `重试构建`
+- **AND** `重新校验` calls `/api/build-attempts/{A.id}/revalidate`
+- **AND** `重试构建` calls `/api/build-attempts/{A.id}/retry`
+
+#### Scenario: Failure reason prefers progress evidence
+
+- **GIVEN** a failed attempt has `build_attempts.error = "shard execution failed"`
+- **AND** its latest `validate/failed` progress event contains
+  `error=missing_challenge`
+- **WHEN** the list or detail view renders the attempt
+- **THEN** it shows a Chinese failure summary equivalent to
+  `校验失败：missing_challenge`
+- **AND** it does not show only `shard execution failed`
 
 ### Requirement: Build attempt allocation remains monotonic after deletion
 
@@ -815,3 +851,115 @@ task-manager operation. A successful start SHALL return `202` and the selected
 - **THEN** A is skipped and B is selected
 - **AND** A's mismatched shard is not claimed
 
+### Requirement: Existing per-attempt revalidation is race-safe and recoverable
+
+The dashboard backend SHALL retain `POST /api/build-attempts/{id}/revalidate`
+for the latest failed attempt and SHALL harden its existing validation, queue,
+and status updates while retaining progress events keyed by the row's
+`shard_basename`.
+
+The endpoint MUST:
+
+- Reject any non-failed or stale sibling and preserve the current failed-shard
+  identity checks.
+- Prefer a valid recorded `resulting_challenge_dir`; otherwise resolve exactly
+  one current directory whose metadata id matches the attributed challenge.
+- Serialize the attempt with a PostgreSQL advisory lock across the validator
+  subprocess; a duplicate request returns `409` before writing progress.
+- Preserve the existing `dashboard-revalidate` worker and
+  `validate/* → complete/*` event semantics.
+- On `passed`: set `row.status = "succeeded"`, `row.error = NULL`,
+  `row.artifact_status = "present"`, refresh `row.finished_at = NOW()`, and
+  set parent `design_task.status = "built"`.
+- On any non-passed status (`flag_mismatch`, `nonzero_exit`, `timeout`,
+  `missing_validation`, `contract_failed`, etc.): set `row.status = "failed"`,
+  `row.error = <validator status>`, refresh `row.finished_at = NOW()`, and set
+  parent `design_task.status = "build_failed"`.
+- Run the validator subprocess outside any open DB transaction while holding
+  only the session-level advisory lock.
+- Convert an unexpected validator exception to `validator_error`, write a
+  `validate/failed` plus `complete/failed` event, and release the lock.
+- Write `complete/passed` only after the shard move and database state commit.
+  If the database commit fails after the shard move, restore the shard and its
+  claim file to `failed/` before returning an error.
+
+The endpoint SHALL retain its `200 OK` attempt representation on success,
+return `404` when no row matches the id, and return `409` for ineligible,
+concurrent, missing-shard, or validation-failure cases.
+
+The existing `POST /api/actions/validate` endpoint and its underlying
+`cli.py validate` subprocess SHALL remain available and unchanged.
+
+#### Scenario: Revalidate flips a failed row to succeeded
+
+- **GIVEN** build_attempt B is `failed` with a present `resulting_challenge_dir`
+  and the on-disk `validate.sh` now exits `0` and prints the expected flag
+- **WHEN** `POST /api/build-attempts/{B}/revalidate` is invoked
+- **THEN** the response is `200` with `status="succeeded"`
+- **AND** the row's `status` is `succeeded`, `error` is null, and
+  `finished_at` is refreshed
+- **AND** the parent design task's `status` is `built`
+- **AND** exactly one `validate/running` and one `validate/passed` progress
+  event are appended for the row's `shard_basename`
+
+#### Scenario: Revalidate of a still-active attempt is rejected
+
+- **GIVEN** build_attempt B is `running`
+- **WHEN** `POST /api/build-attempts/{B}/revalidate` is invoked
+- **THEN** the response is `409` and no progress event is written
+
+#### Scenario: Revalidate of a missing failed shard is rejected
+
+- **GIVEN** build_attempt B is `failed` but its attributed failed shard is absent
+- **WHEN** `POST /api/build-attempts/{B}/revalidate` is invoked
+- **THEN** the response is `409` with a message naming the missing failed shard
+
+#### Scenario: Revalidate failure writes validate and complete terminals
+
+- **GIVEN** the same revalidation produces a `flag_mismatch` result
+- **WHEN** the endpoint completes
+- **THEN** it appends `validate/running`, `validate/failed`, and
+  `complete/failed` using the existing revalidate event semantics
+
+#### Scenario: Stale sibling and concurrent duplicate are rejected
+
+- **GIVEN** B is not the latest attempt for its design task, or another request
+  is already revalidating B
+- **WHEN** `POST /api/build-attempts/{B}/revalidate` is invoked
+- **THEN** the response is `409` and that request starts no validator process
+
+#### Scenario: Final database write failure restores queue placement
+
+- **GIVEN** validation passes and the failed shard is moved to done
+- **WHEN** the attempt status transaction fails to commit
+- **THEN** the shard and claim file are restored under failed
+- **AND** no `complete/passed` event is written
+
+### Requirement: list_attempts progress subquery is bounded by the folded batch
+
+The `list_attempts` repository query SHALL restrict its `progress_snapshots`
+aggregation to the `shard_basename` set of the folded latest-per-task rows
+selected by the outer query, rather than aggregating across every snapshot in
+the table.
+
+The query SHALL use the existing BTree primary-key index on
+`progress_snapshots(shard, challenge_id)` for the restricted shard scan; it
+SHALL NOT require a redundant single-column index.
+
+This requirement is a performance contract: the `list_attempts` query's row
+count read from `progress_snapshots` MUST be proportional to the number of
+returned build_attempts, not to the global snapshot population.
+
+#### Scenario: Snapshot scan size scales with returned rows
+
+- **GIVEN** the `progress_snapshots` table holds 10000 rows across 500 shards
+- **AND** the query is filtered such that only 5 build_attempts are returned
+- **WHEN** the dashboard requests `GET /api/build-attempts?limit=5`
+- **THEN** the executed query's `progress_snapshots` aggregation only scans
+  rows belonging to those 5 shards (verifiable via `EXPLAIN ANALYZE` showing
+  an index scan on `progress_snapshots(shard)`)
+
+#### Scenario: Existing primary key index supports the scan
+
+- **WHEN** the bounded query is explained on PostgreSQL
+- **THEN** the plan may use the primary-key index whose leading column is `shard`

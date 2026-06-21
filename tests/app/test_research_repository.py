@@ -406,6 +406,47 @@ def test_queue_stats_excludes_exact_lease_expiry_boundary(session_factory: Sessi
         session.close()
 
 
+def test_idempotency_key_serializes_hits_conflicts_and_ttl(
+    session_factory: SessionFactory,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    service = ResearchJobService(session_factory)
+
+    def submit(topic="same"):
+        return service.submit_request(
+            "web",
+            topic,
+            1,
+            {"easy": 1},
+            idempotency_key="operator-key",
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _index: submit(), range(2)))
+    assert results[0][0].id == results[1][0].id
+    with session_factory() as session:
+        assert session.scalar(
+            sa.select(sa.func.count()).where(
+                model.GenerationRequest.idempotency_key == "operator-key"
+            )
+        ) == 1
+
+    with pytest.raises(ResearchValidationError, match="idempotency_key_conflict"):
+        submit("different")
+
+    monkeypatch.setenv("RESEARCH_SUBMIT_IDEMPOTENCY_TTL_SECONDS", "1")
+    with session_factory() as session:
+        row = session.scalar(
+            sa.select(model.GenerationRequest).where(
+                model.GenerationRequest.idempotency_key == "operator-key"
+            )
+        )
+        row.created_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+        session.commit()
+    newer, _run = submit()
+    assert newer.id != results[0][0].id
+
+
 def test_expired_lease_recovery_and_max_attempt_failure(session_factory: SessionFactory):
     service = ResearchJobService(session_factory)
     _, run = service.submit_request("web", "lease", 1, {"easy": 1}, max_attempts=1)
