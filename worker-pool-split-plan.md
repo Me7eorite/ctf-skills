@@ -85,7 +85,7 @@
 
 | 事故根因 | Hermes 能帮助的部分 | 项目侧必须自建 |
 |---|---|---|
-| **task=default 残留** | profile 隔离 Hermes 状态；SOUL/config 可按类别分离 | 每次执行创建干净 `work/executions/<execution_id>/`，只 materialize 本次输入 |
+| **task=default 残留** | profile 隔离 Hermes 状态；SOUL/config 可按类别分离 | 每次执行创建干净 `work/executions/<workspace_id>/`，只 materialize 本次输入 |
 | **宿主机绝对路径** | profile 的 `terminal.cwd` 可作为启动 cwd 辅助 | Prompt 只暴露 execution workspace 内相对路径，preflight 校验 `input/` 可读、`output/` 可写 |
 | **模型自主搜索串题** | 类别 profile 可降低行为偏移 | workspace 不放其他题目；preflight fail-closed；执行后 publisher 校验 category/id/scope |
 | **写入路径无 allowlist** | 无（文档明示 profile ≠ sandbox） | **必须自建** output allowlist + staged publication + manifest hash |
@@ -126,9 +126,11 @@
 
 ### 1. `add-execution-workspace-and-profile-per-category` — 项目侧 execution workspace + 按方向建 profile
 
-**一句话**: 每个方向一个 Hermes profile（`cf-web` / `cf-pwn` / `cf-re`），每次 build execution 创建项目侧 `work/executions/<execution_id>/` 干净工作区；Hermes 只能看到本次 materialize 的 `input/`、`references/` 和 `output/`，调用前 preflight 验证 shard 可读、output 可写、category 一致，失败 fail-closed 不调 Hermes。
+**一句话**: 每个方向一个 Hermes profile（`cf-web` / `cf-pwn` / `cf-re`），每次 build execution 创建项目侧 `work/executions/<workspace_id>/` 干净工作区；Hermes 的 prompt/runtime context 只暴露本次 materialize 的 `input/`、`references/` 和 `output/` 相对路径，调用前 preflight 验证 shard 可读、output 可写、category 一致，失败 fail-closed 不调 Hermes。
 
-**v3 变化**: 从"采用 Hermes 原生 `-w` + 每方向一个 profile"改为"项目侧自建 `work/executions/<execution_id>/` + 每方向一个 Hermes profile"。Git worktree 不作为核心隔离方案。
+**v3 变化**: 从"采用 Hermes 原生 `-w` + 每方向一个 profile"改为"项目侧自建 `work/executions/<workspace_id>/` + 每方向一个 Hermes profile"。Git worktree 不作为核心隔离方案。
+
+**命名边界**: 题案 1 不新增数据库表，因此这里使用本地 `workspace_id`，不是持久化的 `execution_id`。`workspace_id` 优先取 `build_attempt_id`；没有 build attempt 的 legacy shard 路径使用 `manual-<uuid>`。真正的 DB `execution_id` 从题案 3 开始引入。
 
 **IN scope**:
 - 创建 3 个 Hermes profile（执行命令）：
@@ -137,9 +139,9 @@
   hermes profile create cf-pwn --description "Generates pwn-category CTF challenges"
   hermes profile create cf-re  --description "Generates reverse-engineering CTF challenges"
   ```
-- 每个 profile 配 SOUL.md（类别相关人格/约束）、共享底层模型配置；`terminal.cwd` 可设为项目根或由 runner 显式传入 execution workspace
+- 每个 profile 配 SOUL.md（类别相关人格/约束）、共享底层模型配置；build runner 显式以 execution workspace 为 `cwd` 调用 Hermes，profile 的 `terminal.cwd` 仅作人工直接使用 profile 时的默认值
 - 所有 build Hermes 调用拼参数时强制加 `-p cf-<category>`，拒绝裸 `hermes chat` 调用；不强制 `-w`
-- 创建 `work/executions/<execution_id>/input/`、`references/`、`output/`、`logs/`，只 materialize 本次执行需要的 `shard.json`、`manifest.json`、必要 reference 和 profile 摘要
+- 创建 `work/executions/<workspace_id>/input/`、`references/`、`output/`、`logs/`，只 materialize 本次执行需要的 `shard.json`、`manifest.json`、必要 reference 和 profile 摘要
 - Materialize 策略明确按内容分两类，避免无脑复制大量静态资源：
 
   | 内容 | 处理 | 理由 |
@@ -158,7 +160,7 @@
 
 **涉及代码**: [src/hermes/process.py](src/hermes/process.py)（命令拼接）、[src/hermes/runner.py](src/hermes/runner.py)、[src/hermes/prompt.py](src/hermes/prompt.py)、[src/services/research_agent_executor.py](src/services/research_agent_executor.py)、[src/services/design_agent_executor.py](src/services/design_agent_executor.py)、[src/core/paths.py](src/core/paths.py)。
 
-**DB schema**: 不动。
+**DB schema**: 不动。题案 1 的 `workspace_id` 只存在于文件路径和日志中，不作为数据库外键或审计主键。
 
 **Spec deltas**: 改造 `hermes-execution-protocol`，加 "Hermes profile + execution workspace 强制使用" 要求，并明确 Git worktree 不属于运行时隔离边界。
 
@@ -347,7 +349,7 @@ re-01     cf-re         build:re     2                enabled
 2. **按 1→2→3→4→5 顺序推进**；题案 6 可在每个前置题案落地时滚动加字段
 3. **每个新题案独立创建**: 复制原 `add-agent-worker-pool-management/` 的格式，scope 严格限定本文档对应行
 4. **不要直接修改原题案**，将原 `add-agent-worker-pool-management` 标记为 "superset, deprecated by [题案 1-6 的名字]"，待 6 个子题案全部归档后一并归档
-5. **题案 1 落地后做一次端到端实跑**: 检查 `work/executions/<execution_id>/input/`、`output/`、`logs/` 是否只包含本次执行材料，验证 prompt/log 不再暴露宿主绝对 shard 路径；验证"串题不再发生"的最佳办法不是单测，是实跑
+5. **题案 1 落地后做一次端到端实跑**: 检查 `work/executions/<workspace_id>/input/`、`output/`、`logs/` 是否只包含本次执行材料，验证 prompt/log 不再暴露宿主绝对 shard 路径；验证"串题不再发生"的最佳办法不是单测，是实跑
 6. **题案 1 上线前**: 在部署机上一次性手动 `hermes profile create cf-web/cf-pwn/cf-re` 三条命令；后续 profile 管理走 Hermes 原生
 7. **首次实现人工反馈迭代时**: 先只支持同一 `build_attempt` 内基于 latest failed/review_required execution 的 `revision`，不要同时引入跨 attempt 克隆或多分支候选，避免状态面过宽
 8. **6 个子题案归档后再补一个轻量收尾题案** `add-build-attempt-feedback-ui`: 题案 3 落地后人工反馈已经能 `curl POST /api/build-attempts/{id}/feedback`，但长期可用性不足。收尾题案纯前端工作——在已有 build-attempts 详情页加反馈表单 + 展示历史反馈 + 触发 revision 按钮；schema/API/audit 全部已就绪
