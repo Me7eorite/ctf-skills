@@ -140,8 +140,16 @@
 - 每个 profile 配 SOUL.md（类别相关人格/约束）、共享底层模型配置；`terminal.cwd` 可设为项目根或由 runner 显式传入 execution workspace
 - 所有 build Hermes 调用拼参数时强制加 `-p cf-<category>`，拒绝裸 `hermes chat` 调用；不强制 `-w`
 - 创建 `work/executions/<execution_id>/input/`、`references/`、`output/`、`logs/`，只 materialize 本次执行需要的 `shard.json`、`manifest.json`、必要 reference 和 profile 摘要
+- Materialize 策略明确按内容分两类，避免无脑复制大量静态资源：
+
+  | 内容 | 处理 | 理由 |
+  |---|---|---|
+  | `shard.json` / `manifest.json` / `generation-profile.json` | **copy** | claim 时刻快照，避免运行中被改 |
+  | `references/<category>/` / common guidance / SOUL 摘要 | **symlink**（或 read-only bind mount） | 静态、可能上 MB，复制浪费 |
+  | revision 用 `base-artifact/`（题案 3 引入） | symlink 或 read-only bind | 上一轮 output 的只读引用 |
 - Prompt 渲染改用 execution workspace 内相对路径（如 `./input/shard.json`、`./output/`），禁止嵌入宿主机绝对路径
 - 调 Hermes 前 preflight 校验（在 execution workspace 视角）: shard 文件可读 + output 区可写 + shard.category 与 profile 匹配 + workspace 不包含其他 challenge 产物
+- "其他 challenge 产物" 检测策略：preflight 递归扫描 workspace，拒绝任何匹配 `(web|pwn|re)-\d+` 模式但 challenge_id ≠ leased challenge_id 的目录条目；symlink target 也按指向路径检查
 - 任何一项失败 → 标记 **infrastructure-failed**，不消耗模型 attempt 配额，不启动 Hermes
 - 进度上报通道改造：从 prompt 让容器调宿主机 CLI，改为主机侧 runner 直接写或本地认证 side-channel
 - 回归测试: 在全局 `work/challenges/pwn/` 或旧 execution quarantine 中预置 `pwn-9999/` 残留 → 跑 Web execution → 断言 execution workspace 内不可见、未被改，且 prompt/log 不包含宿主绝对 shard 路径
@@ -171,7 +179,9 @@
 - 全部通过后才原子 rename 到 `work/challenges`，写入 output manifest hash
 - 失败时 staging 留存供审计；`work/challenges` 不动
 - **Retention policy**: 成功 publish 后清理 execution workspace 的临时输入和可重建缓存；失败保留 quarantine 受 bounded retention 限制（默认: 失败保留 last 20 个或 7 天，二者取严）
+- **Change-policy 硬约束**（题案 3 引入 revision 后生效）: 当 execution 有 `base-artifact/` 和 `change-policy.json` 时，publisher 必须 diff `output/` vs `base-artifact/`，对 metadata 的 identity 字段（`challenge_id`、`flag`、`category`、`build_status`）和 `change_policy.preserve` 列出的路径执行硬约束——任何被改动一律 reject。`change_policy.forbid` 列出的路径出现新建文件也 reject。其余字段（题面文本、Dockerfile 内容）按软约束，仅作为 prompt 输入交给模型自我约束
 - 回归测试: Web execution 输出包含 `pwn/pwn-0001-*` → 整次执行 fail scope validation → 没有任何文件被 publish
+- 回归测试: revision execution 修改了 `metadata.challenge_id` → publisher diff 命中 identity 字段变动 → reject 并保留 staging
 
 **OUT scope**: lease/fencing、agent registry、supervisor。token 重校验留给题案 3。
 
@@ -225,10 +235,14 @@ input/
 - lease 过期回收时签发新 token；旧进程可以本地跑完，但不能 publish
 - 把题案 2 的 publisher 增加"publish 前重校验 token"
 - `revision` claim 会把 parent execution 的 output manifest、base artifact 引用和人工反馈快照写入新 workspace 的 `input/`
+- **反馈入口**：人工通过 `POST /api/build-attempts/{id}/feedback` 提交结构化反馈（`summary` / `requested_changes` / `preserve` / `forbid` / `reviewer`），本题案只负责 schema、持久化和 materialize；管理端 UI 入口归题案 4 或独立反馈题案，不在本 scope
+- **`revalidate` 不创建 execution 行**：只在原 execution 上追加一条 `revalidation_events` 记录（检查项 / 结果 / 时间戳 / 触发者），由 [BuildReconciler](src/services/build_reconciler.py) 复用现有逻辑执行
+- **存量数据迁移**：新 execution 行只适用于迁移后 claim 的 build_attempt；迁移瞬间 in-flight 的 attempt 由 BuildReconciler 通过 legacy 路径完成本轮，不补建 execution 行。Migration 章节须显式列出这一边界
 - 回归测试: execution E1 lease 过期被恢复签发新 token → E1 旧进程跑完后 publish 请求被拒 → 输出留 quarantine
 - 回归测试: execution E1 产物镜像/考点偏离 → 人工提交 feedback → execution E2(kind=revision,parent=E1,iteration=2) 只 materialize E1 产物和反馈，不能重新领取无关 shard
+- 回归测试: `revalidate` 触发后不出现新 execution 行，原 execution 上 revalidation_events 追加一条
 
-**OUT scope**: agent 概念（worker_id 可先是字符串标识，不强约束到 agent 表）、capacity、supervisor。
+**OUT scope**: agent 概念（worker_id 可先是字符串标识，不强约束到 agent 表）、capacity、supervisor、反馈管理 UI。
 
 **依赖**: 题案 2（共享 execution 行与 publisher 流程）。
 
@@ -254,6 +268,7 @@ re-01     cf-re         build:re     2                enabled
 
 **IN scope**:
 - `agents` 表 5 列（id/name, profile_name, capability, max_concurrency, control_state, heartbeat_at, last_error, soft_deleted_at）
+- 对题案 3 已建 `executions` 表执行 `ALTER ADD agent_id` 可空外键；保留原 `worker_id` 字符串作为 legacy/cli 路径的兼容字段，agent 路径的 execution 同时填两列，保证 `worker_id` 查询和 `agent_id` 查询语义一致
 - 校验 profile 在 Hermes 侧存在（包装 `hermes profile show`，复用 [src/hermes/process.py](src/hermes/process.py) 已有的 `profile_exists()`）
 - capability 由项目硬约束（白名单：`research`/`design`/`build:web`/`build:pwn`/`build:re`），不依赖 profile.description
 - claim 路径加授权: 解析 agent → 校验 enabled + 匹配 `build:<category>` → 复用题案 3 的 lease/fencing
@@ -263,6 +278,7 @@ re-01     cf-re         build:re     2                enabled
 - **不重新实现 Hermes profile CRUD**：创建/删除 profile 仍走 Hermes 原生命令；项目 UI 只提供 "查看现有 profile" 和 "绑定到 agent" 入口
 - 不迁移现有 research/design profile bindings
 - 回归测试: Web/Pwn attempt 共存 → agent web-01 仅 `build:web` → 只能领 Web，不能领 Pwn（即使 cf-web profile 的 description 写得不严谨）
+- 回归测试: legacy CLI 路径起的 execution `worker_id` 非空 `agent_id` 为 NULL，agent 路径起的 execution 两列都非空且一致
 
 **OUT scope**: supervisor / slots / 并发限制（题案 5）；审计快照（题案 6）。
 
@@ -334,6 +350,7 @@ re-01     cf-re         build:re     2                enabled
 5. **题案 1 落地后做一次端到端实跑**: 检查 `work/executions/<execution_id>/input/`、`output/`、`logs/` 是否只包含本次执行材料，验证 prompt/log 不再暴露宿主绝对 shard 路径；验证"串题不再发生"的最佳办法不是单测，是实跑
 6. **题案 1 上线前**: 在部署机上一次性手动 `hermes profile create cf-web/cf-pwn/cf-re` 三条命令；后续 profile 管理走 Hermes 原生
 7. **首次实现人工反馈迭代时**: 先只支持同一 `build_attempt` 内基于 latest failed/review_required execution 的 `revision`，不要同时引入跨 attempt 克隆或多分支候选，避免状态面过宽
+8. **6 个子题案归档后再补一个轻量收尾题案** `add-build-attempt-feedback-ui`: 题案 3 落地后人工反馈已经能 `curl POST /api/build-attempts/{id}/feedback`，但长期可用性不足。收尾题案纯前端工作——在已有 build-attempts 详情页加反馈表单 + 展示历史反馈 + 触发 revision 按钮；schema/API/audit 全部已就绪
 
 ---
 
