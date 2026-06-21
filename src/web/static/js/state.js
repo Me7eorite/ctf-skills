@@ -16,6 +16,7 @@ export const appState = {
       design_task_id: "",
       generation_request_id: "",
     },
+    selection: new Set(),
     flags: {},
     poll: { timer: null, loading: false },
   },

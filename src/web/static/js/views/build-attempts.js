@@ -166,11 +166,55 @@ async function startCurrentQueue() {
   try {
     const result = await postJson("/api/build-attempts/queue/start", payload);
     showToast(`顺序队列已启动 · 共 ${result.queue_length} 个任务`);
+    state.selection.clear();
     state.list = null;
     await ensureList();
   } catch (err) {
     showToast(err.message, true);
   }
+}
+
+async function startSelectedQueue() {
+  if (!state.selection.size) return;
+  const rows = state.list || [];
+  const orderedIds = rows
+    .filter((row) => row.status === "queued" && state.selection.has(row.id))
+    .map((row) => row.id);
+  if (!orderedIds.length) {
+    showToast("选中的题目均已不在 queued 状态", true);
+    return;
+  }
+  try {
+    const result = await postJson(
+      "/api/build-attempts/worker/start-sequential",
+      { build_attempt_ids: orderedIds },
+    );
+    showToast(`顺序队列已启动 · 共 ${result.queue_length} 个任务`);
+    state.selection.clear();
+    state.list = null;
+    await ensureList();
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+function toggleRowSelection(attemptId, checked) {
+  if (!attemptId) return;
+  if (checked) state.selection.add(attemptId);
+  else state.selection.delete(attemptId);
+  render(appState.data);
+  initIcons();
+}
+
+function toggleSelectAll(checked) {
+  const rows = state.list || [];
+  for (const row of rows) {
+    if (row.status !== "queued") continue;
+    if (checked) state.selection.add(row.id);
+    else state.selection.delete(row.id);
+  }
+  render(appState.data);
+  initIcons();
 }
 
 async function revalidateAttempt(attemptId) {
@@ -276,22 +320,39 @@ function renderList(root) {
     return;
   }
   const rows = state.list || [];
+  pruneSelection(rows);
+  const selectedCount = state.selection.size;
   root.innerHTML = `
     ${renderBuildReadinessWarning()}
     <section class="card">
       <div class="card-header">
         <div>
           <div class="card-title">构建记录</div>
-          <div class="card-subtitle">${rows.length} 条最新构建运行</div>
+          <div class="card-subtitle">${rows.length} 条最新构建运行${selectedCount ? ` · 已选 ${selectedCount} 条` : ""}</div>
         </div>
-        <button id="ba-start-queue" class="btn btn-primary btn-sm">
-          <i data-lucide="list-ordered"></i>启动当前队列
-        </button>
+        <div class="btn-group">
+          <button id="ba-start-selected" class="btn btn-primary btn-sm" ${selectedCount ? "" : "disabled"}
+            title="按表格中的勾选顺序顺序执行所选 queued 题目">
+            <i data-lucide="play"></i>启动选中${selectedCount ? `（${selectedCount}）` : ""}
+          </button>
+          <button id="ba-start-queue" class="btn btn-secondary btn-sm"
+            title="按当前的分类/生成请求筛选，启动全部 queued 题目（按创建时间从早到晚，最多 100 条）">
+            <i data-lucide="list-ordered"></i>启动全部待运行
+          </button>
+        </div>
       </div>
       ${renderFilters()}
       ${rows.length ? renderTable(rows) : `<div class="empty card-body">没有匹配的构建记录</div>`}
     </section>
   `;
+}
+
+function pruneSelection(rows) {
+  if (!state.selection.size) return;
+  const eligible = new Set(rows.filter((r) => r.status === "queued").map((r) => r.id));
+  for (const id of [...state.selection]) {
+    if (!eligible.has(id)) state.selection.delete(id);
+  }
 }
 
 function renderFilters() {
@@ -328,11 +389,20 @@ function renderFilters() {
 }
 
 function renderTable(rows) {
+  const queuedRows = rows.filter((r) => r.status === "queued");
+  const allQueuedSelected = queuedRows.length > 0
+    && queuedRows.every((r) => state.selection.has(r.id));
   return `
     <div class="table-container">
       <table class="table">
         <thead>
           <tr>
+            <th style="width: 36px;">
+              <input type="checkbox" id="ba-select-all"
+                ${queuedRows.length === 0 ? "disabled" : ""}
+                ${allQueuedSelected ? "checked" : ""}
+                title="全选当前页面上 queued 状态的题目">
+            </th>
             <th>题目</th>
             <th>分类</th>
             <th>难度</th>
@@ -348,6 +418,11 @@ function renderTable(rows) {
         <tbody>
           ${rows.map((attempt) => `
             <tr data-build-attempt-id="${escapeHtml(attempt.id)}">
+              <td>
+                ${attempt.status === "queued"
+                  ? `<input type="checkbox" class="ba-row-select" data-build-attempt-id="${escapeHtml(attempt.id)}" ${state.selection.has(attempt.id) ? "checked" : ""}>`
+                  : `<span style="color: var(--text-muted);" title="仅 queued 状态可选">—</span>`}
+              </td>
               <td>
                 <div class="truncate" style="max-width: 260px;">${escapeHtml(attempt.title || attempt.challenge_id || attempt.id)}</div>
                 ${attempt.failure_summary ? `<div style="margin-top: 2px; color: var(--accent-red); font-size: var(--font-xs);">${escapeHtml(attempt.failure_summary)}</div>` : ""}
@@ -628,6 +703,7 @@ function applyFiltersFromInputs() {
   state.detailId = null;
   state.detail = null;
   state.list = null;
+  state.selection.clear();
   render(appState.data);
 }
 
@@ -642,6 +718,7 @@ function clearFilters() {
   state.detailId = null;
   state.detail = null;
   state.list = null;
+  state.selection.clear();
   render(appState.data);
 }
 
@@ -680,6 +757,10 @@ export function bind() {
     }
     if (event.target.closest("#ba-start-queue")) {
       startCurrentQueue();
+      return;
+    }
+    if (event.target.closest("#ba-start-selected")) {
+      startSelectedQueue();
       return;
     }
     if (event.target.closest("#ba-worker")) {
@@ -728,6 +809,14 @@ export function bind() {
     if (!root || !root.contains(event.target)) return;
     if (["ba-filter-status", "ba-filter-category"].includes(event.target.id)) {
       applyFiltersFromInputs();
+      return;
+    }
+    if (event.target.id === "ba-select-all") {
+      toggleSelectAll(event.target.checked);
+      return;
+    }
+    if (event.target.classList.contains("ba-row-select")) {
+      toggleRowSelection(event.target.dataset.buildAttemptId, event.target.checked);
     }
   });
 }
