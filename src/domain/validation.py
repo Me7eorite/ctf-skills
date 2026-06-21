@@ -240,7 +240,8 @@ class ChallengeValidator:
           1. 必需字段是否存在（id, title, difficulty, build_status, flag）
           2. build_status 是否为 "passed"
           3. Web 类别: 必须有 Dockerfile、docker-compose.yml、deploy/src 目录
-          4. RE/Pwn 类别: 必须有编译后的 ELF 产物，架构必须与声明匹配
+          4. RE/Pwn 类别: 必须有编译后的 ELF 产物（在 attachments/ 或 legacy dist/
+             或 pwn 的 deploy/ 下），架构必须与声明匹配
         """
         errors = [
             f"metadata.{field} is missing"
@@ -267,8 +268,15 @@ class ChallengeValidator:
                 errors.append("Web metadata must record runtime and framework")
 
         if category in {"re", "pwn"} and metadata.get("target_format", "elf") == "elf":
-            # RE/Pwn 的 ELF 产物架构检查
-            roots = [challenge_dir / "dist"]
+            # RE/Pwn 的 ELF 产物架构检查。
+            # 约定：交付目录是 attachments/（玩家下载用），等同于打包出口；
+            # dist/ 是历史遗留兼容位置（早期 prompt 写的是 dist/），新题应该用
+            # attachments/，旧题已有 dist/ 的继续受支持。pwn 还会扫 deploy/
+            # 因为 docker 镜像里有时直接嵌编译产物。
+            roots = [
+                challenge_dir / "attachments",
+                challenge_dir / "dist",  # legacy compatibility
+            ]
             if category == "pwn":
                 roots.append(challenge_dir / "deploy")
             elf_paths = [
@@ -279,7 +287,7 @@ class ChallengeValidator:
                 if is_elf(path)
             ]
             if not elf_paths:
-                errors.append("no compiled ELF artifact found")
+                errors.append("no compiled ELF artifact found in attachments/ or dist/")
 
             # 从 metadata 推断期望的架构
             expected_architecture = (
