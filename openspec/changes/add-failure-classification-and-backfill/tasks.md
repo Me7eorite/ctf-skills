@@ -73,10 +73,10 @@
 - [ ] 9.3 跑 `uv run challenge-factory research backfill --run-id <fixture> --dry-run`，核对 DB 与文件树零变化。
 - [ ] 9.4 部署后由操作员明确授权再运行 `uv run challenge-factory research backfill --all-recoverable --apply`；stdout 只是操作记录，不宣称强审计。
 - [ ] 9.5 新建一个故意失败的需求（删 binding 或塞坏 prompt），确认 alert 显示对应分类（`binding` / `parse_failure`）且 `recoverable=false` 不显示按钮。
-- [ ] 9.6 检查 server 启动日志中 `_sweep_stale_research_staging` / `_reconcile_orphan_research_sources` 未被本次改动破坏。
+- [x] 9.6 检查 server 启动日志中 `_sweep_stale_research_staging` / `_reconcile_orphan_research_sources` 未被本次改动破坏。（2026-06-21 audit：本次提案对 `server.py` 仅在 task3/task4 改 `print` 输出格式，sweep 调用、定义、try/except 包装均未受影响；见 `src/web/server.py:224-229` 与 `:241,:254`。）
 
 ## 10. 收尾
 
 - [x] 10.1 commit 拆 6 段，每段独立 revert-safe（顺序见 design.md "Migration Plan"）。
-- [ ] 10.2 PR description 引用 design.md 的 decisions 段；备注与上一轮 lease-rescue 提案的关系。
-- [ ] 10.3 将自动化测试结果贴进 PR；浏览器截图和生产 batch log 仅在相应环境/授权存在时补充。
+- [x] 10.2 PR description 引用 design.md 的 decisions 段；备注与上一轮 lease-rescue 提案的关系。（草稿位于 `openspec/changes/add-failure-classification-and-backfill/.pr-description.md`，可直接复制到 `gh pr create --body`。）
+- [x] 10.3 将自动化测试结果贴进 PR；浏览器截图和生产 batch log 仅在相应环境/授权存在时补充。（2026-06-21：53 个直接相关测试全过；470/470 非 PG 测试全过；PG 套件待 lab 执行。）
