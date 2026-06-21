@@ -218,10 +218,18 @@ preflight SHALL verify in order:
 3. Every challenge in the shard has one supported category.
 4. The category matches the selected `cf-<category>` profile.
 5. `output/` exists and is writable.
-6. The workspace contains no unrelated challenge artifact names. Unrelated
-   names are directory entries matching `(web|pwn|re)-\d+` whose challenge id
-   is not present in the claimed shard; symlinks are resolved before matching.
-7. Reference symlinks SHALL resolve only to roots listed in the manifest. The
+6. The workspace contains `./bin/progress` as a regular file with the
+   executable bit set; the shim MUST be materialized before preflight so its
+   absence is caught here, not later during prompt rendering.
+7. The workspace contains no unrelated challenge artifact names. A name is
+   "unrelated" when it matches the challenge-namespace pattern
+   `^(web|pwn|re)-[a-zA-Z0-9][a-zA-Z0-9_-]*$` but does NOT match any id from
+   `input/shard.json::challenges[*].id` by exact name or `<id>-<slug>` prefix.
+   Symlinks are resolved before matching. The matcher MUST NOT depend on
+   stricter id-shape assumptions (such as `^(web|pwn|re)-\d+`), because real
+   design-task ids use a project-defined format like
+   `<category>-<hex8>-<NNNN>(-<slug>)?`.
+8. Reference symlinks SHALL resolve only to roots listed in the manifest. The
    copy-only strategy records an empty list, so every reference symlink fails.
 
 When preflight fails, the runner SHALL return `status=failed` with
@@ -268,16 +276,40 @@ workspace output.
   `hermes profile create cf-web`
 - **AND** no shard or workspace output is published
 
+#### Scenario: Missing or non-executable progress shim fails closed
+
+- **GIVEN** a workspace where `./bin/progress` was not materialized (or its
+  executable bit is missing)
+- **WHEN** preflight runs
+- **THEN** preflight returns infrastructure-failed before invoking Hermes
+- **AND** the failure message identifies the missing/invalid shim
+- **AND** the runner does NOT discover the problem only at prompt-rendering
+  time
+
+#### Scenario: Real design-task challenge ids are recognized
+
+- **GIVEN** a claimed shard with `challenges[0].id = "web-abcdef12-0001"`
+- **AND** Hermes writes `./output/challenges/web/web-abcdef12-0001-demo/`
+- **WHEN** preflight scans for unrelated artifacts AND promotion runs
+- **THEN** the directory is treated as the claimed challenge (not "unrelated"
+  or "unclaimed"), because matching is by claimed-ids set, not by the legacy
+  `^(web|pwn|re)-\d+` shape
+
 ### Requirement: Claimed workspace output is promoted for existing validation
 
 Hermes SHALL write candidate challenge artifacts under the workspace output
-tree at the fixed layout `./output/challenges/<category>/<id>-<slug>/`. The
-build prompt SHALL render this layout into Hermes-visible instructions.
+tree at the fixed layout `./output/challenges/<category>/<id>(-<slug>)?/`,
+where `<id>` is one of the ids listed in `input/shard.json::challenges[*].id`.
+The build prompt SHALL render this layout into Hermes-visible instructions.
+
 Before running the existing validator, the runner SHALL promote only output
-directories whose challenge ids are present in `input/shard.json` into the
-canonical `work/challenges/<category>/` tree expected by current resume and
-validation code. Promotion matches `./output/challenges/<category>/<id>-*/`
-and copies to `work/challenges/<category>/<id>-*/`.
+directories whose name matches one of the claimed ids by exact match
+(`name == id`) or by id-prefix (`name == f"{id}-{slug}"`). Matching MUST use
+the claimed-ids set from the shard payload, NOT a regex over the id shape:
+real design-task ids look like `<category>-<hex8>-<NNNN>` and are not covered
+by stricter assumptions like `^(web|pwn|re)-\d+`. Promoted directories are
+copied to `work/challenges/<category>/` expected by current resume and
+validation code.
 
 For resume runs, the runner SHALL first copy any existing canonical challenge
 directory for a claimed id into the workspace output layout before invoking

@@ -298,26 +298,36 @@ def _parse_runtime_constraints(items: list[str]) -> dict[str, object]:
 
 
 def _resolve_run_timeout(cli_value: int | None) -> tuple[int | None, str | None]:
+    """Resolve timeout in priority: CLI flag > env var > shard policy fallback.
+
+    Non-positive or non-integer HERMES_TIMEOUT values fall back to shard policy
+    with a warning, matching the web API behavior in
+    `src/web/build_attempts_endpoints.py:_resolve_worker_timeout`. Previously
+    the CLI exited with non-zero, which silently broke worker subprocesses
+    started by the dashboard whenever HERMES_TIMEOUT was misconfigured.
+    """
     if cli_value is not None:
         return cli_value, "cli"
     env_raw = os.environ.get("HERMES_TIMEOUT")
-    if env_raw:
-        try:
-            env_value = int(env_raw)
-        except ValueError:
-            print(
-                f"error: HERMES_TIMEOUT must be a positive integer, got {env_raw!r}",
-                file=sys.stderr,
-            )
-            sys.exit(2)
-        if env_value <= 0:
-            print(
-                f"error: HERMES_TIMEOUT must be greater than zero, got {env_raw!r}",
-                file=sys.stderr,
-            )
-            sys.exit(2)
-        return env_value, "env"
-    return None, None
+    if not env_raw:
+        return None, None
+    try:
+        env_value = int(env_raw)
+    except ValueError:
+        print(
+            f"warning: ignoring HERMES_TIMEOUT={env_raw!r}; not an integer, "
+            "falling back to shard policy",
+            file=sys.stderr,
+        )
+        return None, "env-fallback"
+    if env_value <= 0:
+        print(
+            f"warning: ignoring HERMES_TIMEOUT={env_raw!r}; not positive, "
+            "falling back to shard policy",
+            file=sys.stderr,
+        )
+        return None, "env-fallback"
+    return env_value, "env"
 
 
 def _progress_store_for_run(*, dry_run: bool):

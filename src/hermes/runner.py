@@ -480,6 +480,28 @@ class HermesRunner:
         manifest = read_json(workspace.manifest, {})
         category = manifest.get("category") if isinstance(manifest, dict) else None
         profile_name = f"cf-{category}"
+        # 中文注释：shim 是 preflight 的检查项之一，必须在 preflight 之前 materialize；
+        # 否则 preflight 通过、prompt 渲染后 Hermes 才发现 ./bin/progress 不存在，违反 fail-closed 契约。
+        try:
+            materialize_progress_shim(workspace)
+        except OSError as exc:
+            message = f"Workspace shim materialization failed: {exc}"
+            self._mark_shard_failed(
+                shard,
+                original_shard_name,
+                worker,
+                challenge_ids,
+                report,
+                message,
+                1,
+            )
+            return {
+                "status": "failed",
+                "failure_type": "infrastructure",
+                "shard": original_shard_name,
+                "returncode": 1,
+                "error": message,
+            }
         try:
             payload = preflight_workspace(
                 workspace,
@@ -506,7 +528,6 @@ class HermesRunner:
             }
         try:
             materialize_resume_outputs(self.paths, workspace, payload)
-            materialize_progress_shim(workspace)
         except (OSError, WorkspacePromotionError, ValueError) as exc:
             message = f"Workspace materialization failed: {exc}"
             self._mark_shard_failed(

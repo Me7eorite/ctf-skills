@@ -537,6 +537,39 @@ second-pass re-evaluation against Docker terminal backend reality.
 43. Patch: `infrastructure-failed` was not a valid runner status and would be
     omitted from the existing failed counter. Solution: retain `status=failed`
     and add `failure_type=infrastructure` to the outcome.
+44. Patch: implementation used `_CHALLENGE_ENTRY = re.compile(r"^(web|pwn|re)-\d+")`
+    to identify claimed output directories, but real design_task ids look like
+    `web-<hex8>-<NNNN>(-<slug>)?` (see
+    [src/services/design_task_planning_service.py:199](../../../src/services/design_task_planning_service.py))
+    and the regex never matches the hex segment. Every real production build
+    would have hit `WorkspacePromotionError unclaimed output directory`.
+    Solution: replace regex-based id extraction with claimed-ids set matching
+    (exact name OR `<id>-<slug>` prefix). Keep a broader namespace pattern
+    `^(web|pwn|re)-[a-zA-Z0-9][a-zA-Z0-9_-]*$` only to gate "this LOOKS like
+    a challenge dir, scrutinize it" — never to extract the id. Spec promotion
+    requirement and preflight requirement updated accordingly; new scenario
+    "Real design-task challenge ids are recognized" added.
+45. Patch: preflight ran before `materialize_progress_shim`, so a missing or
+    broken shim would only fail during prompt rendering (after the model had
+    already started). This violates the fail-closed contract in Decision 9.
+    Solution: runner now calls `materialize_progress_shim(workspace)` BEFORE
+    `preflight_workspace`; preflight adds a `_verify_progress_shim` check
+    (regular file + executable bit). Spec preflight requirement updated; new
+    scenario "Missing or non-executable progress shim fails closed" added.
+46. Patch: CLI `_resolve_run_timeout` exited with returncode 2 on invalid
+    `HERMES_TIMEOUT`, but the Web API path
+    (`build_attempts_endpoints._resolve_worker_timeout`) silently fell back
+    to shard policy and returned `accepted` to the user. Result: dashboard
+    UI says worker is running, subprocess dies immediately. Solution: CLI
+    matches API — warn on stderr, fall back to shard policy, returncode 0.
+    Existing CLI test `test_invalid_env_timeout_fails` repurposed as
+    `test_invalid_env_timeout_warns_and_falls_back`.
+47. Patch: `tests/app/test_execution_workspace.py` failed on Windows hosts
+    (symlinks need admin; POSIX shell shim cannot be `subprocess.run`'d).
+    Decision 9 + Risks already restrict scope to POSIX hosts; Solution:
+    module-level `pytest.mark.skipif(sys.platform.startswith("win"))` with
+    a comment pointing at Decision 9 + Risks. CI must run these on Linux/
+    macOS; PowerShell-only sessions cannot validate this requirement.
 
 ## Risks / Trade-offs
 

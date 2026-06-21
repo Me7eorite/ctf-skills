@@ -179,7 +179,16 @@ class CLITimeoutPrecedenceTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 2, f"raw={raw}")
 
-    def test_invalid_env_timeout_fails(self):
+    def test_invalid_env_timeout_warns_and_falls_back(self):
+        """Invalid HERMES_TIMEOUT must not kill the CLI.
+
+        Previously the CLI exited with code 2, which silently broke worker
+        subprocesses started by the dashboard whenever HERMES_TIMEOUT was
+        misconfigured (the API surface returned `accepted` so the user thought
+        the worker was running). Now CLI matches the API: warn on stderr, fall
+        back to shard policy, keep running. See
+        `src/web/build_attempts_endpoints.py::_resolve_worker_timeout`.
+        """
         with TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             _prepare_workspace(tmp_path)
@@ -190,7 +199,14 @@ class CLITimeoutPrecedenceTests(unittest.TestCase):
                     cwd=tmp_path,
                     env={"HERMES_TIMEOUT": raw},
                 )
-                self.assertEqual(result.returncode, 2, f"raw={raw} stderr={result.stderr}")
+                self.assertEqual(
+                    result.returncode,
+                    0,
+                    f"raw={raw} should fall back (not exit); stderr={result.stderr}",
+                )
+                self.assertIn("ignoring HERMES_TIMEOUT", result.stderr)
+                self.assertIn(repr(raw), result.stderr)
+                self.assertIn("falling back to shard policy", result.stderr)
 
 
 class DurationsCLIInputTests(unittest.TestCase):

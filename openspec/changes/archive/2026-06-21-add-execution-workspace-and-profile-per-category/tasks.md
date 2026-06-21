@@ -127,6 +127,13 @@
   to `work/challenges`.
 - [x] 3A.7 Keep the later staged publisher allowlist, execution leases, and
   operator approval out of this change.
+- [x] 3A.8 Match output directories to claimed ids by the shard payload's
+  `challenges[*].id` set (exact name OR `<id>-<slug>` prefix), NOT by the
+  legacy `^(web|pwn|re)-\d+` regex. Real design-task ids look like
+  `<category>-<hex8>-<NNNN>` and were silently rejected by the old regex.
+  Use the namespace pattern `^(web|pwn|re)-[a-zA-Z0-9][a-zA-Z0-9_-]*$` only
+  to identify "this looks like a challenge directory" when deciding what to
+  scrutinize, never to extract the id itself.
 
 ## 4. Compatibility
 
@@ -200,7 +207,9 @@
   tailing, not just post-exit catch-up).
 - [x] 5.19 Run focused pytest coverage for the changed runner/prompt/workspace
   paths.
-- [x] 5.20 Run `openspec validate add-execution-workspace-and-profile-per-category --strict`.
+- [x] 5.20 Run `openspec validate add-execution-workspace-and-profile-per-category --strict`
+  (verified on dev host with the openspec CLI installed; Windows hosts that
+  lack the CLI MUST not mark this complete from PowerShell alone).
 - [x] 5.21 Add timeout-policy unit tests covering Re 1800s, Web 2700s, Pwn
   3600s, Pwn expert 5400s, mixed Pwn difficulty, missing Pwn difficulty, and
   mixed-category rejection.
@@ -208,6 +217,17 @@
   shard-policy fallback, asserting the exact timeout passed to Hermes.
 - [x] 5.23 Add Web API/UI tests proving constrained worker starts use and
   display the derived effective timeout without requiring manual input.
+- [x] 5.24 Add a real-id regression test for promotion: a claimed id like
+  `web-abcdef12-0001` with output dir `web-abcdef12-0001-demo` MUST promote
+  successfully and end up under `work/challenges/web/`.
+- [x] 5.25 Add a preflight test for "shim missing": preflight MUST fail
+  closed with a message identifying `bin/progress` BEFORE Hermes is invoked.
+- [x] 5.26 Add a Windows-skip marker on the workspace test suite (POSIX-only
+  scope from Decision 9 + Risks); CI MUST run these on a POSIX host.
+- [x] 5.27 Realign CLI `_resolve_run_timeout` behavior with the Web API: an
+  invalid `HERMES_TIMEOUT` warns and falls back to shard policy (returncode
+  0), instead of exiting non-zero and silently killing dashboard-launched
+  worker subprocesses. Cover with both CLI and API tests.
 
 ## 6. Operator Runbook and Rollout
 

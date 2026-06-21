@@ -30,7 +30,24 @@ _CATEGORY_REFERENCE = {
     "re": "reverse-design.md",
 }
 _COMMON_REFERENCES = ("quality-gate.md", "spec-template.md", "delivery-format.md")
-_CHALLENGE_ENTRY = re.compile(r"^(web|pwn|re)-\d+")
+# 中文注释：`_CHALLENGE_NAMESPACE` 只用来识别"这个目录名属于挑战命名空间"，
+# 比之前 ^(web|pwn|re)-\d+ 宽松，能覆盖真实 design-task 生成的
+# web-<hex8>-<NNNN>-<slug> 形态。具体哪一个 id 是已认领的，由 `_match_claimed_id`
+# 拿 shard payload 里的 ids 集合做精确匹配，不再依赖 regex 的格式假设。
+_CHALLENGE_NAMESPACE = re.compile(r"^(web|pwn|re)-[a-zA-Z0-9][a-zA-Z0-9_-]*$")
+
+
+def _match_claimed_id(name: str, claimed_ids: set[str]) -> str | None:
+    """Return the claimed challenge_id whose directory name is `name`, or None.
+
+    Matches exact id (`web-abcdef12-0001`) or id + slug (`web-abcdef12-0001-demo`).
+    Order-independent: longer ids win automatically because `startswith` is
+    deterministic for the given claimed-ids set.
+    """
+    for cid in claimed_ids:
+        if name == cid or name.startswith(f"{cid}-"):
+            return cid
+    return None
 
 
 class WorkspacePreflightError(ValueError):
@@ -181,9 +198,26 @@ def preflight_workspace(
         raise WorkspacePreflightError("manifest category does not match shard category")
     _verify_materialized_hashes(workspace, manifest)
     _verify_output_writable(workspace.output)
+    _verify_progress_shim(workspace)
     _reject_unrelated_artifacts(workspace.root, challenge_ids)
     _verify_reference_symlinks(workspace.references, manifest)
     return payload
+
+
+def _verify_progress_shim(workspace: ExecutionWorkspace) -> None:
+    """Fail closed if `./bin/progress` shim is missing or not executable.
+
+    The prompt renders `./bin/progress`; if the shim is absent or unreadable
+    here, Hermes would only discover it mid-run, after the model has already
+    started. preflight is the documented fail-closed gate.
+    """
+    shim = workspace.root / "bin" / "progress"
+    if shim.is_symlink() or not shim.is_file():
+        raise WorkspacePreflightError(
+            "bin/progress shim is missing; runner must materialize it before preflight"
+        )
+    if not os.access(shim, os.X_OK):
+        raise WorkspacePreflightError("bin/progress shim is not executable")
 
 
 def import_workspace_report(workspace: ExecutionWorkspace, legacy_report: Path) -> bool:
@@ -250,10 +284,9 @@ def promote_claimed_outputs(
     for entry in expected_root.iterdir():
         if not entry.is_dir() or entry.is_symlink():
             raise WorkspacePromotionError(f"invalid output entry: {entry.name}")
-        match = _CHALLENGE_ENTRY.match(entry.name)
-        if match is None or match.group(0) not in challenge_ids:
+        challenge_id = _match_claimed_id(entry.name, challenge_ids)
+        if challenge_id is None:
             raise WorkspacePromotionError(f"unclaimed output directory: {entry.name}")
-        challenge_id = match.group(0)
         if challenge_id in candidates:
             raise WorkspacePromotionError(
                 f"multiple output directories for claimed id {challenge_id}"
@@ -415,8 +448,9 @@ def _reject_unrelated_artifacts(root: Path, challenge_ids: set[str]) -> None:
             if entry.is_symlink():
                 names.append(entry.resolve(strict=False).name)
             for candidate in names:
-                match = _CHALLENGE_ENTRY.match(candidate)
-                if match and match.group(0) not in challenge_ids:
+                if not _CHALLENGE_NAMESPACE.match(candidate):
+                    continue
+                if _match_claimed_id(candidate, challenge_ids) is None:
                     raise WorkspacePreflightError(
                         f"workspace contains unrelated challenge artifact: {candidate}"
                     )
@@ -476,10 +510,9 @@ def _reject_nonconforming_output(
     for entry in output_root.rglob("*"):
         if not entry.is_dir():
             continue
-        match = _CHALLENGE_ENTRY.match(entry.name)
-        if match is None:
+        if not _CHALLENGE_NAMESPACE.match(entry.name):
             continue
-        if match.group(0) not in challenge_ids:
+        if _match_claimed_id(entry.name, challenge_ids) is None:
             raise WorkspacePromotionError(f"unclaimed output directory: {entry.name}")
         try:
             entry.relative_to(expected_root)

@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -11,6 +12,21 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
+
+import pytest
+
+# 中文注释：本套件覆盖 POSIX 平台的 execution workspace 行为：
+# - symlink 在 Windows 需要管理员权限，普通会话会失败
+# - `./bin/progress` shim 是 POSIX shell 脚本，Windows 无法直接 subprocess 执行
+# 设计上 spec 已经声明 POSIX-only（见 design.md Decision 9 + Risks），
+# Windows 跳过这一整套测试是与设计一致的最干净做法。
+pytestmark = pytest.mark.skipif(
+    sys.platform.startswith("win"),
+    reason=(
+        "Execution workspace is POSIX-only (proposal Decision 9 + Risks); "
+        "symlinks and shell shims do not run unprivileged on Windows."
+    ),
+)
 
 from core.build_timeout import shard_timeout_policy
 from core.jsonio import write_json
@@ -304,6 +320,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
             original_shard_name="web.json",
             worker="worker-1",
         )
+        materialize_progress_shim(workspace)
         (workspace.output / "pwn-9999-stale").mkdir()
 
         with self.assertRaisesRegex(WorkspacePreflightError, "unrelated"):
@@ -323,6 +340,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
             original_shard_name="web.json",
             worker="worker-1",
         )
+        materialize_progress_shim(workspace)
         outside = self.paths.root / "outside-reference.md"
         outside.write_text("outside", encoding="utf-8")
         (workspace.references / "injected.md").symlink_to(outside)
@@ -692,6 +710,65 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         self.assertEqual(captured["arguments"][:4], ["hermes", "-p", "cf-web", "chat"])
         self.assertEqual(captured["cwd"], workspace.root)
         self.assertNotEqual(captured["cwd"], self.paths.root)
+
+
+    def test_promotion_accepts_real_design_task_challenge_id_format(self) -> None:
+        """Regression: design_task ids are `<cat>-<hex8>-<NNNN>` (+optional slug).
+
+        Earlier regex `^(web|pwn|re)-\\d+` rejected them outright; promotion
+        must accept these via the claimed-ids matcher.
+        """
+        from hermes.workspace import promote_claimed_outputs
+
+        real_id = "web-abcdef12-0001"
+        payload = {"challenges": [{"id": real_id, "category": "web"}]}
+        shard = self._running_shard(payload, name="real.worker.json")
+        workspace = prepare_workspace(
+            self.paths,
+            shard=shard,
+            original_shard_name="real.json",
+            worker="worker-1",
+        )
+        candidate = workspace.output / "challenges" / "web" / f"{real_id}-demo"
+        candidate.mkdir(parents=True)
+        write_json(
+            candidate / "metadata.json",
+            {"id": real_id, "category": "web", "marker": "x"},
+        )
+        (candidate / "exp.py").write_text("# stub\n", encoding="utf-8")
+
+        promoted = promote_claimed_outputs(self.paths, workspace, payload)
+
+        self.assertEqual(len(promoted), 1)
+        self.assertEqual(promoted[0].name, f"{real_id}-demo")
+        canonical = self.paths.challenges / "web" / f"{real_id}-demo"
+        self.assertTrue(canonical.is_dir())
+        self.assertTrue((canonical / "metadata.json").is_file())
+
+    def test_preflight_rejects_workspace_without_progress_shim(self) -> None:
+        """Shim is part of the fixed layout; absent shim must fail preflight,
+        not be discovered later during prompt rendering."""
+        from hermes.workspace import preflight_workspace, WorkspacePreflightError
+
+        shard = self._running_shard(
+            {"challenges": [{"id": "web-0001", "category": "web"}]},
+            name="noshim.worker.json",
+        )
+        workspace = prepare_workspace(
+            self.paths,
+            shard=shard,
+            original_shard_name="noshim.json",
+            worker="worker-1",
+        )
+        # workspace.root / "bin" exists but no progress shim was materialized
+        with self.assertRaisesRegex(
+            WorkspacePreflightError, "bin/progress shim is missing"
+        ):
+            preflight_workspace(
+                workspace,
+                profile_name="cf-web",
+                profile_exists=lambda _: True,
+            )
 
 
 if __name__ == "__main__":
