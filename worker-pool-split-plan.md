@@ -1,10 +1,10 @@
 # Worker Pool 题案拆分方案
 
-> 起草日期: 2026-06-21（v2 修订：基于 Hermes 官方文档重新对齐原生能力）
+> 起草日期: 2026-06-21（v3 修订：Git worktree 降级为开发调试可选项，运行时隔离改为项目侧 execution workspace）
 >
 > 背景: 原题案 [add-agent-worker-pool-management](openspec/changes/add-agent-worker-pool-management/) scope 横跨 9 个 section（schema/lease/sandbox/supervisor/UI/审计/上线），一次性推进风险高、周期长。本文档把它拆成 6 个独立可交付的子题案，按事故复发风险与依赖关系排序。
 >
-> v2 修订原因: 重新查阅了 Hermes 官方文档（[profiles](https://hermes-agent.nousresearch.com/docs/zh-Hans/user-guide/profiles) / [profile-distributions](https://hermes-agent.nousresearch.com/docs/zh-Hans/user-guide/profile-distributions) / [git-worktrees](https://hermes-agent.nousresearch.com/docs/zh-Hans/user-guide/git-worktrees)）后发现 Hermes 原生已经提供了 per-direction agent (profile) 和 per-execution filesystem isolation (worktree) 两大能力，项目侧需要"另起炉灶"的部分远比原题案小。题案 1 和 4 实质重写，新增第三/四节交代原生能力与项目侧职责边界。
+> v3 修订原因: 重新评估产物形态后确认，本项目的核心产物是本地运行时文件（`work/challenges`、`work/shards`、`work/reports`、日志、Docker 构建上下文），不是 Git 分支实验。Hermes profile 仍适合做模型/状态/人格隔离，但 Git worktree 不应作为 worker pool 的核心运行时隔离手段；题案 1 改为项目侧自建 execution workspace。
 
 ---
 
@@ -17,7 +17,7 @@
 3. 模型自主决策：读不到目标 shard → 在 sandbox 里搜到残留 → 当成自己的任务继续做
 4. 写入路径无 allowlist → 错误执行的产物 commit 到了错误目录
 
-拆分原则：**先修事故、再做并发增强、最后做运维与审计**；**能用 Hermes 原生能力的就不自建**。
+拆分原则：**先修事故、再做并发增强、最后做运维与审计**；**Hermes profile 复用其状态隔离，运行时输入/输出隔离由项目显式控制**。
 
 ---
 
@@ -58,7 +58,7 @@
 
 ---
 
-## 三、Hermes 原生能力清单（v2 新增）
+## 三、Hermes 原生能力与边界（v3 修订）
 
 ### Profiles（[文档](https://hermes-agent.nousresearch.com/docs/zh-Hans/user-guide/profiles)）
 - profile = 独立 Hermes home 目录，**完整状态隔离**：`config.yaml` / `.env` / `SOUL.md` / memory / sessions / skills / cron / state.db
@@ -68,12 +68,11 @@
 - **完整 CRUD 原生支持**：`profile create/list/show/rename/delete/export/import/install/update`
 - **明确警告**: "profile 不对 agent 进行沙箱隔离... agent 仍拥有与你的用户账户相同的文件系统访问权限"
 
-### Git Worktrees（[文档](https://hermes-agent.nousresearch.com/docs/zh-Hans/user-guide/git-worktrees)）
-- **`hermes -w` 标志原生支持 per-session ephemeral worktree**
-- 路径：`<cwd>/.worktrees/hermes/hermes-<hash>/`
-- 每个会话拿到：独立分支 + 独立 checkpoint 历史 + 独立目录
-- 并行 agent 各自有独立 worktree，互不干扰
-- 文档明确推荐："每个 Hermes 实验对应一个 worktree"
+### Git Worktrees（降级为可选开发工具）
+- `hermes -w` / Git worktree 适合隔离代码仓库 checkout、分支和 checkpoint 历史
+- 本项目 worker pool 的核心产物是 `work/` 下的本地运行时文件，不是 Git 追踪代码；因此 worktree **不能**作为 execution 隔离的主方案
+- worktree 不提供文件系统访问控制，也不天然隔离 `work/challenges`、`work/shards`、Docker volume、日志或外部工具链
+- 后续可以把 worktree 作为开发者调试多个代码分支时的可选用法，但不写入 worker pool 的核心题案
 
 ### Profile Distributions（[文档](https://hermes-agent.nousresearch.com/docs/zh-Hans/user-guide/profile-distributions)）
 - 纯粹是 profile 的 git 打包分发机制
@@ -82,20 +81,20 @@
 
 ---
 
-## 四、事故根因 × Hermes 原生能力映射（v2 新增）
+## 四、事故根因 × 责任边界映射（v3 修订）
 
-| 事故根因 | 原方案设想 | Hermes 原生提供 | 仍需项目侧自建 |
-|---|---|---|---|
-| **task=default 残留** | 自建 `work/executions/<uuid>/` | **`hermes -w` 直接给独立 worktree** | 强制每次调用都加 `-w` |
-| **宿主机绝对路径** | 自建 runtime path map | profile 的 `terminal.cwd` 可独立配置 | 调用前 preflight 校验路径在 cwd 内可见 |
-| **模型自主搜索串题** | preflight fail-closed | **worktree 是干净检出，搜不到别的题** | preflight 作兜底 |
-| **写入路径无 allowlist** | 自建 staging + publisher | 无（文档明示 profile ≠ sandbox） | **必须自建** allowlist + staged publication |
+| 事故根因 | Hermes 能帮助的部分 | 项目侧必须自建 |
+|---|---|---|
+| **task=default 残留** | profile 隔离 Hermes 状态；SOUL/config 可按类别分离 | 每次执行创建干净 `work/executions/<execution_id>/`，只 materialize 本次输入 |
+| **宿主机绝对路径** | profile 的 `terminal.cwd` 可作为启动 cwd 辅助 | Prompt 只暴露 execution workspace 内相对路径，preflight 校验 `input/` 可读、`output/` 可写 |
+| **模型自主搜索串题** | 类别 profile 可降低行为偏移 | workspace 不放其他题目；preflight fail-closed；执行后 publisher 校验 category/id/scope |
+| **写入路径无 allowlist** | 无（文档明示 profile ≠ sandbox） | **必须自建** output allowlist + staged publication + manifest hash |
 
-**结论**: 4 个根因里 2 个 Hermes 原生已经解决（worktree + profile.terminal.cwd），1 个原生半解决（worktree 让残留搜不到，但 preflight 仍是兜底），1 个必须项目自建（写入隔离）。
+**结论**: Hermes profile 是有价值的状态/人格/模型隔离层，但不能替代运行时 workspace。阻断串题事故的核心应是项目侧 `execution workspace + preflight + publisher allowlist`，而不是 Git worktree。
 
 ---
 
-## 五、项目侧仍必须自建的事（v2 新增）
+## 五、项目侧仍必须自建的事（v3 修订）
 
 | 需求 | 为什么 Hermes 不提供 |
 |---|---|
@@ -106,30 +105,30 @@
 | **Capability 硬约束** | profile.description 仅供 Hermes kanban 路由参考，不阻止越权 |
 | **不可变审计快照** | Hermes 不知道项目的 attempt/execution 概念 |
 | **Supervisor + slot 池** | Hermes 不管并发编排 |
-| **Retention policy（execution 目录清理）** | worktree 的清理是手动 `git worktree remove`，需要项目调度 |
+| **Retention policy（execution 目录清理）** | execution workspace、quarantine、日志留存都属于项目运行时策略 |
 
 ---
 
-## 六、拆分总览（v2 修订）
+## 六、拆分总览（v3 修订）
 
 | 序 | 提案名 | 取自原题案 | 价值 | 依赖 | 量级 |
 |---|---|---|---|---|---|
-| 1 | `adopt-hermes-worktree-and-profile-per-category` | D6 + D7 + tasks §4 + §8.3/8.4 | **直接修事故**，复用原生 | 无 | 1 PR |
+| 1 | `add-execution-workspace-and-profile-per-category` | D6 + D7 + tasks §4 + §8.3/8.4 | **直接修事故**，建立干净运行时输入/输出边界 | 无 | 1 PR |
 | 2 | `add-staged-publication-allowlist` | D8 + tasks §5 + §8.6 | **直接修事故**（写入侧） | 1 | 1–2 PR |
-| 3 | `add-execution-lease-and-fencing` | D3 + tasks §3 + §8.5 | 防 lease 过期脏写 | 2（共享 execution 行） | 2–3 PR |
+| 3 | `add-execution-lease-and-fencing` | D3 + tasks §3 + §8.5 | 防 lease 过期脏写；建立同一 attempt 下多轮 execution 链 | 2（共享 execution 行） | 2–3 PR |
 | 4 | `add-project-agent-layer-over-hermes-profiles` | D2 + worker-agent-management 整份 spec + tasks §1 (部分) + §2 + §7.1 | dispatch 授权基础 | 3 | 2 PR（薄抽象） |
 | 5 | `add-local-supervisor-and-slots` | D4 + D5 + tasks §1（agent_slots）+ §6 + §7.2-7.4 + §8.7-8.9 | 运维与并发 | 4 | 3–4 PR |
-| 6 | `add-execution-audit-snapshots` | D10 + D11 + tasks §1（execution snapshot 字段）+ build-orchestration delta + §7.6 | 审计与历史 | 1–5 中任意一个落地后即可加 | 1–2 PR |
+| 6 | `add-execution-audit-snapshots` | D10 + D11 + tasks §1（execution snapshot 字段）+ build-orchestration delta + §7.6 | 审计、历史与人工反馈迭代证据 | 1–5 中任意一个落地后即可加 | 1–2 PR |
 
 ---
 
 ## 七、各子题案详情
 
-### 1. `adopt-hermes-worktree-and-profile-per-category` — 复用原生 worktree + 按方向建 profile
+### 1. `add-execution-workspace-and-profile-per-category` — 项目侧 execution workspace + 按方向建 profile
 
-**一句话**: 每个方向一个 Hermes profile（`cf-web` / `cf-pwn` / `cf-re`），所有 Hermes 调用强制 `-p cf-<category> -w` 以拿到原生的 per-session 隔离 worktree；调用前 preflight 验证 shard 可读、output 可写、category 一致，失败 fail-closed 不调 Hermes。
+**一句话**: 每个方向一个 Hermes profile（`cf-web` / `cf-pwn` / `cf-re`），每次 build execution 创建项目侧 `work/executions/<execution_id>/` 干净工作区；Hermes 只能看到本次 materialize 的 `input/`、`references/` 和 `output/`，调用前 preflight 验证 shard 可读、output 可写、category 一致，失败 fail-closed 不调 Hermes。
 
-**v2 变化**: 从"自建 `work/executions/<uuid>/` + runtime path map"改为"采用 Hermes 原生 `-w` + 每方向一个 profile"。
+**v3 变化**: 从"采用 Hermes 原生 `-w` + 每方向一个 profile"改为"项目侧自建 `work/executions/<execution_id>/` + 每方向一个 Hermes profile"。Git worktree 不作为核心隔离方案。
 
 **IN scope**:
 - 创建 3 个 Hermes profile（执行命令）：
@@ -138,14 +137,14 @@
   hermes profile create cf-pwn --description "Generates pwn-category CTF challenges"
   hermes profile create cf-re  --description "Generates reverse-engineering CTF challenges"
   ```
-- 每个 profile 配 SOUL.md（类别相关人格/约束）、`terminal.cwd`（指向各自 staging 区）、共享底层模型配置
-- 所有 Hermes 调用拼参数时强制加 `-p cf-<category>` 和 `-w`，拒绝裸 `hermes chat` 调用
-- 静态资源（generation profile / references / common guidance）通过 symlink 进入 worktree，不复制；只 materialize 本次执行变化的文件（shard.json、manifest.json）
-- Prompt 渲染改用 worktree 内相对路径（如 `./input/shard.json`），禁止嵌入宿主机绝对路径
-- 调 Hermes 前 preflight 校验（在 worktree 视角）: shard 文件可读 + output 区可写 + shard.category 与 profile 匹配
+- 每个 profile 配 SOUL.md（类别相关人格/约束）、共享底层模型配置；`terminal.cwd` 可设为项目根或由 runner 显式传入 execution workspace
+- 所有 build Hermes 调用拼参数时强制加 `-p cf-<category>`，拒绝裸 `hermes chat` 调用；不强制 `-w`
+- 创建 `work/executions/<execution_id>/input/`、`references/`、`output/`、`logs/`，只 materialize 本次执行需要的 `shard.json`、`manifest.json`、必要 reference 和 profile 摘要
+- Prompt 渲染改用 execution workspace 内相对路径（如 `./input/shard.json`、`./output/`），禁止嵌入宿主机绝对路径
+- 调 Hermes 前 preflight 校验（在 execution workspace 视角）: shard 文件可读 + output 区可写 + shard.category 与 profile 匹配 + workspace 不包含其他 challenge 产物
 - 任何一项失败 → 标记 **infrastructure-failed**，不消耗模型 attempt 配额，不启动 Hermes
 - 进度上报通道改造：从 prompt 让容器调宿主机 CLI，改为主机侧 runner 直接写或本地认证 side-channel
-- 回归测试: 沙箱预置 `pwn-9999/` 残留 → 跑 Web execution → 断言不可见、未被改（worktree 天然保证，主要测 `-w` 是否真的加上了）
+- 回归测试: 在全局 `work/challenges/pwn/` 或旧 execution quarantine 中预置 `pwn-9999/` 残留 → 跑 Web execution → 断言 execution workspace 内不可见、未被改，且 prompt/log 不包含宿主绝对 shard 路径
 
 **OUT scope**: agent 表、capability 强制、lease/fencing、写入 allowlist、supervisor、Dashboard。
 
@@ -153,7 +152,7 @@
 
 **DB schema**: 不动。
 
-**Spec deltas**: 改造 `hermes-execution-protocol`，加 "Hermes profile 与 worktree 强制使用" 要求。
+**Spec deltas**: 改造 `hermes-execution-protocol`，加 "Hermes profile + execution workspace 强制使用" 要求，并明确 Git worktree 不属于运行时隔离边界。
 
 **Hermes 侧操作（一次性手动）**: 在部署机上跑 `hermes profile create` 3 次。
 
@@ -161,40 +160,73 @@
 
 ### 2. `add-staged-publication-allowlist` — 产物 Staging + 准入清单
 
-**一句话**: Hermes 只能写到 worktree 的 staging output 区；主机侧 publisher 跑 allowlist 校验通过后才原子 publish 到 `work/challenges`。
+**一句话**: Hermes 只能被要求写到 execution workspace 的 `./output/`；主机侧 publisher 跑 allowlist 校验通过后才原子 publish 到 `work/challenges`。
 
-**为什么仍需独立题案**: worktree 解决了"模型读残留"，没解决"模型写到不该写的地方"。Hermes 文档明示 profile ≠ sandbox（"agent 仍拥有与你的用户账户相同的文件系统访问权限"），写入隔离必须项目侧自建。
+**为什么仍需独立题案**: execution workspace 解决"输入面干净"，没解决"模型写到不该写的地方"。Hermes 文档明示 profile ≠ sandbox（"agent 仍拥有与你的用户账户相同的文件系统访问权限"），写入隔离必须项目侧自建。
 
 **IN scope**:
-- staging 路径定义为 worktree 内的 `./output/`（题案 1 已配 `terminal.cwd`，worktree 是 cwd 子目录）
+- staging 路径定义为 execution workspace 内的 `./output/`
 - 主机 publisher 拒绝: symlink / special file / 绝对路径 / `..` traversal / 非预期 category 根 / 非预期 challenge id / metadata id-category 不匹配
-- 调用 [ChallengeValidator](src/domain/validation.py) 在 staging 上做确定性校验
+- 新增 staging 专用路径安全扫描；再调用或扩展 [ChallengeValidator](src/domain/validation.py) 在 staging 根上做确定性校验，避免直接依赖现有 `work/challenges` 扫描语义
 - 全部通过后才原子 rename 到 `work/challenges`，写入 output manifest hash
 - 失败时 staging 留存供审计；`work/challenges` 不动
-- **Retention policy**: 成功 publish 后立即清理 worktree（`git worktree remove`）；失败保留 quarantine 受 bounded retention 限制（默认: 失败保留 last 20 个或 7 天，二者取严）
+- **Retention policy**: 成功 publish 后清理 execution workspace 的临时输入和可重建缓存；失败保留 quarantine 受 bounded retention 限制（默认: 失败保留 last 20 个或 7 天，二者取严）
 - 回归测试: Web execution 输出包含 `pwn/pwn-0001-*` → 整次执行 fail scope validation → 没有任何文件被 publish
 
 **OUT scope**: lease/fencing、agent registry、supervisor。token 重校验留给题案 3。
 
-**依赖**: 题案 1（共享 worktree + staging 路径约定）。
+**依赖**: 题案 1（共享 execution workspace + staging 路径约定）。
 
 **Spec deltas**: 新建 `worker-pool-execution` capability（首次引入），只放 staged publication 相关 Requirement 与对应 scenario。
 
 ---
 
+### 迭代语义：retry / revision / revalidate
+
+为后续"在上一轮题目基础上按人工反馈修改"预留三类动作，避免全部混成重新跑：
+
+| 动作 | 是否调用 Hermes | 是否产生新 execution | 语义 |
+|---|---|---|---|
+| `retry` | 是 | 是 | 运行失败、环境失败或模型失败后，按原目标重新执行；通常不携带人工修改意见 |
+| `revision` | 是 | 是 | 人工认为镜像、考点、题面或实现偏离预期，基于上一轮产物和反馈进行定向修改 |
+| `revalidate` | 否 | 否或只写校验事件 | 不改产物，只重新跑主机侧 validation / publisher 检查 |
+
+`revision` 的下一轮 workspace 应额外 materialize：
+
+```text
+input/
+  base-artifact/                  # 上一轮 output 的快照或只读引用
+  previous-output-manifest.json
+  feedback.json                   # 人工反馈快照
+  change-policy.json              # 本轮允许改/必须保留/禁止改的边界
+```
+
+典型人工反馈场景：
+- "基础镜像从 Ubuntu 22.04 改为 Alpine，但保留 challenge_id 和目录结构"
+- "考点从 SSRF 改为 JWT key confusion，不要重新生成无关题目"
+- "题面表达可以重写，flag 格式、交付目录、validate.sh 合约不能变"
+
+这类动作属于同一个 `build_attempt` 下的后续 `execution`，而不是创建一个无关联的新题。
+
+---
+
 ### 3. `add-execution-lease-and-fencing` — Execution 行 + 租约 + Fencing Token
 
-**一句话**: 每个 execution 在 PG 里有一行带租约和 fencing token 的记录；过期 worker 即使 Hermes 还在跑，也不能 publish 或标记完成。
+**一句话**: 每个 execution 在 PG 里有一行带租约、fencing token 和迭代关系的记录；过期 worker 即使 Hermes 还在跑，也不能 publish 或标记完成；同一 build attempt 可以串起多轮 retry/revision execution。
 
 **为什么需要**: Hermes session 不知道外部 lease，多 worker 并发或 worker 崩溃恢复场景下需要项目侧 fence。
 
 **IN scope**:
-- `executions` 表（id, build_attempt_id, worker_id, claim_token, lease_expires_at, heartbeat_at, status, started_at, finished_at, exit_class）
+- `executions` 表（id, build_attempt_id, parent_execution_id, iteration_no, execution_kind, worker_id, claim_token, lease_expires_at, heartbeat_at, status, started_at, finished_at, exit_class）
+- `execution_kind` 白名单：`initial` / `retry` / `revision`
+- 同一 `build_attempt_id` 下 `iteration_no` 单调递增；`revision` 必须引用 `parent_execution_id`
 - claim 是单事务: select 可领 attempt → 生成 token + lease → 建 execution 行 → 切 attempt 状态
 - heartbeat / publish / complete / fail 都校验当前 token，旧 token 一律拒绝
 - lease 过期回收时签发新 token；旧进程可以本地跑完，但不能 publish
 - 把题案 2 的 publisher 增加"publish 前重校验 token"
+- `revision` claim 会把 parent execution 的 output manifest、base artifact 引用和人工反馈快照写入新 workspace 的 `input/`
 - 回归测试: execution E1 lease 过期被恢复签发新 token → E1 旧进程跑完后 publish 请求被拒 → 输出留 quarantine
+- 回归测试: execution E1 产物镜像/考点偏离 → 人工提交 feedback → execution E2(kind=revision,parent=E1,iteration=2) 只 materialize E1 产物和反馈，不能重新领取无关 shard
 
 **OUT scope**: agent 概念（worker_id 可先是字符串标识，不强约束到 agent 表）、capacity、supervisor。
 
@@ -208,7 +240,7 @@
 
 **一句话**: 对已有 Hermes profile 加一层项目侧元数据（capability + concurrency + control_state），让 dispatch 在 DB 层硬约束授权；profile 名 ≠ 权限。
 
-**v2 变化**: 从"自建 agent registry"改为"对 Hermes profile 加项目侧标签"。agent 表瘦到 5 列。
+**v3 保留**: 仍采用"对 Hermes profile 加项目侧标签"的薄层方案。agent 表保持轻量，不把 profile CRUD 或运行时沙箱职责搬进项目侧。
 
 **默认配置**: 题案 1 已建好 3 个 Hermes profile（cf-web/cf-pwn/cf-re），本题案的 agent 表初始就是 3 行 1:1 绑定：
 
@@ -270,17 +302,20 @@ re-01     cf-re         build:re     2                enabled
 
 ### 6. `add-execution-audit-snapshots` — 不可变审计快照 + Legacy 隔离
 
-**一句话**: Execution 行保留 claim 时刻的 agent/profile/category/sandbox policy/manifest hash 等不可变快照；后续 agent 改绑或软删不重写历史；legacy `challenge-factory run` 与 pool 路径互不相干。
+**一句话**: Execution 行保留 claim 时刻的 agent/profile/category/sandbox policy/manifest hash、父子迭代关系和人工反馈快照；后续 agent 改绑或软删不重写历史；legacy `challenge-factory run` 与 pool 路径互不相干。
 
 **IN scope**:
-- `executions` 表加字段: agent_name_used, profile_name_used, category_used, model_provider, sandbox_policy_version, input_manifest_hash, output_manifest_hash, token_generation, exit_classification, log_paths
+- `executions` 表加字段: agent_name_used, profile_name_used, category_used, model_provider, sandbox_policy_version, input_manifest_hash, output_manifest_hash, base_artifact_manifest_hash, feedback_snapshot_hash, change_policy_hash, token_generation, exit_classification, log_paths
 - claim 时填充，后续不可变
-- `build_attempts` 加 nullable current/latest execution 引用 + agent/profile/category 快照
+- `build_attempts` 加 nullable current/latest/successful execution 引用 + agent/profile/category 快照
+- `execution_feedback` 或等价 JSON 快照记录人工反馈：source、reviewer、summary、requested_changes、preserve、forbid、created_at；快照写入后不可变，后续 revision 只引用 hash
+- publisher 成功时记录 `successful_execution_id`，让最终 `work/challenges` 能追溯到具体哪一轮 revision
 - 不重写历史 attempt
 - Legacy `challenge-factory run --worker W` 仅保留作为 explicit 全队列 shard 管理用途
 - Dashboard category-specific / pool 视图不调用 legacy 路径
 - 不暴露 profile secrets / 原始 env / 子进程命令
 - 回归测试: execution E1 用 profile cf-web@v1 → agent 改绑到 cf-web@v2 → E1.profile_name_used 仍为 cf-web@v1
+- 回归测试: 人工反馈要求"镜像改 Alpine、考点改 JWT key confusion、保留 challenge_id" → E2 feedback_snapshot_hash 固定，E2 output_manifest_hash 与 E1 不同，E1 历史不被覆盖
 
 **OUT scope**: 无。本题案是"加字段 + 接线"。
 
@@ -296,22 +331,23 @@ re-01     cf-re         build:re     2                enabled
 2. **按 1→2→3→4→5 顺序推进**；题案 6 可在每个前置题案落地时滚动加字段
 3. **每个新题案独立创建**: 复制原 `add-agent-worker-pool-management/` 的格式，scope 严格限定本文档对应行
 4. **不要直接修改原题案**，将原 `add-agent-worker-pool-management` 标记为 "superset, deprecated by [题案 1-6 的名字]"，待 6 个子题案全部归档后一并归档
-5. **题案 1 落地后做一次端到端实跑**: 用 `ls <repo>/.worktrees/hermes/` 看 worktree 是否被正确创建和清理，验证"串题不再发生"的最佳办法不是单测，是实跑
+5. **题案 1 落地后做一次端到端实跑**: 检查 `work/executions/<execution_id>/input/`、`output/`、`logs/` 是否只包含本次执行材料，验证 prompt/log 不再暴露宿主绝对 shard 路径；验证"串题不再发生"的最佳办法不是单测，是实跑
 6. **题案 1 上线前**: 在部署机上一次性手动 `hermes profile create cf-web/cf-pwn/cf-re` 三条命令；后续 profile 管理走 Hermes 原生
+7. **首次实现人工反馈迭代时**: 先只支持同一 `build_attempt` 内基于 latest failed/review_required execution 的 `revision`，不要同时引入跨 attempt 克隆或多分支候选，避免状态面过宽
 
 ---
 
 ## 九、依赖关系图
 
 ```
-题案1 adopt-hermes-worktree-and-profile-per-category
-   │   （复用 hermes -w + per-category profile）
+题案1 add-execution-workspace-and-profile-per-category
+   │   （项目侧 execution workspace + per-category profile）
    ↓
 题案2 staged-publication-allowlist
-   │   （worktree 内 staging → 主机 publisher 把关 → publish 到 work/challenges）
+   │   （execution output → 主机 publisher 把关 → publish 到 work/challenges）
    ↓
 题案3 execution-lease-and-fencing
-   │   （引入 executions 表 + token，防过期 worker 脏写）
+   │   （引入 executions 表 + token + parent/iteration，防过期 worker 脏写并支持同题多轮 revision）
    ↓
 题案4 project-agent-layer-over-hermes-profiles
    │   （在 Hermes profile 上加薄层 capability + control_state）
@@ -324,11 +360,13 @@ re-01     cf-re         build:re     2                enabled
 ```
 
 **关键决策回顾**:
-- 题案 1+2 阻断"串题"事故（worktree 解决读端，publisher 解决写端）
+- 题案 1+2 阻断"串题"事故（execution workspace 解决输入面，publisher 解决写入面）
 - 题案 3 加并发安全（lease + fencing）
+- 题案 3+6 为"基于上一轮产物按人工反馈修改"提供 execution 链、反馈快照和 manifest 证据
 - 题案 4+5 引入工厂规模化所需的运维抽象（agent 元数据 + supervisor）
 - 题案 6 提供事故复盘所需的历史证据
 
 **与 Hermes 原生的边界**:
-- 复用：profile 隔离（题案 1+4）、`-w` worktree（题案 1）、profile CRUD（题案 4 不重新实现）
-- 自建：写入 allowlist（题案 2）、lease/fencing（题案 3）、capability 硬约束（题案 4）、supervisor（题案 5）、audit（题案 6）
+- 复用：profile 状态/人格/模型隔离（题案 1+4）、profile CRUD（题案 4 不重新实现）
+- 可选：Git worktree 仅作为开发者多分支调试工具，不作为 worker pool 运行时隔离依赖
+- 自建：execution workspace（题案 1）、写入 allowlist（题案 2）、lease/fencing（题案 3）、capability 硬约束（题案 4）、supervisor（题案 5）、audit（题案 6）
