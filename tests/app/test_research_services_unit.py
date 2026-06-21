@@ -290,6 +290,29 @@ def _make_research_run(request_id):
     )
 
 
+def _valid_research_stdout() -> str:
+    return json.dumps(
+        {
+            "sources": [
+                {
+                    "url": "https://example.com/a",
+                    "title": "A",
+                    "summary": "Summary",
+                    "content_hash": "a" * 64,
+                }
+            ],
+            "findings": [
+                {
+                    "kind": "technique",
+                    "label": "Technique",
+                    "summary": "Finding summary",
+                    "source_indices": [0],
+                }
+            ],
+        }
+    )
+
+
 def test_executor_marks_failed_when_commit_validation_fails(monkeypatch, tmp_path):
     # 中文注释：commit 阶段的 ResearchValidationError 必须转成 failed，而不是逃出 worker。
     request_id = uuid4()
@@ -338,6 +361,46 @@ def test_executor_marks_failed_when_commit_validation_fails(monkeypatch, tmp_pat
     )
 
     assert job_service.failed_errors == ["commit validation failed"]
+
+
+class SuccessfulExecutorJobService(FakeExecutorJobService):
+    def __init__(self):
+        super().__init__()
+        self.completed_runs = []
+
+    def complete_run_with_staged_results(self, run_id, *_args, **_kwargs):
+        self.completed_runs.append(run_id)
+
+
+def test_executor_accepts_valid_stdout_from_nonzero_hermes_exit(monkeypatch, tmp_path):
+    request_id = uuid4()
+    research_run = _make_research_run(request_id)
+    job_service = SuccessfulExecutorJobService()
+
+    def fake_hermes_invoke(**_kwargs):
+        return HermesProcessResult(
+            returncode=7,
+            stdout=_valid_research_stdout(),
+            cancelled=False,
+        )
+
+    monkeypatch.setattr("services.research_agent_executor.profile_exists", lambda _name: True)
+    executor = ResearchAgentExecutor(
+        ProjectPaths(root=tmp_path, repository=tmp_path),
+        hermes_invoke=fake_hermes_invoke,
+    )
+    executor.job_service = job_service
+    executor._load_generation_request = lambda _request_id: _make_generation_request(request_id)
+
+    executor.execute(
+        research_run,
+        "worker-1",
+        lease_seconds=60,
+        hermes_timeout_seconds=30,
+    )
+
+    assert job_service.completed_runs == [research_run.id]
+    assert job_service.failed_errors == []
 
 
 class FakeJobService:

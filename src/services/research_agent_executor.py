@@ -131,15 +131,6 @@ class ResearchAgentExecutor:
             )
             return
 
-        if res_data.returncode != 0:
-            self._mark_failed_if_owned(
-                run,
-                agent_id,
-                f"Hermes exited with {res_data.returncode}",
-                log_path,
-            )
-            return
-
         try:
             parsed = parse_research_output(
                 res_data.stdout,
@@ -151,8 +142,20 @@ class ResearchAgentExecutor:
                 run_id=run.id,
             )
         except ResearchValidationError as exc:
-            self._mark_failed_if_owned(run, agent_id, str(exc), log_path)
+            last_error = (
+                f"Hermes exited with {res_data.returncode}"
+                if res_data.returncode != 0
+                else str(exc)
+            )
+            self._mark_failed_if_owned(run, agent_id, last_error, log_path)
             return
+
+        if res_data.returncode != 0:
+            LOGGER.warning(
+                "Hermes exited with %s but produced valid research output for run %s",
+                res_data.returncode,
+                run.id,
+            )
 
         try:
             self.job_service.complete_run_with_staged_results(

@@ -380,9 +380,14 @@ export function render(data) {
         <h2 class="rq-page-title">研究需求</h2>
         <p class="rq-page-desc">管理研究意图、执行状态和设计任务生成。</p>
       </div>
-      <button class="btn btn-primary" data-jump="research-submit">
-        <i data-lucide="plus"></i> 新建需求
-      </button>
+      <div class="rq-page-actions">
+        <button class="btn btn-secondary" id="req-refresh"${state.flags.requests?.loading ? " disabled" : ""}>
+          <i data-lucide="refresh-cw"></i> 刷新
+        </button>
+        <button class="btn btn-primary" data-jump="research-submit">
+          <i data-lucide="plus"></i> 新建需求
+        </button>
+      </div>
     </div>
     <section class="card rq-list-card">
       <div class="rq-list-summary">
@@ -923,6 +928,10 @@ export function bind() {
     if (e.target.closest("#req-clear-filter")) {
       state.filter = { category: "", displayStatus: "" };
       forceReloadRequests();
+      return;
+    }
+    if (e.target.closest("#req-refresh")) {
+      forceReloadRequests().finally(initIcons);
       return;
     }
     if (e.target.closest(".design-tasks-generate")) {

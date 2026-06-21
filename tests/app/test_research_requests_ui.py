@@ -18,6 +18,9 @@ def test_request_list_uses_operator_facing_display_status() -> None:
     assert "研究需求" in source
     assert "执行状态" in source
     assert "重置筛选" in source
+    assert 'id="req-refresh"' in source
+    assert "forceReloadRequests().finally(initIcons)" in source
+    assert "刷新" in source
 
 
 def test_request_detail_exposes_quality_gate_and_runtime_constraints() -> None:

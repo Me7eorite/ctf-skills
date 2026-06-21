@@ -21,6 +21,14 @@
   font-size: var(--font-sm);
 }
 
+.rq-page-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .rq-list-summary {
   display: flex;
   align-items: center;
