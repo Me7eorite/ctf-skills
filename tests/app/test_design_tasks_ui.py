@@ -86,3 +86,13 @@ def test_bulk_build_exposes_enqueue_and_ordered_execution_modes() -> None:
     assert "顺序模式同一时间只运行一个" in source
     assert "/api/build-attempts/worker/start-sequential" in source
     assert "build_attempt_ids: result.build_attempt_ids" in source
+
+
+def test_missing_build_profile_is_visible_and_disables_build_eligibility() -> None:
+    source = (STATIC / "js" / "views" / "design-tasks.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "构建环境未就绪，相关题目暂时无法构建" in source
+    assert "buildProfileReady(task.category)" in source
+    assert "item.create_command" in source

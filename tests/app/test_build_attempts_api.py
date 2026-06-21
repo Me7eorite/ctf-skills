@@ -235,6 +235,32 @@ def test_batch_submit_returns_ordered_ids(
         assert [item.design_task_id for item in attempts if item] == [task_b, task_a]
 
 
+def test_missing_profile_blocks_build_submission_before_enqueue(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory, category="pwn")
+    client.app.state.build_profile_readiness = {
+        "ready": False,
+        "categories": {
+            "pwn": {
+                "ready": False,
+                "profile": "cf-pwn",
+                "create_command": "hermes profile create cf-pwn",
+            }
+        },
+        "missing_profiles": ["cf-pwn"],
+    }
+
+    response = client.post(f"/api/design-tasks/{task_id}/build")
+
+    assert response.status_code == 503
+    assert "cf-pwn" in response.json()["detail"]
+    assert "hermes profile create cf-pwn" in response.json()["detail"]
+    with transaction(factory=session_factory) as session:
+        assert BuildAttemptsRepository(session).latest_for_design_task(task_id) is None
+
+
 def test_single_submit_conflicts_on_ineligible_or_active_task(
     client: TestClient,
     session_factory: SessionFactory,

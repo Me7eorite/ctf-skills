@@ -52,6 +52,35 @@
   color: var(--brand-700);
 }
 
+.dt-readiness-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-md);
+  padding: 12px var(--space-md);
+  border: 1px solid var(--warning-300, #f0c36a);
+  border-radius: var(--radius-md);
+  background: var(--warning-50, #fff8e6);
+  color: var(--ink-800);
+  font-size: var(--font-sm);
+}
+
+.dt-readiness-banner > svg {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+  color: var(--warning-700, #9a6700);
+}
+
+.dt-readiness-banner > div {
+  display: grid;
+  gap: 3px;
+}
+
+.dt-readiness-banner code {
+  font-family: var(--font-mono-family);
+}
+
 .dt-summary-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

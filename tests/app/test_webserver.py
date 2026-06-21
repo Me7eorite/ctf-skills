@@ -56,6 +56,26 @@ class WebserverTests(unittest.TestCase):
         self.assertIn("summary", payload)
         self.assertIn("shards", payload)
 
+    def test_state_endpoint_exposes_build_profile_readiness(self):
+        readiness = {
+            "ready": False,
+            "categories": {
+                "pwn": {
+                    "ready": False,
+                    "profile": "cf-pwn",
+                    "create_command": "hermes profile create cf-pwn",
+                }
+            },
+            "missing_profiles": ["cf-pwn"],
+        }
+        service = DashboardService(self.paths)
+        with TestClient(
+            create_app(service, build_profile_readiness=readiness)
+        ) as client:
+            payload = client.get("/api/state").json()
+
+        self.assertEqual(payload["build_readiness"], readiness)
+
     def test_state_endpoint_does_not_trigger_synchronous_reconciliation(self):
         """Phase 0 hot fix: /api/state no longer triggers tick_once_sync.
 

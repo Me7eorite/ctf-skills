@@ -261,6 +261,7 @@ function renderList(root) {
   }
   const rows = state.list || [];
   root.innerHTML = `
+    ${renderBuildReadinessWarning()}
     <section class="card">
       <div class="card-header">
         <div>
@@ -373,6 +374,7 @@ function renderDetail(root) {
   const attempt = state.detail;
   if (!attempt) return;
   root.innerHTML = `
+    ${renderBuildReadinessWarning()}
     <div style="display: flex; align-items: center; justify-content: space-between; gap: var(--space-md); flex-wrap: wrap; margin-bottom: var(--space-md);">
       <button class="btn btn-ghost" id="ba-back">
         <i data-lucide="arrow-left"></i> 返回列表
@@ -381,13 +383,13 @@ function renderDetail(root) {
         <button id="ba-refresh" class="btn btn-secondary btn-sm">
           <i data-lucide="refresh-cw"></i>刷新
         </button>
-        ${attempt.status === "queued"
+        ${attempt.status === "queued" && buildProfileReady(attempt.category)
           ? `<button id="ba-worker" class="btn btn-primary btn-sm"><i data-lucide="play"></i>运行</button>`
           : ""}
         ${attempt.status === "failed"
           ? `<button class="btn btn-secondary btn-sm ba-revalidate" data-build-attempt-id="${escapeHtml(attempt.id)}"><i data-lucide="shield-check"></i>重新校验</button>`
           : ""}
-        ${attempt.status === "failed" || attempt.status === "lost"
+        ${(attempt.status === "failed" || attempt.status === "lost") && buildProfileReady(attempt.category)
           ? `<button class="btn btn-primary btn-sm ba-retry" data-build-attempt-id="${escapeHtml(attempt.id)}">重试构建</button>`
           : ""}
         ${["failed", "lost", "succeeded"].includes(attempt.status)
@@ -433,6 +435,29 @@ function renderDetail(root) {
       ${renderProgressEvents(attempt.progress_events || [])}
     </section>
   `;
+}
+
+function renderBuildReadinessWarning() {
+  const readiness = appState.data?.build_readiness;
+  if (!readiness || readiness.ready) return "";
+  const missing = Object.values(readiness.categories || {}).filter((item) => !item.ready);
+  if (!missing.length) return "";
+  return `
+    <div class="dt-readiness-banner" role="alert">
+      <i data-lucide="triangle-alert"></i>
+      <div>
+        <strong>构建环境未就绪，缺失 Profile 的任务无法构建</strong>
+        <span>缺少：${missing.map((item) => `<code>${escapeHtml(item.profile)}</code>`).join("、")}</span>
+        <span>请先运行：<code>${escapeHtml(missing.map((item) => item.create_command).join(" ; "))}</code></span>
+      </div>
+    </div>
+  `;
+}
+
+function buildProfileReady(category) {
+  const readiness = appState.data?.build_readiness;
+  if (!readiness || readiness.ready) return true;
+  return readiness.categories?.[category]?.ready === true;
 }
 
 function renderSiblingAttempts(attempt) {

@@ -31,6 +31,7 @@ from services.build_attempt_revalidation_service import (
     BuildAttemptRevalidationNotFoundError,
     BuildAttemptRevalidationService,
 )
+from services.build_profile_readiness import unavailable_build_profiles
 
 LOG = logging.getLogger(__name__)
 DEFAULT_LIST_LIMIT = 100
@@ -83,6 +84,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
                 detail="design_task_ids must be an array of UUID strings",
             )
         task_ids = [_parse_uuid(value, "design_task_ids") for value in raw_ids]
+        _require_task_build_profiles(app, task_ids)
         attempt_ids = _submit_batch(app, task_ids)
         return JSONResponse(
             {"build_attempt_ids": [str(item) for item in attempt_ids]},
@@ -92,6 +94,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
     @app.post("/api/design-tasks/{task_id}/build")
     def submit_design_task_for_build(task_id: str) -> JSONResponse:
         task_uuid = _parse_uuid(task_id, "design task id")
+        _require_task_build_profiles(app, [task_uuid])
         attempt_id = _submit_single(app, task_uuid)
         return JSONResponse(
             {"build_attempt_id": str(attempt_id)},
@@ -166,6 +169,11 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
                     detail="build attempt not found",
                 )
             siblings = repo.list_for_design_task(attempt.design_task_id)
+            category = session.scalar(
+                sa.select(task_model.DesignTask.category).where(
+                    task_model.DesignTask.id == attempt.design_task_id
+                )
+            )
             events = session.scalars(
                 sa.select(ProgressEvent)
                 .where(ProgressEvent.shard == attempt.shard_basename)
@@ -177,6 +185,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
             attempt,
             failure_summary=_derive_failure_summary(event_payloads, attempt.error),
         )
+        body["category"] = category
         timeout_manifest = read_json(
             _project_paths(app).executions / str(attempt.id) / "input" / "manifest.json",
             {},
@@ -214,6 +223,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
                     f"allowed: {sorted(SUPPORTED_CATEGORIES)}"
                 ),
             )
+        _require_build_profiles(app, [category])
 
         BuildOrchestrationService(paths=_project_paths(app)).recover_staging()
         selected = _next_eligible_attempt(app, category)
@@ -250,6 +260,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
                 status_code=HTTPStatus.CONFLICT,
                 detail="build attempt has no matching pending shard",
             )
+        _require_build_profiles(app, [category])
         return _start_constrained_worker(app, attempt_uuid, category)
 
     @app.post("/api/build-attempts/worker/start-sequential")
@@ -280,6 +291,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
             )
 
         BuildOrchestrationService(paths=_project_paths(app)).recover_staging()
+        categories = []
         for attempt_id in attempt_ids:
             selected = _exact_eligible_attempt(app, attempt_id)
             if selected is None:
@@ -287,7 +299,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
                     status_code=HTTPStatus.NOT_FOUND,
                     detail=f"build attempt {attempt_id} not found",
                 )
-            status, _category, matches_pending = selected
+            status, category, matches_pending = selected
             if status != "queued" or not matches_pending:
                 raise HTTPException(
                     status_code=HTTPStatus.CONFLICT,
@@ -295,6 +307,9 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
                         f"build attempt {attempt_id} is not an eligible queued task"
                     ),
                 )
+            categories.append(category)
+
+        _require_build_profiles(app, categories)
 
         tasks = app.state.dashboard_tasks
         ok, message = tasks.start_sequential_worker(
@@ -315,6 +330,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
     @app.post("/api/build-attempts/{attempt_id}/retry")
     def retry_build_attempt(attempt_id: str) -> JSONResponse:
         attempt_uuid = _parse_uuid(attempt_id, "build attempt id")
+        _require_attempt_build_profile(app, attempt_uuid)
         try:
             new_id = BuildOrchestrationService(paths=_project_paths(app)).retry(
                 attempt_uuid
@@ -487,6 +503,52 @@ def _submit_batch(app: FastAPI, task_ids: list[UUID]) -> list[UUID]:
             status_code=HTTPStatus.CONFLICT,
             detail="a build is already active for this design task",
         ) from exc
+
+
+def _require_task_build_profiles(app: FastAPI, task_ids: list[UUID]) -> None:
+    from persistence.session import transaction
+
+    with transaction() as session:
+        categories = session.scalars(
+            sa.select(task_model.DesignTask.category).where(
+                task_model.DesignTask.id.in_(task_ids)
+            )
+        ).all()
+    _require_build_profiles(app, categories)
+
+
+def _require_attempt_build_profile(app: FastAPI, attempt_id: UUID) -> None:
+    from persistence.session import transaction
+
+    with transaction() as session:
+        category = session.scalar(
+            sa.select(task_model.DesignTask.category)
+            .join(
+                build_model.BuildAttempt,
+                build_model.BuildAttempt.design_task_id == task_model.DesignTask.id,
+            )
+            .where(build_model.BuildAttempt.id == attempt_id)
+        )
+    if category is not None:
+        _require_build_profiles(app, [category])
+
+
+def _require_build_profiles(app: FastAPI, categories) -> None:
+    readiness = getattr(app.state, "build_profile_readiness", {"ready": True})
+    if readiness.get("ready"):
+        return
+    unavailable = unavailable_build_profiles(readiness, categories)
+    if not unavailable:
+        return
+    profiles = ", ".join(item["profile"] for item in unavailable)
+    commands = "; ".join(item["create_command"] for item in unavailable)
+    raise HTTPException(
+        status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+        detail=(
+            f"构建环境未就绪：缺少 Hermes Profile {profiles}；"
+            f"请先运行：{commands}"
+        ),
+    )
 
 
 def _submit_single(app: FastAPI, task_id: UUID) -> UUID:

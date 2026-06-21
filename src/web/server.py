@@ -19,6 +19,7 @@ from core.jsonio import read_json
 from core.paths import ProjectPaths
 from persistence import make_postgres_progress_store
 from services import ResourceDeletionService
+from services.build_profile_readiness import check_build_profile_readiness
 from services.build_reconciler import BuildReconciler
 from web.build_attempts_endpoints import register_build_attempts_endpoints
 from web.dashboard import DashboardService
@@ -32,6 +33,7 @@ LOG = logging.getLogger(__name__)
 def create_app(
     service: DashboardService,
     build_reconciler: BuildReconciler | None = None,
+    build_profile_readiness: dict | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title="Challenge Factory Dashboard",
@@ -44,6 +46,11 @@ def create_app(
     app.state.build_reconciler = build_reconciler
     app.state.progress_store = service.store
     app.state.dashboard_tasks = service.tasks
+    app.state.build_profile_readiness = build_profile_readiness or {
+        "ready": True,
+        "categories": {},
+        "missing_profiles": [],
+    }
 
     @app.get("/api/state")
     def get_state() -> JSONResponse:
@@ -52,7 +59,9 @@ def create_app(
         # 已经按 poll_interval 节奏在跑，前端拿到的状态是最新一次 tick 的
         # 结果，足够使用；如果需要触发立即 tick，请显式调
         # POST /api/actions/reconcile（如后续提供）。
-        return JSONResponse(service.state())
+        payload = service.state()
+        payload["build_readiness"] = app.state.build_profile_readiness
+        return JSONResponse(payload)
 
     @app.get("/api/logs/{name:path}")
     def get_log(name: str) -> JSONResponse:
@@ -210,6 +219,19 @@ def serve(paths: ProjectPaths, host: str, port: int) -> None:
 
     paths.initialize()
     service = DashboardService(paths, progress=make_postgres_progress_store())
+    build_readiness = check_build_profile_readiness()
+    if not build_readiness["ready"]:
+        missing = ", ".join(build_readiness["missing_profiles"])
+        commands = "; ".join(
+            item["create_command"]
+            for item in build_readiness["categories"].values()
+            if not item["ready"]
+        )
+        LOG.warning(
+            "build environment is not ready; missing Hermes profiles: %s; run: %s",
+            missing,
+            commands,
+        )
     reconciler = BuildReconciler(paths=paths)
     try:
         reconciler.orchestration.recover_staging()
@@ -230,7 +252,11 @@ def serve(paths: ProjectPaths, host: str, port: int) -> None:
         LOG.warning("startup research source cleanup failed: %s", exc)
     thread = Thread(target=reconciler.run_forever, daemon=True)
     thread.start()
-    app = create_app(service, build_reconciler=reconciler)
+    app = create_app(
+        service,
+        build_reconciler=reconciler,
+        build_profile_readiness=build_readiness,
+    )
     print(f"Challenge Factory dashboard: http://{host}:{port}", file=sys.stderr, flush=True)
     try:
         uvicorn.run(app, host=host, port=port, log_level="info", access_log=False)

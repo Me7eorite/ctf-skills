@@ -333,6 +333,8 @@ function renderList(root) {
       <span class="pill">共 ${rows.length} 项</span>
     </div>
 
+    ${renderBuildReadinessWarning()}
+
     ${state.filters.generation_request_id ? `
       <div class="dt-context-banner">
         <div><i data-lucide="link-2"></i><span>当前仅显示研究需求 <code>${escapeHtml(shortId(state.filters.generation_request_id))}</code> 下的设计任务</span></div>
@@ -507,6 +509,8 @@ function renderDetail(root) {
   const isBuilding = !!state.flags.building?.[task.id];
   root.innerHTML = `
     <button class="btn btn-ghost dt-back" id="dt-back"><i data-lucide="arrow-left"></i>返回题目设计</button>
+
+    ${renderBuildReadinessWarning(task.category)}
 
     <section class="dt-hero dt-hero-${designTaskStage(task.status)}" data-design-task-id="${escapeHtml(task.id)}">
       <div class="dt-hero-main">
@@ -702,7 +706,37 @@ function renderTaskSummary(task, latestAttempt, latestDesign, attemptCount) {
 }
 
 function eligibleForBuild(task) {
-  return task?.status === "designed" || task?.status === "build_failed";
+  return (
+    (task?.status === "designed" || task?.status === "build_failed")
+    && buildProfileReady(task.category)
+  );
+}
+
+function buildProfileReady(category) {
+  const readiness = state.data?.build_readiness;
+  if (!readiness || readiness.ready) return true;
+  return readiness.categories?.[category]?.ready === true;
+}
+
+function renderBuildReadinessWarning(category = null) {
+  const readiness = state.data?.build_readiness;
+  if (!readiness || readiness.ready) return "";
+  const missing = Object.entries(readiness.categories || {})
+    .filter(([itemCategory, item]) => (
+      !item.ready && (!category || itemCategory === category)
+    ))
+    .map(([, item]) => item);
+  if (!missing.length) return "";
+  return `
+    <div class="dt-readiness-banner" role="alert">
+      <i data-lucide="triangle-alert"></i>
+      <div>
+        <strong>构建环境未就绪，相关题目暂时无法构建</strong>
+        <span>缺少 Hermes Profile：${missing.map((item) => `<code>${escapeHtml(item.profile)}</code>`).join("、")}</span>
+        <span>请先运行：<code>${escapeHtml(missing.map((item) => item.create_command).join(" ; "))}</code></span>
+      </div>
+    </div>
+  `;
 }
 
 function pruneSelection() {
