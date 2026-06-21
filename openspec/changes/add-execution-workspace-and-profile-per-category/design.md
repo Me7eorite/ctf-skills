@@ -81,9 +81,10 @@ allowed reference roots.
 
 If the prompt needs an executable helper, such as the current progress command,
 the prompt should point at a workspace-local shim such as `./bin/progress`.
-The shim may bridge to the existing project CLI or write runner-importable
-local progress records, but the prompt must not ask the model to discover the
-task by walking the repository root.
+The shim writes runner-importable local progress records; it must not exec a
+host absolute Python or project CLI path because those paths are not visible
+inside Docker/remote terminal backends. The prompt must not ask the model to
+discover the task by walking the repository root.
 
 ### Decision 3: prompt paths are workspace-relative
 
@@ -93,6 +94,7 @@ The build prompt must refer to paths such as:
 - `./references`
 - `./output`
 - `./logs/report.json`
+- `./bin/progress`
 
 It must not embed host absolute paths for the running shard, challenge output
 root, report path, generation profile, design skill, or design references.
@@ -163,6 +165,35 @@ directories under `work/challenges/<category>/...`, the runner must promote
 only directories for the claimed challenge ids from workspace output back to
 the canonical tree before running existing validation.
 
+Resume compatibility matters: when a resume plan carries forward existing
+claimed artifacts, the runner must materialize the claimed canonical challenge
+directory into `./output/challenges/<category>/<id>-<slug>/` before invoking
+Hermes. The model then edits the workspace copy, not the canonical tree. After
+Hermes returns, promotion replaces or creates only the canonical directories
+for claimed ids.
+
+Promotion must be atomic and conservative:
+
+- Reject output symlinks and path traversal; only regular directories below
+  `./output/challenges/<category>/` are promotable.
+- Require exactly one output directory per claimed challenge id, matching
+  `<id>-<slug>`.
+- Validate `metadata.json.id` and `metadata.json.category` before promotion.
+- Copy to a temporary sibling under `work/challenges/<category>/` and then
+  rename into place.
+- If an existing canonical directory for the claimed id exists, quarantine it
+  under a workspace-scoped backup path before replacement and keep it until
+  validation succeeds or fails. Do not delete unrelated challenge directories.
+- If promotion fails, mark the claimed shard failed before validation; do not
+  let the reconciler observe a `done` shard with missing canonical artifacts.
+
+Hermes also writes the runner-visible report to `./logs/report.json`. Before
+calling `ensure_report`, `merge_validation_into_report`, or any legacy report
+merge path, the runner imports that workspace report into the existing
+`work/reports/<running-shard-stem>.report.json` location. This preserves
+`merge-reports`, dashboard state, and existing tests that scan `work/reports`
+while still keeping the prompt workspace-relative.
+
 This is not the later staged publisher allowlist: it does not add execution
 rows, fencing tokens, operator approval, or arbitrary output publication.
 It is a narrow compatibility bridge so the current validation path can keep
@@ -206,6 +237,11 @@ This is intentionally a minimum version: a full bounded retention policy
 publisher change. The 7-day window here exists only to prevent unbounded
 disk growth on hosts that run many manual shards.
 
+Dry-run MUST NOT run this GC pass and MUST NOT delete or recreate an existing
+workspace. Dry-run may create an ephemeral preview workspace and write its
+prompt/log there, but the only durable queue mutation remains the existing
+claim-and-requeue behavior.
+
 ### Decision 8: category scope follows the live build queue
 
 The build queue currently supports `web`, `pwn`, and `re` through
@@ -213,7 +249,7 @@ The build queue currently supports `web`, `pwn`, and `re` through
 for categories accepted by the live build queue. It must not imply that
 research-only or future categories can already be built by the shard runner.
 
-### Decision 9: progress helper is a workspace-local shell shim
+### Decision 9: progress helper is a workspace-local JSONL spool shim
 
 The current `shard_prompt.md` renders `{progress_command}` as an absolute path
 to `python <cli_script_path> progress ...`. Inside an isolated workspace such
@@ -221,29 +257,51 @@ a path is meaningless: the model would need to know the host's Python
 interpreter and the project root, neither of which we want in the prompt.
 
 The runner SHALL materialize a workspace-local shell shim at
-`./bin/progress` whose body is a thin wrapper of the form:
+`./bin/progress` whose body appends one JSON object per invocation to
+`./logs/progress-events.jsonl`. The prompt renders only `./bin/progress`.
+The shim accepts the same agent-facing flags as the existing progress command:
 
 ```sh
 #!/bin/sh
-exec "<host-python>" "<host-cli>" progress --workspace "<workspace_id>" "$@"
+stage=
+status=
+challenge=
+message=
+# parse --challenge/--stage/--status/--message, then append compact JSONL
 ```
 
-The shim is generated at workspace creation time with the host paths baked in
-once (so the prompt only sees `./bin/progress`). The CLI accepts a new
-`--workspace` flag that reads `input/manifest.json` from the workspace to
-recover shard/worker/category context. This keeps the prompt path
-workspace-relative while preserving the existing progress writing path.
+The host runner tails or imports `./logs/progress-events.jsonl`, combines each
+record with `input/manifest.json` (`shard_name`, `worker`, `category`, and
+workspace id), and writes the existing PostgreSQL progress events through the
+same `ProgressStore` used today. If live tailing is not implemented in the
+first patch, the runner must at least import the file immediately after Hermes
+returns, before validation events are written.
 
 Decisions on alternative transports (Unix socket / HTTP side-channel /
-runner-managed progress importer) are deferred to a future change. A shim is
-the smallest move that satisfies the workspace-relative prompt contract
-without rewriting how progress is reported.
+direct CLI bridge) are deferred to a future change. The JSONL spool is the
+smallest move that satisfies the workspace-relative prompt contract without
+requiring host absolute paths to exist inside the Hermes terminal backend.
 
 **Platform scope**: the shim is a POSIX `/bin/sh` script. This change is scoped
 to POSIX hosts (Linux / macOS), matching the current project deployment
 targets. Windows host support is not a goal of this change; a Windows-equivalent
 shim (`.cmd` wrapper or a Python entrypoint) can be added later without
 breaking the prompt contract, since the prompt only refers to `./bin/progress`.
+
+### Decision 10: report and artifact compatibility stay explicit
+
+Existing consumers still depend on canonical paths:
+
+- `domain.reports.merge_reports()` scans `work/reports/*.report.json`.
+- `DashboardService.state()` reads `work/reports/validation.json`.
+- `BuildReconciler._artifact()` discovers artifacts only under
+  `work/challenges/<category>/<id>-*/metadata.json`.
+
+This change must not silently move those canonical read paths. Workspace
+reports and artifacts are runtime staging surfaces; the runner imports reports
+and promotes claimed artifacts into the existing canonical surfaces before
+legacy consumers run. If a future change moves these consumers, it must do so
+as an explicit compatibility migration with its own tests.
 
 ## Iterative Review Log
 
@@ -332,8 +390,9 @@ second-pass re-evaluation against Docker terminal backend reality.
     asserting `subprocess.Popen(cwd=...)` actually equals the workspace path.
 21. Patch: the original prompt rendered a host Python + CLI absolute path for
     progress reporting. Solution: D9 adds a workspace-local `./bin/progress`
-    POSIX shell shim that exec's the host CLI with `--workspace <id>`; the
-    CLI reads `input/manifest.json` for context. POSIX-only by design.
+    POSIX shell shim that appends JSONL to `./logs/progress-events.jsonl`;
+    the host runner imports those records with context from
+    `input/manifest.json`. POSIX-only by design.
 22. Patch: this proposal claims to fix "Hermes Docker backend cannot see
     host paths" but its preflight only verifies workspace from the host. If
     the operator's Docker backend does not mount `work/executions/`, the
@@ -342,6 +401,57 @@ second-pass re-evaluation against Docker terminal backend reality.
     probing; Risks documents the operator mount requirement; this is the
     smallest move that does not pretend to solve a backend-isolation problem
     out of scope.
+23. Patch: `domain.reports.merge_reports()` and dashboard state still read
+    `work/reports`, while this proposal moved prompt report paths to
+    `./logs/report.json`. Solution: D6/D10 now require importing the workspace
+    report back to `work/reports/<running-shard-stem>.report.json` before
+    existing report consumers run.
+24. Patch: the proposed `./bin/progress` shim originally exec'd the host
+    Python and project CLI. Problem: those absolute paths are still invisible
+    in Docker terminal backends. Solution: D9 replaces that with a
+    workspace-local JSONL spool that the host runner imports.
+25. Patch: existing `challenge-factory progress` requires `--shard`, so adding
+    `--workspace` would be a larger CLI compatibility change than necessary.
+    Solution: remove the required CLI bridge from the proposal; the runner
+    imports progress JSONL through `ProgressStore` instead.
+26. Patch: resume flow currently reads canonical `work/challenges` evidence.
+    Problem: starting Hermes with an empty `./output` would lose carried
+    artifacts. Solution: D6 requires materializing claimed canonical dirs into
+    workspace output before Hermes.
+27. Patch: output promotion could copy malicious symlinks or wrong-category
+    metadata. Solution: D6/spec require symlink rejection plus metadata
+    id/category validation before atomic promotion.
+28. Patch: `BuildReconciler._artifact()` only sees canonical challenge dirs.
+    Problem: a done shard before promotion would become `artifact directory
+    missing`. Solution: promotion failure marks the claimed shard failed
+    before validation/reconciler observes done.
+29. Patch: retrying the same challenge can collide with an existing canonical
+    directory. Solution: D6 requires quarantine of only the claimed existing
+    directory before atomic replacement, never deletion of unrelated dirs.
+30. Patch: dry-run should not perform cleanup side effects. Solution: D7 now
+    forbids dry-run workspace GC or destructive workspace recreation.
+31. Patch: validation mutates `metadata.solve_status` in canonical challenge
+    dirs. Solution: D6 makes canonical promotion happen before validation so
+    validation updates the visible artifact, not a discarded workspace copy.
+32. Patch: report path and Hermes log path were conflated. Solution: per-run
+    Hermes stdout/stderr stays in workspace logs, while the structured report
+    is imported back to `work/reports` for legacy merge/dashboard consumers.
+33. Patch: live dashboard progress may degrade if the JSONL spool is only
+    imported after Hermes returns. Solution: D9 allows live tailing but sets
+    post-Hermes import as the minimum contract; verification distinguishes the
+    two.
+34. Patch: materialized static references via symlink require stable allowed
+    roots. Solution: preflight must resolve each reference symlink against the
+    explicit static roots copied into the manifest.
+35. Patch: prompt examples must match the exact output layout. Solution:
+    spec now fixes `./output/challenges/<category>/<id>-<slug>/` and rejects
+    non-conforming output.
+36. Patch: the output bridge is temporary but could become permanent by
+    accident. Solution: D6/spec require the later publisher change to remove
+    this requirement and replace it under `worker-pool-execution`.
+37. Patch: canonical consumer paths are a compatibility boundary, not an
+    implementation detail. Solution: D10 names the current consumers and
+    forbids silent movement in this change.
 
 ## Risks / Trade-offs
 
@@ -369,3 +479,7 @@ second-pass re-evaluation against Docker terminal backend reality.
   loss. A configurable retention knob is deferred to the publisher change.
 - POSIX-only shim. Windows hosts cannot use the build runner under this
   change. This matches current project deployment.
+- JSONL progress spooling may delay dashboard progress if live tailing is not
+  implemented in the first patch. The minimum contract imports progress before
+  validation events; live tailing is preferred but not required for this
+  hardening step.

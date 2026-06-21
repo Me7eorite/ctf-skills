@@ -19,6 +19,10 @@
 - [ ] 1.7 Redirect Hermes per-shard `log_path` from `paths.logs /
   f"{shard_name}.log"` to `work/executions/<workspace_id>/logs/hermes.log`.
   Preserve research/design log paths unchanged.
+- [ ] 1.8 Render the structured report path as `./logs/report.json` in the
+  prompt, then import/sync it to the legacy
+  `work/reports/<running-shard-stem>.report.json` path before existing report
+  consumers run.
 
 ## 1A. Shared Profile-Injection Helper
 
@@ -57,6 +61,8 @@
   [research_agent_executor.py](src/services/research_agent_executor.py)).
   Missing profile returns infrastructure-failed with a message that includes
   the literal recovery command `hermes profile create cf-<category>`.
+- [ ] 2.10 Manifest allowed static reference roots; preflight resolves every
+  reference symlink and rejects targets outside those roots.
 
 ## 3. Prompt and Hermes Invocation
 
@@ -70,23 +76,31 @@
 - [ ] 3.5 Preserve research/design Hermes profile binding behavior unchanged.
 - [ ] 3.6 Keep `hermes -w` out of the required build invocation contract.
 - [ ] 3.7 Generate the workspace-local progress shim at `./bin/progress` as
-  described in Decision 9: a shell wrapper that exec's the host CLI with
-  `--workspace <workspace_id>`. Render the prompt's progress command as
-  `./bin/progress ...` only.
-- [ ] 3.8 Add a `--workspace` flag to `challenge-factory progress` that loads
-  `input/manifest.json` to recover shard/worker/category context.
+  described in Decision 9: a POSIX shell wrapper that appends compact JSON
+  records to `./logs/progress-events.jsonl`. Render the prompt's progress
+  command as `./bin/progress ...` only.
+- [ ] 3.8 Import (or live-tail) `./logs/progress-events.jsonl` from the host
+  runner, combine records with `input/manifest.json`, and write them through
+  the existing `ProgressStore` before validation events are written.
 
 ## 3A. Output Promotion for Existing Validation
 
 - [ ] 3A.1 Require Hermes to write claimed challenge directories under
   `./output/challenges/<category>/<id>-<slug>/` or an equivalent fixed
   workspace output layout.
-- [ ] 3A.2 Before existing validation runs, promote only directories whose
+- [ ] 3A.2 For resume runs, copy the existing claimed canonical challenge
+  directory into the workspace output layout before invoking Hermes.
+- [ ] 3A.3 Before existing validation runs, promote only directories whose
   challenge ids are present in `input/shard.json` into
   `work/challenges/<category>/`.
-- [ ] 3A.3 Reject or ignore unclaimed output directories; do not publish them
+- [ ] 3A.4 Reject output symlinks, path traversal, missing metadata, metadata
+  id/category mismatch, and more than one output directory per claimed id.
+- [ ] 3A.5 Promote claimed directories atomically via a temporary sibling and
+  quarantine any existing canonical directory for the same claimed id under a
+  workspace-scoped backup path.
+- [ ] 3A.6 Reject or ignore unclaimed output directories; do not publish them
   to `work/challenges`.
-- [ ] 3A.4 Keep the later staged publisher allowlist, execution leases, and
+- [ ] 3A.7 Keep the later staged publisher allowlist, execution leases, and
   operator approval out of this change.
 
 ## 4. Compatibility
@@ -126,9 +140,20 @@
   > 7 days and `work/executions/manual-fresh/`; create a new workspace; assert
   `manual-old` is removed and `manual-fresh` is kept. Seed an attributed
   `work/executions/<uuid>/` and assert it is never touched by GC.
-- [ ] 5.12 Run focused pytest coverage for the changed runner/prompt/workspace
+- [ ] 5.12 Add a progress-spool test proving `./bin/progress` writes JSONL
+  without host absolute paths and the runner imports records into
+  `ProgressStore` with shard/worker context from `input/manifest.json`.
+- [ ] 5.13 Add report compatibility tests proving `./logs/report.json` is
+  imported to `work/reports/<running-shard-stem>.report.json` and
+  `merge-reports` still sees the build report.
+- [ ] 5.14 Add resume promotion tests proving existing claimed canonical
+  artifacts are copied into workspace output before Hermes and atomically
+  replaced/quarantined only for claimed ids.
+- [ ] 5.15 Add promotion security tests for output symlinks, path traversal,
+  duplicate claimed-id directories, and metadata id/category mismatch.
+- [ ] 5.16 Run focused pytest coverage for the changed runner/prompt/workspace
   paths.
-- [ ] 5.13 Run `openspec validate add-execution-workspace-and-profile-per-category --strict`.
+- [ ] 5.17 Run `openspec validate add-execution-workspace-and-profile-per-category --strict`.
 
 ## 6. Operator Runbook and Rollout
 

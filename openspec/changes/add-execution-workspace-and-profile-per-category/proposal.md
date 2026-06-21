@@ -32,8 +32,8 @@ can actually read its claimed shard inside its sandbox.
   per-claim files are copied; large static references are symlinked to avoid
   disk waste on bulk runs.
 - Render the build prompt with workspace-relative paths such as
-  `./input/shard.json`, `./output/`, and `./bin/progress`; never host absolute
-  shard/report/CLI paths.
+  `./input/shard.json`, `./output/`, `./logs/report.json`, and
+  `./bin/progress`; never host absolute shard/report/CLI paths.
 - Extract the duplicated `_build_arguments(profile_name)` (currently in
   `hermes/research.py` and `hermes/design.py`) into a single shared helper in
   `hermes/process.py`; migrate research, design, and the new build runner to
@@ -50,6 +50,9 @@ can actually read its claimed shard inside its sandbox.
   empty/orphaned) at workspace creation. Attributed `build_attempt_id`
   workspaces are not touched; their retention belongs to the later publisher
   change.
+- Import `./logs/report.json` into the legacy
+  `work/reports/<running-shard-stem>.report.json` path before existing report
+  merge/dashboard consumers read it.
 - Promote only claimed challenge output from `./output/` back to the canonical
   `work/challenges/<category>/...` tree before the existing validation path
   runs; this is an explicit narrow compatibility bridge that will be removed
@@ -77,7 +80,7 @@ None. This is a protocol hardening change for the existing runner.
   only; persistent `execution_id` is reserved for the later lease/fencing
   change.
 - **Filesystem**: add `work/executions/<workspace_id>/input`,
-  `references`, `output`, `logs`, and optional `bin` helper shims. A reused
+  `references`, `output`, `logs`, and required `bin/progress` shim. A reused
   workspace id must start from an empty owned workspace or fail preflight.
 - **Hermes**: build execution uses `cf-web`, `cf-pwn`, or `cf-re` according to
   the claimed shard category. Git worktree is not part of the runtime
@@ -90,5 +93,7 @@ None. This is a protocol hardening change for the existing runner.
 - **Operator runbook**: one-time `hermes profile create cf-{web,pwn,re}` is
   required before enabling this change; for Docker terminal backends, the
   profile config must also mount `work/executions/` into the container.
-- **Platform**: POSIX-only shim under `./bin/progress`. Windows host support is
-  not in scope (matches current project deployment).
+- **Platform**: POSIX-only shim under `./bin/progress`. The shim writes
+  workspace-local JSONL progress records instead of executing host absolute
+  paths, so it works for both local and mounted Docker terminal backends.
+  Windows host support is not in scope (matches current project deployment).

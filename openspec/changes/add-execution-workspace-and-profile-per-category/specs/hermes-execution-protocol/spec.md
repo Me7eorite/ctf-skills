@@ -20,6 +20,12 @@ Per-invocation Hermes log output SHALL be written under
 `work/logs/<shard_name>.log` location for build shards). Research and design
 log paths SHALL remain unchanged.
 
+The build prompt SHALL render the structured report path as
+`./logs/report.json`. Before existing report consumers run, the runner SHALL
+import or sync that workspace report to the legacy
+`work/reports/<running-shard-stem>.report.json` path. Existing report summary
+behavior that scans `work/reports/*.report.json` SHALL continue to work.
+
 **Materialization strategy** SHALL distinguish per-claim files from static
 references. Per-claim files MUST be copied so that claim-time snapshots cannot
 be modified retroactively: `input/shard.json`, `input/manifest.json`, and any
@@ -71,6 +77,14 @@ stale workspace input, output, logs, or references.
   build shard
 - **AND** research and design log paths under `work/research/logs/` and
   `work/design/logs/` are unchanged
+
+#### Scenario: Workspace report is visible to legacy report merge
+
+- **GIVEN** Hermes writes `./logs/report.json` in workspace `W`
+- **WHEN** the runner finishes the Hermes invocation
+- **THEN** the report is imported to
+  `work/reports/<running-shard-stem>.report.json`
+- **AND** `merge-reports` can include it without scanning `work/executions`
 
 ### Requirement: Build prompts use workspace-relative paths
 
@@ -212,6 +226,19 @@ canonical `work/challenges/<category>/` tree expected by current resume and
 validation code. Promotion matches `./output/challenges/<category>/<id>-*/`
 and copies to `work/challenges/<category>/<id>-*/`.
 
+For resume runs, the runner SHALL first copy any existing canonical challenge
+directory for a claimed id into the workspace output layout before invoking
+Hermes, so carried-forward artifacts remain available without exposing the
+canonical tree to the prompt.
+
+Promotion SHALL reject output symlinks, path traversal, missing
+`metadata.json`, metadata `id` or `category` mismatch, and multiple output
+directories for the same claimed id. Promotion SHALL copy to a temporary
+sibling under `work/challenges/<category>/` and atomically rename into place.
+If a canonical directory for the same claimed id already exists, it SHALL be
+quarantined under a workspace-scoped backup path before replacement; unrelated
+challenge directories SHALL NOT be moved or deleted.
+
 This requirement SHALL NOT introduce execution rows, lease/fencing tokens,
 operator approval, or a general publisher allowlist. Unclaimed output
 directories SHALL NOT be copied to `work/challenges`.
@@ -249,17 +276,46 @@ operator approval, or anything beyond the literal claimed challenge ids.
 - **AND** it is not promoted to `work/challenges`
 - **AND** the runner records an infrastructure or quality-gate failure
 
-### Requirement: Build prompts invoke the host CLI through a workspace-local shim
+#### Scenario: Resume artifacts are edited in the workspace copy
 
-For non-dry-run build invocations, the runner SHALL materialize a shell shim at
-`./bin/progress` whose body exec's the host CLI with `--workspace <workspace_id>`
-appended (host Python and CLI path baked in at workspace creation time). The
-build prompt SHALL render the progress command as `./bin/progress ...` and
-SHALL NOT render the host Python path or absolute CLI path.
+- **GIVEN** `work/challenges/web/web-0001-demo/metadata.json` already exists
+- **AND** the resume plan says `web-0001` has carried-forward stages
+- **WHEN** the runner prepares workspace `W`
+- **THEN** it copies that canonical directory to
+  `work/executions/W/output/challenges/web/web-0001-demo/`
+- **AND** the prompt still only references `./output/challenges/web/web-0001-demo/`
 
-The host CLI SHALL accept a `--workspace <id>` flag that reads
-`work/executions/<id>/input/manifest.json` to recover shard, worker, and
-category context.
+#### Scenario: Unsafe output symlink is rejected
+
+- **GIVEN** Hermes writes `./output/challenges/web/web-0001-demo` as a symlink
+  to a path outside the workspace
+- **WHEN** output promotion runs
+- **THEN** the symlink is not promoted
+- **AND** the claimed shard is failed before validation runs
+
+#### Scenario: Existing claimed artifact is quarantined before replacement
+
+- **GIVEN** a claimed output directory for `web-0001`
+- **AND** `work/challenges/web/web-0001-demo/` already exists
+- **WHEN** promotion succeeds
+- **THEN** the existing canonical directory is moved to a workspace-scoped
+  quarantine path
+- **AND** the new claimed directory is atomically renamed into
+  `work/challenges/web/web-0001-demo/`
+
+### Requirement: Build prompts record progress through a workspace-local shim
+
+For non-dry-run build invocations, the runner SHALL materialize a POSIX shell
+shim at `./bin/progress` whose body appends one compact JSON object per
+invocation to `./logs/progress-events.jsonl`. The build prompt SHALL render
+the progress command as `./bin/progress ...` and SHALL NOT render the host
+Python path or absolute CLI path.
+
+The host runner SHALL import or live-tail `./logs/progress-events.jsonl`, read
+`input/manifest.json` for shard, worker, category, and workspace context, and
+write corresponding events through the existing `ProgressStore`. The minimum
+contract is import-before-validation; live tailing is allowed but not required
+by this change.
 
 #### Scenario: Build prompt uses local progress shim
 
@@ -272,6 +328,7 @@ category context.
 
 - **GIVEN** a workspace `work/executions/<id>/` with a valid `input/manifest.json`
 - **WHEN** Hermes runs `./bin/progress --challenge web-0001 --stage build`
-- **THEN** the resolved CLI invocation includes `--workspace <id>`
-- **AND** shard/worker/category context is read from
-  `input/manifest.json` without requiring additional CLI flags
+- **THEN** the shim appends a JSONL record under `./logs/progress-events.jsonl`
+- **AND** the host runner imports the record with shard/worker/category
+  context from `input/manifest.json`
+  without requiring additional model-visible CLI flags
