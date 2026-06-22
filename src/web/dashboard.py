@@ -9,11 +9,14 @@ import time
 from pathlib import Path
 from uuid import UUID
 
+from core.execution_config import execution_minting_enabled, lease_ttl_seconds
 from core.jsonio import read_json
 from core.paths import ProjectPaths
 from core.queue import ShardQueue
 from core.state import InMemoryProgressStore, ProgressStore
 from domain.seeds import SeedStore
+from persistence.repositories import ExecutionsRepository
+from persistence.session import transaction
 
 
 def relative_time(timestamp: float) -> str:
@@ -69,6 +72,7 @@ class TaskManager:
         category: str,
         build_attempt_id: UUID,
     ) -> tuple[bool, str]:
+        self._mark_execution_running(build_attempt_id, worker="dashboard-01")
         cli_script = Path(__file__).resolve().parents[1] / "cli.py"
         return self._start(
             "worker",
@@ -84,6 +88,10 @@ class TaskManager:
                 str(build_attempt_id),
             ],
             require_pending=False,
+            on_started=lambda: self._mark_execution_running(
+                build_attempt_id,
+                worker="dashboard-01",
+            ),
         )
 
     def start_sequential_worker(
@@ -94,6 +102,8 @@ class TaskManager:
         """Run an explicit build-attempt list in the supplied order."""
         if not build_attempt_ids:
             return False, "顺序队列至少需要一个构建任务"
+        for attempt_id in build_attempt_ids:
+            pass
         cli_script = Path(__file__).resolve().parents[1] / "cli.py"
         command = [
             sys.executable,
@@ -108,6 +118,13 @@ class TaskManager:
             "sequential-worker",
             command,
             require_pending=False,
+            on_started=lambda: [
+                self._mark_execution_running(
+                    attempt_id,
+                    worker="dashboard-sequential-01",
+                )
+                for attempt_id in build_attempt_ids
+            ],
         )
 
     def _start(
@@ -116,6 +133,7 @@ class TaskManager:
         command: list[str],
         *,
         require_pending: bool,
+        on_started=None,
     ) -> tuple[bool, str]:
         if require_pending and not any(
             (self.paths.shards / "pending").glob("*.json")
@@ -151,6 +169,9 @@ class TaskManager:
             self._started_at = time.strftime("%Y-%m-%d %H:%M:%S")
             process = self._process
 
+        if on_started is not None:
+            on_started()
+
         time.sleep(0.2)
         returncode = process.poll()
         if returncode is not None:
@@ -160,6 +181,23 @@ class TaskManager:
                 message = f"{message}: {detail}"
             return False, message
         return True, f"{kind} 已启动"
+
+    @staticmethod
+    def _mark_execution_running(attempt_id: UUID, *, worker: str) -> None:
+        if not execution_minting_enabled():
+            return
+        with transaction() as session:
+            repo = ExecutionsRepository(session)
+            latest = repo.latest_for_attempt(attempt_id)
+            if latest is None:
+                return
+            if latest.status == "queued":
+                _, token = repo.claim_queued(
+                    attempt_id,
+                    worker_id=worker,
+                    lease_ttl_seconds=lease_ttl_seconds(),
+                )
+                repo.update_to_running(latest.id, claim_token=token)
 
     def state(self) -> dict:
         with self._lock:

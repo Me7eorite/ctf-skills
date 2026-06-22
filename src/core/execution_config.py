@@ -28,9 +28,9 @@ def lease_ttl_seconds() -> int:
 def execution_minting_enabled() -> bool:
     """Whether retry/clean/revision append executions (Option A) vs legacy mint.
 
-    Defaults to enabled now that worker outcome recording and the reconciler
-    execution reaper are wired. Operators may set ``EXECUTION_MINTING=0`` as a
-    rollback path for legacy build-attempt minting.
+    Defaults to disabled so legacy build-attempt minting remains the baseline.
+    Operators may set ``EXECUTION_MINTING=1`` to enable the execution-backed
+    cutover path.
     """
 
     raw = os.environ.get("EXECUTION_MINTING")

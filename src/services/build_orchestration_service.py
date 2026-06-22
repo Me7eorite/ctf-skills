@@ -358,8 +358,11 @@ class BuildOrchestrationService:
                 if design is None:
                     raise BuildOrchestrationError(f"design task {task_id} has no validated draft design")
 
-                minting = execution_minting_enabled()
                 source_attempt_id = retry_sources.get(task_id)
+                minting = execution_minting_enabled()
+                if source_attempt_id is not None:
+                    source_container = session.get(build_model.BuildAttempt, source_attempt_id)
+                    minting = bool(minting and source_container is not None and source_container.latest_execution_id is not None)
                 # Option A: a retry reuses the existing build-attempt container and
                 # appends an execution; legacy (or fresh) mints a new container.
                 is_retry = minting and source_attempt_id is not None
@@ -451,17 +454,12 @@ class BuildOrchestrationService:
                     exec_repo = ExecutionsRepository(session)
                     parent_execution_id = None
                     mode = "clean" if submission.execution_mode == "clean" else "standard"
-                    if not submission.is_fresh:
-                        container = session.get(
-                            build_model.BuildAttempt, submission.attempt_id
-                        )
-                        parent_execution_id = (
-                            container.latest_execution_id if container else None
-                        )
+                    container = session.get(build_model.BuildAttempt, submission.attempt_id)
+                    if container is not None:
+                        parent_execution_id = container.latest_execution_id
                         # Keep the legacy shard_basename in sync so reconciler and
                         # runner attribute the reused container's current iteration.
-                        if container is not None:
-                            container.shard_basename = submission.shard_basename
+                        container.shard_basename = submission.shard_basename
                     exec_repo.schedule_execution(
                         submission.attempt_id,
                         execution_kind=submission.execution_kind,

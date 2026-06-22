@@ -149,6 +149,20 @@ def test_schedule_claim_and_terminal_lifecycle(session_factory: SessionFactory):
         assert container.status == "succeeded"
 
 
+def test_schedule_then_claim_sets_running_before_terminal(session_factory: SessionFactory):
+    with session_factory() as session:
+        container = _seed_container(session)
+        repo = ExecutionsRepository(session)
+
+        e1 = repo.schedule_execution(container.id, execution_kind="initial")
+        _, token = repo.claim_queued(container.id, worker_id="w1", lease_ttl_seconds=TTL)
+        repo.update_to_running(e1.id, claim_token=token)
+
+        session.refresh(container)
+        assert container.status == "running"
+        assert container.current_execution_id == e1.id
+
+
 def test_retry_appends_iteration_under_same_container(
     session_factory: SessionFactory,
 ):

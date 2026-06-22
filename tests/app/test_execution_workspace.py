@@ -440,7 +440,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         log = observed["log"]
         self.assertIsInstance(log, Path)
         self.assertEqual(log.name, "hermes.log")
-        self.assertEqual(log.parent.parent.parent, self.paths.executions)
+        self.assertEqual(log.parent.parent.parent.parent, self.paths.executions)
         manifest = json.loads((log.parent.parent / "input" / "manifest.json").read_text())
         self.assertEqual(manifest["timeout_source"], "shard_policy")
 

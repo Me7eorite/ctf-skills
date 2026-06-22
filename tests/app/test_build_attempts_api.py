@@ -686,6 +686,26 @@ def test_exact_worker_recovers_staging_and_respects_busy_guard(
     assert tasks.calls == [("web", attempt.id)]
 
 
+def test_exact_worker_start_marks_execution_backed_attempt_running(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory)
+    with transaction(factory=session_factory) as session:
+        attempt = _create_canonical_attempt(BuildAttemptsRepository(session), task_id)
+    _write_pending_attempt(client, attempt)
+    tasks = _StubBuildTaskManager()
+    client.app.state.dashboard_tasks = tasks
+
+    response = client.post(f"/api/build-attempts/{attempt.id}/worker/start")
+
+    assert response.status_code == 202
+    with session_factory() as session:
+        row = session.get(build_model.BuildAttempt, attempt.id)
+        assert row.status == "running"
+    assert tasks.calls == [("web", attempt.id)]
+
+
 def test_exact_worker_accepts_iteration_shard_basename(
     client: TestClient,
     session_factory: SessionFactory,

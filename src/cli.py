@@ -82,37 +82,31 @@ def _record_execution_outcome(
 ) -> None:
     """Record the run outcome on the scheduled execution (cutover flag only).
 
-    Best-effort and token-fenced: claims the queued execution then writes its
-    terminal status in one short transaction. Heartbeating / long-running lease
-    windows are the local supervisor's concern (split-plan #5), so this records
-    the outcome after the synchronous run rather than holding a lease across it.
+    Best-effort and token-fenced: the execution should already be marked running
+    before Hermes starts; this only writes the terminal status afterwards.
     """
-    from core.execution_config import execution_minting_enabled, lease_ttl_seconds
-
-    if not execution_minting_enabled():
-        return
     from persistence.repositories import ExecutionsRepository
     from persistence.session import transaction
 
-    failed = int(item.get("failed", 0))
-    processed = int(item.get("processed", 0))
-    status = "succeeded" if processed > 0 and failed == 0 else "failed"
-    error = None
-    if status == "failed":
-        outcomes = item.get("outcomes") or []
-        last = outcomes[-1] if outcomes else {}
-        error = (last.get("error") or last.get("status") or "build failed")[:2000]
     try:
         with transaction(factory=session_factory) as session:
             repo = ExecutionsRepository(session)
             latest = repo.latest_for_attempt(attempt_id)
-            if latest is None or latest.status != "queued":
+            if latest is None or latest.status not in {"claimed", "running"}:
                 return
-            _claimed, token = repo.claim_queued(
-                attempt_id, worker_id=worker, lease_ttl_seconds=lease_ttl_seconds()
-            )
+            failed = int(item.get("failed", 0))
+            processed = int(item.get("processed", 0))
+            status = "succeeded" if processed > 0 and failed == 0 else "failed"
+            error = None
+            if status == "failed":
+                outcomes = item.get("outcomes") or []
+                last = outcomes[-1] if outcomes else {}
+                error = (last.get("error") or last.get("status") or "build failed")[:2000]
             repo.update_to_terminal(
-                latest.id, claim_token=token, status=status, error=error
+                latest.id,
+                claim_token=latest.claim_token,
+                status=status,
+                error=error,
             )
     except Exception as exc:  # never break the worker loop on bookkeeping
         print(

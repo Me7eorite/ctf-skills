@@ -813,6 +813,13 @@ def _start_constrained_worker(
     )
     if not ok:
         raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=message)
+    from persistence.session import transaction
+
+    with transaction() as session:
+        repo = BuildAttemptsRepository(session)
+        attempt = repo.get(attempt_id)
+        if attempt is not None and attempt.status == "queued":
+            repo.update_to_running(attempt_id, worker="dashboard-01")
     return JSONResponse(
         {
             "ok": True,
