@@ -365,3 +365,75 @@ class SolverIntegrityTests(unittest.TestCase):
         )
         errors = self.validator.contract_errors(challenge, metadata)
         self.assertEqual(errors, [])
+
+
+class StringsExposureTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.paths = ProjectPaths(
+            root=Path(self.temp.name) / "factory",
+            repository=Path(self.temp.name),
+        )
+        self.paths.initialize()
+        self.validator = ChallengeValidator(self.paths)
+
+    def _re_with_artifact(
+        self, *, embed_flag: bool, technique: str
+    ) -> tuple:
+        challenge = self.paths.challenges / "re" / "re-0001-demo"
+        (challenge / "attachments").mkdir(parents=True)
+        header = bytearray(b"\x7fELF" + b"\x00" * 16)
+        header[18:20] = (0x3E).to_bytes(2, "little")
+        body = bytes(header) + b"\x00padding\x00"
+        if embed_flag:
+            body += b"flag{the_secret}\x00"
+        (challenge / "attachments" / "chal").write_bytes(body)
+        # genuine solver that touches the artifact
+        (challenge / "validate.sh").write_text(
+            "#!/bin/sh\npython3 writenup/exp.py ./attachments/chal\n",
+            encoding="utf-8",
+        )
+        (challenge / "writenup").mkdir(parents=True)
+        (challenge / "writenup" / "exp.py").write_text(
+            "import sys\nopen(sys.argv[1],'rb').read()\nprint(recover())\n",
+            encoding="utf-8",
+        )
+        metadata = {
+            "id": "re-0001",
+            "title": "Demo",
+            "category": "re",
+            "difficulty": "easy",
+            "build_status": "passed",
+            "flag": "flag{the_secret}",
+            "target_format": "elf",
+            "target_platform": "linux/amd64",
+            "primary_technique": technique,
+            "learning_objective": "recover the flag",
+        }
+        return challenge, metadata
+
+    def test_plaintext_flag_in_artifact_is_rejected(self):
+        challenge, metadata = self._re_with_artifact(
+            embed_flag=True, technique="control-flow deobfuscation"
+        )
+        errors = self.validator.contract_errors(challenge, metadata)
+        self.assertTrue(
+            any("exposes the plaintext flag via strings" in e for e in errors)
+        )
+
+    def test_plaintext_flag_allowed_when_strings_is_the_technique(self):
+        challenge, metadata = self._re_with_artifact(
+            embed_flag=True, technique="strings on the binary"
+        )
+        errors = self.validator.contract_errors(challenge, metadata)
+        self.assertFalse(
+            any("exposes the plaintext flag" in e for e in errors)
+        )
+
+    def test_obfuscated_flag_not_in_strings_passes(self):
+        challenge, metadata = self._re_with_artifact(
+            embed_flag=False, technique="xor decode"
+        )
+        errors = self.validator.contract_errors(challenge, metadata)
+        self.assertEqual(errors, [])

@@ -50,6 +50,32 @@ def _read_text(path: Path) -> str | None:
         return None
 
 
+# When the intended technique IS recovering the flag via strings/static reading,
+# a plaintext flag in the artifact is by design; otherwise it is a defect.
+_STRINGS_TECHNIQUE_HINTS = ("strings", "字符串")
+
+
+def _strings_is_intended(metadata: dict) -> bool:
+    haystack = " ".join(
+        str(metadata.get(key, ""))
+        for key in ("primary_technique", "learning_objective")
+    ).lower()
+    return any(hint in haystack for hint in _STRINGS_TECHNIQUE_HINTS)
+
+
+def _file_contains_bytes(path: Path, needle: str) -> bool:
+    """Whether ``needle`` appears as a contiguous byte run in the file.
+
+    The flag is a printable run, so a contiguous byte-substring hit is exactly
+    what an ordinary ``strings | grep`` would surface — without shelling out.
+    """
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return False
+    return needle.encode("utf-8", "ignore") in data
+
+
 def compose_literal_flag(compose_path: Path) -> str | None:
     """Return a literal FLAG value from an environment list entry.
 
@@ -376,6 +402,27 @@ class ChallengeValidator:
                     errors.append(
                         f"ELF artifact architecture is not {canonical}: "
                         + ", ".join(wrong_arch)
+                    )
+
+            # Dynamic-ish hardening (re): if `strings` on the delivered artifact
+            # would surface the plaintext flag and that is NOT the declared
+            # technique, the challenge is trivially solvable — reject it.
+            flag = metadata.get("flag") or ""
+            if (
+                category == "re"
+                and flag
+                and not _strings_is_intended(metadata)
+            ):
+                exposed = [
+                    path.relative_to(challenge_dir).as_posix()
+                    for path in elf_paths
+                    if _file_contains_bytes(path, flag)
+                ]
+                if exposed:
+                    errors.append(
+                        "delivered artifact exposes the plaintext flag via strings "
+                        f"({', '.join(exposed)}); embed it so the solver must "
+                        "recover it, or declare strings as the intended technique"
                     )
 
         errors.extend(self._solver_integrity_errors(challenge_dir, metadata))
