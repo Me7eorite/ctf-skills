@@ -41,6 +41,17 @@ class _ContractFailingValidator:
         }
 
 
+class _PathValidator:
+    def __init__(self) -> None:
+        self.seen: list[Path] = []
+
+    def validate_path(
+        self, challenge_dir: Path, *, expected_challenge_id: str
+    ) -> dict[str, Any]:
+        self.seen.append(challenge_dir)
+        return {"challenge_id": expected_challenge_id, "status": "passed", "elapsed": 0.01}
+
+
 def _make_gate_passing_web_challenge(paths: _Paths, challenge_id: str) -> Path:
     challenge = paths.challenges / "web" / f"{challenge_id}-demo"
     deploy = challenge / "deploy"
@@ -113,3 +124,27 @@ def test_contract_errors_are_recorded_as_validation_error(tmp_path: Path) -> Non
         "validator: status=contract_failed "
         "error=metadata.build_status is not passed; missing deploy/Dockerfile"
     )
+
+
+def test_workspace_validation_uses_exact_bound_path(tmp_path: Path) -> None:
+    paths = _Paths(tmp_path)
+    target = _make_gate_passing_web_challenge(
+        _Paths(tmp_path / "execution" / "output"), "web-0001"
+    )
+    validator = _PathValidator()
+    recorder = _Recorder()
+
+    results = run_validation(
+        state=recorder,
+        validator=validator,  # type: ignore[arg-type]
+        paths=paths,  # type: ignore[arg-type]
+        image_exists=lambda _image: True,
+        original_shard_name="web.iter-001.json",
+        worker="worker-01",
+        challenge_ids=["web-0001"],
+        plan_by_id={},
+        validation_targets={"web-0001": target},
+    )
+
+    assert results[0]["validation_status"] == "passed"
+    assert validator.seen == [target]

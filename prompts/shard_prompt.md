@@ -250,10 +250,9 @@ same-name container with
 `docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true`.
 Forced rebuilds are an operator concern (`docker rmi` outside the script);
 `validate.sh` itself does not need a force flag. For Re, `validate.sh` must
-build the artifact when needed and run the solver against `dist/`. Its last
-non-empty stdout line must be the recovered flag. For Re, `validate.sh` runs
-the solver against the player-facing artifact in `attachments/` (or legacy
-`dist/`).
+build the artifact when needed and run the solver against the player-facing
+artifact in `attachments/` (or legacy `dist/`). Its last non-empty stdout
+line must be the recovered flag.
 
 Do not print a hardcoded known flag merely to satisfy validation. These rules
 are now **host-enforced** as deterministic contract checks — a build that

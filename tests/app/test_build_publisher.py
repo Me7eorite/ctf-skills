@@ -14,6 +14,7 @@ from core.jsonio import read_json, write_json
 from core.paths import ProjectPaths
 from hermes.build_publisher import (
     prepare_publication_contract,
+    prepare_workspace_validation,
     publish_workspace_output,
 )
 from hermes.workspace import (
@@ -95,6 +96,21 @@ def test_publish_records_manifest_hash_and_high_water() -> None:
         assert manifest["output_manifest_hash"] == result.output_manifest_hash
         assert high_water["output_manifest_hash"] == result.output_manifest_hash
         assert not (workspace.state / "publish-journal.json").exists()
+
+
+def test_prepare_workspace_validation_does_not_touch_canonical() -> None:
+    with tempfile.TemporaryDirectory() as temp:
+        paths = _paths(Path(temp))
+        payload = {"challenges": [{"id": "web-0001", "category": "web"}]}
+        workspace = _workspace(paths, payload)
+        candidate = _artifact(workspace.output / "challenges")
+        contract = prepare_publication_contract(paths, workspace, payload)
+
+        validation_set = prepare_workspace_validation(workspace, contract=contract)
+
+        assert validation_set.candidates == {"web-0001": candidate}
+        assert validation_set.output_manifest_hash
+        assert not (paths.challenges / "web" / candidate.name).exists()
 
 
 def test_publish_noop_when_output_hash_matches_high_water() -> None:
@@ -767,3 +783,29 @@ def test_retention_skips_active_journal_and_repeated_publish_keeps_inputs(
 
         assert stage_generations == [1, 2]
         assert workspace.input.joinpath("shard.json").exists()
+
+
+def test_retention_sweep_purges_two_layer_current_and_attempt_artifacts() -> None:
+    with tempfile.TemporaryDirectory() as temp:
+        paths = _paths(Path(temp))
+        root = paths.executions / "two-layer"
+        current = root / "current"
+        (current / "state").mkdir(parents=True)
+        (current / "output").mkdir()
+        (current / "output" / "artifact").write_text("current")
+        archived = root / "attempts" / "iter-001"
+        (archived / "output").mkdir(parents=True)
+        (archived / "output" / "artifact").write_text("old")
+        write_json(
+            current / "state" / "publish-status.json",
+            {
+                "status": "failed",
+                "wall_clock_seconds": time.time() - 8 * 86400,
+            },
+        )
+
+        build_publisher._sweep_retention_roots(paths)
+
+        assert not (current / "output").exists()
+        assert not (archived / "output").exists()
+        assert (current / "state" / "publish-status.json").exists()

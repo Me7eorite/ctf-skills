@@ -43,8 +43,12 @@ from domain.resume import (
 from domain.validation import ChallengeValidator
 from hermes import process as hermes_process
 from hermes.build_publisher import (
+    PublicationContract,
+    WorkspaceValidationSet,
     prepare_publication_contract,
+    prepare_workspace_validation,
     publish_workspace_output,
+    record_workspace_terminal,
 )
 from hermes.process import (
     DEFAULT_HERMES_COMMAND,
@@ -83,6 +87,21 @@ __all__ = [
 def _carry_forward_pending_message(stage: str) -> str:
     """生成断点恢复中的待处理阶段消息。"""
     return f"Waiting for {stage} stage execution"
+
+
+def _validation_failure_message(results: list[dict[str, Any]]) -> str:
+    failures: list[str] = []
+    for result in results:
+        if result.get("solve_status") != "failed":
+            continue
+        challenge_id = str(result.get("challenge_id", "unknown"))
+        status = str(result.get("validation_status", "failed"))
+        error = str(result.get("validation_error") or "").strip()
+        detail = f"{challenge_id}: {status}"
+        if error:
+            detail += f" ({error[:300]})"
+        failures.append(detail)
+    return "; ".join(failures) or "challenge validation failed"
 
 
 _ITERATION_RE = re.compile(r"\.iter-(\d+)\.")
@@ -759,44 +778,11 @@ class HermesRunner:
 
         import_workspace_report(workspace, report)
 
-        if returncode == 0 or returncode == HERMES_TIMEOUT_RETURNCODE:
-            try:
-                publish_workspace_output(
-                    self.paths,
-                    workspace,
-                    contract=publication_contract,
-                )
-            except (OSError, WorkspacePromotionError, ValueError) as exc:
-                message = f"Workspace output promotion failed: {exc}"
-                failure_elapsed = elapsed()
-                publisher_phase = getattr(exc, "phase", None)
-                self._mark_shard_failed(
-                    shard,
-                    original_shard_name,
-                    worker,
-                    challenge_ids,
-                    report,
-                    message,
-                    returncode,
-                    hermes_phase="materialize",
-                    elapsed_seconds=failure_elapsed,
-                    workspace=workspace,
-                    publisher_phase=publisher_phase,
-                )
-                return fail_outcome(
-                    hermes_phase="materialize",
-                    returncode=returncode,
-                    error=message,
-                    elapsed_seconds=failure_elapsed,
-                    workspace=workspace,
-                    publisher_phase=publisher_phase,
-                )
-
-        # Hermes 返回非零 → 检查是否为超时 + 超时恢复通过
+        # Hermes 返回非零：普通进程错误立即失败；超时产物交给同一套
+        # workspace-bound host validation 判断是否已经完整，禁止为验证而提前发布。
+        timed_out = returncode == HERMES_TIMEOUT_RETURNCODE
         if returncode != 0:
-            timed_out = returncode == HERMES_TIMEOUT_RETURNCODE
-            if not timed_out or not self._timeout_recovery_complete(original_shard_name, challenge_ids):
-                # 非超时错误，或超时恢复失败 → 直接标记失败
+            if not timed_out:
                 hermes_phase = classify_hermes_exit(
                     returncode,
                     self._read_tail(log, 4096),
@@ -821,22 +807,39 @@ class HermesRunner:
                     elapsed_seconds=invoke_elapsed,
                     workspace=workspace,
                 )
-            # 超时但恢复通过 → 继续执行后续步骤（Hermes 已生成了足够的内容）
+            # 超时继续进入 workspace validation；不完整产物会形成确定性诊断。
 
         # 步骤 8: 确保报告文件存在
         ensure_report(report, shard, worker, "completed_by_runner", returncode)
 
         # 步骤 9: 执行强制校验
-        per_results = self._run_validation(original_shard_name, worker, challenge_ids, plan_by_id)
+        per_results, validated_set = self._run_workspace_validation(
+            original_shard_name,
+            worker,
+            challenge_ids,
+            plan_by_id,
+            workspace,
+            publication_contract,
+        )
+        self._record_validation_round(workspace, 0, per_results, validated_set)
         merge_validation_into_report(report, per_results)
 
         # Host validation is authoritative, but a generated exploit frequently needs
         # runtime feedback (container logs, traceback, leak parsing, libc offsets) that
         # was unavailable during the initial authoring pass. Feed deterministic failure
         # diagnostics back to Hermes and revalidate a bounded number of times.
+        # Union of every contract violation seen across repair rounds, replayed
+        # into each prompt as a non-regression list so the agent does not satisfy
+        # the latest diagnostic by reintroducing an earlier one.
+        seen_contract_errors: list[str] = []
         for repair_attempt in range(1, self.validation_repair_attempts + 1):
             if not any(result.get("solve_status") == "failed" for result in per_results):
                 break
+            for result in per_results:
+                for contract_error in result.get("validation_contract_errors") or []:
+                    text = str(contract_error)
+                    if text and text not in seen_contract_errors:
+                        seen_contract_errors.append(text)
             self._progress.record(
                 shard=original_shard_name,
                 worker=worker,
@@ -851,6 +854,7 @@ class HermesRunner:
                 attempt=repair_attempt,
                 max_attempts=self.validation_repair_attempts,
                 validation_results=per_results,
+                prior_contract_errors=seen_contract_errors,
             )
             repair_log = workspace.logs / f"hermes-validation-repair-{repair_attempt}.log"
             pre_signature = _output_signature(workspace.output)
@@ -891,32 +895,23 @@ class HermesRunner:
                     ),
                 )
                 break
-            try:
-                repair_publish_result = publish_workspace_output(
-                    self.paths,
-                    workspace,
-                    contract=publication_contract,
-                )
-            except (OSError, WorkspacePromotionError, ValueError) as exc:
-                _LOGGER.warning(
-                    "validation repair attempt %s promotion failed: %s",
-                    repair_attempt,
-                    exc,
-                )
-                break
-            if repair_publish_result.outcome == "noop":
-                _LOGGER.info(
-                    "validation repair attempt %s: publisher reported noop; "
-                    "exiting repair loop without rerunning validator",
-                    repair_attempt,
-                )
-                break
-            per_results = self._run_validation(original_shard_name, worker, challenge_ids, plan_by_id)
+            per_results, validated_set = self._run_workspace_validation(
+                original_shard_name,
+                worker,
+                challenge_ids,
+                plan_by_id,
+                workspace,
+                publication_contract,
+            )
+            self._record_validation_round(
+                workspace, repair_attempt, per_results, validated_set
+            )
             merge_validation_into_report(report, per_results)
 
         # 步骤 10: 根据校验结果判定最终状态
         any_failed = any(result.get("solve_status") == "failed" for result in per_results)
         if any_failed:
+            failure_summary = _validation_failure_message(per_results)
             # 有题目校验失败 → 标记分片为 failed
             self._record_per_challenge_complete(original_shard_name, worker, per_results)
             self._progress.record(
@@ -924,9 +919,9 @@ class HermesRunner:
                 worker=worker,
                 stage="complete",
                 status="failed",
-                message="One or more challenges failed validation",
+                message=failure_summary,
             )
-            update_report(report, "failed", "challenge validation failed")
+            update_report(report, "failed", failure_summary)
             validation_elapsed = elapsed()
             self._augment_failure_report(
                 report,
@@ -934,17 +929,70 @@ class HermesRunner:
                 elapsed_seconds=validation_elapsed,
                 workspace=workspace,
             )
+            record_workspace_terminal(
+                self.paths,
+                workspace,
+                status="failed",
+                output_hash=(
+                    validated_set.output_manifest_hash if validated_set else None
+                ),
+            )
             self.queue.complete(shard, "failed")
             return fail_outcome(
                 hermes_phase="validation",
-                returncode=0,
+                returncode=returncode if timed_out else 0,
                 failure_type="validation",
-                error="challenge validation failed",
+                error=failure_summary,
                 elapsed_seconds=validation_elapsed,
                 workspace=workspace,
             )
 
-        # 所有题目校验通过 → 完成!
+        # 校验通过后重新捕获精确候选及 hash；任何校验后的修改都会阻止发布。
+        try:
+            publish_validation_set = prepare_workspace_validation(
+                workspace,
+                contract=publication_contract,
+            )
+            if (
+                validated_set is None
+                or publish_validation_set.output_manifest_hash
+                != validated_set.output_manifest_hash
+            ):
+                raise WorkspacePromotionError(
+                    "workspace output changed after successful validation"
+                )
+            publish_workspace_output(
+                self.paths,
+                workspace,
+                contract=publication_contract,
+            )
+        except (OSError, WorkspacePromotionError, ValueError) as exc:
+            message = f"Validated workspace publication failed: {exc}"
+            failure_elapsed = elapsed()
+            publisher_phase = getattr(exc, "phase", None)
+            self._mark_shard_failed(
+                shard,
+                original_shard_name,
+                worker,
+                challenge_ids,
+                report,
+                message,
+                1,
+                hermes_phase="materialize",
+                elapsed_seconds=failure_elapsed,
+                workspace=workspace,
+                publisher_phase=publisher_phase,
+            )
+            return fail_outcome(
+                hermes_phase="materialize",
+                returncode=1,
+                error=message,
+                elapsed_seconds=failure_elapsed,
+                workspace=workspace,
+                publisher_phase=publisher_phase,
+            )
+
+        # 所有题目校验并发布成功 → 完成!
         self._record_per_challenge_complete(original_shard_name, worker, per_results)
         self._progress.record(
             shard=original_shard_name,
@@ -1033,6 +1081,7 @@ class HermesRunner:
         worker: str,
         challenge_ids: list[str],
         plan_by_id: dict[str, ChallengeResumePlan],
+        validation_targets: dict[str, Path] | None = None,
     ) -> list[dict[str, Any]]:
         return run_validation(
             state=self._progress,
@@ -1043,7 +1092,104 @@ class HermesRunner:
             worker=worker,
             challenge_ids=challenge_ids,
             plan_by_id=plan_by_id,
+            validation_targets=validation_targets,
         )
+
+    def _run_workspace_validation(
+        self,
+        original_shard_name: str,
+        worker: str,
+        challenge_ids: list[str],
+        plan_by_id: dict[str, ChallengeResumePlan],
+        workspace: ExecutionWorkspace,
+        contract: PublicationContract,
+    ) -> tuple[list[dict[str, Any]], WorkspaceValidationSet | None]:
+        """Validate only exact, allowlisted output under this execution."""
+        try:
+            validation_set = prepare_workspace_validation(
+                workspace,
+                contract=contract,
+            )
+        except (OSError, WorkspacePromotionError, ValueError) as exc:
+            claimed_id = getattr(exc, "claimed_id", None)
+            phase = getattr(exc, "phase", "allowlist")
+            error = f"workspace output {phase} failed: {exc}"
+            results = []
+            for challenge_id in challenge_ids:
+                if claimed_id is not None and challenge_id != claimed_id:
+                    continue
+                self._progress.record(
+                    shard=original_shard_name,
+                    challenge_id=challenge_id,
+                    worker=worker,
+                    stage="validate",
+                    status="failed",
+                    message=f"validator: status=contract_failed error={error}",
+                )
+                results.append(
+                    {
+                        "challenge_id": challenge_id,
+                        "solve_status": "failed",
+                        "validation_status": "contract_failed",
+                        "validation_error": error,
+                        "validation_contract_errors": [error],
+                    }
+                )
+            if not results:
+                results = [
+                    {
+                        "challenge_id": challenge_id,
+                        "solve_status": "failed",
+                        "validation_status": "contract_failed",
+                        "validation_error": error,
+                        "validation_contract_errors": [error],
+                    }
+                    for challenge_id in challenge_ids
+                ]
+            return results, None
+        results = self._run_validation(
+            original_shard_name,
+            worker,
+            challenge_ids,
+            plan_by_id,
+            validation_targets=dict(validation_set.candidates),
+        )
+        # ChallengeValidator records solve_status/solve_note in metadata.json.
+        # Capture the approved hash after those host-owned mutations so the
+        # final publish fence compares against the actual validated tree.
+        post_validation_set = prepare_workspace_validation(
+            workspace,
+            contract=contract,
+        )
+        return results, post_validation_set
+
+    @staticmethod
+    def _record_validation_round(
+        workspace: ExecutionWorkspace,
+        round_no: int,
+        results: list[dict[str, Any]],
+        validation_set: WorkspaceValidationSet | None,
+    ) -> None:
+        """Persist first-failure evidence and append bounded repair diagnostics."""
+        entry = {
+            "round": round_no,
+            "output_manifest_hash": (
+                validation_set.output_manifest_hash if validation_set else None
+            ),
+            "results": results,
+        }
+        history_path = workspace.state / "validation-history.json"
+        history = read_json(history_path, [])
+        if not isinstance(history, list):
+            history = []
+        history.append(entry)
+        write_json(history_path, history)
+        if any(result.get("solve_status") == "failed" for result in results):
+            first_path = workspace.state / "first-validation-failure.json"
+            if not first_path.exists():
+                write_json(first_path, entry)
+        else:
+            write_json(workspace.state / "validated-output.json", entry)
 
     def _validate_gate(self, challenge_id: str, plan: ChallengeResumePlan | None) -> str | None:
         return validate_gate(challenge_id, plan, self.paths, self._image_exists)

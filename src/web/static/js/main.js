@@ -67,7 +67,9 @@ function routeFromHash() {
 
 async function loadState() {
   try {
-    appState.data = await api("/api/state");
+    appState.data = appState.view === "build-attempts"
+      ? await api("/api/ui-state")
+      : await api("/api/state");
     renderAll();
   } catch (error) {
     showToast(error.message, true);
@@ -77,7 +79,8 @@ async function loadState() {
 }
 
 function renderAll() {
-  for (const view of Object.values(views)) view.render?.(appState.data);
+  const activeView = views[appState.view];
+  activeView?.render?.(appState.data);
   renderProcess();
   setView(appState.view);
   initIcons();

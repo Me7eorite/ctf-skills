@@ -64,6 +64,13 @@ def create_app(
         payload["sequential_worker_result"] = _latest_sequential_worker_result(service.paths)
         return JSONResponse(payload)
 
+    @app.get("/api/ui-state")
+    def get_ui_state() -> JSONResponse:
+        payload = service.ui_state()
+        payload["build_readiness"] = app.state.build_profile_readiness
+        payload["sequential_worker_result"] = _latest_sequential_worker_result(service.paths)
+        return JSONResponse(payload)
+
     @app.get("/api/logs/{name:path}")
     def get_log(name: str) -> JSONResponse:
         try:

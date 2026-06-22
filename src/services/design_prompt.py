@@ -237,7 +237,7 @@ def _render_output_contract(task: DesignTask) -> str:
         "`README.md`, `metadata.json`, `validate.sh`, `writenup/wp.md`, "
         "and `writenup/exp.py`. Extensionless native executables and "
         "conventional build files are valid; for example "
-        "`attachments/crackme`, `dist/crackme`, and `deploy/Makefile`."
+        "`attachments/crackme` and `deploy/Makefile`."
         + container_artifacts_hint
         + "\n3. `validation` MAY reference local compose URLs "
         "(`http://127.0.0.1:<port>`, `http://localhost:<port>`) but MUST "

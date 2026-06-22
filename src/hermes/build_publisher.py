@@ -30,9 +30,12 @@ except ImportError:  # pragma: no cover - Windows hosts hit preflight error
 
 _MANIFEST_PROJECTION_FIELDS = {"output_manifest_hash", "publish_generation"}
 _STATE_FILES = {
+    "first-validation-failure.json",
     "publish-journal.json",
     "publish-status.json",
     "highest-committed-generation.json",
+    "validated-output.json",
+    "validation-history.json",
 }
 _CONTRACT_INPUT_HASH_EXCLUDED_PATHS = {f"state/{name}" for name in _STATE_FILES}
 _DEFAULT_MAX_BYTES = 2 * 1024 * 1024 * 1024
@@ -106,6 +109,14 @@ class PublishResult:
     quarantined: list[Path]
     output_manifest_hash: str
     outcome: str = "succeeded"
+
+
+@dataclass(frozen=True)
+class WorkspaceValidationSet:
+    """Exact workspace candidates and the hash approved by host validation."""
+
+    candidates: Mapping[str, Path]
+    output_manifest_hash: str
 
 
 @dataclass(frozen=True)
@@ -321,6 +332,43 @@ def publish_workspace_output(
             quarantined=quarantined,
             output_manifest_hash=staged_hash,
         )
+
+
+def prepare_workspace_validation(
+    workspace: ExecutionWorkspace,
+    *,
+    contract: PublicationContract,
+) -> WorkspaceValidationSet:
+    """Resolve and preflight the exact workspace output that must be validated.
+
+    This performs the publisher's immutable-contract, allowlist, size,
+    resume-binding, and revision-policy checks without touching canonical
+    challenge storage.
+    """
+    _preflight_platform()
+    _verify_contract(workspace, contract)
+    candidates = _collect_candidates(workspace, contract)
+    _cross_check_resume_targets(candidates, contract)
+    _enforce_output_limits(candidates, _publisher_limits_from_env())
+    _enforce_change_policy(workspace, candidates, contract.change_policy)
+    return WorkspaceValidationSet(
+        candidates=dict(candidates),
+        output_manifest_hash=_output_manifest_hash(candidates),
+    )
+
+
+def record_workspace_terminal(
+    paths: ProjectPaths,
+    workspace: ExecutionWorkspace,
+    *,
+    status: str,
+    output_hash: str | None = None,
+) -> None:
+    """Record a terminal pre-publication outcome for retention accounting."""
+    if status not in {"failed", "succeeded", "noop"}:
+        raise ValueError(f"invalid workspace terminal status: {status}")
+    _write_terminal_marker(workspace, status=status, output_hash=output_hash)
+    _run_retention_sweep(paths)
 
 
 def _verify_contract(
@@ -1314,15 +1362,19 @@ def _sweep_retention_roots(paths: ProjectPaths) -> None:
 
 
 def _workspace_has_active_journal(workspace_dir: Path) -> bool:
-    return (workspace_dir / "state" / "publish-journal.json").exists()
+    return any(
+        (active / "state" / "publish-journal.json").exists()
+        for active in _workspace_active_roots(workspace_dir)
+    )
 
 
 def _read_terminal_marker(workspace_dir: Path) -> Mapping[str, Any] | None:
-    path = workspace_dir / "state" / "publish-status.json"
-    if not path.exists():
-        return None
-    value = read_json(path, None)
-    return value if isinstance(value, Mapping) else None
+    for active in _workspace_active_roots(workspace_dir):
+        path = active / "state" / "publish-status.json"
+        if path.exists():
+            value = read_json(path, None)
+            return value if isinstance(value, Mapping) else None
+    return None
 
 
 def _workspace_has_retained_artifacts(workspace_dir: Path) -> bool:
@@ -1334,11 +1386,13 @@ def _workspace_has_retained_artifacts(workspace_dir: Path) -> bool:
     marker = _read_terminal_marker(workspace_dir)
     status = marker.get("status") if isinstance(marker, Mapping) else None
     if status == "failed":
-        output_dir = workspace_dir / "output"
-        logs_dir = workspace_dir / "logs"
-        if output_dir.is_dir() and any(output_dir.iterdir()):
-            return True
-        if logs_dir.is_dir() and any(logs_dir.iterdir()):
+        for active in _workspace_active_roots(workspace_dir):
+            for relative in ("output", "logs"):
+                target = active / relative
+                if target.is_dir() and any(target.iterdir()):
+                    return True
+        attempts = workspace_dir / "attempts"
+        if attempts.is_dir() and any(attempts.iterdir()):
             return True
     return False
 
@@ -1353,8 +1407,15 @@ def _can_acquire_workspace_publisher_locks(
     terminal). When a journal is present we try every (category, claimed_id)
     pair non-blockingly; any held lock skips the workspace.
     """
-    journal_path = workspace_dir / "state" / "publish-journal.json"
-    if not journal_path.exists():
+    journal_path = next(
+        (
+            active / "state" / "publish-journal.json"
+            for active in _workspace_active_roots(workspace_dir)
+            if (active / "state" / "publish-journal.json").exists()
+        ),
+        None,
+    )
+    if journal_path is None:
         return True
     raw = read_json(journal_path, None)
     if not isinstance(raw, dict):
@@ -1389,7 +1450,22 @@ def _can_acquire_workspace_publisher_locks(
 
 
 def _purge_retained_artifacts(workspace_dir: Path) -> None:
-    for relative in ("quarantine", "output", "logs"):
-        target = workspace_dir / relative
+    targets = [workspace_dir / "quarantine"]
+    for active in _workspace_active_roots(workspace_dir):
+        targets.extend((active / "output", active / "logs"))
+    attempts = workspace_dir / "attempts"
+    if attempts.is_dir():
+        for iteration in attempts.iterdir():
+            if iteration.is_dir():
+                targets.extend((iteration / "output", iteration / "logs"))
+    for target in targets:
         if target.is_dir():
             shutil.rmtree(target, ignore_errors=True)
+
+
+def _workspace_active_roots(workspace_dir: Path) -> tuple[Path, ...]:
+    """Return two-layer active root first, with legacy root compatibility."""
+    current = workspace_dir / "current"
+    if current.is_dir():
+        return (current, workspace_dir)
+    return (workspace_dir,)

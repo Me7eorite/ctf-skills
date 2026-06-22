@@ -229,7 +229,44 @@ class ChallengeValidator:
         result.setdefault("challenge_id", challenge_id)
         return result
 
-    def validate_one(self, challenge_dir: Path) -> dict:
+    def validate_path(
+        self,
+        challenge_dir: Path,
+        *,
+        expected_challenge_id: str,
+    ) -> dict:
+        """Validate one execution-bound directory without global ID lookup."""
+        if challenge_dir.is_symlink() or not challenge_dir.is_dir():
+            return {
+                "challenge_id": expected_challenge_id,
+                "status": "missing_challenge",
+                "error": f"challenge directory does not exist: {challenge_dir}",
+            }
+        metadata = read_json(challenge_dir / "metadata.json")
+        if not isinstance(metadata, dict):
+            return {
+                "challenge_id": expected_challenge_id,
+                "status": "invalid_metadata",
+            }
+        if metadata.get("id") != expected_challenge_id:
+            return {
+                "challenge_id": expected_challenge_id,
+                "status": "identity_mismatch",
+                "error": (
+                    f"metadata.id={metadata.get('id')!r}, "
+                    f"expected={expected_challenge_id!r}"
+                ),
+            }
+        result = self.validate_one(challenge_dir, persist_result=False)
+        result["challenge_id"] = expected_challenge_id
+        return result
+
+    def validate_one(
+        self,
+        challenge_dir: Path,
+        *,
+        persist_result: bool = True,
+    ) -> dict:
         """校验单个题目目录。
 
         校验流程:
@@ -260,16 +297,20 @@ class ChallengeValidator:
         expected_flag = metadata.get("flag", "")
         record["expected_flag"] = expected_flag
 
+        def record_status(status: str, note: str | None = None) -> None:
+            if persist_result:
+                self._update_metadata(metadata_path, status, note)
+
         # 第一步：合约检查
         errors = self.contract_errors(challenge_dir, metadata)
         if errors:
-            self._update_metadata(metadata_path, "failed", "; ".join(errors))
+            record_status("failed", "; ".join(errors))
             return {**record, "status": "contract_failed", "contract_errors": errors}
 
         # 第二步：检查 validate.sh 是否存在
         validation_script = challenge_dir / "validate.sh"
         if not validation_script.exists():
-            self._update_metadata(metadata_path, "failed", "validate.sh missing")
+            record_status("failed", "validate.sh missing")
             return {**record, "status": "missing_validation"}
 
         # 第三步：执行参考解题脚本
@@ -284,10 +325,10 @@ class ChallengeValidator:
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            self._update_metadata(metadata_path, "failed", "validation timed out")
+            record_status("failed", "validation timed out")
             return {**record, "status": "timeout"}
         except FileNotFoundError as exc:
-            self._update_metadata(metadata_path, "failed", "validation shell not found")
+            record_status("failed", "validation shell not found")
             return {**record, "status": "no_shell", "error": str(exc)}
 
         # 记录执行结果
@@ -303,9 +344,7 @@ class ChallengeValidator:
 
         # 非零退出 → 失败
         if process.returncode != 0:
-            self._update_metadata(
-                metadata_path, "failed", f"validation exited {process.returncode}"
-            )
+            record_status("failed", f"validation exited {process.returncode}")
             return {**record, "status": "nonzero_exit"}
 
         # 比对 flag
@@ -313,10 +352,10 @@ class ChallengeValidator:
         printed_flag = matches[-1] if matches else ""
         record["printed_flag"] = printed_flag
         if expected_flag and printed_flag == expected_flag:
-            self._update_metadata(metadata_path, "passed")
+            record_status("passed")
             return {**record, "status": "passed"}
 
-        self._update_metadata(metadata_path, "failed", "flag did not match metadata")
+        record_status("failed", "flag did not match metadata")
         return {**record, "status": "flag_mismatch"}
 
     def contract_errors(self, challenge_dir: Path, metadata: dict) -> list[str]:

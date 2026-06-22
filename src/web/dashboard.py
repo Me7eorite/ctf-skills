@@ -282,6 +282,15 @@ class DashboardService:
             "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
 
+    def ui_state(self) -> dict:
+        """Return the minimal dashboard shell state for fast initial paint."""
+        return {
+            "process": self.tasks.state(),
+            "build_readiness": None,
+            "sequential_worker_result": None,
+            "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
     def read_log(self, name: str) -> str:
         path = self.paths.logs / Path(name).name
         if not path.exists():

@@ -110,6 +110,39 @@ class ValidateChallengeFlagExtractionTests(unittest.TestCase):
         self.assertEqual(result["status"], "flag_mismatch")
         self.assertEqual(result["printed_flag"], "")
 
+    def test_validate_path_is_identity_bound_and_does_not_mutate_metadata(self):
+        temp = TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        paths = _seed_paths(Path(temp.name))
+        directory = _make_challenge_dir(paths, "web-0001")
+        metadata = {"id": "web-0001", "flag": "flag{expected-value}"}
+        write_json(directory / "metadata.json", metadata)
+        (directory / "validate.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+        validator = ChallengeValidator(paths)  # type: ignore[arg-type]
+        validator.contract_errors = lambda *_: []  # type: ignore[method-assign]
+
+        with patch(
+            "domain.validation.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                [], 0, "flag{expected-value}\n", ""
+            ),
+        ):
+            result = validator.validate_path(
+                directory,
+                expected_challenge_id="web-0001",
+            )
+
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(
+            json.loads((directory / "metadata.json").read_text()), metadata
+        )
+
+        mismatch = validator.validate_path(
+            directory,
+            expected_challenge_id="web-9999",
+        )
+        self.assertEqual(mismatch["status"], "identity_mismatch")
+
 
 class MergeValidationIntoReportTests(unittest.TestCase):
     def test_creates_report_when_missing(self):

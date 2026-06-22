@@ -125,7 +125,7 @@ async function refreshWithTick() {
   render(appState.data);
   initIcons();
   try {
-    appState.data = await api("/api/state");
+    appState.data = await api("/api/ui-state");
     state.list = null;
     state.detail = null;
     if (state.detailId) await ensureDetail(state.detailId);

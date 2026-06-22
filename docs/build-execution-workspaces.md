@@ -4,6 +4,26 @@ Build Hermes invocations run from an isolated project-owned directory under
 `work/executions/<workspace_id>/`. The prompt only references `./input`,
 `./references`, `./output`, `./logs`, and `./bin/progress`.
 
+## Validation and publication boundary
+
+Host validation is bound to the exact claimed directories under the active
+execution's `output/challenges/<category>/` tree. Build execution never looks up
+the candidate by challenge id in canonical `work/challenges/` storage.
+
+The lifecycle is:
+
+1. Hermes creates or repairs files in the active execution workspace.
+2. The publisher allowlist resolves exactly one directory per claimed id without
+   changing canonical storage.
+3. Host contract and solver validation run against those resolved paths.
+4. Failed rounds append diagnostics under `state/validation-history.json`; repair
+   continues in the same active workspace.
+5. The runner rechecks the validated output hash and publishes once, only after
+   every challenge passes.
+
+`attempts/iter-NNN` is created only when a new execution replaces `current`; a
+validation-repair round does not create another directory.
+
 ## One-time profile setup
 
 ```bash
@@ -52,7 +72,8 @@ Before bulk execution, submit one queued Web attempt from the Web UI. Confirm:
 3. `logs/hermes.log` shows workspace `cwd` and argv containing `-p cf-web`.
 4. Hermes reads `./input/shard.json`, reports through `./bin/progress`, and
    writes below `./output/challenges/web/`.
-5. Only claimed output reaches `work/challenges/web/`, and the legacy report
+5. Failed validation leaves `work/challenges/web/` unchanged; only claimed,
+   validated output reaches it once, and the legacy report
    appears under `work/reports/`.
 
 Stop rollout on any failure. Host preflight cannot prove Docker mount

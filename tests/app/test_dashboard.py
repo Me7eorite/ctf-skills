@@ -60,6 +60,16 @@ class DashboardTests(unittest.TestCase):
         self.assertFalse(state["progress"]["storage"]["fallback"])
         self.assertEqual(state["progress"]["storage"]["warning"], "")
 
+    def test_ui_state_is_minimal_and_fast(self):
+        state = DashboardService(self.paths).ui_state()
+
+        self.assertIn("process", state)
+        self.assertIsNone(state["build_readiness"])
+        self.assertIsNone(state["sequential_worker_result"])
+        self.assertNotIn("summary", state)
+        self.assertNotIn("challenges", state)
+        self.assertNotIn("logs", state)
+
     def test_worker_rejects_empty_pending_queue(self):
         ok, message = TaskManager(self.paths).start("worker")
 

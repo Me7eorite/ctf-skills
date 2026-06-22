@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, Protocol
 
 from core.paths import ProjectPaths, category_of
@@ -49,6 +50,7 @@ def run_validation(
     worker: str,
     challenge_ids: list[str],
     plan_by_id: dict[str, ChallengeResumePlan],
+    validation_targets: dict[str, Path] | None = None,
 ) -> list[dict[str, Any]]:
     """对分片中的所有题目执行校验。
 
@@ -75,6 +77,9 @@ def run_validation(
     results: list[dict[str, Any]] = []
     for challenge_id in challenge_ids:
         plan = _refresh_missing_directory(paths, plan_by_id.get(challenge_id))
+        if validation_targets is not None:
+            target = validation_targets.get(challenge_id)
+            plan = _bind_validation_target(plan, challenge_id, target)
 
         # 情况 1: 断点恢复中 validate 已完成
         if plan is not None and "validate" in plan.skipped_stages:
@@ -117,7 +122,21 @@ def run_validation(
             status="running",
             message=validator_message(status="running"),
         )
-        outcome = validator.validate_challenge(challenge_id)
+        if validation_targets is None:
+            outcome = validator.validate_challenge(challenge_id)
+        else:
+            target = validation_targets.get(challenge_id)
+            if target is None:
+                outcome = {
+                    "challenge_id": challenge_id,
+                    "status": "missing_challenge",
+                    "error": "claimed workspace output is missing",
+                }
+            else:
+                outcome = validator.validate_path(
+                    target,
+                    expected_challenge_id=challenge_id,
+                )
         elapsed = outcome.get("elapsed")
 
         if outcome.get("status") == "passed":
@@ -171,6 +190,22 @@ def run_validation(
     return results
 
 
+def _bind_validation_target(
+    plan: ChallengeResumePlan | None,
+    challenge_id: str,
+    target: Path | None,
+) -> ChallengeResumePlan:
+    """Use the execution-bound output for evidence checks and validation."""
+    return ChallengeResumePlan(
+        challenge_id=challenge_id,
+        directory=target,
+        lookup_status="ok" if target is not None else "missing_challenge",
+        skipped_stages=plan.skipped_stages if plan is not None else (),
+        first_pending_stage=plan.first_pending_stage if plan is not None else "validate",
+        stage_sources=plan.stage_sources if plan is not None else {},
+    )
+
+
 def _refresh_missing_directory(
     paths: ProjectPaths,
     plan: ChallengeResumePlan | None,
@@ -212,6 +247,12 @@ def validate_gate(
         return plan.lookup_status
 
     category = category_of(plan.directory, paths)
+    if not category:
+        # Execution-bound candidates live under
+        # current/output/challenges/<category>/<challenge-dir>, outside the
+        # canonical paths.challenges tree. Their immediate parent is still the
+        # authoritative category directory.
+        category = plan.directory.parent.name
 
     # 按阶段顺序检查证据
     if not design_evidence(plan.directory, challenge_id):

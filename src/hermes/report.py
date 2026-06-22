@@ -64,10 +64,16 @@ def merge_validation_into_report(
         target["validation_status"] = result.get(
             "validation_status", target.get("validation_status", "")
         )
-        if "validation_elapsed" in result:
-            target["validation_elapsed"] = result["validation_elapsed"]
-        if "validation_error" in result:
-            target["validation_error"] = result["validation_error"]
+        for field in (
+            "validation_elapsed",
+            "validation_error",
+            "validation_returncode",
+            "validation_stdout_tail",
+            "validation_stderr_tail",
+            "validation_contract_errors",
+        ):
+            if field in result and result[field] is not None:
+                target[field] = result[field]
         if target["solve_status"] == "failed":
             any_failed = True
 

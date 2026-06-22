@@ -8,11 +8,15 @@ import os
 import re
 import socket
 import sys
+import threading
 import time
 from collections import Counter
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from uuid import UUID
 
+from core.execution_config import execution_minting_enabled, lease_ttl_seconds
 from core.jsonio import write_json
 from core.paths import ProjectPaths
 from core.queue import SUPPORTED_CATEGORIES, ShardQueue, split_matrix
@@ -115,6 +119,62 @@ def _record_execution_outcome(
         )
 
 
+@contextmanager
+def _execution_heartbeat(
+    attempt_id: UUID | None,
+    *,
+    session_factory=None,
+) -> Iterator[None]:
+    """Renew the current execution lease while a blocking build is running."""
+    if attempt_id is None or not execution_minting_enabled():
+        yield
+        return
+
+    from persistence.repositories import ExecutionsRepository
+    from persistence.session import transaction
+
+    stop = threading.Event()
+    ttl = lease_ttl_seconds()
+    interval = max(1.0, ttl / 3)
+
+    def heartbeat_loop() -> None:
+        while not stop.is_set():
+            try:
+                with transaction(factory=session_factory) as session:
+                    repo = ExecutionsRepository(session)
+                    latest = repo.latest_for_attempt(attempt_id)
+                    if (
+                        latest is None
+                        or latest.status not in {"claimed", "running"}
+                        or latest.claim_token is None
+                    ):
+                        continue
+                    repo.heartbeat(
+                        latest.id,
+                        claim_token=latest.claim_token,
+                        lease_ttl_seconds=ttl,
+                    )
+            except Exception as exc:  # bookkeeping must not kill Hermes
+                print(
+                    f"execution heartbeat skipped for {attempt_id}: {exc}",
+                    flush=True,
+                )
+            if stop.wait(interval):
+                break
+
+    thread = threading.Thread(
+        target=heartbeat_loop,
+        name=f"execution-heartbeat-{attempt_id}",
+        daemon=True,
+    )
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join(timeout=max(2.0, interval + 1.0))
+
+
 def _run_build_attempt_sequence(
     runner: HermesRunner,
     worker: str,
@@ -134,12 +194,13 @@ def _run_build_attempt_sequence(
 
     for index, attempt_id in enumerate(build_attempt_sequence):
         try:
-            item = runner.run(
-                worker,
-                timeout=timeout,
-                timeout_source=timeout_source,
-                build_attempt_id=attempt_id,
-            )
+            with _execution_heartbeat(attempt_id):
+                item = runner.run(
+                    worker,
+                    timeout=timeout,
+                    timeout_source=timeout_source,
+                    build_attempt_id=attempt_id,
+                )
         except KeyboardInterrupt:
             abort_reason = "interrupt"
             interrupted_attempt = str(attempt_id)
@@ -1149,17 +1210,20 @@ def main() -> None:
             )
             write_json(paths.root / _SEQ_RESULT_PATH, result)
         else:
-            result = runner.run(
-                args.worker,
-                loop=args.loop,
-                dry_run=args.dry_run,
-                max_shards=args.max_shards,
-                timeout=effective_timeout,
-                timeout_source=source,
-                category=args.category,
-                build_attempt_id=args.build_attempt,
-                require_build_attempt=args.build_attempts_only,
-            )
+            with _execution_heartbeat(
+                args.build_attempt if not args.dry_run else None
+            ):
+                result = runner.run(
+                    args.worker,
+                    loop=args.loop,
+                    dry_run=args.dry_run,
+                    max_shards=args.max_shards,
+                    timeout=effective_timeout,
+                    timeout_source=source,
+                    category=args.category,
+                    build_attempt_id=args.build_attempt,
+                    require_build_attempt=args.build_attempts_only,
+                )
         print(json.dumps(result, indent=2))
         if result.get("abort_reason") is not None:
             sys.exit(1)

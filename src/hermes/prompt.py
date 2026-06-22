@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from core.jsonio import read_json
@@ -20,8 +20,16 @@ def render_validation_repair_prompt(
     attempt: int,
     max_attempts: int,
     validation_results: list[dict],
+    prior_contract_errors: Sequence[str] = (),
 ) -> str:
-    """Render a focused prompt for repairing host-observed validation failures."""
+    """Render a focused prompt for repairing host-observed validation failures.
+
+    ``prior_contract_errors`` carries the union of every contract violation seen
+    in earlier repair attempts for this shard. Surfacing them as an explicit
+    non-regression list stops the agent from trading one host-enforced rule for
+    another across rounds (the classic "fix the hardcoded flag by reading it from
+    metadata.json instead" whack-a-mole).
+    """
     diagnostics = []
     for result in validation_results:
         if result.get("solve_status") == "passed":
@@ -43,6 +51,7 @@ def render_validation_repair_prompt(
             }
         )
     rendered = json.dumps(diagnostics, ensure_ascii=False, indent=2)
+    non_regression = _render_non_regression_section(prior_contract_errors)
     return f"""You are repairing CTF challenge artifacts after authoritative host validation failed.
 
 Repair attempt {attempt} of {max_attempts}. Work only inside the existing claimed challenge
@@ -66,17 +75,74 @@ How to read `validation_error`:
 - `"build evidence incomplete: metadata.artifact_sha256 does not match artifact contents"`
   means the file at `metadata.artifact` was rebuilt without updating its `artifact_sha256`.
   Recompute the SHA-256 and write it back to `metadata.json`.
-
-For Web/Pwn, rebuild the exact image named by `metadata.docker_image` whenever deploy
-source, Dockerfile, binary, or runtime dependencies change. The Compose service must
-contain the literal list entry `- FLAG=flag{{...}}`, equal to `metadata.flag`, and service
-code must read `FLAG`.
-
+{_VALIDATION_CONTRACT_CHECKLIST}{non_regression}
 Run `validate.sh` yourself and iterate until it exits 0 and its last recovered flag equals
 `metadata.flag`. Do not hardcode or merely echo the expected flag in the exploit. The exploit
 must recover it through the intended vulnerability. Do not write `validate/*` progress events;
 the host runner will perform and record the authoritative validation again after you return.
 Update documentation and metadata when the repaired implementation changes them.
+
+Before you finish, self-check every challenge you touched: confirm `validate.sh` and
+`writenup/exp.py` contain neither the literal `metadata.flag` value nor any reference to
+`metadata.json` / `challenge.yml` / `docker-compose*`, and (for `re`) that they do open the
+delivered artifact under `attachments/`. A repair that fixes one diagnostic by violating a
+different rule above still fails host validation.
+"""
+
+
+# Host contract checklist replayed into every repair prompt. The host validator
+# enforces each of these per category (see ``domain.validation.contract_errors``
+# and ``_solver_integrity_errors``); fixing one without honouring the rest just
+# produces a different ``contract_failed``. Keep this in sync with those checks
+# and with ``prompts/shard_prompt.md``.
+_VALIDATION_CONTRACT_CHECKLIST = """
+Host contract checklist — every rule below is host-enforced. Re-check ALL rules that
+apply to each challenge's `metadata.category` before finishing; satisfy them
+simultaneously rather than trading one for another.
+
+Common (web, pwn, re):
+- `metadata.json` MUST keep `id`, `title`, `difficulty`, `build_status: passed`, and `flag`.
+- `validate.sh` and `writenup/exp.py` MUST NOT contain the literal `metadata.flag` value.
+- `writenup/exp.py` MUST NOT read the flag from organizer files (`metadata.json`,
+  `challenge.yml`, `docker-compose*`); it recovers the flag at runtime.
+
+Web / Pwn:
+- Keep `deploy/Dockerfile`, `deploy/docker-compose.yml`, and `deploy/src/`.
+- The Compose service MUST define the literal environment list entry `- FLAG=flag{...}`
+  equal to `metadata.flag`, and the service code MUST read `FLAG`.
+- The exploit recovers the flag from the live service via `CHAL_HOST`/`CHAL_PORT`,
+  never from the compose file that injects it.
+- Rebuild the exact image named by `metadata.docker_image` whenever deploy source,
+  Dockerfile, binary, or runtime dependencies change; keep `metadata.artifact_sha256` in sync.
+- Web additionally requires `metadata.runtime` and `metadata.framework`.
+
+Re / Pwn (ELF target):
+- The compiled player-facing ELF lives in `attachments/` (legacy `dist/` still accepted;
+  pwn may also ship it under `deploy/`), and its architecture MUST match
+  `metadata.architecture` / `metadata.target_platform`.
+
+Re:
+- `validate.sh` / `writenup/exp.py` MUST reference the distributed artifact under
+  `attachments/` (or legacy `dist/`) and derive the flag from that binary — never from
+  `metadata.json` or `challenge.yml`.
+- The delivered artifact MUST NOT expose the plaintext flag through ordinary `strings`
+  unless `primary_technique` declares strings as the intended solve; otherwise embed or
+  encode the flag so recovery requires the intended technique.
+"""
+
+
+def _render_non_regression_section(prior_contract_errors: Sequence[str]) -> str:
+    # 中文注释：把历轮已经报过的合约违规汇总成"禁止回归"清单，避免 Agent 修一条破一条。
+    unique = list(dict.fromkeys(str(item) for item in prior_contract_errors if item))
+    if not unique:
+        return "\n"
+    rendered = json.dumps(unique, ensure_ascii=False, indent=2)
+    return f"""
+Already-flagged contract violations from earlier repair attempts — each one MUST stay
+fixed. Do NOT reintroduce any of these while addressing the diagnostics above:
+```json
+{rendered}
+```
 """
 
 

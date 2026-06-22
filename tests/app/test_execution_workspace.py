@@ -22,6 +22,7 @@ from domain.reports import merge_reports
 from hermes import process as hermes_process
 from hermes.build_publisher import (
     prepare_publication_contract,
+    prepare_workspace_validation,
     publish_workspace_output,
 )
 from hermes.runner import HermesRunner
@@ -443,6 +444,110 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         self.assertEqual(log.parent.parent.parent.parent, self.paths.executions)
         manifest = json.loads((log.parent.parent / "input" / "manifest.json").read_text())
         self.assertEqual(manifest["timeout_source"], "shard_policy")
+
+    def test_runner_does_not_publish_failed_workspace_validation(self) -> None:
+        self.paths.prompt_template.parent.mkdir(parents=True, exist_ok=True)
+        self.paths.prompt_template.write_text("prompt\n", encoding="utf-8")
+        shard = self.paths.shards / "pending" / "validation-fail.json"
+        write_json(
+            shard,
+            {"challenges": [{"id": "web-0001", "category": "web"}]},
+        )
+        runner = HermesRunner(
+            self.paths,
+            profile_exists=lambda _: True,
+            validation_repair_attempts=0,
+        )
+
+        def invoke(_prompt, _log, *, workspace, **_kwargs):
+            self._artifact(workspace.output / "challenges")
+            return 0
+
+        def validate(_shard, _worker, _ids, _plans, workspace, contract):
+            validation_set = prepare_workspace_validation(
+                workspace, contract=contract
+            )
+            return (
+                [
+                    {
+                        "challenge_id": "web-0001",
+                        "solve_status": "failed",
+                        "validation_status": "contract_failed",
+                        "validation_error": "synthetic failure",
+                    }
+                ],
+                validation_set,
+            )
+
+        with (
+            patch.object(runner, "_invoke", side_effect=invoke),
+            patch.object(runner, "_run_workspace_validation", side_effect=validate),
+        ):
+            outcome = runner.process_one("worker-1", dry_run=False)
+
+        self.assertEqual(outcome["failure_type"], "validation")
+        self.assertFalse(
+            (self.paths.challenges / "web" / "web-0001-demo").exists()
+        )
+        workspace_root = next(self.paths.executions.iterdir())
+        active_root = (
+            workspace_root / "current"
+            if (workspace_root / "current").is_dir()
+            else workspace_root
+        )
+        self.assertTrue(
+            (
+                active_root
+                / "output"
+                / "challenges"
+                / "web"
+                / "web-0001-demo"
+            ).exists()
+        )
+
+    def test_runner_publishes_once_after_workspace_validation_passes(self) -> None:
+        self.paths.prompt_template.parent.mkdir(parents=True, exist_ok=True)
+        self.paths.prompt_template.write_text("prompt\n", encoding="utf-8")
+        shard = self.paths.shards / "pending" / "validation-pass.json"
+        write_json(
+            shard,
+            {"challenges": [{"id": "web-0001", "category": "web"}]},
+        )
+        runner = HermesRunner(
+            self.paths,
+            profile_exists=lambda _: True,
+            validation_repair_attempts=0,
+        )
+
+        def invoke(_prompt, _log, *, workspace, **_kwargs):
+            self._artifact(workspace.output / "challenges")
+            return 0
+
+        def validate(_shard, _worker, _ids, _plans, workspace, contract):
+            validation_set = prepare_workspace_validation(
+                workspace, contract=contract
+            )
+            return (
+                [
+                    {
+                        "challenge_id": "web-0001",
+                        "solve_status": "passed",
+                        "validation_status": "passed",
+                    }
+                ],
+                validation_set,
+            )
+
+        with (
+            patch.object(runner, "_invoke", side_effect=invoke),
+            patch.object(runner, "_run_workspace_validation", side_effect=validate),
+        ):
+            outcome = runner.process_one("worker-1", dry_run=False)
+
+        self.assertEqual(outcome["status"], "done")
+        self.assertTrue(
+            (self.paths.challenges / "web" / "web-0001-demo").exists()
+        )
 
     def test_timeout_policy_by_category_and_expert_difficulty(self) -> None:
         def payload(category: str, difficulty: str | None = None) -> dict:
