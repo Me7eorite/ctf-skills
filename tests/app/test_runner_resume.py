@@ -365,6 +365,31 @@ class RunnerRealRunTests(unittest.TestCase):
             self.assertEqual(report["effective_timeout_seconds"], 2700)
             self.assertEqual(report["timeout_source"], "shard_policy")
 
+    def test_keyboard_interrupt_marks_cancelled_before_reraising(self):
+        with TemporaryDirectory() as tmp:
+            paths = _Paths(root=Path(tmp))
+            paths.initialize()
+            _copy_real_prompt(paths)
+            _make_web_challenge(paths, "web-0001")
+            _make_shard(paths, "web-0001-0001.json", ["web-0001"])
+            runner = self._make_runner_with_fake_invoke(paths)
+
+            def fake_invoke(prompt: str, log: Path, dry_run: bool, *, timeout=None, **_kwargs) -> int:
+                log.parent.mkdir(parents=True, exist_ok=True)
+                log.write_text("interrupted\n", encoding="utf-8")
+                raise KeyboardInterrupt
+
+            runner._invoke = fake_invoke  # type: ignore[assignment]
+
+            with self.assertRaises(KeyboardInterrupt):
+                runner.process_one("worker-01", dry_run=False)
+
+            report = read_json(paths.reports / "web-0001-0001.worker-01.report.json", {})
+            self.assertEqual(report["hermes_phase"], "hermes_cancelled")
+            self.assertEqual(report["returncode"], -2)
+            self.assertIsInstance(report["elapsed_seconds"], float)
+            self.assertTrue((paths.shards / "failed" / "web-0001-0001.json").exists())
+
     def test_resume_to_build_writes_carry_forward_and_build_pending(self):
         with TemporaryDirectory() as tmp:
             paths = _Paths(root=Path(tmp))

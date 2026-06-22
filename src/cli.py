@@ -13,6 +13,7 @@ from collections import Counter
 from pathlib import Path
 from uuid import UUID
 
+from core.jsonio import write_json
 from core.paths import ProjectPaths
 from core.queue import SUPPORTED_CATEGORIES, ShardQueue, split_matrix
 from core.state import STAGES, STATUSES, InMemoryProgressStore
@@ -35,6 +36,15 @@ SHARD_BASENAME_RE = re.compile(r"^[a-z0-9_-]+\.json$")
 # or DATABASE_URL unset). Keeps `--help` and `--category` argparse choices
 # working for users without DB access.
 _FALLBACK_CATEGORY_CODES: tuple[str, ...] = ("web", "pwn", "re")
+_SEQUENTIAL_INFRA_PHASES = {
+    "preflight_workspace",
+    "contract_prepare",
+    "hermes_auth",
+    "hermes_rate_limit",
+}
+_SEQUENTIAL_CANCEL_PHASES = {"hermes_cancelled"}
+_SEQ_FAILFAST_ENV = "BUILD_SEQ_INFRA_FAILFAST_STREAK"
+_SEQ_RESULT_PATH = Path("work") / "logs" / "dashboard-sequential-worker-result.json"
 
 
 def _positive_int(raw: str) -> int:
@@ -49,6 +59,99 @@ def _positive_int(raw: str) -> int:
             f"must be greater than zero, got {value}"
         )
     return value
+
+
+def _parse_sequential_failfast_streak(raw: str | None) -> int:
+    if raw is None or raw == "":
+        return 2
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"{_SEQ_FAILFAST_ENV} must be a non-negative integer"
+        ) from exc
+    if value < 0:
+        raise argparse.ArgumentTypeError(
+            f"{_SEQ_FAILFAST_ENV} must be a non-negative integer"
+        )
+    return value
+
+
+def _run_build_attempt_sequence(
+    runner: HermesRunner,
+    worker: str,
+    build_attempt_sequence: list[UUID],
+    *,
+    timeout: int | None,
+    timeout_source: str | None,
+    failfast_streak: int,
+) -> dict:
+    outcomes: list[dict] = []
+    processed = 0
+    failed = 0
+    infra_streak = 0
+    abort_reason: str | None = None
+    aborted_attempts: list[str] = []
+    interrupted_attempt: str | None = None
+
+    for index, attempt_id in enumerate(build_attempt_sequence):
+        try:
+            item = runner.run(
+                worker,
+                timeout=timeout,
+                timeout_source=timeout_source,
+                build_attempt_id=attempt_id,
+            )
+        except KeyboardInterrupt:
+            abort_reason = "interrupt"
+            interrupted_attempt = str(attempt_id)
+            aborted_attempts = [
+                str(tail_id) for tail_id in build_attempt_sequence[index + 1 :]
+            ]
+            break
+
+        item_outcomes = item.get("outcomes", [])
+        outcomes.extend(item_outcomes)
+        processed += int(item.get("processed", 0))
+        failed += int(item.get("failed", 0))
+
+        last = item_outcomes[-1] if item_outcomes else {}
+        phase = last.get("hermes_phase") if isinstance(last, dict) else None
+        if phase in _SEQUENTIAL_CANCEL_PHASES:
+            abort_reason = "interrupt"
+            aborted_attempts = [
+                str(tail_id) for tail_id in build_attempt_sequence[index + 1 :]
+            ]
+            break
+        if failfast_streak and phase in _SEQUENTIAL_INFRA_PHASES:
+            infra_streak += 1
+            if infra_streak >= failfast_streak:
+                abort_reason = "consecutive_infra"
+                aborted_attempts = [
+                    str(tail_id) for tail_id in build_attempt_sequence[index + 1 :]
+                ]
+                break
+        else:
+            infra_streak = 0
+
+    for aborted_id in aborted_attempts:
+        outcomes.append(
+            {
+                "status": "aborted",
+                "shard": aborted_id,
+                "abort_reason": abort_reason,
+            }
+        )
+
+    return {
+        "processed": processed,
+        "failed": failed,
+        "outcomes": outcomes,
+        "requested": len(build_attempt_sequence),
+        "abort_reason": abort_reason,
+        "aborted": aborted_attempts,
+        "interrupted_attempt": interrupted_attempt,
+    }
 
 
 def parser() -> argparse.ArgumentParser:
@@ -976,6 +1079,12 @@ def main() -> None:
             argument_parser.error(
                 "--build-attempts-only and --build-attempt-sequence are mutually exclusive"
             )
+        try:
+            sequential_failfast_streak = _parse_sequential_failfast_streak(
+                os.environ.get(_SEQ_FAILFAST_ENV)
+            )
+        except argparse.ArgumentTypeError as exc:
+            argument_parser.error(str(exc))
         effective_timeout, source = _resolve_run_timeout(args.timeout)
         if effective_timeout is None:
             print("effective_timeout=shard-policy source=shard_policy", flush=True)
@@ -990,25 +1099,15 @@ def main() -> None:
             ),
         )
         if args.build_attempt_sequence:
-            outcomes = []
-            processed = 0
-            failed = 0
-            for attempt_id in args.build_attempt_sequence:
-                item = runner.run(
-                    args.worker,
-                    timeout=effective_timeout,
-                    timeout_source=source,
-                    build_attempt_id=attempt_id,
-                )
-                outcomes.extend(item["outcomes"])
-                processed += item["processed"]
-                failed += item["failed"]
-            result = {
-                "processed": processed,
-                "failed": failed,
-                "outcomes": outcomes,
-                "requested": len(args.build_attempt_sequence),
-            }
+            result = _run_build_attempt_sequence(
+                runner,
+                args.worker,
+                args.build_attempt_sequence,
+                timeout=effective_timeout,
+                timeout_source=source,
+                failfast_streak=sequential_failfast_streak,
+            )
+            write_json(paths.root / _SEQ_RESULT_PATH, result)
         else:
             result = runner.run(
                 args.worker,
@@ -1022,6 +1121,8 @@ def main() -> None:
                 require_build_attempt=args.build_attempts_only,
             )
         print(json.dumps(result, indent=2))
+        if result.get("abort_reason") is not None:
+            sys.exit(1)
         if result["failed"]:
             sys.exit(1)
         return

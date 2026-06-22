@@ -61,6 +61,7 @@ def create_app(
         # POST /api/actions/reconcile（如后续提供）。
         payload = service.state()
         payload["build_readiness"] = app.state.build_profile_readiness
+        payload["sequential_worker_result"] = _latest_sequential_worker_result(service.paths)
         return JSONResponse(payload)
 
     @app.get("/api/logs/{name:path}")
@@ -181,6 +182,11 @@ def _action_response(ok: bool, message: str) -> JSONResponse:
         {"ok": ok, "message": message},
         status_code=HTTPStatus.ACCEPTED if ok else HTTPStatus.CONFLICT,
     )
+
+
+def _latest_sequential_worker_result(paths: ProjectPaths) -> dict | None:
+    result = read_json(paths.logs / "dashboard-sequential-worker-result.json", None)
+    return result if isinstance(result, dict) else None
 
 
 def _attributed_shard_conflict(

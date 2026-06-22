@@ -4,6 +4,7 @@
 >
 > 进度索引：
 > - 题案 1 `add-execution-workspace-and-profile-per-category` — ✅ **已折叠进 baseline spec，当前代码已有 execution workspace + narrow promotion bridge**
+> - 旁路可靠性修复 `add-sequential-queue-fail-fast` — ✅ **独立于 worker pool 拆分；顺序队列现在可在连续 Hermes 认证/限流故障或取消时 fail-fast**
 > - 题案 2 `add-staged-publication-allowlist` — ⏳ 规划中（正在题案整改）
 > - 题案 3 `add-execution-lease-and-fencing` — ⏳ 规划中
 > - 题案 4 `add-project-agent-layer-over-hermes-profiles` — ⏳ 规划中

@@ -9,6 +9,7 @@ Hermes) so the threading and termination paths are end-to-end covered.
 
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 import threading
@@ -23,6 +24,7 @@ from hermes.process import (
     TERMINATION_WAIT_TIMEOUT,
     HermesProcessResult,
     _wait_after_terminate,
+    hermes_profile_health,
     invoke,
     invoke_capture,
 )
@@ -229,6 +231,65 @@ class InvokeLogMarkerTests(unittest.TestCase):
         self.assertEqual(returncode, 1)
         marker = read_json(self.log.with_name("hermes.log.error_marker.json"), {})
         self.assertEqual(marker["error_type"], "rate_limit_error")
+
+
+class HermesProfileHealthTests(unittest.TestCase):
+    def test_missing_profile_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"USERPROFILE": tmp, "HOME": tmp}):
+                ok, code, _message = hermes_profile_health("cf-web")
+
+        self.assertFalse(ok)
+        self.assertEqual(code, "hermes_profile_missing")
+
+    def test_missing_env_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            profile = Path(tmp) / ".hermes" / "profiles" / "cf-web"
+            profile.mkdir(parents=True)
+            with patch.dict(os.environ, {"USERPROFILE": tmp, "HOME": tmp}):
+                ok, code, _message = hermes_profile_health("cf-web")
+
+        self.assertFalse(ok)
+        self.assertEqual(code, "hermes_profile_env_missing")
+
+    def test_missing_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            profile = Path(tmp) / ".hermes" / "profiles" / "cf-web"
+            profile.mkdir(parents=True)
+            (profile / ".env").write_text("ANTHROPIC_API_KEY=''\nANTHROPIC_TOKEN=   \n", encoding="utf-8")
+            with patch.dict(os.environ, {"USERPROFILE": tmp, "HOME": tmp}):
+                ok, code, _message = hermes_profile_health("cf-web")
+
+        self.assertFalse(ok)
+        self.assertEqual(code, "hermes_profile_key_missing")
+
+    def test_cli_unavailable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            profile = Path(tmp) / ".hermes" / "profiles" / "cf-web"
+            profile.mkdir(parents=True)
+            (profile / ".env").write_text("ANTHROPIC_API_KEY='secret'\n", encoding="utf-8")
+            with patch.dict(os.environ, {"USERPROFILE": tmp, "HOME": tmp}), patch(
+                "hermes.process.profile_exists",
+                return_value=False,
+            ):
+                ok, code, _message = hermes_profile_health("cf-web")
+
+        self.assertFalse(ok)
+        self.assertEqual(code, "hermes_profile_cli_unavailable")
+
+    def test_ok_with_token(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            profile = Path(tmp) / ".hermes" / "profiles" / "cf-web"
+            profile.mkdir(parents=True)
+            (profile / ".env").write_text("ANTHROPIC_TOKEN=\"secret\"\n", encoding="utf-8")
+            with patch.dict(os.environ, {"USERPROFILE": tmp, "HOME": tmp}), patch(
+                "hermes.process.profile_exists",
+                return_value=True,
+            ):
+                ok, code, _message = hermes_profile_health("cf-web")
+
+        self.assertTrue(ok)
+        self.assertEqual(code, "")
 
 
 if __name__ == "__main__":  # pragma: no cover

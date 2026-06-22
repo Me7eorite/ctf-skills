@@ -28,7 +28,7 @@ use the Hermes invocation elapsed time. Negative values SHALL be replaced with
 include `effective_timeout_seconds` and `timeout_source`.
 
 The `hermes_phase` classification is independent of, and additive to,
-the publisher-level `phase` introduced by `add-staged-publication-allowlist`.
+the publisher-level `phase` already emitted by the baseline publisher.
 When a publisher exception triggers a runner failure, the runner SHALL
 record the publisher's phase in a separate `publisher_phase` key and
 SHALL NOT overwrite `hermes_phase`.

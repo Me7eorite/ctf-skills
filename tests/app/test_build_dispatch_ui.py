@@ -64,6 +64,16 @@ def test_worker_start_and_detail_expose_effective_timeout():
     assert "Hermes 超时" in source
 
 
+def test_sequential_aborted_result_is_rendered_as_not_failed():
+    source = BUILD_ATTEMPTS_JS.read_text(encoding="utf-8")
+
+    assert 'api("/api/state")' in source
+    assert "sequential_worker_result" in source
+    assert "status === \"aborted\"" in source
+    assert "已中止" in source
+    assert "待重提" in source
+
+
 def test_detail_poll_writes_no_dom_for_five_unchanged_cycles():
     source = BUILD_ATTEMPTS_JS.read_text(encoding="utf-8")
     start = source.index("function detailWithoutEvents")

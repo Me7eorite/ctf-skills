@@ -461,6 +461,58 @@ def profile_exists(profile_name: str) -> bool:
     return profile_process.returncode == 0
 
 
+def hermes_profile_health(profile_name: str) -> tuple[bool, str, str]:
+    """Offline sanity check for a Hermes profile used by build workers."""
+    profile_dir = Path("~/.hermes/profiles").expanduser() / profile_name
+    if not profile_dir.is_dir():
+        return (
+            False,
+            "hermes_profile_missing",
+            f"Hermes Profile {profile_name} 不存在，请先创建或绑定该构建 Profile",
+        )
+    env_path = profile_dir / ".env"
+    if not env_path.is_file():
+        return (
+            False,
+            "hermes_profile_env_missing",
+            f"Hermes Profile {profile_name} 缺少 .env 配置文件",
+        )
+    try:
+        values = _read_profile_env(env_path)
+    except OSError:
+        return (
+            False,
+            "hermes_profile_env_missing",
+            f"Hermes Profile {profile_name} 的 .env 无法读取",
+        )
+    if not (
+        values.get("ANTHROPIC_API_KEY") or values.get("ANTHROPIC_TOKEN")
+    ):
+        return (
+            False,
+            "hermes_profile_key_missing",
+            f"Hermes Profile {profile_name} 缺少可用的 Anthropic 密钥",
+        )
+    if not profile_exists(profile_name):
+        return (
+            False,
+            "hermes_profile_cli_unavailable",
+            f"Hermes CLI 无法读取 Profile {profile_name}",
+        )
+    return True, "", f"Hermes Profile {profile_name} 可用"
+
+
+def _read_profile_env(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        values[key.strip()] = value.strip().strip("\"'")
+    return values
+
+
 def _terminate(process: "subprocess.Popen[str]") -> None:
     """尽力终止子进程：先 SIGTERM，等待 5 秒后再 SIGKILL。"""
     try:

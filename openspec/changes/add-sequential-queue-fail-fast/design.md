@@ -34,7 +34,7 @@ Three orthogonal questions need design:
 
 - Add a stable, finite failure-phase taxonomy for runner-level outcomes
   that is independent of (and orthogonal to) the publisher phase
-  taxonomy introduced by `add-staged-publication-allowlist`.
+  taxonomy already present in the baseline publisher.
 - Make the sequential CLI driver fail-fast on consecutive infrastructure
   failures, with a configurable streak threshold.
 - Make cancellation (`returncode < 0`, `KeyboardInterrupt`) an
@@ -115,8 +115,7 @@ The runner-level phases are deliberately kept in a different field name
 
 When the publisher fails, the runner records `failure_type=infrastructure`
 and the publisher's own `phase` separately under `publisher_phase`; the
-two fields coexist. (This proposal does NOT change publisher phase
-emission — that lives in `add-staged-publication-allowlist`.)
+two fields coexist. This proposal does NOT change publisher phase emission.
 
 Rationale for `elapsed_seconds < 30` as part of the auth tail fallback: a real
 build failure under cf-web takes minutes; a 401 fails inside the SDK

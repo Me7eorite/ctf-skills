@@ -76,6 +76,24 @@ class WebserverTests(unittest.TestCase):
 
         self.assertEqual(payload["build_readiness"], readiness)
 
+    def test_state_endpoint_exposes_latest_sequential_worker_result(self):
+        write_json(
+            self.paths.logs / "dashboard-sequential-worker-result.json",
+            {
+                "abort_reason": "consecutive_infra",
+                "aborted": ["attempt-1"],
+                "outcomes": [{"status": "aborted", "shard": "attempt-1"}],
+            },
+        )
+
+        with self._client() as client:
+            payload = client.get("/api/state").json()
+
+        self.assertEqual(
+            payload["sequential_worker_result"]["abort_reason"],
+            "consecutive_infra",
+        )
+
     def test_state_endpoint_does_not_trigger_synchronous_reconciliation(self):
         """Phase 0 hot fix: /api/state no longer triggers tick_once_sync.
 

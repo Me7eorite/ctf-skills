@@ -98,45 +98,45 @@
 
 ## 2. CLI Sequential Driver
 
-- [ ] 2.1 Rewrite the `if args.build_attempt_sequence:` block in
+- [x] 2.1 Rewrite the `if args.build_attempt_sequence:` block in
       `src/cli.py:992–1011` as the state machine specified in
       design Decision 3. Keep the existing per-attempt
       `runner.run(args.worker, ..., build_attempt_id=attempt_id)`
       call shape — only the surrounding loop changes.
-- [ ] 2.2 Read `BUILD_SEQ_INFRA_FAILFAST_STREAK` from the environment
+- [x] 2.2 Read `BUILD_SEQ_INFRA_FAILFAST_STREAK` from the environment
       at startup, default `2`, validated non-negative integer. Reject
       negatives with `argument_parser.error(...)` referencing the env
       var name. The value `0` SHALL be accepted and SHALL disable the
       streak (no fail-fast).
-- [ ] 2.3 Maintain the `infra_streak` counter only over phases in
+- [x] 2.3 Maintain the `infra_streak` counter only over phases in
       `{preflight_workspace, contract_prepare, hermes_auth, hermes_rate_limit}`. Phases
       `materialize` and `hermes_runtime` and `validation` and
       `hermes_timeout` SHALL reset the streak to `0`. (Justification:
       these can be per-challenge problems; the streak is reserved for
       cross-attempt credential / shared-resource failures.)
-- [ ] 2.4 Catch `KeyboardInterrupt` around `runner.run(...)`; on catch,
+- [x] 2.4 Catch `KeyboardInterrupt` around `runner.run(...)`; on catch,
       set `abort_reason = "interrupt"`, set `interrupted_attempt` to the
       in-flight id, fill `aborted_attempts` with ids after the in-flight one,
       and break the loop. The exception is NOT re-raised — the CLI exits 1
       cleanly with the structured JSON. The in-flight attempt is not converted
       into a synthetic `aborted` outcome because the runner may already have
       claimed and failed its shard.
-- [ ] 2.5 When the loop terminates with a non-None `abort_reason`,
+- [x] 2.5 When the loop terminates with a non-None `abort_reason`,
       append one synthetic outcome per remaining attempt:
       `{"status": "aborted", "shard": "<id>", "abort_reason": ...}`.
       These outcomes do NOT increment `failed` and do NOT increment
       `processed`.
-- [ ] 2.6 Extend the final JSON object to include
+- [x] 2.6 Extend the final JSON object to include
       `"abort_reason": <str|null>`, `"aborted": [<id>, ...]`, and
       `"interrupted_attempt": <id|null>`. The pre-existing `"requested"` field
       is unchanged.
-- [ ] 2.7 The single-`--build-attempt` and `--loop` paths are NOT
+- [x] 2.7 The single-`--build-attempt` and `--loop` paths are NOT
       modified; they SHALL NOT gain the new JSON keys (so existing
       callers that parse those shapes stay valid).
-- [ ] 2.8 Exit code: when `abort_reason` is non-null, `sys.exit(1)`
+- [x] 2.8 Exit code: when `abort_reason` is non-null, `sys.exit(1)`
       unconditionally. When `abort_reason` is null, retain today's
       `if result["failed"]: sys.exit(1)` behavior.
-- [ ] 2.9 Persist the final sequential result JSON to
+- [x] 2.9 Persist the final sequential result JSON to
       `work/logs/dashboard-sequential-worker-result.json` after the sequence
       exits, including `abort_reason`, `aborted`, and the synthetic outcomes.
       This file is for dashboard visibility only and does not change
@@ -144,33 +144,33 @@
 
 ## 3. Dashboard Preflight
 
-- [ ] 3.1 Add a new helper `hermes_profile_health(profile_name: str) ->
+- [x] 3.1 Add a new helper `hermes_profile_health(profile_name: str) ->
       tuple[bool, str, str]` in `src/hermes/process.py` (returns
       `(ok, error_code, message)`). The helper SHALL NOT make any
       subprocess call that contacts the upstream LLM. Permitted checks:
       `Path('~/.hermes/profiles/<profile>').expanduser().is_dir()`,
       reading the `.env` file's keys, and calling the existing
       `profile_exists(profile_name)` for the offline Hermes CLI probe.
-- [ ] 3.2 The `.env` parser SHALL accept either `ANTHROPIC_API_KEY` or
+- [x] 3.2 The `.env` parser SHALL accept either `ANTHROPIC_API_KEY` or
       `ANTHROPIC_TOKEN` with a non-empty value (trimmed of whitespace
       and surrounding quotes). It SHALL NOT log or return the key
       value; only existence is reported.
-- [ ] 3.3 Define stable error codes: `hermes_profile_missing`,
+- [x] 3.3 Define stable error codes: `hermes_profile_missing`,
       `hermes_profile_env_missing`, `hermes_profile_key_missing`,
       `hermes_profile_cli_unavailable`. The dashboard maps each to a
       Chinese message identical to today's tone (see existing strings
       in `src/web/dashboard.py`).
-- [ ] 3.4 In the `/api/build-attempts/worker/start-sequential` endpoint or its
+- [x] 3.4 In the `/api/build-attempts/worker/start-sequential` endpoint or its
       service helper, before calling `dashboard_tasks.start_sequential_worker`,
       derive profile names from each distinct attempt category
       (`f"cf-{category}"`) and call `hermes_profile_health` once per profile.
       On failure, return structured `409` WITHOUT spawning the worker. Keep
       `TaskManager.start_sequential_worker` on its current `(ok, message)`
       spawn contract. Existing single-`--build-attempt` paths are not touched.
-- [ ] 3.5 If the sequence spans multiple categories, run the preflight
+- [x] 3.5 If the sequence spans multiple categories, run the preflight
       once per distinct category and accumulate the messages. If any
       category fails, refuse to spawn.
-- [ ] 3.6 In `src/web/build_attempts_endpoints.py`'s
+- [x] 3.6 In `src/web/build_attempts_endpoints.py`'s
       `/api/build-attempts/worker/start-sequential` handler, return
       HTTP `409` with body
       `{"ok": false, "error_code": "...", "message": "...", "errors": [...]}`
@@ -180,21 +180,21 @@
 
 ## 4. Process-Level Cancellation Hygiene
 
-- [ ] 4.1 In `src/hermes/process.py::invoke`, do NOT collapse negative
+- [x] 4.1 In `src/hermes/process.py::invoke`, do NOT collapse negative
       returncodes to `1`. Today's path already returns the raw
       `process.returncode`, but verify with a regression test
       (`tests/app/test_hermes_process_signals.py`) that a child killed by
       SIGINT/SIGTERM is observed as `-2` / `-15` on platforms that report
       POSIX-style negative signal return codes. On platforms that do not, the
       test must assert the portable `KeyboardInterrupt` path instead.
-- [ ] 4.2 Verify `HERMES_TIMEOUT_RETURNCODE == 124` and that timeouts
+- [x] 4.2 Verify `HERMES_TIMEOUT_RETURNCODE == 124` and that timeouts
       remain reachable independently of negative returncodes (a
       timed-out child gets `124` from this module, NOT the kernel's
       `-9`).
 
 ## 5. Tests
 
-- [ ] 5.1 Unit: `tests/app/test_build_failure_taxonomy.py` covers
+- [x] 5.1 Unit: `tests/app/test_build_failure_taxonomy.py` covers
       every `classify_hermes_exit` branch:
         - marker `{error_type: "authentication_error"}` → `hermes_auth`
         - marker `{status_code: 429}` → `hermes_rate_limit`
@@ -210,11 +210,11 @@
         - `(rc=-15, "", 60.0) → hermes_cancelled`
         - `(rc=0, "", 12.0)` is treated as an invariant violation and
           MUST raise (the classifier is only for failures).
-- [ ] 5.2 Unit: env-var validation rejects
+- [x] 5.2 Unit: env-var validation rejects
       `BUILD_HERMES_FAIL_FAST_MIN_SECONDS=0`, negative, non-integer.
-- [ ] 5.3 Unit: `BUILD_SEQ_INFRA_FAILFAST_STREAK=0` disables the streak
+- [x] 5.3 Unit: `BUILD_SEQ_INFRA_FAILFAST_STREAK=0` disables the streak
       and the driver consumes the full sequence.
-- [ ] 5.4 Integration: `tests/app/test_sequential_queue_failfast.py`
+- [x] 5.4 Integration: `tests/app/test_sequential_queue_failfast.py`
       drives a fake `HermesRunner` that returns scripted outcomes:
         - 5 successes followed by 2 `hermes_auth` → driver aborts before
           attempt 8, `aborted` outcomes for attempts 8–N, final JSON has
@@ -230,11 +230,15 @@
           produces `abort_reason="interrupt"` with the in-flight
           attempt recorded as `interrupted_attempt`, while only later ids are
           included in the synthetic aborted tail.
-        - Replay of the lab-host incident shape (`4d → d47 → 9b →
-          4e → 96 → ced→cancel → 670→auth → bec→auth`): driver stops at
-          attempt #8 with two infra streak entries, leaving 4 aborted.
-- [ ] 5.5 Integration: dashboard preflight in
-      `tests/app/test_dashboard_preflight.py`:
+        - Replay of the lab-host cancellation shape (`4d → d47 → 9b →
+          4e → 96 → ced→cancel`): driver stops immediately at attempt #6,
+          leaving the unstarted tail aborted.
+        - Replay of the auth-cascade shape without an earlier cancellation
+          (`4d → d47 → 9b → 4e → 96 → runtime → 670→auth → bec→auth`):
+          driver stops at attempt #8 with two infra streak entries, leaving
+          4 aborted.
+- [x] 5.5 Integration: dashboard preflight in
+      `tests/app/test_hermes_process.py` and `tests/app/test_build_attempts_api.py`:
         - missing profile directory → 409
         - present directory but missing `.env` → 409
         - `.env` present but both `ANTHROPIC_API_KEY` and
@@ -242,32 +246,30 @@
         - all three checks pass → 200 and worker is spawned
         - multiple categories in sequence, one bad → 409 with both
           messages
-- [ ] 5.6 Regression: `tests/app/test_runner_resume.py` (already
+- [x] 5.6 Regression: `tests/app/test_runner_resume.py` (already
       modified in this branch) gains assertions that every failed
       outcome carries `hermes_phase` and `elapsed_seconds`. The
       `KeyboardInterrupt` branch test asserts `hermes_phase ==
       "hermes_cancelled"` and `returncode == -2`.
-- [ ] 5.7 Regression: BuildReconciler tests confirm that the new
+- [x] 5.7 Regression: BuildReconciler tests confirm that the new
       `aborted` outcomes do NOT trigger a `build_failed` state
       transition; the underlying `build_attempt` row stays in its
       pre-batch state. (This is the behavior today because reconciler
       reads filesystem, not outcome JSON, but the test pins it.)
-- [ ] 5.8 Regression: dashboard result-surface tests confirm that
+- [x] 5.8 Regression: dashboard result-surface tests confirm that
       `work/logs/dashboard-sequential-worker-result.json` is read after a
       refresh and that aborted attempts render as "已中止 / 待重提" rather than
       "构建失败".
-- [ ] 5.9 Run `uv run pytest tests/app/test_build_failure_taxonomy.py
-      tests/app/test_sequential_queue_failfast.py
-      tests/app/test_dashboard_preflight.py
-      tests/app/test_hermes_process_signals.py
-      tests/app/test_runner_resume.py -q` and confirm all green.
+- [x] 5.9 Run focused pytest for taxonomy, sequential queue, profile
+      preflight/process, signal hygiene, runner, reconciler, webserver, and
+      build-attempt endpoint coverage; do not run `openspec validate`.
 
 ## 6. Documentation
 
-- [ ] 6.1 Update `worker-pool-split-plan.md` (or the relevant docs index)
+- [x] 6.1 Update `worker-pool-split-plan.md` (or the relevant docs index)
       to reference this proposal as a sibling reliability fix landed
       alongside, but not inside, the worker pool split sequence.
-- [ ] 6.2 Add a short ops note under `docs/operator/` (create if
+- [x] 6.2 Add a short ops note under `docs/operator/` (create if
       missing) describing the new `abort_reason` values, the two env
       vars, and the operator action when
       `abort_reason=consecutive_infra` (rotate Hermes key, re-submit
@@ -275,10 +277,10 @@
 
 ## 7. Static proposal consistency
 
-- [ ] 7.1 Perform a static consistency pass over
+- [x] 7.1 Perform a static consistency pass over
       `proposal.md`, `design.md`, `tasks.md`, and both spec files. Do not run
       `openspec validate` for this review pass.
-- [ ] 7.2 Confirm the change can be archived independently: nothing in
+- [x] 7.2 Confirm the change can be archived independently: nothing in
       this proposal references files or specs introduced by
       `add-staged-publication-allowlist` that are not already present
       in the baseline.

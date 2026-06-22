@@ -125,7 +125,7 @@ async function refreshWithTick() {
   render(appState.data);
   initIcons();
   try {
-    await api("/api/state");
+    appState.data = await api("/api/state");
     state.list = null;
     state.detail = null;
     if (state.detailId) await ensureDetail(state.detailId);
@@ -412,6 +412,8 @@ function renderBuildMetric(label, value, icon, tone) {
 }
 
 function renderProgressCell(attempt) {
+  const sequentialNotice = sequentialAttemptNotice(attempt);
+  if (sequentialNotice) return sequentialNotice;
   // percent 来自 Hermes 自报的 document/build/... passed 事件，不代表磁盘证据校验
   // 通过；在 failed/lost 终态下若仍只渲染 96% / 99% 会让人误以为"接近完成"。
   // 这里把"事件进度"与"终态结果"分开展示。
@@ -425,6 +427,17 @@ function renderProgressCell(attempt) {
     `;
   }
   return `${value}`;
+}
+
+function sequentialAttemptNotice(attempt) {
+  const result = appState.data?.sequential_worker_result;
+  const outcomes = Array.isArray(result?.outcomes) ? result.outcomes : [];
+  const outcome = outcomes.find((item) => item?.status === "aborted" && item?.shard === attempt.id);
+  if (!outcome) return "";
+  return `
+    <div>已中止</div>
+    <div class="ba-progress-aborted">待重提</div>
+  `;
 }
 
 function pruneSelection(rows) {

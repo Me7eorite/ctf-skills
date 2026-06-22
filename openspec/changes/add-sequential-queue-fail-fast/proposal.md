@@ -6,11 +6,10 @@ current `hermes-execution-protocol` and the dashboard's existing sequential
 queue feature (introduced by commit `8c8b6bf2 新增顺序队列构建的功能` /
 `ad662831 添加顺序队列的前端显示` / `c1206181 修改 顺序队列的逻辑`).
 
-It can land independently of `add-staged-publication-allowlist` because it
-only touches the runner's failure return shape, the CLI sequence driver, the
-dashboard/API preflight, and the dashboard's latest sequential-worker result
-surface; it does NOT touch the publisher, the canonical tree, or the database
-schema.
+It can land independently because it only touches the runner's failure return
+shape, the CLI sequence driver, the dashboard/API preflight, and the
+dashboard's latest sequential-worker result surface; it does NOT touch the
+publisher, the canonical tree, or the database schema.
 
 ## Reporter-provided incident summary
 
@@ -89,7 +88,7 @@ matches exactly the symptom the reporter described
 
 - **Modify** `hermes-execution-protocol`: add a stable failure-phase
   taxonomy for the runner-level outcomes that complements the publisher
-  phase taxonomy introduced by `add-staged-publication-allowlist`.
+  phase taxonomy already present in the baseline publisher.
   Specifically the runner SHALL classify every non-success return from a
   Hermes invocation into one of
   `preflight_workspace | materialize | contract_prepare | hermes_auth |

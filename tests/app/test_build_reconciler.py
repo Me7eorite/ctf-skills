@@ -216,6 +216,38 @@ def test_dry_run_requeue_stays_queued(
     assert _row(session_factory, attempt_id).status == "queued"
 
 
+def test_aborted_sequential_result_json_does_not_mark_attempt_failed(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    task_id, attempt_id, basename = _seed_attempt(session_factory)
+    reconciler = _reconciler(tmp_path, session_factory)
+    write_json(
+        reconciler.paths.logs / "dashboard-sequential-worker-result.json",
+        {
+            "abort_reason": "consecutive_infra",
+            "aborted": [str(attempt_id)],
+            "outcomes": [
+                {
+                    "status": "aborted",
+                    "shard": str(attempt_id),
+                    "abort_reason": "consecutive_infra",
+                }
+            ],
+        },
+    )
+    write_json(
+        reconciler.paths.shards / "pending" / basename,
+        _payload(task_id, attempt_id, _challenge_id(session_factory, task_id)),
+    )
+
+    reconciler.tick_once_sync()
+
+    row = _row(session_factory, attempt_id)
+    assert row.status == "queued"
+    assert row.error is None
+
+
 def test_fast_success_and_artifact_availability_do_not_rewrite_status(
     tmp_path: Path,
     session_factory: SessionFactory,

@@ -466,6 +466,7 @@ def test_category_worker_starts_first_eligible_db_attempt(
 def test_sequential_worker_preserves_requested_attempt_order(
     client: TestClient,
     session_factory: SessionFactory,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     first_task = _seed_designed_task(session_factory, task_no=1)
     second_task = _seed_designed_task(session_factory, task_no=2)
@@ -478,6 +479,11 @@ def test_sequential_worker_preserves_requested_attempt_order(
     _write_pending_attempt(client, second)
     tasks = _StubBuildTaskManager()
     client.app.state.dashboard_tasks = tasks
+    monkeypatch.setattr(
+        build_attempts_endpoints,
+        "hermes_profile_health",
+        lambda _profile: (True, "", "ok"),
+    )
 
     response = client.post(
         "/api/build-attempts/worker/start-sequential",
@@ -493,6 +499,7 @@ def test_sequential_worker_preserves_requested_attempt_order(
 def test_queue_start_runs_all_eligible_attempts_in_created_order(
     client: TestClient,
     session_factory: SessionFactory,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     first_task = _seed_designed_task(session_factory, task_no=1)
     second_task = _seed_designed_task(session_factory, task_no=2)
@@ -511,6 +518,11 @@ def test_queue_start_runs_all_eligible_attempts_in_created_order(
     _write_pending_attempt(client, third, category="pwn")
     tasks = _StubBuildTaskManager()
     client.app.state.dashboard_tasks = tasks
+    monkeypatch.setattr(
+        build_attempts_endpoints,
+        "hermes_profile_health",
+        lambda _profile: (True, "", "ok"),
+    )
 
     response = client.post(
         "/api/build-attempts/queue/start",
@@ -521,6 +533,82 @@ def test_queue_start_runs_all_eligible_attempts_in_created_order(
     assert response.json()["build_attempt_ids"] == [str(first.id), str(second.id)]
     assert response.json()["queue_length"] == 2
     assert tasks.calls == [("sequence", first.id), ("sequence", second.id)]
+
+
+def test_sequential_worker_preflight_failure_returns_409(
+    client: TestClient,
+    session_factory: SessionFactory,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    task_id = _seed_designed_task(session_factory)
+    with transaction(factory=session_factory) as session:
+        attempt = _create_canonical_attempt(BuildAttemptsRepository(session), task_id)
+
+    _write_pending_attempt(client, attempt)
+    tasks = _StubBuildTaskManager()
+    client.app.state.dashboard_tasks = tasks
+    monkeypatch.setattr(
+        build_attempts_endpoints,
+        "hermes_profile_health",
+        lambda profile: (False, "hermes_profile_missing", f"{profile} missing"),
+    )
+
+    response = client.post(
+        "/api/build-attempts/worker/start-sequential",
+        json={"build_attempt_ids": [str(attempt.id)]},
+    )
+
+    assert response.status_code == 409
+    body = response.json()
+    assert body["ok"] is False
+    assert body["error_code"] == "hermes_profile_missing"
+    assert body["errors"] == [
+        {
+            "profile": "cf-web",
+            "error_code": "hermes_profile_missing",
+            "message": "cf-web missing",
+        }
+    ]
+    assert tasks.calls == []
+
+
+def test_queue_start_preflight_accumulates_distinct_category_errors(
+    client: TestClient,
+    session_factory: SessionFactory,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    web_task = _seed_designed_task(session_factory, task_no=1, category="web")
+    pwn_task = _seed_designed_task(session_factory, task_no=2, category="pwn")
+    with transaction(factory=session_factory) as session:
+        repo = BuildAttemptsRepository(session)
+        web_attempt = _create_canonical_attempt(repo, web_task)
+        pwn_attempt = _create_canonical_attempt(repo, pwn_task)
+
+    _write_pending_attempt(client, web_attempt, category="web")
+    _write_pending_attempt(client, pwn_attempt, category="pwn")
+    tasks = _StubBuildTaskManager()
+    client.app.state.dashboard_tasks = tasks
+
+    def fake_health(profile: str):
+        if profile == "cf-pwn":
+            return False, "hermes_profile_key_missing", "cf-pwn missing key"
+        return True, "", "ok"
+
+    monkeypatch.setattr(build_attempts_endpoints, "hermes_profile_health", fake_health)
+
+    response = client.post("/api/build-attempts/queue/start", json={})
+
+    assert response.status_code == 409
+    body = response.json()
+    assert body["error_code"] == "hermes_profile_key_missing"
+    assert body["errors"] == [
+        {
+            "profile": "cf-pwn",
+            "error_code": "hermes_profile_key_missing",
+            "message": "cf-pwn missing key",
+        }
+    ]
+    assert tasks.calls == []
 
 
 def test_category_worker_skips_mismatched_payload(

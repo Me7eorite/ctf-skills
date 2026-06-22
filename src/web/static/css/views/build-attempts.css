@@ -118,6 +118,12 @@
   font-size: var(--font-xs);
 }
 
+.ba-progress-aborted {
+  margin-top: 2px;
+  color: var(--accent-amber);
+  font-size: var(--font-xs);
+}
+
 .ba-muted {
   color: var(--ink-400);
 }

@@ -19,6 +19,7 @@ from core.build_timeout import shard_timeout_policy
 from core.jsonio import read_json
 from core.queue import SUPPORTED_CATEGORIES
 from domain.build_attempts import BuildAttempt, BuildAttemptListItem, BuildAttemptStatus
+from hermes.process import hermes_profile_health
 from persistence.models import build_attempts as build_model
 from persistence.models import design_tasks as task_model
 from persistence.models.progress import ProgressEvent
@@ -297,7 +298,9 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
                 )
             categories.append(category)
 
-        _require_build_profiles(app, categories)
+        preflight = _sequential_profile_preflight_response(categories)
+        if preflight is not None:
+            return preflight
 
         tasks = app.state.dashboard_tasks
         ok, message = tasks.start_sequential_worker(
@@ -356,7 +359,9 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
                 detail=f"no eligible{scope} queued build attempts have matching pending shards",
             )
         categories = [item[1] for item in attempts]
-        _require_build_profiles(app, categories)
+        preflight = _sequential_profile_preflight_response(categories)
+        if preflight is not None:
+            return preflight
 
         attempt_ids = [item[0] for item in attempts]
         tasks = app.state.dashboard_tasks
@@ -621,6 +626,32 @@ def _require_build_profiles(app: FastAPI, categories) -> None:
     raise HTTPException(
         status_code=HTTPStatus.SERVICE_UNAVAILABLE,
         detail=(f"构建环境未就绪：缺少 Hermes Profile {profiles}；请先运行：{commands}"),
+    )
+
+
+def _sequential_profile_preflight_response(categories) -> JSONResponse | None:
+    errors = []
+    for category in sorted({str(item) for item in categories if item}):
+        profile = f"cf-{category}"
+        ok, error_code, message = hermes_profile_health(profile)
+        if not ok:
+            errors.append(
+                {
+                    "profile": profile,
+                    "error_code": error_code,
+                    "message": message,
+                }
+            )
+    if not errors:
+        return None
+    return JSONResponse(
+        {
+            "ok": False,
+            "error_code": errors[0]["error_code"],
+            "message": "；".join(error["message"] for error in errors),
+            "errors": errors,
+        },
+        status_code=HTTPStatus.CONFLICT,
     )
 
 
