@@ -9,11 +9,11 @@ reaches a configurable threshold. The driver is invoked via
 (spawned by `src/web/dashboard.py::start_sequential_worker` from the
 HTTP endpoint `/api/build-attempts/worker/start-sequential`). The streak
 SHALL be incremented by exactly the runner-level `hermes_phase` values in
-`{preflight_workspace, contract_prepare, hermes_auth}` and SHALL be
+`{preflight_workspace, contract_prepare, hermes_auth, hermes_rate_limit}` and SHALL be
 reset to `0` by any other phase value or by a `done` outcome.
 
 When the streak reaches the value of the environment variable
-`BUILD_SEQ_INFRA_FAILFAST_STREAK` (positive integer, default `2`,
+`BUILD_SEQ_INFRA_FAILFAST_STREAK` (non-negative integer, default `2`,
 where `0` disables the streak entirely and negatives are rejected at
 startup), the driver SHALL stop consuming the remaining attempts and
 SHALL emit one synthetic outcome per remaining attempt of the shape
@@ -23,7 +23,9 @@ SHALL emit one synthetic outcome per remaining attempt of the shape
 The driver SHALL extend the final JSON result with the additional
 top-level keys `abort_reason` (one of `null`, `"consecutive_infra"`,
 `"interrupt"`) and `aborted` (the list of attempt ids that received a
-synthetic `aborted` outcome). When `abort_reason` is non-null the CLI
+synthetic `aborted` outcome). The result SHALL also include
+`interrupted_attempt`, set to the in-flight attempt id when the CLI catches
+`KeyboardInterrupt`, otherwise `null`. When `abort_reason` is non-null the CLI
 SHALL exit with status code `1` regardless of `failed`.
 
 The `aborted` outcomes SHALL NOT increment `failed` and SHALL NOT
@@ -35,6 +37,12 @@ retry/clean-rebuild.
 The single-`--build-attempt` and `--loop` paths SHALL NOT gain the
 new JSON keys; this requirement applies only to the
 `--build-attempt-sequence` driver.
+
+The sequential driver SHALL persist its final structured JSON result to
+`work/logs/dashboard-sequential-worker-result.json`. The dashboard SHALL read
+that file when rendering the build-attempt queue surface so synthetic
+`aborted` outcomes remain visible after refresh. This result file SHALL NOT be
+used by the reconciler to move `build_attempt` rows to `failed`.
 
 #### Scenario: Two consecutive hermes_auth outcomes halt the queue
 
@@ -61,6 +69,17 @@ new JSON keys; this requirement applies only to the
 - **AND** `abort_reason` is `null`
 - **AND** `aborted` is empty
 
+#### Scenario: Rate limit after auth reaches the infrastructure streak
+
+- **GIVEN** a sequence of attempt ids `[A1, A2, A3, A4]`
+- **AND** `BUILD_SEQ_INFRA_FAILFAST_STREAK == 2`
+- **AND** `A1` returns `hermes_phase == "hermes_auth"`
+- **AND** `A2` returns `hermes_phase == "hermes_rate_limit"`
+- **WHEN** the sequential driver runs the sequence
+- **THEN** the driver does NOT call the runner for `A3` or `A4`
+- **AND** `abort_reason == "consecutive_infra"`
+- **AND** `aborted == ["A3", "A4"]`
+
 #### Scenario: Cancellation propagates as immediate batch stop
 
 - **GIVEN** a sequence of attempt ids `[A1, A2, A3]`
@@ -78,11 +97,11 @@ new JSON keys; this requirement applies only to the
 - **AND** `runner.run(A1)` raises `KeyboardInterrupt`
 - **WHEN** the sequential driver catches the exception
 - **THEN** `A1` does NOT appear in `outcomes` (the runner had no chance
-  to record an outcome for it)
-- **AND** synthetic `aborted` outcomes are appended for `A1`, `A2`,
-  `A3`
+  to return an outcome to the driver)
+- **AND** `interrupted_attempt == "A1"`
+- **AND** synthetic `aborted` outcomes are appended only for `A2` and `A3`
 - **AND** `abort_reason == "interrupt"`
-- **AND** `aborted == ["A1", "A2", "A3"]`
+- **AND** `aborted == ["A2", "A3"]`
 
 #### Scenario: Fail-fast can be disabled by env var for CI
 
@@ -94,12 +113,25 @@ new JSON keys; this requirement applies only to the
 - **AND** `abort_reason` is `null`
 - **AND** `aborted` is empty
 
+#### Scenario: Dashboard shows aborted tail after refresh
+
+- **GIVEN** a sequential worker stopped with
+  `abort_reason == "consecutive_infra"`
+- **AND** the final result file contains synthetic `aborted` outcomes for
+  `[A4, A5]`
+- **WHEN** the operator refreshes the build-attempt dashboard
+- **THEN** the dashboard shows `A4` and `A5` as aborted / ready to re-submit
+- **AND** neither row is presented as a real `build_failed` attempt because
+  the reconciler has not moved the DB row to `failed`
+
 ### Requirement: Dashboard refuses to spawn a sequential worker without a healthy Hermes profile
 
-`src/web/dashboard.py::start_sequential_worker` SHALL call a new
-local-filesystem-only helper `hermes_profile_health(profile_name)`
-before spawning the worker subprocess. The helper SHALL NOT contact
-the upstream LLM and SHALL NOT issue any network request.
+The sequential-worker HTTP endpoint SHALL resolve the requested attempts'
+distinct categories to Hermes profile names, call a new local-filesystem-only
+helper `hermes_profile_health(profile_name)`, and only then call
+`src/web/dashboard.py::start_sequential_worker` to spawn the worker subprocess.
+The helper SHALL NOT contact the upstream LLM and SHALL NOT issue any network
+request.
 
 The helper SHALL inspect (a) that
 `Path(f"~/.hermes/profiles/{profile_name}").expanduser()` exists and
@@ -119,8 +151,9 @@ return a stable error code from the set
 hermes_profile_key_missing, hermes_profile_cli_unavailable}`.
 The HTTP endpoint `/api/build-attempts/worker/start-sequential` SHALL
 return status code `409` with body
-`{"ok": false, "error_code": "...", "message": "..."}`. The existing
-single-`--build-attempt` endpoints SHALL NOT be changed.
+`{"ok": false, "error_code": "...", "message": "...", "errors": [...]}`.
+Each `errors[]` entry SHALL include `profile`, `error_code`, and `message`.
+The existing single-`--build-attempt` endpoints SHALL NOT be changed.
 
 #### Scenario: Missing profile directory blocks startup
 
@@ -156,5 +189,4 @@ single-`--build-attempt` endpoints SHALL NOT be changed.
 - **GIVEN** any sequence
 - **WHEN** the dashboard performs preflight
 - **THEN** no outbound HTTP request is made
-- **AND** the preflight completes in under one second on a healthy
-  profile
+- **AND** every subprocess probe is local and bounded by its configured timeout

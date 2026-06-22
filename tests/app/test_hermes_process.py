@@ -17,11 +17,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from core.jsonio import read_json
 from hermes.process import (
     HERMES_TIMEOUT_RETURNCODE,
     TERMINATION_WAIT_TIMEOUT,
     HermesProcessResult,
     _wait_after_terminate,
+    invoke,
     invoke_capture,
 )
 
@@ -178,6 +180,55 @@ class InvokeCaptureTests(unittest.TestCase):
             _wait_after_terminate(process)
 
         self.assertEqual(process.timeout, TERMINATION_WAIT_TIMEOUT)
+
+
+class InvokeLogMarkerTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.workdir = Path(self.temp.name)
+        self.log = self.workdir / "hermes.log"
+
+    def test_invoke_writes_auth_error_marker_without_stdout_capture(self):
+        arguments = _python(
+            "import sys",
+            "sys.stdout.write('{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"status_code\":401}}\\n')",
+            "sys.exit(1)",
+        )
+
+        returncode = invoke(
+            "noop",
+            arguments=arguments,
+            log_path=self.log,
+            cwd=self.workdir,
+            environment={},
+            timeout=10,
+        )
+
+        self.assertEqual(returncode, 1)
+        marker = read_json(self.log.with_name("hermes.log.error_marker.json"), {})
+        self.assertEqual(marker["error_type"], "authentication_error")
+        self.assertEqual(marker["status_code"], 401)
+
+    def test_invoke_writes_rate_limit_marker_from_provider_tail(self):
+        arguments = _python(
+            "import sys",
+            "sys.stdout.write('Anthropic overloaded_error: retry later\\n')",
+            "sys.exit(1)",
+        )
+
+        returncode = invoke(
+            "noop",
+            arguments=arguments,
+            log_path=self.log,
+            cwd=self.workdir,
+            environment={},
+            timeout=10,
+        )
+
+        self.assertEqual(returncode, 1)
+        marker = read_json(self.log.with_name("hermes.log.error_marker.json"), {})
+        self.assertEqual(marker["error_type"], "rate_limit_error")
 
 
 if __name__ == "__main__":  # pragma: no cover

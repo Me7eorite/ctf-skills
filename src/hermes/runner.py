@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,7 @@ from core.jsonio import read_json, write_json
 from core.paths import ProjectPaths, category_of
 from core.queue import ShardQueue
 from core.state import InMemoryProgressStore, ProgressEventInput, ProgressStore
+from domain.build_failure_taxonomy import BuildFailureCategory, classify_hermes_exit
 from domain.resume import (
     ChallengeResumePlan,
     ShardResumePlan,
@@ -409,6 +411,36 @@ class HermesRunner:
           9. 合并校验结果到报告
           10. 根据校验结果标记 shard 为 done 或 failed
         """
+        process_started = time.monotonic()
+
+        def elapsed() -> float:
+            return max(0.0, time.monotonic() - process_started)
+
+        def fail_outcome(
+            *,
+            hermes_phase: BuildFailureCategory,
+            returncode: int,
+            error: str | None = None,
+            failure_type: str = "infrastructure",
+            elapsed_seconds: float | None = None,
+            workspace: ExecutionWorkspace | None = None,
+            publisher_phase: str | None = None,
+        ) -> dict[str, Any]:
+            outcome: dict[str, Any] = {
+                "status": "failed",
+                "failure_type": failure_type,
+                "hermes_phase": hermes_phase,
+                "elapsed_seconds": elapsed() if elapsed_seconds is None else max(0.0, elapsed_seconds),
+                "shard": original_shard_name,
+                "returncode": returncode,
+            }
+            if error is not None:
+                outcome["error"] = error
+            if publisher_phase:
+                outcome["publisher_phase"] = publisher_phase
+            outcome.update(self._timeout_metadata(workspace))
+            return outcome
+
         # 步骤 1: 从历史窗口中计算恢复计划
         # 【重要】必须在写入本轮 queued 事件之前计算！
         shard_payload = read_json(shard, {})
@@ -490,6 +522,7 @@ class HermesRunner:
             )
         except (OSError, ValueError) as exc:
             message = f"Workspace preparation failed: {exc}"
+            failure_elapsed = elapsed()
             self._mark_shard_failed(
                 shard,
                 original_shard_name,
@@ -498,14 +531,15 @@ class HermesRunner:
                 report,
                 message,
                 1,
+                hermes_phase="materialize",
+                elapsed_seconds=failure_elapsed,
             )
-            return {
-                "status": "failed",
-                "failure_type": "infrastructure",
-                "shard": original_shard_name,
-                "returncode": 1,
-                "error": message,
-            }
+            return fail_outcome(
+                hermes_phase="materialize",
+                returncode=1,
+                error=message,
+                elapsed_seconds=failure_elapsed,
+            )
         manifest = read_json(workspace.manifest, {})
         category = manifest.get("category") if isinstance(manifest, dict) else None
         profile_name = f"cf-{category}"
@@ -515,6 +549,7 @@ class HermesRunner:
             materialize_progress_shim(workspace)
         except OSError as exc:
             message = f"Workspace shim materialization failed: {exc}"
+            failure_elapsed = elapsed()
             self._mark_shard_failed(
                 shard,
                 original_shard_name,
@@ -523,14 +558,17 @@ class HermesRunner:
                 report,
                 message,
                 1,
+                hermes_phase="materialize",
+                elapsed_seconds=failure_elapsed,
+                workspace=workspace,
             )
-            return {
-                "status": "failed",
-                "failure_type": "infrastructure",
-                "shard": original_shard_name,
-                "returncode": 1,
-                "error": message,
-            }
+            return fail_outcome(
+                hermes_phase="materialize",
+                returncode=1,
+                error=message,
+                elapsed_seconds=failure_elapsed,
+                workspace=workspace,
+            )
         try:
             payload = preflight_workspace(
                 workspace,
@@ -539,6 +577,7 @@ class HermesRunner:
             )
         except WorkspacePreflightError as exc:
             message = f"Workspace preflight failed: {exc}"
+            failure_elapsed = elapsed()
             self._mark_shard_failed(
                 shard,
                 original_shard_name,
@@ -547,14 +586,17 @@ class HermesRunner:
                 report,
                 message,
                 1,
+                hermes_phase="preflight_workspace",
+                elapsed_seconds=failure_elapsed,
+                workspace=workspace,
             )
-            return {
-                "status": "failed",
-                "failure_type": "infrastructure",
-                "shard": original_shard_name,
-                "returncode": 1,
-                "error": message,
-            }
+            return fail_outcome(
+                hermes_phase="preflight_workspace",
+                returncode=1,
+                error=message,
+                elapsed_seconds=failure_elapsed,
+                workspace=workspace,
+            )
         try:
             execution_mode_raw = payload.get("execution_mode")
             resume_source = payload.get("resume_from_shard_basename")
@@ -585,6 +627,8 @@ class HermesRunner:
                 write_json(workspace.manifest, manifest)
         except (OSError, WorkspacePromotionError, ValueError) as exc:
             message = f"Workspace materialization failed: {exc}"
+            failure_elapsed = elapsed()
+            publisher_phase = getattr(exc, "phase", None)
             self._mark_shard_failed(
                 shard,
                 original_shard_name,
@@ -593,14 +637,19 @@ class HermesRunner:
                 report,
                 message,
                 1,
+                hermes_phase="materialize",
+                elapsed_seconds=failure_elapsed,
+                workspace=workspace,
+                publisher_phase=publisher_phase,
             )
-            return {
-                "status": "failed",
-                "failure_type": "infrastructure",
-                "shard": original_shard_name,
-                "returncode": 1,
-                "error": message,
-            }
+            return fail_outcome(
+                hermes_phase="materialize",
+                returncode=1,
+                error=message,
+                elapsed_seconds=failure_elapsed,
+                workspace=workspace,
+                publisher_phase=publisher_phase,
+            )
         if timeout is not None:
             if timeout <= 0:
                 raise ValueError("timeout must be positive")
@@ -622,6 +671,8 @@ class HermesRunner:
             )
         except (OSError, WorkspacePromotionError, ValueError) as exc:
             message = f"Publication contract preparation failed: {exc}"
+            failure_elapsed = elapsed()
+            publisher_phase = getattr(exc, "phase", None)
             self._mark_shard_failed(
                 shard,
                 original_shard_name,
@@ -630,14 +681,19 @@ class HermesRunner:
                 report,
                 message,
                 1,
+                hermes_phase="contract_prepare",
+                elapsed_seconds=failure_elapsed,
+                workspace=workspace,
+                publisher_phase=publisher_phase,
             )
-            return {
-                "status": "failed",
-                "failure_type": "infrastructure",
-                "shard": original_shard_name,
-                "returncode": 1,
-                "error": message,
-            }
+            return fail_outcome(
+                hermes_phase="contract_prepare",
+                returncode=1,
+                error=message,
+                elapsed_seconds=failure_elapsed,
+                workspace=workspace,
+                publisher_phase=publisher_phase,
+            )
         log = workspace.hermes_log
         prompt = self.render_prompt(
             workspace.input / "shard.json",
@@ -651,6 +707,7 @@ class HermesRunner:
         )
         tailer = WorkspaceProgressTailer(workspace, self._progress.record)
         tailer.start()
+        invoke_started = time.monotonic()
         try:
             returncode = self._invoke(
                 prompt,
@@ -663,6 +720,7 @@ class HermesRunner:
         except KeyboardInterrupt:
             # 被用户中断 → 记录失败并重新抛出
             import_workspace_report(workspace, report)
+            failure_elapsed = max(0.0, time.monotonic() - invoke_started)
             self._mark_shard_failed(
                 shard,
                 original_shard_name,
@@ -670,11 +728,15 @@ class HermesRunner:
                 challenge_ids,
                 report,
                 "Runner interrupted",
-                130,  # 标准 POSIX 返回码：被信号中断
+                -2,
+                hermes_phase="hermes_cancelled",
+                elapsed_seconds=failure_elapsed,
+                workspace=workspace,
             )
             raise
         finally:
             tailer.stop_and_flush()
+        invoke_elapsed = max(0.0, time.monotonic() - invoke_started)
 
         import_workspace_report(workspace, report)
 
@@ -687,6 +749,8 @@ class HermesRunner:
                 )
             except (OSError, WorkspacePromotionError, ValueError) as exc:
                 message = f"Workspace output promotion failed: {exc}"
+                failure_elapsed = elapsed()
+                publisher_phase = getattr(exc, "phase", None)
                 self._mark_shard_failed(
                     shard,
                     original_shard_name,
@@ -695,20 +759,31 @@ class HermesRunner:
                     report,
                     message,
                     returncode,
+                    hermes_phase="materialize",
+                    elapsed_seconds=failure_elapsed,
+                    workspace=workspace,
+                    publisher_phase=publisher_phase,
                 )
-                return {
-                    "status": "failed",
-                    "failure_type": "infrastructure",
-                    "shard": original_shard_name,
-                    "returncode": returncode,
-                    "error": message,
-                }
+                return fail_outcome(
+                    hermes_phase="materialize",
+                    returncode=returncode,
+                    error=message,
+                    elapsed_seconds=failure_elapsed,
+                    workspace=workspace,
+                    publisher_phase=publisher_phase,
+                )
 
         # Hermes 返回非零 → 检查是否为超时 + 超时恢复通过
         if returncode != 0:
             timed_out = returncode == HERMES_TIMEOUT_RETURNCODE
             if not timed_out or not self._timeout_recovery_complete(original_shard_name, challenge_ids):
                 # 非超时错误，或超时恢复失败 → 直接标记失败
+                hermes_phase = classify_hermes_exit(
+                    returncode,
+                    self._read_tail(log, 4096),
+                    invoke_elapsed,
+                    self._read_error_marker(log),
+                )
                 self._mark_shard_failed(
                     shard,
                     original_shard_name,
@@ -717,13 +792,16 @@ class HermesRunner:
                     report,
                     f"Hermes exited with {returncode}",
                     returncode,
+                    hermes_phase=hermes_phase,
+                    elapsed_seconds=invoke_elapsed,
+                    workspace=workspace,
                 )
-                return {
-                    "status": "failed",
-                    "failure_type": "infrastructure",
-                    "shard": original_shard_name,
-                    "returncode": returncode,
-                }
+                return fail_outcome(
+                    hermes_phase=hermes_phase,
+                    returncode=returncode,
+                    elapsed_seconds=invoke_elapsed,
+                    workspace=workspace,
+                )
             # 超时但恢复通过 → 继续执行后续步骤（Hermes 已生成了足够的内容）
 
         # 步骤 8: 确保报告文件存在
@@ -830,8 +908,22 @@ class HermesRunner:
                 message="One or more challenges failed validation",
             )
             update_report(report, "failed", "challenge validation failed")
+            validation_elapsed = elapsed()
+            self._augment_failure_report(
+                report,
+                hermes_phase="validation",
+                elapsed_seconds=validation_elapsed,
+                workspace=workspace,
+            )
             self.queue.complete(shard, "failed")
-            return {"status": "failed", "shard": original_shard_name}
+            return fail_outcome(
+                hermes_phase="validation",
+                returncode=0,
+                failure_type="validation",
+                error="challenge validation failed",
+                elapsed_seconds=validation_elapsed,
+                workspace=workspace,
+            )
 
         # 所有题目校验通过 → 完成!
         self._record_per_challenge_complete(original_shard_name, worker, per_results)
@@ -963,6 +1055,11 @@ class HermesRunner:
         report: Path,
         message: str,
         returncode: int,
+        *,
+        hermes_phase: BuildFailureCategory,
+        elapsed_seconds: float,
+        workspace: ExecutionWorkspace | None = None,
+        publisher_phase: str | None = None,
     ) -> None:
         for challenge_id in challenge_ids:
             self._progress.record(
@@ -981,7 +1078,66 @@ class HermesRunner:
             message=message,
         )
         ensure_report(report, shard, worker, "failed", returncode)
+        self._augment_failure_report(
+            report,
+            hermes_phase=hermes_phase,
+            elapsed_seconds=elapsed_seconds,
+            workspace=workspace,
+            publisher_phase=publisher_phase,
+        )
         self.queue.complete(shard, "failed")
+
+    @staticmethod
+    def _timeout_metadata(workspace: ExecutionWorkspace | None) -> dict[str, Any]:
+        if workspace is None:
+            return {}
+        manifest = read_json(workspace.manifest, {})
+        if not isinstance(manifest, dict):
+            return {}
+        metadata: dict[str, Any] = {}
+        effective_timeout = manifest.get("effective_timeout_seconds")
+        if isinstance(effective_timeout, int | float):
+            metadata["effective_timeout_seconds"] = effective_timeout
+        timeout_source = manifest.get("timeout_source")
+        if isinstance(timeout_source, str):
+            metadata["timeout_source"] = timeout_source
+        return metadata
+
+    def _augment_failure_report(
+        self,
+        report: Path,
+        *,
+        hermes_phase: BuildFailureCategory,
+        elapsed_seconds: float,
+        workspace: ExecutionWorkspace | None = None,
+        publisher_phase: str | None = None,
+    ) -> None:
+        raw = read_json(report, {})
+        if not isinstance(raw, dict):
+            raw = {}
+        raw["hermes_phase"] = hermes_phase
+        raw["elapsed_seconds"] = max(0.0, elapsed_seconds)
+        if publisher_phase:
+            raw["publisher_phase"] = publisher_phase
+        raw.update(self._timeout_metadata(workspace))
+        write_json(report, raw)
+
+    @staticmethod
+    def _read_tail(path: Path, limit: int) -> str:
+        try:
+            with path.open("rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                size = handle.tell()
+                handle.seek(max(0, size - limit))
+                data = handle.read()
+        except OSError:
+            return ""
+        return data.decode("utf-8", errors="replace")
+
+    @staticmethod
+    def _read_error_marker(log_path: Path) -> Mapping[str, Any] | None:
+        marker = read_json(log_path.with_name(log_path.name + ".error_marker.json"), None)
+        return marker if isinstance(marker, Mapping) else None
 
     # ------------------------------------------------------------------
     # Hermes subprocess invocation

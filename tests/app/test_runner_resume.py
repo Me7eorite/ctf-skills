@@ -115,11 +115,12 @@ def _make_web_challenge(
     paths: _Paths,
     challenge_id: str,
     *,
+    category: str = "web",
     slug: str = "demo",
     docker_image: str = "demo:latest",
     metadata_extra: dict | None = None,
 ) -> Path:
-    directory = paths.challenges / "web" / f"{challenge_id}-{slug}"
+    directory = paths.challenges / category / f"{challenge_id}-{slug}"
     deploy = directory / "deploy"
     (deploy / "src").mkdir(parents=True, exist_ok=True)
     (deploy / "src" / "app.py").write_text("print('vuln')\n", encoding="utf-8")
@@ -139,7 +140,7 @@ def _make_web_challenge(
     metadata = {
         "id": challenge_id,
         "title": "demo",
-        "category": "web",
+        "category": category,
         "difficulty": "easy",
         "docker_image": docker_image,
         "build_command": "docker build -t demo:latest .",
@@ -311,6 +312,58 @@ class RunnerRealRunTests(unittest.TestCase):
                     event["status"] == "failed" and "missing_challenge" in event["message"] for event in validate_events
                 )
             )
+
+    def test_pwn_shard_policy_timeout_is_passed_to_hermes(self):
+        with TemporaryDirectory() as tmp:
+            paths = _Paths(root=Path(tmp))
+            paths.initialize()
+            _copy_real_prompt(paths)
+            _make_web_challenge(paths, "pwn-0001", category="pwn")
+            _make_shard(paths, "pwn-0001-0001.json", ["pwn-0001"])
+            runner = self._make_runner_with_fake_invoke(paths)
+            observed: dict[str, int | None] = {}
+
+            def fake_invoke(prompt: str, log: Path, dry_run: bool, *, timeout=None, **_kwargs) -> int:
+                observed["timeout"] = timeout
+                log.parent.mkdir(parents=True, exist_ok=True)
+                log.write_text("fake invoke\n", encoding="utf-8")
+                return 0
+
+            runner._invoke = fake_invoke  # type: ignore[assignment]
+
+            outcome = runner.process_one("worker-01", dry_run=False)
+
+            self.assertIn(outcome["status"], {"done", "failed"})
+            self.assertEqual(observed["timeout"], 3600)
+
+    def test_failed_hermes_outcome_includes_phase_elapsed_and_timeout_metadata(self):
+        with TemporaryDirectory() as tmp:
+            paths = _Paths(root=Path(tmp))
+            paths.initialize()
+            _copy_real_prompt(paths)
+            _make_web_challenge(paths, "web-0001")
+            _make_shard(paths, "web-0001-0001.json", ["web-0001"])
+            runner = self._make_runner_with_fake_invoke(paths)
+
+            def fake_invoke(prompt: str, log: Path, dry_run: bool, *, timeout=None, **_kwargs) -> int:
+                log.parent.mkdir(parents=True, exist_ok=True)
+                log.write_text("Anthropic 401 gic密钥已失效\n", encoding="utf-8")
+                return 1
+
+            runner._invoke = fake_invoke  # type: ignore[assignment]
+
+            outcome = runner.process_one("worker-01", dry_run=False)
+
+            self.assertEqual(outcome["status"], "failed")
+            self.assertEqual(outcome["failure_type"], "infrastructure")
+            self.assertEqual(outcome["hermes_phase"], "hermes_auth")
+            self.assertIsInstance(outcome["elapsed_seconds"], float)
+            self.assertEqual(outcome["effective_timeout_seconds"], 2700)
+            self.assertEqual(outcome["timeout_source"], "shard_policy")
+            report = read_json(paths.reports / "web-0001-0001.worker-01.report.json", {})
+            self.assertEqual(report["hermes_phase"], "hermes_auth")
+            self.assertEqual(report["effective_timeout_seconds"], 2700)
+            self.assertEqual(report["timeout_source"], "shard_policy")
 
     def test_resume_to_build_writes_carry_forward_and_build_pending(self):
         with TemporaryDirectory() as tmp:

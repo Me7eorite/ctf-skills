@@ -7,9 +7,35 @@ queue feature (introduced by commit `8c8b6bf2 新增顺序队列构建的功能`
 `ad662831 添加顺序队列的前端显示` / `c1206181 修改 顺序队列的逻辑`).
 
 It can land independently of `add-staged-publication-allowlist` because it
-only touches the runner's failure return shape, the CLI sequence driver, and
-the dashboard's preflight; it does NOT touch the publisher, the canonical
-tree, or the database schema.
+only touches the runner's failure return shape, the CLI sequence driver, the
+dashboard/API preflight, and the dashboard's latest sequential-worker result
+surface; it does NOT touch the publisher, the canonical tree, or the database
+schema.
+
+## Reporter-provided incident summary
+
+The lab host `192.168.6.150` ran an explicit sequential build queue ordered
+`4d564868 -> ... -> ccce77b0`. Attempt #6 hit `KeyboardInterrupt` inside the
+Hermes Anthropic SDK, after which the AI Gateway invalidated the upstream key.
+Attempts #7-#12 then failed within roughly eight seconds with 401/auth text in
+`work/executions/<build_attempt_id>/logs/hermes.log`. The current driver
+treated each non-zero Hermes exit as an ordinary build failure, continued
+through the remaining queue, and marked six unrelated `build_attempt_id`s as
+`build_failed`.
+
+The incident proves three things at once:
+
+1. runner failures need a stable build-specific taxonomy rather than a single
+   `failure_type=infrastructure` bucket;
+2. the sequential driver must be a state machine that can stop on repeated
+   shared-infrastructure failures and on cancellation;
+3. dashboard startup should reject obviously broken local Hermes profiles
+   before spawning a long batch.
+
+This proposal supersedes any narrower "downstream build failure type"
+backfill-only idea: classification must be produced at runtime where the
+return code, Hermes log, elapsed time, and cancellation signal are still
+available.
 
 ## Why
 
@@ -67,9 +93,17 @@ matches exactly the symptom the reporter described
   Specifically the runner SHALL classify every non-success return from a
   Hermes invocation into one of
   `preflight_workspace | materialize | contract_prepare | hermes_auth |
-  hermes_runtime | hermes_timeout | hermes_cancelled | validation`, and
+  hermes_rate_limit | hermes_runtime | hermes_timeout | hermes_cancelled |
+  validation`, and
   carry that classification through `_mark_shard_failed` into the
   per-shard outcome dict.
+- **Modify** `hermes-execution-protocol`: make classification prefer a
+  structured Hermes error marker over tail regexes. Because the current build
+  `invoke()` streams output directly to `hermes.log`, the marker SHALL be
+  produced by bounded post-exit log scanning or an equivalent streaming tee,
+  not by changing the build path to capture full stdout in memory. The
+  classifier consumes that marker first and falls back to bounded log-tail
+  heuristics.
 - **Modify** `build-orchestration`: define the sequential-queue contract.
   The CLI sequence driver (`src/cli.py` `--build-attempt-sequence`)
   SHALL fail-fast on consecutive infrastructure failures, SHALL propagate
@@ -78,11 +112,15 @@ matches exactly the symptom the reporter described
   so that the dashboard and reconciler observe an explicit reason rather
   than missing rows.
 - **Modify** `build-orchestration`: require a Hermes credential / profile
-  preflight gate inside the dashboard launcher
-  (`src/web/dashboard.py::start_sequential_worker` and its HTTP entry
-  point `/api/build-attempts/worker/start-sequential`). The gate SHALL be
-  read-only against `~/.hermes/profiles/<profile>/`, MUST NOT call the
+  preflight gate in the sequential-worker HTTP path before
+  `src/web/dashboard.py::start_sequential_worker` spawns the subprocess. The
+  endpoint/service layer resolves attempt categories to profile names, then the
+  gate checks `~/.hermes/profiles/<profile>/` read-only, MUST NOT call the
   upstream LLM, and MUST refuse to spawn the worker on negative result.
+- **Modify** `build-orchestration`: surface aborted sequential tails to the
+  dashboard by writing and reading the latest sequential-worker result JSON.
+  This preserves the no-migration boundary while avoiding a dashboard refresh
+  that hides the fact that a batch was intentionally stopped.
 
 This proposal does **not**:
 
@@ -115,26 +153,33 @@ This proposal does **not**:
   - `src/hermes/process.py` — `invoke` returns the actual signed
     `returncode` (today's path already returns the int; this proposal
     only formalizes that negative values are reserved for the cancelled
-    classification and not collapsed to 1).
-  - `src/web/dashboard.py` — `start_sequential_worker` runs
-    `hermes_profile_health(profile_name)` (new helper) and refuses to
-    spawn on failure.
-  - `src/web/build_attempts_endpoints.py` — surfaces the preflight error
-    text as a 409-shaped JSON for the dashboard frontend.
+    classification and not collapsed to 1) and writes a bounded
+    `hermes.log.error_marker.json` sidecar after SDK-shaped auth/rate-limit
+    errors are observed in the log stream.
+  - `src/web/build_attempts_endpoints.py` — resolves the sequence's distinct
+    categories, calls `hermes_profile_health(profile_name)` for each derived
+    `cf-<category>` profile, and surfaces preflight errors as 409-shaped JSON
+    for the dashboard frontend.
+  - `src/web/dashboard.py` — keeps `start_sequential_worker` responsible for
+    spawning the already-approved explicit sequence; it does not need database
+    category lookup.
   - New `src/domain/build_failure_taxonomy.py` (parallel to the existing
     `src/domain/research_failure_taxonomy.py`) classifies
-    `(returncode, hermes_log_tail, elapsed_seconds)` into the eight phase
-    names above.
+    `(returncode, hermes_log_tail, elapsed_seconds, error_marker)` into the
+    nine phase names above.
 - **Database**: none.
-- **Filesystem**: none. The aborted outcomes are recorded only in the
-  worker's JSON return and the sequential worker log; the per-shard
-  workspace under `work/executions/<id>/` is untouched.
+- **Filesystem**:
+  - `work/executions/<id>/logs/hermes.log.error_marker.json` records a tiny
+    structured marker derived from Hermes/SDK output; it never stores API keys.
+  - `work/logs/dashboard-sequential-worker-result.json` records the latest
+    structured sequence result so the dashboard can show `aborted` tails after
+    refresh. The per-shard workspace under `work/executions/<id>/` is otherwise
+    untouched.
 - **Operator runbook**: when the queue halts with
   `abort_reason: consecutive_infra`, the operator follows the same
   remediation as today (rotate the Hermes profile key, then re-submit
-  the aborted attempts). The terminal worker log now names the affected
-  attempts in the `outcomes` block, so no extra dashboard work is needed
-  to recover.
+  the aborted attempts). The terminal worker log and the latest result JSON now
+  name the affected attempts in the `outcomes` block.
 - **Compatibility**: the existing single-`--build-attempt` and
   legacy `--loop` paths keep their current return shape; only the
   sequential driver gains the new abort fields. The
@@ -143,6 +188,15 @@ This proposal does **not**:
   unknown extra keys in the worker outcome dict.
 - **Out of scope**:
   - Recovering the AI Gateway key automatically — operator action only.
+  - A Hermes Profile / API-key management UI. This proposal creates the
+    preflight codes that such a UI can reuse later, but a key-editing UI first
+    needs dashboard authentication, masking, single-profile writes, and audit
+    logging.
+  - Treating the reporter's 1500-second timeout log observation as a confirmed
+    current implementation bug. Current code already routes the no-CLI/no-env
+    sequential path through `shard_timeout_policy(payload)`; this proposal only
+    pins that behavior with diagnostics/tests so future fail-fast classification
+    cannot confuse a logging observation with actual timeout source.
   - Per-attempt parallelism (sequential queue stays sequential).
   - Cross-host preflight (only local profile files are inspected).
   - Live cancellation from the dashboard mid-batch — `kill -INT` on

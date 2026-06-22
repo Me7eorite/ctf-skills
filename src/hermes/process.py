@@ -18,12 +18,16 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
+
+from core.jsonio import write_json
 
 DEFAULT_HERMES_COMMAND = "hermes chat -Q --yolo -q"
 # -Q: 查询模式（单次问答，非交互）；--yolo: 自动批准所有工具调用；-q: 静默模式
 DEFAULT_HERMES_TIMEOUT = 1500  # 默认超时秒数（25 分钟）
 HERMES_TIMEOUT_RETURNCODE = 124  # 超时返回码（与 timeout 命令兼容）
 TERMINATION_WAIT_TIMEOUT = 10
+_ERROR_MARKER_MAX_BYTES = 64 * 1024
 
 
 @dataclass(frozen=True)
@@ -154,6 +158,7 @@ def invoke(
     """
     log_path.parent.mkdir(parents=True, exist_ok=True)
     full_arguments = [*arguments, prompt]
+    returncode: int
     with log_path.open("w", encoding="utf-8") as output:
         # 日志头：显示命令（prompt 用 <prompt> 占位避免泄露）
         output.write(
@@ -176,11 +181,103 @@ def invoke(
             output.write(
                 "Hermes command not found or not executable. Set HERMES_CMD or install Hermes.\n"
             )
-            return 127  # 标准 POSIX 返回码：命令未找到
+            returncode = 127  # 标准 POSIX 返回码：命令未找到
         except subprocess.TimeoutExpired:
             output.write(f"\nHermes command timed out after {timeout}s.\n")
-            return HERMES_TIMEOUT_RETURNCODE
-    return process.returncode
+            returncode = HERMES_TIMEOUT_RETURNCODE
+        else:
+            returncode = process.returncode
+    _write_error_marker_from_log(log_path)
+    return returncode
+
+
+def _write_error_marker_from_log(log_path: Path) -> None:
+    marker = _detect_error_marker(_tail_text(log_path, _ERROR_MARKER_MAX_BYTES))
+    marker_path = _error_marker_path(log_path)
+    if marker is None:
+        try:
+            marker_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+        return
+    write_json(marker_path, marker)
+
+
+def _error_marker_path(log_path: Path) -> Path:
+    return log_path.with_name(log_path.name + ".error_marker.json")
+
+
+def _tail_text(path: Path, limit: int) -> str:
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - limit))
+            data = handle.read()
+    except OSError:
+        return ""
+    return data.decode("utf-8", errors="replace")
+
+
+def _detect_error_marker(text: str) -> dict[str, Any] | None:
+    marker = _detect_json_error_marker(text)
+    if marker is not None:
+        return marker
+    lower = text.lower()
+    if (
+        "authentication_error" in lower
+        or "anthropic 401" in lower
+        or "gic密钥" in text
+        or "密钥已失效" in text
+    ):
+        return {"type": "error", "error_type": "authentication_error", "status_code": 401, "source": "log_tail"}
+    if "rate_limit_error" in lower or "overloaded_error" in lower or "rate limit" in lower:
+        return {"type": "error", "error_type": "rate_limit_error", "source": "log_tail"}
+    if "429" in lower and any(
+        needle in lower for needle in ("anthropic", "gateway", "provider", "api")
+    ):
+        return {"type": "error", "error_type": "rate_limit_error", "status_code": 429, "source": "log_tail"}
+    return None
+
+
+def _detect_json_error_marker(text: str) -> dict[str, Any] | None:
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(text):
+        if char != "{":
+            continue
+        try:
+            parsed, _ = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        error = parsed.get("error")
+        if isinstance(error, dict):
+            error_type = error.get("type") or error.get("error_type") or error.get("code")
+            status_code = error.get("status_code") or parsed.get("status_code")
+            if error_type or status_code:
+                marker: dict[str, Any] = {"type": "error", "source": "hermes_sdk"}
+                if error_type is not None:
+                    marker["error_type"] = str(error_type)
+                if status_code is not None:
+                    marker["status_code"] = status_code
+                return marker
+        error_type = parsed.get("error_type") or parsed.get("type") or parsed.get("code")
+        status_code = parsed.get("status_code")
+        if error_type in {
+            "authentication_error",
+            "rate_limit_error",
+            "overloaded_error",
+        } or status_code in {401, 429, "401", "429"}:
+            marker = {"type": "error", "source": "hermes_sdk"}
+            if error_type is not None:
+                marker["error_type"] = str(error_type)
+            if status_code is not None:
+                marker["status_code"] = status_code
+            return marker
+    return None
 
 
 # 中文注释：只有这些环境变量会写入捕获日志头，`CUSTOM_API_KEY` 等密钥会被刻意省略。

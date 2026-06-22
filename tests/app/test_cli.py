@@ -45,11 +45,12 @@ def _prepare_workspace(tmp: Path) -> None:
             target.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
 
 
-def _seed_pending_shard(tmp: Path) -> None:
+def _seed_pending_shard(tmp: Path, *, category: str = "web") -> None:
     shards = tmp / "work" / "shards" / "pending"
     shards.mkdir(parents=True, exist_ok=True)
-    (shards / "web-0001-0001.json").write_text(
-        json.dumps({"challenges": [{"id": "web-0001"}]}),
+    challenge_id = f"{category}-0001"
+    (shards / f"{challenge_id}-0001.json").write_text(
+        json.dumps({"challenges": [{"id": challenge_id, "category": category}]}),
         encoding="utf-8",
     )
 
@@ -149,6 +150,22 @@ class CLITimeoutPrecedenceTests(unittest.TestCase):
                 args=[],
                 env={"HERMES_TIMEOUT": ""},  # cleared
                 expected="effective_timeout=shard-policy source=shard_policy",
+            )
+
+    def test_default_preserves_pwn_shard_policy_source(self):
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            _prepare_workspace(tmp_path)
+            _seed_pending_shard(tmp_path, category="pwn")
+            result = _run_cli(
+                ["run", "--worker", "dry-01", "--dry-run"],
+                cwd=tmp_path,
+                env={"HERMES_TIMEOUT": ""},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                result.stdout.splitlines()[0],
+                "effective_timeout=shard-policy source=shard_policy",
             )
 
     def test_env_used_when_no_cli_flag(self):
