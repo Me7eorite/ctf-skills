@@ -41,9 +41,9 @@
 
 ## 6. Workspace materialization (ties to proposal #1 layout)
 
-- [ ] 6.1 Before claim, atomically rename the entire prior `current/` directory to canonical zero-padded `attempts/iter-NNN/`, then create a fresh `current/` inode; never move only its children, and retain exit_class in DB/manifest rather than the directory name
-- [ ] 6.2 Revision claim: resolve the explicit parent execution and materialize `base-artifact` from `../../attempts/iter-<parent.iteration_no>/output`, plus manifest, selected immutable feedback snapshot, and change policy into `current/input/`
-- [ ] 6.3 Publisher (proposal #2) re-checks the current token before atomic rename; record `successful_execution_id` on success
+- [x] 6.1 Before claim, atomically rename the entire prior `current/` directory to canonical zero-padded `attempts/iter-NNN/`, then create a fresh `current/` inode; never move only its children, and retain exit_class in DB/manifest rather than the directory name (`prepare_workspace(two_layer=...)`, cwd=`workspace.active`; verified by `test_two_layer_archives_prior_current_into_attempts`)
+- [ ] 6.2 Revision claim: resolve the explicit parent execution and materialize `base-artifact` from `../../attempts/iter-<parent.iteration_no>/output`, plus manifest, selected immutable feedback snapshot, and change policy into `current/input/` (deferred with the revision entry point in §7)
+- [~] 6.3 Publisher (proposal #2) re-checks the current token before atomic rename; record `successful_execution_id` on success (`ExecutionsRepository.set_successful_execution()` ready; publisher call-site lands with proposal #2)
 
 ## 7. Feedback & revalidate
 

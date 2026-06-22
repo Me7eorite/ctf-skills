@@ -60,14 +60,27 @@ class WorkspacePromotionError(ValueError):
 
 @dataclass(frozen=True)
 class ExecutionWorkspace:
-    """Paths and identity for one build invocation."""
+    """Paths and identity for one build invocation.
+
+    ``root`` is the container directory (keyed by build_attempt_id). In the
+    legacy single-layer layout the active iteration *is* the root. In the
+    two-layer layout (add-execution-lease-and-fencing) the active iteration is
+    ``root/current`` and prior iterations are archived under ``root/attempts``;
+    ``active_dir`` carries that distinction while ``references`` stays at the
+    container level so it is materialized once per container.
+    """
 
     workspace_id: str
     root: Path
+    active_dir: Path | None = None
+
+    @property
+    def active(self) -> Path:
+        return self.active_dir or self.root
 
     @property
     def input(self) -> Path:
-        return self.root / "input"
+        return self.active / "input"
 
     @property
     def references(self) -> Path:
@@ -79,11 +92,11 @@ class ExecutionWorkspace:
 
     @property
     def output(self) -> Path:
-        return self.root / "output"
+        return self.active / "output"
 
     @property
     def logs(self) -> Path:
-        return self.root / "logs"
+        return self.active / "logs"
 
     @property
     def report(self) -> Path:
@@ -95,7 +108,7 @@ class ExecutionWorkspace:
 
     @property
     def state(self) -> Path:
-        return self.root / "state"
+        return self.active / "state"
 
 
 def derive_workspace_id(payload: Mapping[str, Any]) -> str:
@@ -116,8 +129,17 @@ def prepare_workspace(
     original_shard_name: str,
     worker: str,
     now: datetime | None = None,
+    two_layer: bool = False,
+    iteration_no: int = 1,
 ) -> ExecutionWorkspace:
-    """Create a clean fixed-layout workspace and immutable shard manifest."""
+    """Create a clean fixed-layout workspace and immutable shard manifest.
+
+    With ``two_layer`` (execution-minting cutover), the active iteration lives in
+    ``root/current`` and the prior ``current`` is atomically archived to
+    ``root/attempts/iter-NNN`` instead of being wiped, so a stale process keeps
+    the renamed inode and the prior failure scene is preserved for triage and
+    revision reuse.
+    """
     payload = read_json(shard, None)
     if not isinstance(payload, dict):
         raise ValueError(f"invalid shard payload: {shard.name}")
@@ -131,18 +153,24 @@ def prepare_workspace(
 
     workspace_id = derive_workspace_id(payload)
     root = executions / workspace_id
-    _recreate_owned_workspace(executions, root)
-    for name in _LAYOUT:
-        (root / name).mkdir()
+    if two_layer:
+        active, references_root = _prepare_iteration(executions, root)
+        active_dir: Path | None = active
+    else:
+        _recreate_owned_workspace(executions, root)
+        for name in _LAYOUT:
+            (root / name).mkdir()
+        active, references_root, active_dir = root, root, None
 
-    shard_snapshot = root / "input" / "shard.json"
+    shard_snapshot = active / "input" / "shard.json"
     shutil.copyfile(shard, shard_snapshot)
     challenges = payload.get("challenges")
     category = _single_category(challenges)
-    materialized = _materialize_context(paths, root, category)
+    materialized = _materialize_context(paths, active, references_root, category)
     input_files = [shard_snapshot, *materialized]
     manifest = {
         "workspace_id": workspace_id,
+        "iteration_no": iteration_no,
         "original_shard_basename": Path(original_shard_name).name,
         "running_shard_basename": shard.name,
         "worker": worker,
@@ -153,11 +181,60 @@ def prepare_workspace(
         "input_hashes": {path.relative_to(root).as_posix(): f"sha256:{_sha256(path)}" for path in input_files},
         "allowed_static_reference_roots": [],
         "reference_files": [
-            path.relative_to(root).as_posix() for path in materialized if path.is_relative_to(root / "references")
+            path.relative_to(root).as_posix()
+            for path in materialized
+            if path.is_relative_to(references_root / "references")
         ],
     }
-    write_json(root / "input" / "manifest.json", manifest)
-    return ExecutionWorkspace(workspace_id=workspace_id, root=root)
+    write_json(active / "input" / "manifest.json", manifest)
+    return ExecutionWorkspace(
+        workspace_id=workspace_id, root=root, active_dir=active_dir
+    )
+
+
+_CURRENT_LAYOUT = ("input", "output", "logs", "bin", "state")
+
+
+def _prepare_iteration(executions: Path, root: Path) -> tuple[Path, Path]:
+    """Two-layer prepare: archive prior current/, create a fresh current/.
+
+    Returns ``(active, references_root)``. The prior ``current`` is renamed
+    atomically to ``attempts/iter-NNN`` (NNN = its recorded iteration_no, with a
+    count fallback) rather than deleted, preserving the failure scene.
+    """
+    if root.parent != executions or root.name in {"", ".", ".."}:
+        raise ValueError("workspace must be a direct child of executions")
+    if root.is_symlink():
+        raise ValueError(f"workspace path must not be a symlink: {root}")
+    root.mkdir(parents=True, exist_ok=True)
+    references_root = root
+    (root / "references").mkdir(exist_ok=True)
+    attempts = root / "attempts"
+    attempts.mkdir(exist_ok=True)
+
+    current = root / "current"
+    if current.is_symlink():
+        raise ValueError(f"current path must not be a symlink: {current}")
+    if current.exists():
+        prev_iter = _read_iteration_no(current, attempts)
+        archive = attempts / f"iter-{prev_iter:03d}"
+        if archive.exists():
+            shutil.rmtree(archive)
+        os.replace(current, archive)  # atomic rename — stale cwd follows the inode
+    current.mkdir()
+    for name in _CURRENT_LAYOUT:
+        (current / name).mkdir()
+    return current, references_root
+
+
+def _read_iteration_no(current: Path, attempts: Path) -> int:
+    manifest = read_json(current / "input" / "manifest.json", {})
+    if isinstance(manifest, dict):
+        value = manifest.get("iteration_no")
+        if isinstance(value, int) and value > 0:
+            return value
+    existing = [p for p in attempts.glob("iter-*") if p.is_dir()]
+    return len(existing) + 1
 
 
 def preflight_workspace(
@@ -283,15 +360,16 @@ def _single_category(challenges: Any) -> str | None:
 
 def _materialize_context(
     paths: ProjectPaths,
-    root: Path,
+    active: Path,
+    references_root: Path,
     category: str | None,
 ) -> list[Path]:
     copied: list[Path] = []
-    generation_target = root / "input" / "generation-profiles.json"
+    generation_target = active / "input" / "generation-profiles.json"
     _copy_regular_file(paths.generation_profile, generation_target)
     copied.append(generation_target)
 
-    skill_target = root / "references" / "design-challenges" / "SKILL.md"
+    skill_target = references_root / "references" / "design-challenges" / "SKILL.md"
     _copy_regular_file(paths.design_skill, skill_target)
     copied.append(skill_target)
     if category not in _CATEGORIES_WITH_REFERENCES:

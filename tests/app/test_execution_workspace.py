@@ -110,6 +110,48 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must be a UUID"):
             derive_workspace_id({"build_attempt_id": "../../outside"})
 
+    def test_two_layer_archives_prior_current_into_attempts(self) -> None:
+        attempt_id = uuid4()
+        payload = {
+            "build_attempt_id": str(attempt_id),
+            "design_task_id": str(uuid4()),
+            "challenges": [{"id": "web-0001", "category": "web"}],
+        }
+        shard1 = self._running_shard(payload, name="claimed.iter-001.worker.json")
+        ws1 = prepare_workspace(
+            self.paths,
+            shard=shard1,
+            original_shard_name=f"{attempt_id}.iter-001.json",
+            worker="w",
+            two_layer=True,
+            iteration_no=1,
+        )
+        # Active iteration lives under current/, references at container level.
+        self.assertEqual(ws1.active, ws1.root / "current")
+        self.assertTrue((ws1.root / "current" / "input" / "shard.json").is_file())
+        self.assertTrue((ws1.root / "references").is_dir())
+        (ws1.output / "marker.txt").write_text("iter1", encoding="utf-8")
+
+        shard2 = self._running_shard(payload, name="claimed.iter-002.worker.json")
+        ws2 = prepare_workspace(
+            self.paths,
+            shard=shard2,
+            original_shard_name=f"{attempt_id}.iter-002.json",
+            worker="w",
+            two_layer=True,
+            iteration_no=2,
+        )
+        # Same container root, prior current archived (not wiped), fresh current.
+        self.assertEqual(ws2.root, ws1.root)
+        archived = ws1.root / "attempts" / "iter-001"
+        self.assertTrue(archived.is_dir())
+        self.assertEqual(
+            (archived / "output" / "marker.txt").read_text(encoding="utf-8"), "iter1"
+        )
+        self.assertFalse((ws2.output / "marker.txt").exists())
+        manifest = json.loads((ws2.input / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["iteration_no"], 2)
+
     def test_prepare_creates_clean_layout_snapshot_and_manifest(self) -> None:
         attempt_id = uuid4()
         design_task_id = uuid4()

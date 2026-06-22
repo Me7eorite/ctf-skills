@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import time
 from collections.abc import Callable, Mapping
@@ -23,6 +24,7 @@ from uuid import UUID
 
 from core.build_timeout import shard_timeout_policy
 from core.docker import image_exists as default_image_exists
+from core.execution_config import execution_minting_enabled
 from core.jsonio import read_json, write_json
 from core.paths import ProjectPaths, category_of
 from core.queue import ShardQueue
@@ -81,6 +83,21 @@ __all__ = [
 def _carry_forward_pending_message(stage: str) -> str:
     """生成断点恢复中的待处理阶段消息。"""
     return f"Waiting for {stage} stage execution"
+
+
+_ITERATION_RE = re.compile(r"\.iter-(\d+)\.")
+
+
+def _iteration_from_shard_name(original_shard_name: str | None) -> int:
+    """Parse the iteration from a per-iteration shard basename, default 1.
+
+    Minting submits stage shards as ``{build_attempt_id}.iter-NNN.json`` so the
+    runner can name the workspace archive; legacy basenames lack the suffix.
+    """
+    if not original_shard_name:
+        return 1
+    match = _ITERATION_RE.search(original_shard_name)
+    return int(match.group(1)) if match else 1
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -519,6 +536,8 @@ class HermesRunner:
                 shard=shard,
                 original_shard_name=original_shard_name,
                 worker=worker,
+                two_layer=execution_minting_enabled(),
+                iteration_no=_iteration_from_shard_name(original_shard_name),
             )
         except (OSError, ValueError) as exc:
             message = f"Workspace preparation failed: {exc}"
@@ -1176,7 +1195,7 @@ class HermesRunner:
             prompt,
             arguments=arguments,
             log_path=log,
-            cwd=workspace.root if workspace is not None else self.paths.root,
+            cwd=workspace.active if workspace is not None else self.paths.root,
             environment=environment,
             timeout=effective_timeout,
         )
