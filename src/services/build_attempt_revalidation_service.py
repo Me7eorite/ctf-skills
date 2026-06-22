@@ -22,6 +22,7 @@ from domain.validation import ChallengeValidator
 from hermes.validation import record_per_challenge_complete, run_validation
 from persistence.models import build_attempts as build_model
 from persistence.models import design_tasks as task_model
+from persistence.models import executions as exec_model
 from persistence.repositories import BuildAttemptsRepository
 from persistence.session import SessionFactory, transaction
 
@@ -185,6 +186,22 @@ class BuildAttemptRevalidationService:
                 raise BuildAttemptRevalidationError(
                     f"build attempt is {row.status}, expected failed"
                 )
+            if row.latest_execution_id is not None:
+                if row.current_execution_id is not None:
+                    raise BuildAttemptRevalidationError(
+                        "cannot revalidate while an execution is current"
+                    )
+                latest_execution = session.get(
+                    exec_model.Execution, row.latest_execution_id
+                )
+                if latest_execution is None or latest_execution.status not in {
+                    "succeeded",
+                    "failed",
+                    "lost",
+                }:
+                    raise BuildAttemptRevalidationError(
+                        "latest execution must be terminal before revalidate"
+                    )
             latest = BuildAttemptsRepository(session).latest_for_design_task(
                 row.design_task_id
             )

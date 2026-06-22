@@ -31,7 +31,7 @@
 - [~] 4.3 `retry()` → execution(kind=`retry`); `clean_rebuild()` → execution(kind=`retry`, execution_mode=`clean`, same container) done; `revision` (kind=`revision`, parent set) entry point deferred to §7 feedback flow
 - [x] 4.4 Stage the per-iteration shard as `{build_attempt_id}.iter-NNN.json` (not a reused basename, so progress/resume cannot bleed across iterations); publish to pending after DB scheduling commits via the existing compensation flow
 - [x] 4.5 Update `_validate_task_for_submit` to anchor eligibility on the container's latest execution (container aggregate status)
-- [ ] 4.6 Reject `revalidate` unless `current_execution_id` is null and `latest_execution_id` names a terminal execution
+- [x] 4.6 Reject `revalidate` unless `current_execution_id` is null and `latest_execution_id` names a terminal execution
 
 ## 4b. Worker-claim keystone (ties executions into the live flow)
 
@@ -58,7 +58,7 @@
 
 ## 8. Regression tests
 
-- [ ] 8.1 Retry schedules queued execution(iter=2) under the same build_attempt; claim mints its token; top-level workspace dir unchanged; prior round archived to `attempts/iter-001/`
+- [x] 8.1 Retry schedules queued execution(iter=2) under the same build_attempt; claim mints its token; top-level workspace dir unchanged; prior round archived to `attempts/iter-001/`
 - [ ] 8.2 Batch of 10 challenges × 2 retries → `work/executions/` holds exactly 10 top-level dirs
 - [ ] 8.3 Stale-token complete/publish rejected by `update_to_terminal`; output remains noncanonical in its archived workspace or quarantine
 - [ ] 8.4 Expired execution becomes permanently lost; recovery creates a new queued iteration/token; old process's publish is fenced

@@ -162,7 +162,9 @@ class ShardQueue:
                     continue
                 if (
                     normalized_attempt_id is not None
-                    and shard.name != f"{normalized_attempt_id}.json"
+                    and not _attributed_shard_basename_matches(
+                        shard.name, normalized_attempt_id
+                    )
                 ):
                     continue
                 payload = read_json(shard, None)
@@ -319,6 +321,17 @@ def _claim_filters(
         return UUID(str(build_attempt_id))
     except (TypeError, ValueError, AttributeError) as exc:
         raise ValueError("build_attempt_id must be a UUID") from exc
+
+
+def _attributed_shard_basename_matches(name: str, attempt_id: UUID) -> bool:
+    if name == f"{attempt_id}.json":
+        return True
+    prefix = f"{attempt_id}.iter-"
+    suffix = ".json"
+    if not (name.startswith(prefix) and name.endswith(suffix)):
+        return False
+    iteration = name[len(prefix) : -len(suffix)]
+    return len(iteration) == 3 and iteration.isdigit() and int(iteration) > 0
 
 
 def _matches_claim_filters(

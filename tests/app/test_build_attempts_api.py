@@ -6,6 +6,7 @@ import os
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -682,6 +683,30 @@ def test_exact_worker_recovers_staging_and_respects_busy_guard(
     assert "already running" in response.json()["detail"]
     assert not staged.exists()
     assert (paths.shards / "pending" / attempt.shard_basename).exists()
+    assert tasks.calls == [("web", attempt.id)]
+
+
+def test_exact_worker_accepts_iteration_shard_basename(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory)
+    with transaction(factory=session_factory) as session:
+        attempt = _create_canonical_attempt(BuildAttemptsRepository(session), task_id)
+        iteration_basename = f"{attempt.id}.iter-001.json"
+        session.get(build_model.BuildAttempt, attempt.id).shard_basename = iteration_basename
+    attempt = SimpleNamespace(
+        id=attempt.id,
+        design_task_id=attempt.design_task_id,
+        shard_basename=iteration_basename,
+    )
+    _write_pending_attempt(client, attempt)
+    tasks = _StubBuildTaskManager()
+    client.app.state.dashboard_tasks = tasks
+
+    response = client.post(f"/api/build-attempts/{attempt.id}/worker/start")
+
+    assert response.status_code == 202
     assert tasks.calls == [("web", attempt.id)]
 
 

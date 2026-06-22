@@ -146,7 +146,7 @@ def test_records_failed_outcome_with_error(session_factory, monkeypatch):
 
 
 def test_noop_when_flag_disabled(session_factory, monkeypatch):
-    monkeypatch.delenv("EXECUTION_MINTING", raising=False)
+    monkeypatch.setenv("EXECUTION_MINTING", "0")
     with session_factory() as session:
         attempt_id, execution_id = _seed_scheduled(session)
         session.commit()

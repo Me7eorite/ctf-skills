@@ -199,6 +199,25 @@ class ShardTests(unittest.TestCase):
         self.assertEqual(ShardQueue(self.paths).original_name(claimed), canonical.name)
         self.assertTrue(duplicate.exists())
 
+    def test_exact_attempt_accepts_iteration_basename(self):
+        wanted = uuid4()
+        payload = {
+            "build_attempt_id": str(wanted),
+            "design_task_id": str(uuid4()),
+            "challenges": [{"id": "web-0001", "category": "web"}],
+        }
+        duplicate = self._write_payload("a-duplicate.json", payload)
+        iteration = self._write_payload(f"{wanted}.iter-002.json", payload)
+
+        claimed = ShardQueue(self.paths).claim(
+            "worker-1",
+            category="web",
+            build_attempt_id=wanted,
+        )
+
+        self.assertEqual(ShardQueue(self.paths).original_name(claimed), iteration.name)
+        self.assertTrue(duplicate.exists())
+
     def test_constrained_claim_skips_malformed_and_symlink(self):
         malformed = self.paths.shards / "pending" / "a.json"
         malformed.write_text("{", encoding="utf-8")

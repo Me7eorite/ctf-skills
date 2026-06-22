@@ -498,12 +498,12 @@ def test_concurrent_same_key_clean_rebuild_collapses_to_one_attempt(
     assert count == 1
 
 
-def test_minting_retry_reuses_container_and_appends_execution(
+def test_default_retry_reuses_container_and_appends_execution(
     tmp_path: Path,
     session_factory: SessionFactory,
     monkeypatch,
 ):
-    monkeypatch.setenv("EXECUTION_MINTING", "1")
+    monkeypatch.delenv("EXECUTION_MINTING", raising=False)
     task = _seed_designed_task(session_factory)
     service = _service(tmp_path, session_factory)
 
@@ -544,14 +544,21 @@ def test_minting_retry_reuses_container_and_appends_execution(
     assert (
         service.paths.shards / "pending" / f"{container_id}.iter-002.json"
     ).exists()
+    with session_factory() as session:
+        claimed, token = ExecutionsRepository(session).claim_queued(
+            container_id, worker_id="retry-worker", lease_ttl_seconds=300
+        )
+        assert claimed.iteration_no == 2
+        assert claimed.claim_token == token
+        assert claimed.status == "claimed"
 
 
-def test_legacy_retry_still_mints_new_attempt_when_flag_off(
+def test_legacy_retry_still_mints_new_attempt_when_explicitly_disabled(
     tmp_path: Path,
     session_factory: SessionFactory,
     monkeypatch,
 ):
-    monkeypatch.delenv("EXECUTION_MINTING", raising=False)
+    monkeypatch.setenv("EXECUTION_MINTING", "0")
     task = _seed_designed_task(session_factory)
     service = _service(tmp_path, session_factory)
 

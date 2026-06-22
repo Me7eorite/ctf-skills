@@ -777,7 +777,7 @@ def _pending_payload_matches(
 ) -> bool:
     if Path(shard_basename).name != shard_basename:
         return False
-    if shard_basename != f"{attempt_id}.json":
+    if not _attributed_shard_basename_matches(shard_basename, attempt_id):
         return False
     shard = paths.shards / "pending" / shard_basename
     if shard.is_symlink() or not shard.is_file():
@@ -834,8 +834,29 @@ def _effective_timeout_for_attempt(paths, attempt_id: UUID) -> tuple[int, str]:
             value = 0
         if value > 0:
             return value, "env"
-    payload = read_json(paths.shards / "pending" / f"{attempt_id}.json", {})
+    payload = {}
+    for shard in _candidate_pending_shards(paths, attempt_id):
+        payload = read_json(shard, {})
+        break
     return shard_timeout_policy(payload), "shard_policy"
+
+
+def _candidate_pending_shards(paths, attempt_id: UUID) -> list[Path]:
+    pending = paths.shards / "pending"
+    exact = pending / f"{attempt_id}.json"
+    candidates = [*sorted(pending.glob(f"{attempt_id}.iter-*.json"), reverse=True), exact]
+    return [path for path in candidates if path.is_file() and not path.is_symlink()]
+
+
+def _attributed_shard_basename_matches(shard_basename: str, attempt_id: UUID) -> bool:
+    if shard_basename == f"{attempt_id}.json":
+        return True
+    prefix = f"{attempt_id}.iter-"
+    suffix = ".json"
+    if not (shard_basename.startswith(prefix) and shard_basename.endswith(suffix)):
+        return False
+    iteration = shard_basename[len(prefix) : -len(suffix)]
+    return len(iteration) == 3 and iteration.isdigit() and int(iteration) > 0
 
 
 def _parse_uuid(value: Any, label: str, *, not_found: bool = False) -> UUID:

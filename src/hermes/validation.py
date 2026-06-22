@@ -144,6 +144,9 @@ def run_validation(
             # 校验失败（状态可能是 nonzero_exit / flag_mismatch / timeout 等）
             status = str(outcome.get("status", "failed"))
             error = outcome.get("error")
+            contract_errors = outcome.get("contract_errors")
+            if not error and isinstance(contract_errors, list):
+                error = "; ".join(str(item) for item in contract_errors if item)
             state.record(
                 shard=original_shard_name,
                 challenge_id=challenge_id,
@@ -162,7 +165,7 @@ def run_validation(
                     "validation_returncode": outcome.get("returncode"),
                     "validation_stdout_tail": outcome.get("stdout_tail"),
                     "validation_stderr_tail": outcome.get("stderr_tail"),
-                    "validation_contract_errors": outcome.get("contract_errors"),
+                    "validation_contract_errors": contract_errors,
                 }
             )
     return results

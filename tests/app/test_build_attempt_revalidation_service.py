@@ -19,9 +19,14 @@ from core.paths import ProjectPaths
 from persistence.models import build_attempts as build_model
 from persistence.models import challenge_designs as design_model
 from persistence.models import design_tasks as task_model
+from persistence.models import executions as exec_model
 from persistence.models import research as research_model
 from persistence.models.progress import ProgressEvent, ProgressSnapshot
-from persistence.repositories import BuildAttemptsRepository, PostgresProgressStore
+from persistence.repositories import (
+    BuildAttemptsRepository,
+    ExecutionsRepository,
+    PostgresProgressStore,
+)
 from persistence.session import SessionFactory, transaction
 from services.build_attempt_revalidation_service import (
     BuildAttemptRevalidationError,
@@ -192,6 +197,76 @@ def test_revalidate_rejects_stale_failed_attempt(
     )
 
     with pytest.raises(BuildAttemptRevalidationError, match="latest"):
+        service.revalidate(attempt_id)
+
+
+def test_revalidate_rejects_current_execution(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    paths = ProjectPaths(root=tmp_path, repository=tmp_path)
+    paths.initialize()
+    task_id, attempt_id, basename, challenge_id = _seed_failed_attempt(
+        session_factory
+    )
+    _write_failed_shard(paths, task_id, attempt_id, basename, challenge_id)
+    _write_web_challenge(paths, challenge_id)
+    with transaction(factory=session_factory) as session:
+        parent_id = _seed_terminal_execution(session, attempt_id)
+        repo = ExecutionsRepository(session)
+        execution = repo.schedule_execution(
+            attempt_id,
+            execution_kind="retry",
+            parent_execution_id=parent_id,
+        )
+        repo.claim_queued(attempt_id, worker_id="w", lease_ttl_seconds=300)
+        container = session.get(build_model.BuildAttempt, attempt_id)
+        container.status = "failed"
+        assert container.current_execution_id == execution.id
+
+    service = BuildAttemptRevalidationService(
+        paths=paths,
+        progress=PostgresProgressStore(session_factory),
+        session_factory=session_factory,
+        validator=_PassingValidator(),  # type: ignore[arg-type]
+        image_exists=lambda _image: True,
+    )
+
+    with pytest.raises(BuildAttemptRevalidationError, match="current"):
+        service.revalidate(attempt_id)
+
+
+def test_revalidate_rejects_nonterminal_latest_execution(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    paths = ProjectPaths(root=tmp_path, repository=tmp_path)
+    paths.initialize()
+    task_id, attempt_id, basename, challenge_id = _seed_failed_attempt(
+        session_factory
+    )
+    _write_failed_shard(paths, task_id, attempt_id, basename, challenge_id)
+    _write_web_challenge(paths, challenge_id)
+    with transaction(factory=session_factory) as session:
+        parent_id = _seed_terminal_execution(session, attempt_id)
+        ExecutionsRepository(session).schedule_execution(
+            attempt_id,
+            execution_kind="retry",
+            parent_execution_id=parent_id,
+        )
+        container = session.get(build_model.BuildAttempt, attempt_id)
+        container.status = "failed"
+        container.current_execution_id = None
+
+    service = BuildAttemptRevalidationService(
+        paths=paths,
+        progress=PostgresProgressStore(session_factory),
+        session_factory=session_factory,
+        validator=_PassingValidator(),  # type: ignore[arg-type]
+        image_exists=lambda _image: True,
+    )
+
+    with pytest.raises(BuildAttemptRevalidationError, match="terminal"):
         service.revalidate(attempt_id)
 
 
@@ -391,6 +466,23 @@ def _seed_failed_attempt(
         )
         task.status = "build_failed"
         return task.id, attempt.id, attempt.shard_basename, task.challenge_id
+
+
+def _seed_terminal_execution(session, attempt_id: UUID) -> UUID:
+    execution_id = uuid4()
+    session.add(
+        exec_model.Execution(
+            id=execution_id,
+            build_attempt_id=attempt_id,
+            iteration_no=1,
+            execution_kind="initial",
+            execution_mode="standard",
+            status="failed",
+            error="initial failed",
+        )
+    )
+    session.flush()
+    return execution_id
 
 
 def _write_failed_shard(
