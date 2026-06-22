@@ -82,14 +82,17 @@ unsupervised. Specifically:
   monotonicity purposes and replaced atomically by the new generation
   during the manifest commit step.
 - The publisher SHALL treat `manifest.output_manifest_hash` as authoritative
-  ONLY when a journal entry for the same `publish_generation` is in the
-  `committed` phase. A hash recorded in `manifest.json` whose generation does
-  not match a committed journal entry SHALL be ignored for downstream audit
-  and re-derived from the canonical tree before the next commit.
+  ONLY when `manifest.publish_generation` matches the generation recorded in
+  `state/highest-committed-generation.json` and the high-water file records
+  the same `output_manifest_hash`. A hash recorded in `manifest.json` whose
+  generation/hash pair does not match the high-water file SHALL be ignored
+  for downstream audit and re-derived from the canonical tree before the next
+  commit.
 
-#### Scenario: Publish generation must advance past the committed journal
+#### Scenario: Publish generation must advance past the high-water file
 
-- **GIVEN** the last committed journal records `publish_generation = 3`
+- **GIVEN** `state/highest-committed-generation.json` records
+  `publish_generation = 3`
 - **AND** `manifest.json` reports `publish_generation = 999` (agent-written
   during Hermes execution, excluded from contract verification)
 - **WHEN** the publisher prepares the next publication
@@ -100,11 +103,12 @@ unsupervised. Specifically:
 #### Scenario: Uncommitted manifest hash is not authoritative
 
 - **GIVEN** a prior publication crashed after manifest write but before
-  marking the journal `committed`
+  the high-water file was advanced to the same generation/hash pair
 - **WHEN** bootstrap reconciles the workspace
-- **THEN** the rollback restores the predecessor canonical tree
+- **THEN** recovery uses the journal phase to either finalize high-water or
+  roll back the predecessor canonical tree
 - **AND** any downstream audit treats the manifest's `output_manifest_hash`
-  as not authoritative until the next successful publication overwrites it
+  as authoritative only after it matches the high-water file
 
 Everything under `state/` SHALL be reserved for host runtime writes; agents
 have no read or write need for these files and contract verification SHALL
@@ -218,8 +222,11 @@ are already the new authoritative version.
   validator again (the canonical tree is byte-identical to the previous
   iteration, so re-running validation would only produce duplicate events)
 - **AND** it MUST NOT advance the attempt's progress percent or write a
-  terminal marker on the noop iteration itself; the attempt's terminal
-  state is whatever the prior succeeded publication produced
+  terminal marker on the noop iteration itself
+- **AND** the runner MUST finish the attempt from the most recent validation
+  results already recorded before the noop; if those results still contain a
+  failed challenge, the attempt is marked failed and the normal terminal
+  failure marker is written by the finalization path
 
 ### Requirement: Publisher bounds resource consumption before staging
 
@@ -344,12 +351,15 @@ be the latest failed/lost build attempt and its design task MUST be
 the design task row within the same session that prepares the new attempt's
 identity and shard payload (the existing `_prepare` pattern in
 `BuildOrchestrationService`); committing the new attempt MAY use a separate
-session. Concurrency safety SHALL be enforced by a UNIQUE constraint on
+session. Idempotent replay safety SHALL be enforced by a UNIQUE constraint on
 `build_attempts.idempotency_key`: replayed requests with the same key
 resolve to the existing row, and concurrent inserts produce one row plus a
-UNIQUE-violation that the API converts to the existing-row response. A stale
-source attempt SHALL be rejected with a stable error code. The API SHALL
-require an explicit `confirmed=true` field in the request body, so
+UNIQUE-violation that the API converts to the existing-row response. This
+proposal does NOT guarantee that two deliberate clean rebuild submissions with
+different idempotency keys create only one attempt; source-attempt-scoped
+single-child enforcement is deferred to proposal #3's execution-row lease and
+fencing model. A stale source attempt SHALL be rejected with a stable error
+code. The API SHALL require an explicit `confirmed=true` field in the request body, so
 misconfigured clients that omit it (default-false case) fail closed with
 `409 confirmation_required` rather than triggering clean rebuild
 unintentionally. This protects against client default behavior and
@@ -357,12 +367,13 @@ accidental replays, NOT against deliberate abuse — a caller that
 intentionally sends `confirmed=true` is treated as confirming. Stronger
 API-side authorization (RBAC, audit) is out of scope for this proposal.
 
-This Requirement guarantees clean-vs-clean concurrency. Clean-vs-retry
-cross-entry concurrency (operator triggers both retry and clean rebuild on
-the same failed attempt) inherits the existing retry transaction shape and
-is NOT additionally covered here; it carries the same pre-existing race
-window as retry-vs-retry. Proposal #3 `add-execution-lease-and-fencing`
-closes that window via the execution-row lease.
+This Requirement guarantees same-key clean-vs-clean idempotency. Clean requests
+with different idempotency keys, clean-vs-retry cross-entry concurrency
+(operator triggers both retry and clean rebuild on the same failed attempt),
+and retry-vs-retry concurrency inherit the existing retry transaction shape and
+are NOT additionally covered here. Proposal #3
+`add-execution-lease-and-fencing` closes that window via the execution-row
+lease.
 
 Cross-feature concurrency with `resource_deletion`: deleting a challenge
 via the existing `resource_deletion` flow does NOT take the publisher's
@@ -380,6 +391,15 @@ expected to land alongside proposal #3's lease/fencing work.
 - **WHEN** they execute concurrently
 - **THEN** both resolve to one new clean build attempt
 - **AND** no request deletes or mutates the canonical predecessor
+
+#### Scenario: Different clean rebuild keys are separate submissions
+
+- **GIVEN** two clean-rebuild requests target the same latest failed attempt
+- **AND** they use different idempotency keys
+- **WHEN** proposal #3's execution lease is not yet available
+- **THEN** this proposal does not promise source-attempt-scoped collapse
+- **AND** stale-source detection or later lease/fencing rules decide whether
+  the second request is accepted or rejected
 
 ### Requirement: Publish is serialized, failure-atomic, and crash-recoverable
 

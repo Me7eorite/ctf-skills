@@ -8,7 +8,7 @@ the split" until all 6 children archive; it MUST NOT be archived
 independently because that would create `worker-pool-execution` twice. The
 6 children land in this order:
 
-1. `add-execution-workspace-and-profile-per-category` (archived)
+1. `add-execution-workspace-and-profile-per-category` (folded into baseline spec)
 2. `add-staged-publication-allowlist` (this change)
 3. `add-execution-lease-and-fencing`
 4. `add-project-agent-layer-over-hermes-profiles`
@@ -17,8 +17,9 @@ independently because that would create `worker-pool-execution` twice. The
 
 ## Why
 
-The just-archived `add-execution-workspace-and-profile-per-category` change
-introduced a **narrow compatibility bridge** in `hermes-execution-protocol`:
+The `add-execution-workspace-and-profile-per-category` change has been folded
+into the baseline `hermes-execution-protocol` spec and current runner code as a
+**narrow compatibility bridge**:
 the runner promotes claimed challenge ids from `./output/` back to
 `work/challenges/<category>/` so existing validation can run. That bridge has
 no fencing token, no operator approval gate, and no general allowlist — it is
@@ -100,8 +101,9 @@ APIs — those land in subsequent proposals.
   runner calls publisher instead of the narrow promotion path. Workspace
   materialization, prompt rendering, build orchestration, API, and build-list
   UI also distinguish retry/resume from clean rebuild.
-- **Database**: no schema change (execution rows are deferred to the next
-  proposal). `output_manifest_hash` is stored in workspace
+- **Database**: one narrow schema change for clean-rebuild idempotency:
+  `build_attempts.idempotency_key TEXT NULL UNIQUE`. Execution rows are still
+  deferred to the next proposal. `output_manifest_hash` is stored in workspace
   `input/manifest.json` for now; persistence moves to DB rows in
   `add-execution-lease-and-fencing` (proposal 3).
 - **Filesystem**: success path stays the same (`work/challenges/<cat>/<id>-<slug>/`);

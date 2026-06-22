@@ -121,8 +121,10 @@ sha256(canonical_encode(sorted(entry_records_for_all_claimed_ids)))
 ```
 
 It is written to `work/executions/<workspace_id>/input/manifest.json` under
-the `output_manifest_hash` key. The next proposal will move it onto an
-execution row; until then the workspace manifest is the source of truth.
+the `output_manifest_hash` key. The manifest is the visible workspace record,
+but the hash is authoritative only when paired with
+`state/highest-committed-generation.json` at the same generation/hash. The
+next proposal will move it onto an execution row.
 
 Why a manifest hash (not just per-file hashes): downstream audit
 (`add-execution-audit-snapshots`, proposal 6) needs a single value that
@@ -200,9 +202,11 @@ crash recovery rather than claiming an impossible filesystem transaction.
    manifest commit or rollback. The lock tree MAY live on a different
    filesystem than `work/challenges/` and `work/executions/`; only temp,
    canonical, and quarantine are required to be co-located (Decision 5 step 2).
-   Windows hosts are out of scope for this change; preflight rejects them with
-   a clear unsupported-platform message rather than silently using a different
-   primitive.
+   Windows hosts are out of scope for the publisher runtime path; preflight
+   rejects them with a clear unsupported-platform message rather than silently
+   using a different primitive. Local Windows development may still run
+   non-publisher tests, but publisher lock/recovery tests must be POSIX-gated
+   or run under a POSIX CI/deployment environment.
 2. Validate the entire output and policy before changing canonical state.
    Enforce configured file-count, byte-count, path-depth, and component-length
    limits while walking with `lstat`; never follow symlinks. Defaults are 2 GiB
@@ -319,14 +323,17 @@ and publication contract MUST be one normalized in-memory value.
 
 ### Decision 11: Clean rebuild preserves orchestration concurrency rules
 
-Clean rebuild has the same eligibility and idempotency boundary as retry: only
-the latest failed/lost attempt of a `build_failed` design task can be rebuilt,
-and concurrent requests for the same source attempt produce at most one new
-attempt. The service performs eligibility re-check and attempt creation in the
-same transaction. The API returns the existing attempt for a replay of the
-same idempotency key, rejects stale source attempts, and never deletes the
-canonical predecessor when submitting work. Operator confirmation is enforced
-by an explicit request field, not only by browser JavaScript.
+Clean rebuild has the same eligibility boundary as retry: only the latest
+failed/lost attempt of a `build_failed` design task can be rebuilt. This
+proposal's idempotency guarantee is same-key only: concurrent requests with the
+same idempotency key produce at most one new attempt, while two deliberate
+requests with different keys are separate submissions until proposal 3 adds
+execution-row lease/fencing. The service performs eligibility re-check while
+preparing the attempt identity and shard payload. The API returns the existing
+attempt for a replay of the same idempotency key, rejects stale source
+attempts, and never deletes the canonical predecessor when submitting work.
+Operator confirmation is enforced by an explicit request field, not only by
+browser JavaScript.
 
 ### Decision 12: Publisher errors remain diagnosable by phase
 

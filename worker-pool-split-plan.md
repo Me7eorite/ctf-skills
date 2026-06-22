@@ -3,8 +3,8 @@
 > 起草日期: 2026-06-21（v4 修订：题案 1 已落地为 OpenSpec change，其余 5 个子题案保持规划状态）
 >
 > 进度索引：
-> - 题案 1 `add-execution-workspace-and-profile-per-category` — ✅ **proposal 起草完成、validate --strict 通过**，等待实现
-> - 题案 2 `add-staged-publication-allowlist` — ⏳ 规划中
+> - 题案 1 `add-execution-workspace-and-profile-per-category` — ✅ **已折叠进 baseline spec，当前代码已有 execution workspace + narrow promotion bridge**
+> - 题案 2 `add-staged-publication-allowlist` — ⏳ 规划中（正在题案整改）
 > - 题案 3 `add-execution-lease-and-fencing` — ⏳ 规划中
 > - 题案 4 `add-project-agent-layer-over-hermes-profiles` — ⏳ 规划中
 > - 题案 5 `add-local-supervisor-and-slots` — ⏳ 规划中
