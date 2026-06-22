@@ -200,8 +200,193 @@ delta 与 tasks。每轮均按“分析问题 → 推荐方案 → 题案整改 
 2. Hermes 后执行完整 allowlist、policy、resource 和 input-integrity 检查；
 3. 对重叠写者加锁，对整批先 staging，再用 journal 提交/回滚/恢复；
 4. 保证 validation repair 生命周期不被提前清理；
-5. 明确 retry/resume 与 clean rebuild 的行为、并发和幂等边界。
+5. 明确 retry/resume 与 clean rebuild 的行为、并发和幂等边界；
+6. **接受多目录 rename 不提供瞬时全局原子视图作为本题案的边界**：本题案不再
+   宣称跨目录的瞬时原子性；该限制由后续 execution fencing + 所有消费者统一
+   锁协议（题案 3 起）继续收紧，而不是在 publisher 层假装解决。
 
-仍有一个明确残余限制：在不整体替换 category root 的前提下，多目录 rename 对不遵守
-publisher lock 的外部读者无法提供瞬时全局原子视图。本题案已不再作该过度承诺；后续
-execution fencing 和所有消费者统一锁协议可继续收紧该边界。
+## 第 19 轮：外部独立审视的整改
+
+在 18 轮自审之外，另一名独立审视者就题案 1 落地后的现状提出 9 项问题（编号
+B–J），其中没有一项被前 18 轮覆盖。本轮按推荐方案整改：
+
+- **B（shim 兼容路径）**：删除 tasks 10.1 的“或保留一发布”软出口；shim 转为
+  显式 raise 的 deprecation stub，tasks 1.2/10.1/10.2 同步收紧，spec migration
+  追加“归档前必须删除”约束。
+- **C（publisher_generation / output_manifest_hash 单调性）**：spec 加入“以
+  committed journal 为权威而非 manifest”、“新 generation 必须严格大于已提交
+  上限”两条约束 + 两个 scenario；tasks 1.7 新增对应实现项。
+- **D（locks 路径悬空）**：design.md decision 5 改写为 `paths.build_publisher_locks`
+  + `fcntl.flock(LOCK_EX)` + 非 POSIX 平台 preflight 拒绝；spec 同步；tasks 5.0
+  新增对 ProjectPaths 与 initialize() 的扩展。
+- **E（保留输入文件唯一性）**：spec 显式约定 `(workspace_id, publish_generation)`
+  唯一标识 journal 记录、未 committed 的 journal 强制走 bootstrap recovery。
+- **F（repair 无变更协同 F5）**：spec 新增 `noop` 结果 scenario，publisher 在
+  staging hash 等于 committed hash 时短路；tasks 4.4 新增实现项；runner 据此
+  跳过冗余 validation rerun。
+- **G（sweep 频率退避）**：spec 加入每进程 60 秒 throttle、被压制调用不丢失
+  sweep 待办；tasks 6.6 新增实现项。
+- **H（clean rebuild 事务边界落地）**：tasks 7A.2–7A.4 指明在
+  `BuildOrchestrationService.clean_rebuild()` 复用 retry 的事务结构；新增
+  `build_attempts.idempotency_key` 迁移；UI 客户端生成 UUIDv4 作为 key。
+- **I（staging 是唯一事实源）**：spec 新增"resume_output_targets 仅作 prompt /
+  诊断、与 staging 不一致时 publisher 在 contract 阶段失败"的 Requirement 文本
+  和场景。
+- **J（atomicity 退让升级到总体结论）**：本节第 6 条。
+
+## 第 20 轮：整改后再审
+
+在 19 轮整改完成后做的二次独立审视，发现 4 项新张力：
+
+- **K（noop vs increment 字面冲突）**：spec 同时写"每次成功 publish 都
+  increment"与"noop 不变"。整改：把 increment 约束的主语改为
+  `succeeded`，noop 单独成立；不再依赖读者拼接两段文本。
+- **M（"remove or archive committed journal"二选一让信任源消失）**：若选
+  remove，下一次 publish 找不到任何 committed journal，C 的"严格大于已提
+  交上限"退化为"从 1 开始"。整改：spec 强制 archive 到
+  `input/publish-journal-archive/<generation>.json`，禁止 delete；archive
+  目录纳入 reserved 文件集合；tasks 1.7 同步约束。
+- **P（clean rebuild 与 split-plan 题案 3 的 execution_kind 未对齐）**：
+  split-plan 写 execution kind 为 `initial / retry / revision`，本题案的
+  clean 是 build_attempt 级别。整改：proposal 加 forward-compat note，明
+  确 `execution_mode: "clean"`（shard 字段）与未来的 `execution_kind`
+  （DB 列）正交，由题案 3 决定是否引入新 kind。
+- **R（tasks 7A.2 与现状不一致）**：复读 [BuildOrchestrationService.retry()](src/services/build_orchestration_service.py:123)
+  实际是 3 个独立 session，与原"single transaction"措辞矛盾；继续要求
+  "single transaction"既会偏离 retry 现状，也无实际并发收益。整改：spec
+  改为"eligibility re-check 在 `_prepare` 的 session 内重读源 attempt 与
+  design task；并发安全由 `build_attempts.idempotency_key` UNIQUE 约束兜
+  底；UNIQUE race 由 API 转换为 existing-row 响应"；tasks 7A.2/7A.3 同步。
+
+## 第 21–22 轮：第二次独立审视
+
+19 轮整改后再做两轮独立审视，识别 10 项遗漏（编号 S/T/V/W/Y/Z/AA/BB/CC/EE），
+其中 2 项为按字面实现必撞的真矛盾：
+
+- **S（高）**：reserved publisher-owned 文件（journal/status/archive）若放在
+  `input/` 下，被 contract input-hash 当作 host-owned 输入 → 第一次成功
+  publish 后 input-hash 改变 → 下一次 repair 必报 `contract` 阶段失败。
+- **T（高）**：上一轮要求 archive 不可删除，但单 workspace 长期 repair 会让
+  archive 文件不断累积；与"不删除"的硬约束直接相撞。
+
+整改采用**统一更简的设计**：把所有 publisher-owned 运行时状态搬到 workspace
+内独立目录 `state/`，archive 改成单个 high-water 文件
+`state/highest-committed-generation.json`：
+
+- **S 闭合**：spec 与 design 都明确"contract input-hash SHALL exclude
+  every path under `state/` and the publisher-owned manifest projection
+  fields"；实现以代码枚举排除集，禁止 regex 兜底。
+- **T 闭合**：archive 收敛为单文件 high-water；删除"全历史 archive"承诺
+  并把完整审计交给 proposal #6；任何 generation 重新可读但不维护历史。
+
+剩下 8 项均已落地：
+
+- **CC（文本残留）**：上一轮把 reserved 集合扩到 3 项后仍写 "Both reserved
+  files"。已改为 "These reserved paths" 并按新结构重写整段。
+- **V（runner 状态机覆盖）**：新增 scenario "Runner observes noop and exits
+  the repair loop" 明确 noop 时跳出 repair loop、不刷新进度百分比、不写
+  terminal marker。
+- **W（flock 选型理由）**：spec 显式说明选 `fcntl.flock` 而非 `lockf`
+  是因为 supervisor fork worker 时需要 fd 继承语义；非 POSIX 仍走
+  preflight fail。
+- **Y（clean-retry 跨入口并发）**：本题案仅承诺 clean-vs-clean 并发；
+  clean-vs-retry 与 retry-vs-retry 同源，等 proposal #3 用 lease 收紧。
+- **Z（recovery → publish 时序）**：spec 在 reserved-files 段补一段
+  "After bootstrap recovery completes successfully ... publisher SHALL
+  treat the workspace as in its post-recovery canonical state"；recovery
+  本身不消耗 generation；finalize 更新 high-water，rollback 不更新。
+- **AA（"safe permissions" 措辞模糊）**：tasks 5.0 改为 "default umask is
+  sufficient — the lock files carry no secrets"。
+- **BB（task 编号倒置）**：交换原 7A.2 与 7A.3 顺序——idempotency_key 迁移
+  作为 7A.2 先做，clean_rebuild 实现作为 7A.3 在其后。
+- **EE（idempotency key 复用语义）**：tasks 7A.4 改为 "one UUIDv4 per
+  click"，明确"新点击 = 新 key、HTTP-layer 重试复用 key"，避免 UI 跨用户
+  动作复用 key 导致后端误返 existing row。
+
+## 第 23 轮：第三次独立审视
+
+第 21–22 轮整改后再做一次独立审视，发现 6 项：
+
+- **F3（中-高）**：commit 流程是"canonical rename → manifest write → high-water
+  update"三步，第 3 步前 crash 会留下 `committed` journal + 落后的
+  high-water。原 spec 只规定 "refuse to recover a journal whose generation
+  is less than high-water"——只防退化、不防推进，留下半提交卡死空白。
+  整改：spec 显式补 "committed journal generation > high-water 时，
+  recovery SHALL atomic 推进 high-water 到 journal generation，幂等；
+  canonical 与 manifest 不回滚"；加 scenario "Recovery pushes high-water
+  forward after manifest-then-crash"；tasks 5.7 跟随。
+- **F4（中）**：原措辞 "SHALL NOT rely only on a browser confirmation dialog"
+  暗示 API 层有独立防御能力，但实际只是收一个 `confirmed=true` boolean，
+  脚本塞个字段就能绕过。整改：把措辞弱化到匹配实际防御能力—— "`confirmed=true`
+  仅防止 client 默认值漏写导致的误触发，不是反 abuse；更强的 RBAC/audit
+  out of scope"。
+- **F6（小）**：`paths.locks_root` 与 `paths.build_publisher_locks` 的关系隐式，
+  题案 3 后续加 lease lock 时易分叉。整改：spec 与 tasks 显式声明
+  `build_publisher_locks = locks_root / "build-publisher"`，未来子题案
+  必须加在 `locks_root` 下的 sibling，不准嵌套。
+- **F7（小）**：lock 文件生命周期未约束；题目被 resource_deletion 删除后
+  lock 文件变孤儿。整改：spec 与 tasks 显式说明 lock 文件与题目生命周期
+  解耦、孤儿无害；publisher 不主动清理。
+- **F8（中）**：[resource_deletion.py](src/web/resource_deletion.py)
+  删题目时不取 publisher 的 `(category, id)` 锁；in-flight publish 与
+  delete 并发会观察到半 rename 中间态或删掉 publisher 刚就位的目录。
+  本题案不收紧 scope，但 spec 加 forward note："cross-feature concurrency
+  with resource_deletion 是预存 race；与 publisher lock 对齐留给 proposal #3
+  的 lease/fencing 一起做"。
+- **F9（小）**：tasks 7A.3 原措辞 "reuses the existing _prepare / _submit
+  plumbing" 过于乐观——`_submit`/`_prepare` 的 `retry_sources` 语义专为
+  resume 写 `resume_from_shard_basename`，clean 不需要这个字段。整改：
+  tasks 7A.3 补一句 "extend `_prepare`/`_validate_task_for_submit` with
+  an explicit `execution_mode` branch"，明确 resume 写 basename、clean
+  不写但仍消费 source attempt 做 eligibility；测试加一条 "clean payload
+  contains execution_mode='clean' and omits resume_from_shard_basename"。
+
+## 总体结论（v5）
+
+19 轮自审 + 3 轮独立审视 + 3 轮整改后再审，本题案现在的关键不变量：
+
+- publisher-owned 运行时状态完全隔离在 `state/`，agent 不可写；contract
+  input-hash 按枚举排除该目录；
+- monotonicity 信任源是 single high-water file，**且 crash 恢复对
+  "committed-journal-ahead-of-high-water" 这种半提交状态有显式 finalize
+  路径**；
+- `succeeded` / `noop` 是两条分立结果，runner 在 noop 时退出 repair loop
+  且不更新 attempt 状态；
+- clean rebuild 的事务边界对齐到现存 retry 实现 + idempotency_key UNIQUE
+  约束；clean-vs-retry 跨入口并发以及 resource_deletion 跨入口并发显式
+  留给 proposal #3 的 lease；
+- `confirmed=true` 仅承诺防 client 默认值漏写，不承诺反 abuse；
+- lock primitive `fcntl.flock` 的 fd 继承语义被显式选定为 supervisor /
+  worker fork 场景的正确选择；lock 文件与题目生命周期解耦；
+- 与 split-plan 题案 3 的 `execution_kind` 关系正交、推迟决策；
+- 锁路径命名约定（`locks_root` / `build_publisher_locks` 关系、未来 sibling
+  扩展规则）显式写明，避免后续子题案分叉。
+
+## 总体结论（v4，已被 v5 覆盖）
+
+19 轮自审 + 2 轮独立审视 + 2 轮整改后再审，本题案现在的关键不变量：
+
+- **publisher-owned 运行时状态完全隔离在 `state/`**，agent 不可写；contract
+  input-hash 按枚举排除该目录，避免 publisher 自身写入触发误报；
+- **monotonicity 的真实信任源是 single high-water file**，不是 manifest 也
+  不是无界 archive；
+- **`succeeded` / `noop`** 是两条分立结果，runner 在 noop 时退出 repair loop
+  且不更新 attempt 状态；
+- **clean rebuild 的事务边界对齐到现存 retry 实现 + idempotency_key UNIQUE
+  约束**；clean-vs-retry 跨入口并发显式留给 proposal #3 的 lease；
+- **lock primitive `fcntl.flock` 的 fd 继承语义**被显式选定为 supervisor /
+  worker fork 场景的正确选择；非 POSIX preflight fail；
+- 与 split-plan 题案 3 的 `execution_kind` 关系正交、推迟决策。
+
+## 总体结论（更新）
+
+经 18 轮自审 + 1 轮外部独立审视，题案现已：
+
+- 与拆分计划 `worker-pool-split-plan.md` 显式对齐（proposal #2 of 6）；
+- 在 hermes-execution-protocol 中托管 bridge 的完整移除路径（无 silent shim）；
+- 把 publisher 的私有字段（`publish_generation` / `output_manifest_hash`）的
+  权威性绑定到 journal commit；
+- 把 lock 根、lock primitive、平台限制、sweep throttle、no-op 短路全部落到
+  spec 和 tasks，不留给实现者临时拼装；
+- 把 clean rebuild 的并发/幂等边界对到现有事务实现，避免与上一轮 retry 流程
+  产生分叉。

@@ -1,3 +1,20 @@
+## Source
+
+This change is proposal **#2 of 6** in the Worker Pool split plan (see
+[`worker-pool-split-plan.md`](../../../worker-pool-split-plan.md)). The
+sibling proposal `add-agent-worker-pool-management` is the historical
+superset and is kept in `openspec/changes/` as "superset, deprecated by
+the split" until all 6 children archive; it MUST NOT be archived
+independently because that would create `worker-pool-execution` twice. The
+6 children land in this order:
+
+1. `add-execution-workspace-and-profile-per-category` (archived)
+2. `add-staged-publication-allowlist` (this change)
+3. `add-execution-lease-and-fencing`
+4. `add-project-agent-layer-over-hermes-profiles`
+5. `add-local-supervisor-and-slots`
+6. `add-execution-audit-snapshots`
+
 ## Why
 
 The just-archived `add-execution-workspace-and-profile-per-category` change
@@ -101,3 +118,15 @@ APIs — those land in subsequent proposals.
   from proposal 3). Automatic selection or merging of duplicate output
   directories is explicitly out of scope; duplicate publication remains a
   fail-closed publisher error.
+
+## Forward compatibility note for proposal 3
+
+Proposal 3 (`add-execution-lease-and-fencing`) introduces an `execution_kind`
+column with values `initial / retry / revision`. The clean rebuild action
+landed by this proposal is currently modeled as a separate `build_attempt`
+(parallel to retry), NOT as a new `execution_kind`. When proposal 3 lands,
+clean rebuild can be wrapped as either `execution_kind=initial` on a new
+attempt (preserving today's semantics) or as a new `execution_kind=clean`
+on the same attempt chain; that decision belongs to proposal 3. This
+proposal's `execution_mode: "clean"` shard field is orthogonal to
+`execution_kind` and remains valid in either future shape.

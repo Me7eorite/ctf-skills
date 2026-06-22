@@ -74,17 +74,32 @@ publisher's implementation core (it already does symlink/traversal/id
 checks). New responsibilities (manifest hash, change-policy diff, retention
 sweep) are layered around it.
 
-`input/publish-journal.json` and `input/publish-status.json` are reserved
-host-runtime files. Contract preparation requires them to be absent unless an
-existing journal is already being recovered; publisher verification rejects an
-agent-created reserved file. The publisher creates them only after contract
-verification. The final host mutation of `manifest.json` is governed by the
-journal and is not mistaken for an agent input mutation.
-Each publication in a validation-repair loop increments
-`manifest.publish_generation`, uses a fresh journal, and removes or archives
-the committed journal before Hermes can start the next repair invocation.
-Thus one pre-invocation contract can safely authorize multiple publisher-owned
-hash updates without allowing agent mutation of immutable manifest fields.
+All publisher-owned runtime state lives under
+`work/executions/<workspace_id>/state/`, kept separate from agent-readable
+`input/`:
+
+- `state/publish-journal.json` — current in-flight journal (absent at
+  contract-capture time outside of bootstrap recovery).
+- `state/publish-status.json` — last terminal status marker for the sweep.
+- `state/highest-committed-generation.json` — single high-water file
+  carrying the largest committed `publish_generation` plus its
+  `output_manifest_hash`. Authoritative monotonicity source; never deleted
+  while the workspace is alive. A full per-generation archive is
+  deliberately NOT kept by this proposal (history belongs to proposal #6).
+
+Contract input-hash exclusions are enumerated in code: every path under
+`state/` plus the publisher-owned manifest projection fields
+(`output_manifest_hash`, `publish_generation`). Adding a new
+publisher-owned file later requires deliberately updating that exclusion
+list. The publisher creates state files only after contract verification.
+The final host mutation of `manifest.json` is governed by the journal and
+is not mistaken for an agent input mutation. Each `succeeded` publication
+in a validation-repair loop increments `manifest.publish_generation`, uses
+a fresh journal, and atomically updates the high-water file before Hermes
+can start the next repair invocation. `noop` publications touch none of
+these. Thus one pre-invocation contract can safely authorize multiple
+publisher-owned hash updates without allowing agent mutation of immutable
+manifest fields.
 
 Why a separate module: the same logic will later be invoked from
 `BuildPoolSupervisor` (proposal 5) with extra fencing-token args. Splitting
@@ -174,11 +189,20 @@ serialization, synchronous rollback for ordinary failures, and deterministic
 crash recovery rather than claiming an impossible filesystem transaction.
 
 1. Acquire cross-process exclusive locks for every `(category, claimed_id)` in
-   sorted order under `work/locks/build-publisher/`, using a digest-derived
-   filename and POSIX advisory locking. The default acquisition timeout is 30
-   seconds (`BUILD_PUBLISH_LOCK_TIMEOUT_SECONDS`). Hold them through manifest
-   commit or rollback. This prevents overlapping publishers from losing an
-   update even before database fencing lands.
+   sorted order under `paths.build_publisher_locks` (resolves to
+   `work/locks/build-publisher/`). The directory is added to `ProjectPaths` and
+   created during `initialize()`; same-host operators do not need to pre-create
+   it. Lock primitive is `fcntl.flock(LOCK_EX)` on a regular file whose
+   basename is a hex digest of `(category, claimed_id)` (no host paths in the
+   filename to keep error messages safe). The default acquisition timeout is 30
+   seconds (`BUILD_PUBLISH_LOCK_TIMEOUT_SECONDS`); invalid configuration fails
+   `initialize()`/preflight rather than silently falling back. Hold them through
+   manifest commit or rollback. The lock tree MAY live on a different
+   filesystem than `work/challenges/` and `work/executions/`; only temp,
+   canonical, and quarantine are required to be co-located (Decision 5 step 2).
+   Windows hosts are out of scope for this change; preflight rejects them with
+   a clear unsupported-platform message rather than silently using a different
+   primitive.
 2. Validate the entire output and policy before changing canonical state.
    Enforce configured file-count, byte-count, path-depth, and component-length
    limits while walking with `lstat`; never follow symlinks. Defaults are 2 GiB
@@ -188,7 +212,7 @@ crash recovery rather than claiming an impossible filesystem transaction.
    `work/challenges/<cat>/.workspace-<workspace_id>-<rand>/`, then independently
    revalidate and hash every temp tree. No canonical rename begins until all
    claimed ids are staged successfully.
-4. Write and fsync `input/publish-journal.json` containing source, temp,
+4. Write and fsync `state/publish-journal.json` containing source, temp,
    canonical, quarantine, expected hash, and phase for the whole batch.
 5. Move existing canonicals to unique quarantine paths and rename all temps
    into place, updating and fsyncing the journal after every step.

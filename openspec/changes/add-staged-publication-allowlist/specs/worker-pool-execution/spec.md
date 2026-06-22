@@ -38,17 +38,120 @@ For `manifest.json`, contract verification SHALL compare an immutable
 projection that excludes only publisher-owned `output_manifest_hash` and
 `publish_generation`. Identity, `input_hashes`, timeout, execution mode, and
 resume-target fields SHALL remain protected (execution mode is protected via
-the hashed shard snapshot rather than a duplicate manifest field). Every successful publication,
-including validation repair, SHALL increment `publish_generation`, use a fresh
-journal, and remove or archive the committed journal before the next Hermes
-repair invocation.
+the hashed shard snapshot rather than a duplicate manifest field). Every
+publication whose result is `succeeded` (i.e. canonical state changed) SHALL
+increment `publish_generation`, use a fresh journal, and update the
+high-water file (see below) before the next Hermes repair invocation.
+Publications whose result is `noop` (see the no-op scenario below) SHALL
+NOT touch `publish_generation`, the journal, or the high-water file.
 
-`input/publish-journal.json` and `input/publish-status.json` SHALL be reserved
-for host runtime writes. They MUST be absent when a new contract is captured
-unless bootstrap is recovering an existing journal. An agent-created reserved
-file SHALL fail contract verification. Publisher-created journal/status files
-and the journaled final manifest update are authorized runtime mutations and
-SHALL not be confused with agent input mutation.
+All publisher-owned runtime state SHALL live under
+`work/executions/<workspace_id>/state/`, NOT under `input/`. This separates
+host-runtime artifacts from agent-readable inputs and keeps contract
+verification clean (see "input-hash exclusions" below). The minimum set is:
+
+- `state/publish-journal.json` — current in-flight journal (present only
+  during a publication; archived/removed at terminal phase).
+- `state/publish-status.json` — last terminal status marker used by the
+  retention sweep.
+- `state/highest-committed-generation.json` — a single high-water file
+  recording the largest committed `publish_generation` and the
+  corresponding `output_manifest_hash`. Written atomically (temp +
+  rename) at the end of every successful publication. This file is the
+  authoritative source of monotonicity; it SHALL NOT be deleted while the
+  workspace is alive. A full historical archive is intentionally NOT kept
+  by this proposal (audit trails belong to proposal #6).
+
+Contract input-hash exclusions: the publisher's contract input-hash SHALL
+exclude every path under `state/` and SHALL exclude `manifest.json`'s
+publisher-owned projection fields (`output_manifest_hash`,
+`publish_generation`). The host-owned input set that IS hashed comprises
+`shard.json`, `change-policy.json` (when present), `base-artifact/` (when
+present), and the rest of `manifest.json`. Implementations SHALL enumerate
+the excluded set in code (not regex over `state/`), so adding a new
+publisher-owned file later requires an explicit update.
+
+Because `publish_generation` and `output_manifest_hash` are excluded from
+contract verification, the publisher SHALL NOT trust their on-disk values
+unsupervised. Specifically:
+
+- The publisher SHALL read the last committed `publish_generation` from
+  `state/highest-committed-generation.json` (or 0 when that file does not
+  exist), NOT from `manifest.json`. The new generation SHALL be strictly
+  greater than that value; any other manifest value is ignored for
+  monotonicity purposes and replaced atomically by the new generation
+  during the manifest commit step.
+- The publisher SHALL treat `manifest.output_manifest_hash` as authoritative
+  ONLY when a journal entry for the same `publish_generation` is in the
+  `committed` phase. A hash recorded in `manifest.json` whose generation does
+  not match a committed journal entry SHALL be ignored for downstream audit
+  and re-derived from the canonical tree before the next commit.
+
+#### Scenario: Publish generation must advance past the committed journal
+
+- **GIVEN** the last committed journal records `publish_generation = 3`
+- **AND** `manifest.json` reports `publish_generation = 999` (agent-written
+  during Hermes execution, excluded from contract verification)
+- **WHEN** the publisher prepares the next publication
+- **THEN** it ignores the manifest value
+- **AND** it writes a new journal at `publish_generation = 4`
+- **AND** the manifest commit replaces both fields atomically
+
+#### Scenario: Uncommitted manifest hash is not authoritative
+
+- **GIVEN** a prior publication crashed after manifest write but before
+  marking the journal `committed`
+- **WHEN** bootstrap reconciles the workspace
+- **THEN** the rollback restores the predecessor canonical tree
+- **AND** any downstream audit treats the manifest's `output_manifest_hash`
+  as not authoritative until the next successful publication overwrites it
+
+Everything under `state/` SHALL be reserved for host runtime writes; agents
+have no read or write need for these files and contract verification SHALL
+fail if Hermes creates anything under `state/`. Among these:
+
+- `state/publish-journal.json` MUST be absent when a new contract is
+  captured unless bootstrap is recovering an existing journal.
+- `state/highest-committed-generation.json` MAY exist and SHALL NOT be
+  deleted by contract capture.
+- `state/publish-status.json` MAY exist (it records the last terminal
+  marker) and SHALL NOT be deleted by contract capture.
+
+Publisher-created files under `state/` and the journaled final manifest
+update are authorized runtime mutations and SHALL not be confused with
+agent input mutation.
+
+These reserved paths SHALL be uniquely scoped to one workspace by the
+`workspace_id` segment of their parent path; no other workspace ever reads or
+writes them. Each journal record SHALL be identified by the tuple
+`(workspace_id, publish_generation)`. Starting a new execution in an existing
+workspace SHALL fail preflight when `state/publish-journal.json` is in a
+phase other than `committed`, and SHALL force the bootstrap recovery path
+instead of silently overwriting the journal. Recovery is idempotent under
+the same `(workspace_id, publish_generation)` and SHALL refuse to recover
+a journal whose generation is less than the value in
+`state/highest-committed-generation.json`.
+
+After bootstrap recovery completes successfully (either finalize or
+rollback), the publisher SHALL treat the workspace as in its post-recovery
+canonical state and proceed with whatever fresh contract preparation or
+publication the runner requests next. Bootstrap recovery is NOT itself
+counted as a publication; if it finalizes an incomplete journal, the
+high-water file is updated to that finalized generation, and no new
+generation is consumed. If it rolls back, no generation is consumed and the
+high-water file is unchanged.
+
+Crash window between manifest write and high-water update: the commit
+sequence (canonical rename → manifest write → high-water update) can crash
+between any pair of steps. If recovery finds a `committed` journal whose
+generation is strictly greater than the high-water value, this means the
+manifest was written but the high-water update did not land. Recovery
+SHALL push the high-water file forward to the journal's generation
+atomically (temp + rename), then mark the journal archived/removed. This
+operation is idempotent: re-running it on a workspace already at the same
+generation is a no-op. Recovery SHALL NOT roll back canonical state in
+this case because the journal is `committed` — the canonical and manifest
+are already the new authoritative version.
 
 #### Scenario: Publisher rejects symlinked output
 
@@ -95,6 +198,29 @@ SHALL not be confused with agent input mutation.
 - **THEN** publisher-owned manifest fields do not cause a false contract error
 - **AND** any mutation to an immutable manifest field still fails
 
+#### Scenario: Repair with byte-identical output is a publisher no-op
+
+- **GIVEN** the prior publication committed `output_manifest_hash = H`
+- **AND** the repair invocation produced staging whose computed hash equals
+  `H` (byte-identical output — for example because the runner's
+  no-changes detector aborted the repair before Hermes edited anything)
+- **WHEN** the publisher prepares to publish
+- **THEN** it MUST short-circuit: no journal is written, `publish_generation`
+  is unchanged, no quarantine is created, no canonical rename runs, and the
+  retention sweep is not triggered
+- **AND** the publisher reports a `noop` outcome distinct from `succeeded`
+
+#### Scenario: Runner observes noop and exits the repair loop
+
+- **GIVEN** the publisher returned `noop` for the current repair iteration
+- **WHEN** the runner receives that outcome
+- **THEN** it MUST exit the validation-repair loop without invoking the
+  validator again (the canonical tree is byte-identical to the previous
+  iteration, so re-running validation would only produce duplicate events)
+- **AND** it MUST NOT advance the attempt's progress percent or write a
+  terminal marker on the noop iteration itself; the attempt's terminal
+  state is whatever the prior succeeded publication produced
+
 ### Requirement: Publisher bounds resource consumption before staging
 
 The publisher SHALL enforce configurable limits for total regular-file bytes,
@@ -131,6 +257,15 @@ contains more than one directory matching a claimed id, publication SHALL fail
 before any canonical rename. The publisher SHALL NOT select, merge, or delete
 one of the ambiguous candidates automatically.
 
+`resume_output_targets` is an advisory binding used to render the prompt and
+to enrich diagnostics; it SHALL NOT be the publisher's truth source for what
+to publish. The publisher SHALL enumerate `./output/` directly under the
+allowlist rules and decide what to publish from that enumeration. When the
+enumeration disagrees with `resume_output_targets` (e.g. an id is missing
+from output, or the published basename differs from the recorded target),
+publication SHALL fail in the `contract` phase with both the recorded target
+and the offending observed path, and the canonical tree SHALL be unchanged.
+
 #### Scenario: Retry edits the materialized directory in place
 
 - **GIVEN** canonical directory
@@ -149,6 +284,16 @@ one of the ambiguous candidates automatically.
 - **AND** Hermes also creates `pwn-c8c19354-0001-new-slug/`
 - **WHEN** the publisher validates workspace output
 - **THEN** publication fails with a duplicate-id error
+- **AND** the canonical tree is unchanged
+
+#### Scenario: Resume target binding disagrees with staging
+
+- **GIVEN** `resume_output_targets["web-abcdef12-0001"]` records
+  `output/challenges/web/web-abcdef12-0001-demo`
+- **AND** the only directory the agent left in staging is
+  `output/challenges/web/web-abcdef12-0001-other`
+- **WHEN** the publisher validates workspace output
+- **THEN** publication fails in the `contract` phase referencing both paths
 - **AND** the canonical tree is unchanged
 
 ### Requirement: Clean rebuild starts without prior artifact or progress carry-forward
@@ -195,11 +340,38 @@ plan computation, materialization, prompt rendering, and contract creation.
 
 Clean rebuild SHALL apply the same eligibility rules as retry: its source MUST
 be the latest failed/lost build attempt and its design task MUST be
-`build_failed`. Eligibility re-check and creation of the new build attempt
-SHALL occur in one database transaction. Concurrent or replayed requests with
-the same idempotency key SHALL create at most one new attempt; a stale source
-attempt SHALL be rejected. The API SHALL require an explicit confirmation
-field and SHALL NOT rely only on a browser confirmation dialog.
+`build_failed`. Eligibility re-check SHALL re-read the source attempt row and
+the design task row within the same session that prepares the new attempt's
+identity and shard payload (the existing `_prepare` pattern in
+`BuildOrchestrationService`); committing the new attempt MAY use a separate
+session. Concurrency safety SHALL be enforced by a UNIQUE constraint on
+`build_attempts.idempotency_key`: replayed requests with the same key
+resolve to the existing row, and concurrent inserts produce one row plus a
+UNIQUE-violation that the API converts to the existing-row response. A stale
+source attempt SHALL be rejected with a stable error code. The API SHALL
+require an explicit `confirmed=true` field in the request body, so
+misconfigured clients that omit it (default-false case) fail closed with
+`409 confirmation_required` rather than triggering clean rebuild
+unintentionally. This protects against client default behavior and
+accidental replays, NOT against deliberate abuse — a caller that
+intentionally sends `confirmed=true` is treated as confirming. Stronger
+API-side authorization (RBAC, audit) is out of scope for this proposal.
+
+This Requirement guarantees clean-vs-clean concurrency. Clean-vs-retry
+cross-entry concurrency (operator triggers both retry and clean rebuild on
+the same failed attempt) inherits the existing retry transaction shape and
+is NOT additionally covered here; it carries the same pre-existing race
+window as retry-vs-retry. Proposal #3 `add-execution-lease-and-fencing`
+closes that window via the execution-row lease.
+
+Cross-feature concurrency with `resource_deletion`: deleting a challenge
+via the existing `resource_deletion` flow does NOT take the publisher's
+`(category, id)` lock. A delete fired during an in-flight publish for the
+same id may therefore observe a half-renamed canonical tree or remove a
+canonical directory the publisher just placed. Within this proposal that
+window is acknowledged as a pre-existing race; aligning
+`resource_deletion` with the publisher locks is out of scope and is
+expected to land alongside proposal #3's lease/fencing work.
 
 #### Scenario: Concurrent clean rebuild requests create one attempt
 
@@ -213,9 +385,34 @@ field and SHALL NOT rely only on a browser confirmation dialog.
 
 The publisher SHALL acquire cross-process locks for every claimed
 `(category, id)` in deterministic sorted order and hold them until commit or
-rollback completes. It SHALL validate and copy the entire claimed set to
-temporary siblings before changing canonical state. Temp, canonical, and
-quarantine paths SHALL be verified as same-filesystem before commit.
+rollback completes. Locks live in `paths.build_publisher_locks`, which
+SHALL be defined as `paths.locks_root / "build-publisher"`; both are
+registered on `ProjectPaths` and created by `initialize()`. Future
+proposals adding their own locks (e.g. lease locks in proposal #3) SHALL
+add sibling directories under `paths.locks_root`, never nest under
+`build-publisher/`. Missing or unwritable lock root SHALL fail preflight
+before any canonical mutation. Lock filenames SHALL be a hex digest
+derived from `(category, claimed_id)` and SHALL NOT embed host paths.
+
+Lock files are decoupled from challenge lifecycle: the publisher does not
+delete the lock file when a publication finishes, and does not delete it
+when the underlying challenge is later removed via `resource_deletion`.
+Orphan lock files (claim ids that no longer exist) are harmless — they
+cost one inode each and never block correct publications. The
+primitive is `fcntl.flock(LOCK_EX)` with the configured timeout;
+`fcntl.lockf` / `F_SETLK` is NOT used because lock ownership in this
+proposal must be inherited across `fork()` (the supervisor in proposal #5
+forks worker processes that own the publisher lock; flock's
+fd-inheritance semantics make trylock from outside the worker's process
+tree correctly report the lock as held). Non-POSIX hosts SHALL fail
+preflight with an explicit unsupported-platform error rather than
+silently degrading. The lock root MAY reside on a different filesystem
+than canonical or quarantine; only temp, canonical, and quarantine are
+required to be same-filesystem.
+
+It SHALL validate and copy the entire claimed set to temporary siblings before
+changing canonical state. Temp, canonical, and quarantine paths SHALL be
+verified as same-filesystem before commit.
 
 Before the first canonical rename, the publisher SHALL write and fsync a
 durable batch journal listing every temp, canonical, quarantine, expected
@@ -263,6 +460,20 @@ unrelated challenge directories.
 - **THEN** it acquires the same claimed-id locks
 - **AND** deterministically completes rollback or finalization from journal
   state
+
+#### Scenario: Recovery pushes high-water forward after manifest-then-crash
+
+- **GIVEN** the prior publication advanced the canonical tree and wrote
+  `manifest.json` at `publish_generation = 5`
+- **AND** the journal is `committed` at generation 5
+- **AND** the process died before `state/highest-committed-generation.json`
+  was updated; it still records generation 4
+- **WHEN** workspace bootstrap runs
+- **THEN** recovery atomically updates the high-water file to 5
+- **AND** the journal is archived/removed
+- **AND** the canonical and manifest are not rolled back (the journal
+  recorded `committed`)
+- **AND** repeating the same recovery is a no-op
 
 ### Requirement: Change-policy file enforces preserve and forbid rules
 
@@ -408,9 +619,14 @@ field to a database execution row.
 
 ### Requirement: Bounded retention sweep keeps retained workspace artifacts disk-bounded
 
-On every publish call (success or failure), the publisher SHALL perform an
+On publish calls (success or failure), the publisher SHALL perform an
 opportunistic sweep over replaced-canonical quarantine and failed-workspace
-`output/` and `logs/` staging:
+`output/` and `logs/` staging, subject to a per-process throttle: at most one
+sweep per `BUILD_PUBLISH_SWEEP_INTERVAL_SECONDS` (default 60 seconds). When a
+sweep is suppressed by the throttle the publish path SHALL still record that
+a sweep is due, so the next eligible call (or bootstrap) runs it. The
+throttle SHALL be configurable as a positive integer; invalid values fail
+preflight.
 
 - Treat each terminal workspace containing replaced-canonical quarantine or
   failed output/log staging as one retention root.

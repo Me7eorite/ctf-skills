@@ -1,11 +1,14 @@
 ## 1. Publisher Module
 
 - [ ] 1.1 Create `src/services/build_publisher.py` with `prepare_publication_contract(...)` and `publish_workspace_output(paths, workspace, *, contract)` entry points plus an immutable `PublicationContract`.
-- [ ] 1.2 Move the existing `promote_claimed_outputs` core logic from `src/hermes/workspace.py` into the publisher as its first stage. Keep the public name in `workspace.py` as a thin shim for backward compatibility during the transition; the runner stops importing it directly.
+- [ ] 1.2 Move the existing `promote_claimed_outputs` core logic from `src/hermes/workspace.py` into the publisher as its first stage. Within the same PR, replace any remaining export of that name with a deprecation stub that raises `WorkspacePromotionError("promote_claimed_outputs removed; use services.build_publisher.publish_workspace_output with a PublicationContract")`; the runner and all other callers MUST import the publisher entry point directly. No silent forwarding is permitted.
 - [ ] 1.3 Add a `PublishResult` dataclass: `published_paths: list[Path]`, `quarantined: list[Path]`, `output_manifest_hash: str`.
 - [ ] 1.4 Capture normalized shard identity, execution mode, resume targets, parsed policy, base digests, and host-owned input hashes before Hermes invocation; re-verify them before publication.
 - [ ] 1.5 Add stable publisher error phases (`contract`, `allowlist`, `policy`, `limits`, `stage`, `commit`, `manifest`, `rollback`, `recovery`) without host-absolute path leakage.
 - [ ] 1.6 Verify an immutable manifest projection while allowing only publisher-owned `output_manifest_hash`/`publish_generation` evolution; use a fresh journal and increment generation for every validation-repair publication.
+- [ ] 1.7 Derive the next `publish_generation` from `state/highest-committed-generation.json` (falling back to 0 when absent); reject any new value not strictly greater; atomically update that high-water file (temp + rename) at the end of every successful publication; never delete it while the workspace is alive; document that `manifest.json::publish_generation` and `output_manifest_hash` are authoritative ONLY when paired with the high-water file at the same generation.
+- [ ] 1.8 Place all publisher-owned runtime state under `state/` (workspace-relative `state/publish-journal.json`, `state/publish-status.json`, `state/highest-committed-generation.json`). Extend `ExecutionWorkspace` with a `.state` property; ensure `initialize()` creates the directory; reject Hermes-written files under `state/` during contract verification.
+- [ ] 1.9 In the contract input-hash, EXPLICITLY exclude every path under `state/` and the publisher-owned manifest projection fields. Enumerate the exclusion set in code (not regex over `state/`) so adding a new publisher-owned file later requires a deliberate update.
 
 ## 2. Allowlist Hardening
 
@@ -32,15 +35,19 @@
 - [ ] 4.1 Compute a deterministic batch hash over claimed id, relative path, entry type, normalized mode, and content using length-prefixed canonical records; include empty directories.
 - [ ] 4.2 Re-hash canonicals after rename, then atomically write `output_manifest_hash` to the workspace manifest while locks remain held.
 - [ ] 4.3 Roll back the canonical batch on hash mismatch or manifest replacement failure; cover the rename/manifest crash window in the durable journal.
+- [ ] 4.4 Short-circuit publish with a `noop` outcome (no journal, no generation increment, no quarantine, no sweep) when the staged hash equals the last committed `output_manifest_hash`; expose the outcome to the runner so it can avoid a redundant validation rerun.
 
 ## 5. Serialized Recoverable Publish
 
-- [ ] 5.1 Acquire sorted digest-named POSIX cross-process `(category, claimed_id)` locks with a validated default 30-second timeout and hold them through commit or rollback.
+- [ ] 5.0 Add `paths.locks_root` (= `work/locks`) and `paths.build_publisher_locks` (= `paths.locks_root / "build-publisher"`) to `src/core/paths.py`; ensure `initialize()` creates both (default umask is sufficient — the lock files carry no secrets). Future proposals MUST add sibling subdirectories under `locks_root`, never nest under `build-publisher/`. Reject non-POSIX hosts in preflight with a clear unsupported-platform error.
+- [ ] 5.1 Acquire sorted digest-named POSIX cross-process `(category, claimed_id)` locks under `paths.build_publisher_locks` using `fcntl.flock(LOCK_EX)` with a validated default 30-second timeout, and hold them through commit or rollback. Lock filenames SHALL be a digest of `(category, claimed_id)` only — host paths are never embedded.
 - [ ] 5.2 Validate and stage the complete batch before canonical mutation; require temp/canonical/quarantine to be on one filesystem.
 - [ ] 5.3 Write/fsync a durable batch journal before the first canonical rename and after every phase transition.
 - [ ] 5.4 Preserve the fixed quarantine tree, adding a unique transaction suffix on basename collision.
 - [ ] 5.5 On ordinary failure, reverse the journal to restore every predecessor and remove every temp/new destination.
 - [ ] 5.6 Add bootstrap reconciliation for incomplete journals under the same locks and make recovery idempotent.
+- [ ] 5.7 In bootstrap reconciliation, handle the "committed journal generation > high-water" case explicitly: atomically push `state/highest-committed-generation.json` forward to the journal's generation, then archive/remove the journal. Test that re-running reconciliation on an already-finalized workspace is a no-op.
+- [ ] 5.8 Document that publisher lock files are decoupled from challenge lifecycle: the publisher never deletes them on publication completion or on `resource_deletion`. Orphan lock files are expected and harmless.
 
 ## 6. Retention Sweep
 
@@ -49,6 +56,7 @@
 - [ ] 6.3 Treat each terminal workspace containing replaced-canonical quarantine or failed output/log staging as one retention root; remove roots older than 7 days, then cap all such roots at the newest 20.
 - [ ] 6.4 Skip incomplete journals and any workspace whose publisher locks cannot be acquired non-blockingly.
 - [ ] 6.5 Sweep errors (permission/busy) log a warning and do NOT block the publish result.
+- [ ] 6.6 Throttle sweep invocations to at most once per `BUILD_PUBLISH_SWEEP_INTERVAL_SECONDS` per process (default 60 seconds), recording suppressed calls so the next eligible call still runs the sweep; validate that the env override parses as a positive integer.
 
 ## 7. Runner Integration
 
@@ -65,9 +73,9 @@
 ## 7A. Build Orchestration and UI
 
 - [ ] 7A.1 Keep the existing retry action resume-oriented and write `execution_mode: "resume"` into its shard payload.
-- [ ] 7A.2 Add a distinct clean-rebuild service/API action that writes `execution_mode: "clean"`, omits `resume_from_shard_basename`, and transactionally rechecks latest-attempt/task eligibility.
-- [ ] 7A.3 Require an idempotency key and explicit confirmation field in the clean-rebuild API; concurrent/replayed requests create at most one attempt and stale source attempts fail.
-- [ ] 7A.4 Expose separate `重试构建` and `干净重建` controls in the build list; browser confirmation supplements, but does not replace, API confirmation.
+- [ ] 7A.2 Add a database migration introducing `build_attempts.idempotency_key TEXT NULL UNIQUE` (sparse unique index, NULL allowed for legacy rows). Persist the API-provided key on the new attempt; replayed requests with the same key resolve to the existing row and return its id. Concurrent inserts that lose the UNIQUE race SHALL be caught and re-read the surviving row instead of surfacing the DB error. Stale source attempts fail with a stable error code. The `confirmed` boolean is a request-body field; absence of `confirmed=true` returns `409 confirmation_required`. (This task lands before 7A.3; 7A.3's concurrency safety depends on the UNIQUE column existing.)
+- [ ] 7A.3 Add `BuildOrchestrationService.clean_rebuild(attempt_id, *, idempotency_key, confirmed)` that reuses the existing `_prepare` / `_submit` plumbing (eligibility re-check happens in `_prepare`'s session against the source attempt and design task rows; new attempt commit MAY use a separate session, matching `retry()`). Extend `_prepare` / `_validate_task_for_submit` with an explicit `execution_mode` branch: in `resume` mode it continues to consume `expected_source_id` and writes `resume_from_shard_basename` into the shard payload; in `clean` mode it still anchors eligibility on the source attempt id (latest failed/lost) but SHALL NOT write `resume_from_shard_basename`. The new shard payload SHALL write `execution_mode: "clean"`. Concurrency safety relies on the idempotency-key UNIQUE constraint introduced in 7A.2, NOT on holding a single transaction across re-check and commit. Tests cover (a) eligibility against a stale source attempt, (b) concurrent submissions with the same idempotency key collapsing to one row, (c) replay of an already-completed key returning the same id, and (d) clean payload contains `execution_mode: "clean"` and omits `resume_from_shard_basename`.
+- [ ] 7A.4 Expose separate `重试构建` and `干净重建` controls in the build list; browser confirmation supplements, but does not replace, API confirmation. The UI generates the idempotency key client-side per **button press** (one UUIDv4 per click — a new click is a new key, even if the previous attempt is still failed). Only the HTTP-layer retries of the SAME in-flight `fetch` reuse the same key (network deduplication); the UI MUST NOT reuse a key across user-visible interactions. Document this rule next to the click handler so future maintainers don't widen the reuse window.
 
 ## 8. Spec Migration
 
@@ -112,5 +120,5 @@
 
 ## 10. Cleanup
 
-- [ ] 10.1 Once the publisher path is in place and tests are green, delete the now-unused shim `promote_claimed_outputs` from `src/hermes/workspace.py` (or keep as a deprecated forwarder for one release if external callers exist).
-- [ ] 10.2 Remove imports of `promote_claimed_outputs` from `src/hermes/runner.py` and any other call sites; only `services.build_publisher.publish_workspace_output` should be referenced.
+- [ ] 10.1 Delete `promote_claimed_outputs` (including the deprecation stub from 1.2) from `src/hermes/workspace.py` before this change archives. A silent forwarding shim is NOT a permitted exit; if any caller still references the old name at archive time, archival is blocked until the reference is migrated.
+- [ ] 10.2 Remove imports of `promote_claimed_outputs` from `src/hermes/runner.py` and any other call sites; only `services.build_publisher.publish_workspace_output` should be referenced. Add a repository-level grep guard in CI (or an equivalent unit test) that fails if the symbol re-appears.

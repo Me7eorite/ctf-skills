@@ -21,6 +21,13 @@ helper functions kept in `workspace.py` (`_match_claimed_id`,
 `_matching_directories`) remain available as internal building blocks for
 the publisher; they do NOT change.
 
+The bridge function name SHALL NOT be retained as a silent compatibility
+forwarder. If any in-tree caller still references `promote_claimed_outputs`
+when the publisher lands, the migration replaces the public name with a
+deprecation stub that raises `WorkspacePromotionError`. The stub itself is
+deleted before this change archives; archival is gated on the symbol no
+longer being importable.
+
 Tests previously written against the bridge wording are migrated to
 publisher-named tests (`test_publisher_*`) in
 `tests/app/test_build_publisher.py`. Claimed-id matching, quarantine location,
