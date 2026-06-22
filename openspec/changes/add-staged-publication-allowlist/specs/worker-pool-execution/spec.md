@@ -238,7 +238,9 @@ and each temporary copy SHALL be independently rescanned before commit to
 detect a changed entry or type.
 
 Defaults SHALL be 2 GiB total regular-file bytes, 50,000 regular files, depth
-64, and 255 UTF-8 bytes per path component. Environment overrides and the
+64, and 255 UTF-8 bytes per path component. Environment overrides
+(`BUILD_PUBLISH_MAX_BYTES`, `BUILD_PUBLISH_MAX_FILES`,
+`BUILD_PUBLISH_MAX_DEPTH`, `BUILD_PUBLISH_MAX_COMPONENT_BYTES`) and the
 publisher lock timeout (default 30 seconds) SHALL parse as positive integers;
 invalid configuration SHALL fail startup/preflight rather than silently use a
 different value.

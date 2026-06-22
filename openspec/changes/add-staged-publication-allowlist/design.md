@@ -41,7 +41,13 @@ slot in without rewriting the boundary.
 
 ### Decision 1: Publisher is a separate module, called from the runner
 
-`services/build_publisher.py` exposes preparation and publication functions:
+`hermes/build_publisher.py` exposes preparation and publication functions. This
+is intentionally inside the `hermes` package: the live repository enforces a
+dependency direction where `hermes` may depend only on `domain` and `core`, and
+must not import `services`. The publisher is part of the execution-workspace
+boundary and reuses workspace-private validation helpers, so placing it under
+`hermes` preserves the existing architecture while still giving the runner a
+direct publisher entry point:
 
 ```python
 def prepare_publication_contract(
@@ -211,7 +217,9 @@ crash recovery rather than claiming an impossible filesystem transaction.
    Enforce configured file-count, byte-count, path-depth, and component-length
    limits while walking with `lstat`; never follow symlinks. Defaults are 2 GiB
    total regular-file bytes, 50,000 regular files, depth 64, and 255 UTF-8 bytes
-   per component; environment overrides must parse as positive integers.
+   per component; environment overrides (`BUILD_PUBLISH_MAX_BYTES`,
+   `BUILD_PUBLISH_MAX_FILES`, `BUILD_PUBLISH_MAX_DEPTH`,
+   `BUILD_PUBLISH_MAX_COMPONENT_BYTES`) must parse as positive integers.
 3. Copy every candidate to a temp sibling
    `work/challenges/<cat>/.workspace-<workspace_id>-<rand>/`, then independently
    revalidate and hash every temp tree. No canonical rename begins until all

@@ -23,7 +23,7 @@ from core.queue import SUPPORTED_CATEGORIES
 _LOGGER = logging.getLogger(__name__)
 _MANUAL_PREFIX = "manual-"
 _MANUAL_RETENTION = timedelta(days=7)
-_LAYOUT = ("input", "references", "output", "logs", "bin")
+_LAYOUT = ("input", "references", "output", "logs", "bin", "state")
 # Phase 1 (9-references → 3): the design skill is now a single core file
 # (`design-core.md` — output shape, spec template, quality gate, safety) plus
 # a unified `category-tactics.md` covering every category. Per-category
@@ -92,6 +92,10 @@ class ExecutionWorkspace:
     @property
     def hermes_log(self) -> Path:
         return self.logs / "hermes.log"
+
+    @property
+    def state(self) -> Path:
+        return self.root / "state"
 
 
 def derive_workspace_id(payload: Mapping[str, Any]) -> str:
@@ -271,76 +275,11 @@ def promote_claimed_outputs(
     workspace: ExecutionWorkspace,
     payload: Mapping[str, Any],
 ) -> list[Path]:
-    """Atomically publish only claimed, validated workspace challenge directories."""
-    category, challenge_ids = _validate_challenges(payload.get("challenges"))
-    output_root = workspace.output
-    expected_root = output_root / "challenges" / category
-    _reject_tree_symlinks(output_root)
-    _reject_nonconforming_output(output_root, expected_root, challenge_ids)
-    if not expected_root.is_dir():
-        raise WorkspacePromotionError(f"missing output category directory: {category}")
-
-    candidates: dict[str, Path] = {}
-    for entry in expected_root.iterdir():
-        if not entry.is_dir() or entry.is_symlink():
-            raise WorkspacePromotionError(f"invalid output entry: {entry.name}")
-        challenge_id = _match_claimed_id(entry.name, challenge_ids)
-        if challenge_id is None:
-            raise WorkspacePromotionError(f"unclaimed output directory: {entry.name}")
-        if challenge_id in candidates:
-            raise WorkspacePromotionError(
-                f"multiple output directories for claimed id {challenge_id}"
-            )
-        metadata = read_json(entry / "metadata.json", None)
-        if not isinstance(metadata, dict):
-            raise WorkspacePromotionError(f"missing metadata.json for {challenge_id}")
-        if metadata.get("id") != challenge_id or metadata.get("category") != category:
-            raise WorkspacePromotionError(f"metadata mismatch for {challenge_id}")
-        candidates[challenge_id] = entry
-    missing = challenge_ids - candidates.keys()
-    if missing:
-        raise WorkspacePromotionError(
-            f"missing claimed output: {', '.join(sorted(missing))}"
-        )
-
-    canonical_root = paths.challenges / category
-    canonical_root.mkdir(parents=True, exist_ok=True)
-    quarantine_root = workspace.root / "quarantine" / category
-    promoted: list[Path] = []
-    for challenge_id in sorted(challenge_ids):
-        source = candidates[challenge_id]
-        existing = _matching_directories(canonical_root, challenge_id)
-        if len(existing) > 1:
-            raise WorkspacePromotionError(
-                f"multiple canonical directories for claimed id {challenge_id}"
-            )
-        temporary = canonical_root / f".workspace-{workspace.workspace_id}-{uuid.uuid4().hex}"
-        shutil.copytree(source, temporary)
-        quarantined: Path | None = None
-        try:
-            if existing:
-                quarantine_root.mkdir(parents=True, exist_ok=True)
-                quarantined = quarantine_root / existing[0].name
-                if quarantined.exists():
-                    # A validation-repair invocation can promote the same claimed
-                    # challenge more than once. Preserve every prior canonical version
-                    # instead of blocking the repair loop on the first quarantine.
-                    quarantined = quarantine_root / (
-                        f"{existing[0].name}.repair-{uuid.uuid4().hex}"
-                    )
-                existing[0].replace(quarantined)
-            destination = canonical_root / source.name
-            if destination.exists():
-                raise WorkspacePromotionError(f"promotion destination exists: {destination}")
-            temporary.replace(destination)
-            promoted.append(destination)
-        except BaseException:
-            if temporary.exists():
-                shutil.rmtree(temporary)
-            if quarantined is not None and quarantined.exists() and not existing[0].exists():
-                quarantined.replace(existing[0])
-            raise
-    return promoted
+    del paths, workspace, payload
+    raise WorkspacePromotionError(
+        "promote_claimed_outputs removed; use hermes.build_publisher."
+        "publish_workspace_output with a PublicationContract"
+    )
 
 
 def _executions_path(paths: ProjectPaths) -> Path:

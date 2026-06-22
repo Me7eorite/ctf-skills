@@ -37,6 +37,10 @@ from domain.resume import (
 )
 from domain.validation import ChallengeValidator
 from hermes import process as hermes_process
+from hermes.build_publisher import (
+    prepare_publication_contract,
+    publish_workspace_output,
+)
 from hermes.process import (
     DEFAULT_HERMES_COMMAND,
     DEFAULT_HERMES_TIMEOUT,
@@ -57,7 +61,6 @@ from hermes.workspace import (
     materialize_resume_outputs,
     preflight_workspace,
     prepare_workspace,
-    promote_claimed_outputs,
     record_effective_timeout,
 )
 from hermes.workspace_progress import WorkspaceProgressTailer, materialize_progress_shim
@@ -574,6 +577,30 @@ class HermesRunner:
             seconds=effective_timeout,
             source=effective_timeout_source,
         )
+        try:
+            publication_contract = prepare_publication_contract(
+                self.paths,
+                workspace,
+                payload,
+            )
+        except (OSError, WorkspacePromotionError, ValueError) as exc:
+            message = f"Publication contract preparation failed: {exc}"
+            self._mark_shard_failed(
+                shard,
+                original_shard_name,
+                worker,
+                challenge_ids,
+                report,
+                message,
+                1,
+            )
+            return {
+                "status": "failed",
+                "failure_type": "infrastructure",
+                "shard": original_shard_name,
+                "returncode": 1,
+                "error": message,
+            }
         log = workspace.hermes_log
         prompt = self.render_prompt(
             workspace.input / "shard.json",
@@ -615,7 +642,11 @@ class HermesRunner:
 
         if returncode == 0 or returncode == HERMES_TIMEOUT_RETURNCODE:
             try:
-                promote_claimed_outputs(self.paths, workspace, payload)
+                publish_workspace_output(
+                    self.paths,
+                    workspace,
+                    contract=publication_contract,
+                )
             except (OSError, WorkspacePromotionError, ValueError) as exc:
                 message = f"Workspace output promotion failed: {exc}"
                 self._mark_shard_failed(
@@ -734,7 +765,11 @@ class HermesRunner:
                 )
                 break
             try:
-                promote_claimed_outputs(self.paths, workspace, payload)
+                publish_workspace_output(
+                    self.paths,
+                    workspace,
+                    contract=publication_contract,
+                )
             except (OSError, WorkspacePromotionError, ValueError) as exc:
                 _LOGGER.warning(
                     "validation repair attempt %s promotion failed: %s",

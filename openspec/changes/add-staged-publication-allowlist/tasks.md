@@ -1,41 +1,41 @@
 ## 1. Publisher Module
 
-- [ ] 1.1 Create `src/services/build_publisher.py` with `prepare_publication_contract(...)` and `publish_workspace_output(paths, workspace, *, contract)` entry points plus an immutable `PublicationContract`.
-- [ ] 1.2 Move the existing `promote_claimed_outputs` core logic from `src/hermes/workspace.py` into the publisher as its first stage. Within the same PR, replace any remaining export of that name with a deprecation stub that raises `WorkspacePromotionError("promote_claimed_outputs removed; use services.build_publisher.publish_workspace_output with a PublicationContract")`; the runner and all other callers MUST import the publisher entry point directly. No silent forwarding is permitted.
-- [ ] 1.3 Add a `PublishResult` dataclass: `published_paths: list[Path]`, `quarantined: list[Path]`, `output_manifest_hash: str`.
-- [ ] 1.4 Capture normalized shard identity, execution mode, resume targets, parsed policy, base digests, and host-owned input hashes before Hermes invocation; re-verify them before publication.
-- [ ] 1.5 Add stable publisher error phases (`contract`, `allowlist`, `policy`, `limits`, `stage`, `commit`, `manifest`, `rollback`, `recovery`) without host-absolute path leakage.
-- [ ] 1.6 Verify an immutable manifest projection while allowing only publisher-owned `output_manifest_hash`/`publish_generation` evolution; use a fresh journal and increment generation for every validation-repair publication whose result is `succeeded`; `noop` publications MUST NOT increment generation or write a journal.
-- [ ] 1.7 Derive the next `publish_generation` from `state/highest-committed-generation.json` (falling back to 0 when absent); reject any new value not strictly greater; atomically update that high-water file (temp + rename) at the end of every successful publication; never delete it while the workspace is alive; document that `manifest.json::publish_generation` and `output_manifest_hash` are authoritative ONLY when paired with the high-water file at the same generation.
-- [ ] 1.8 Place all publisher-owned runtime state under `state/` (workspace-relative `state/publish-journal.json`, `state/publish-status.json`, `state/highest-committed-generation.json`). Extend `ExecutionWorkspace` with a `.state` property; ensure `initialize()` creates the directory; reject Hermes-written files under `state/` during contract verification.
-- [ ] 1.9 In the contract input-hash, EXPLICITLY exclude every path under `state/` and the publisher-owned manifest projection fields. Enumerate the exclusion set in code (not regex over `state/`) so adding a new publisher-owned file later requires a deliberate update.
+- [x] 1.1 Create `src/hermes/build_publisher.py` with `prepare_publication_contract(...)` and `publish_workspace_output(paths, workspace, *, contract)` entry points plus an immutable `PublicationContract`. The module lives under `hermes`, not `services`, because live repo dependency-direction tests forbid `hermes -> services` while runner integration must call the publisher directly.
+- [x] 1.2 Move the existing `promote_claimed_outputs` core logic from `src/hermes/workspace.py` into the publisher as its first stage. Within the same PR, replace any remaining export of that name with a deprecation stub that raises `WorkspacePromotionError("promote_claimed_outputs removed; use hermes.build_publisher.publish_workspace_output with a PublicationContract")`; the runner and all other callers MUST import the publisher entry point directly. No silent forwarding is permitted.
+- [x] 1.3 Add a `PublishResult` dataclass: `published_paths: list[Path]`, `quarantined: list[Path]`, `output_manifest_hash: str`.
+- [x] 1.4 Capture normalized shard identity, execution mode, resume targets, parsed policy, base digests, and host-owned input hashes before Hermes invocation; re-verify them before publication.
+- [x] 1.5 Add stable publisher error phases (`contract`, `allowlist`, `policy`, `limits`, `stage`, `commit`, `manifest`, `rollback`, `recovery`) without host-absolute path leakage.
+- [x] 1.6 Verify an immutable manifest projection while allowing only publisher-owned `output_manifest_hash`/`publish_generation` evolution; use a fresh journal and increment generation for every validation-repair publication whose result is `succeeded`; `noop` publications MUST NOT increment generation or write a journal.
+- [x] 1.7 Derive the next `publish_generation` from `state/highest-committed-generation.json` (falling back to 0 when absent); reject any new value not strictly greater; atomically update that high-water file (temp + rename) at the end of every successful publication; never delete it while the workspace is alive; document that `manifest.json::publish_generation` and `output_manifest_hash` are authoritative ONLY when paired with the high-water file at the same generation.
+- [x] 1.8 Place all publisher-owned runtime state under `state/` (workspace-relative `state/publish-journal.json`, `state/publish-status.json`, `state/highest-committed-generation.json`). Extend `ExecutionWorkspace` with a `.state` property; ensure `initialize()` creates the directory; reject Hermes-written files under `state/` during contract verification.
+- [x] 1.9 In the contract input-hash, EXPLICITLY exclude every path under `state/` and the publisher-owned manifest projection fields. Enumerate the exclusion set in code (not regex over `state/`) so adding a new publisher-owned file later requires a deliberate update.
 
 ## 2. Allowlist Hardening
 
-- [ ] 2.1 Verify the existing allowlist still rejects: output-tree symlinks, special files, `..` traversal, absolute paths, unexpected category roots, non-claimed challenge ids, duplicate-id directories, `metadata.json` missing.
-- [ ] 2.2 Add an explicit check that `metadata.json::id` and `metadata.json::category` match the claimed shard's `challenges[*].id` and `challenges[*].category` (identity-field hard check, independent of change_policy).
-- [ ] 2.3 The matcher MUST use the `_match_claimed_id` helper (claimed-ids set, NOT regex). Preserve the regex-removal contract from the previous proposal.
-- [ ] 2.4 Enforce defaults of 2 GiB total bytes, 50,000 files, depth 64, and 255 UTF-8 bytes/component with validated positive-integer overrides; use `lstat`, never follow symlinks, and rescan temporary copies before commit.
+- [x] 2.1 Verify the existing allowlist still rejects: output-tree symlinks, special files, `..` traversal, absolute paths, unexpected category roots, non-claimed challenge ids, duplicate-id directories, `metadata.json` missing.
+- [x] 2.2 Add an explicit check that `metadata.json::id` and `metadata.json::category` match the claimed shard's `challenges[*].id` and `challenges[*].category` (identity-field hard check, independent of change_policy).
+- [x] 2.3 The matcher MUST use the `_match_claimed_id` helper (claimed-ids set, NOT regex). Preserve the regex-removal contract from the previous proposal.
+- [x] 2.4 Enforce defaults of 2 GiB total bytes, 50,000 files, depth 64, and 255 UTF-8 bytes/component with validated positive-integer overrides (`BUILD_PUBLISH_MAX_BYTES`, `BUILD_PUBLISH_MAX_FILES`, `BUILD_PUBLISH_MAX_DEPTH`, `BUILD_PUBLISH_MAX_COMPONENT_BYTES`); use `lstat`, never follow symlinks, and rescan temporary copies before commit.
 
 ## 3. Change-Policy Enforcement
 
-- [ ] 3.1 If `input/change-policy.json` exists, load and validate its schema (`base_artifact_relpath: str`, `preserve: list[str]`, `forbid: list[str]`).
-- [ ] 3.2 For each `preserve` entry:
+- [x] 3.1 If `input/change-policy.json` exists, load and validate its schema (`base_artifact_relpath: str`, `preserve: list[str]`, `forbid: list[str]`).
+- [x] 3.2 For each `preserve` entry:
     - `path` (no `#`): byte-compare staging file with base-artifact file.
     - `path#json_field`: load JSON from both, compare the named top-level field by equality.
     - Mismatch raises `WorkspacePublishError` with a message naming the mismatched preserve entry.
-- [ ] 3.3 For each `forbid` entry: if it newly exists in staging (and did not exist in base-artifact), raise `WorkspacePublishError`.
-- [ ] 3.4 If `change-policy.json` exists but `input/base-artifact/` does not, raise `WorkspacePublishError("change-policy requires base-artifact materialization")`.
-- [ ] 3.5 When `change-policy.json` is absent, skip the diff entirely (initial-run path).
-- [ ] 3.6 Strictly validate policy schema and normalized POSIX paths: reject unknown keys, duplicates, wrong types, empty/dot/dotdot components, absolute paths, backslashes, NUL, symlinks, root escape, and missing selected JSON fields.
-- [ ] 3.7 Treat each `forbid` value as a recursive prefix and reject every newly added descendant relative path even when the base already contains the prefix directory.
+- [x] 3.3 For each `forbid` entry: if it newly exists in staging (and did not exist in base-artifact), raise `WorkspacePublishError`.
+- [x] 3.4 If `change-policy.json` exists but `input/base-artifact/` does not, raise `WorkspacePublishError("change-policy requires base-artifact materialization")`.
+- [x] 3.5 When `change-policy.json` is absent, skip the diff entirely (initial-run path).
+- [x] 3.6 Strictly validate policy schema and normalized POSIX paths: reject unknown keys, duplicates, wrong types, empty/dot/dotdot components, absolute paths, backslashes, NUL, symlinks, root escape, and missing selected JSON fields.
+- [x] 3.7 Treat each `forbid` value as a recursive prefix and reject every newly added descendant relative path even when the base already contains the prefix directory.
 
 ## 4. Output Manifest Hash
 
-- [ ] 4.1 Compute a deterministic batch hash over claimed id, relative path, entry type, normalized mode, and content using length-prefixed canonical records; include empty directories.
+- [x] 4.1 Compute a deterministic batch hash over claimed id, relative path, entry type, normalized mode, and content using length-prefixed canonical records; include empty directories.
 - [ ] 4.2 Re-hash canonicals after rename, then atomically write `output_manifest_hash` to the workspace manifest while locks remain held.
 - [ ] 4.3 Roll back the canonical batch on hash mismatch or manifest replacement failure; cover the rename/manifest crash window in the durable journal.
-- [ ] 4.4 Short-circuit publish with a `noop` outcome (no journal, no generation increment, no quarantine, no sweep) when the staged hash equals the last committed `output_manifest_hash`; expose the outcome to the runner so it can avoid a redundant validation rerun.
+- [x] 4.4 Short-circuit publish with a `noop` outcome (no journal, no generation increment, no quarantine, no sweep) when the staged hash equals the last committed `output_manifest_hash`; expose the outcome to the runner so it can avoid a redundant validation rerun.
 
 ## 5. Serialized Recoverable Publish
 
@@ -121,4 +121,4 @@
 ## 10. Cleanup
 
 - [ ] 10.1 Delete `promote_claimed_outputs` (including the deprecation stub from 1.2) from `src/hermes/workspace.py` before this change archives. A silent forwarding shim is NOT a permitted exit; if any caller still references the old name at archive time, archival is blocked until the reference is migrated.
-- [ ] 10.2 Remove imports of `promote_claimed_outputs` from `src/hermes/runner.py` and any other call sites; only `services.build_publisher.publish_workspace_output` should be referenced. Add a repository-level grep guard in CI (or an equivalent unit test) that fails if the symbol re-appears.
+- [ ] 10.2 Remove imports of `promote_claimed_outputs` from `src/hermes/runner.py` and any other call sites; only `hermes.build_publisher.publish_workspace_output` should be referenced. Add a repository-level grep guard in CI (or an equivalent unit test) that fails if the symbol re-appears.

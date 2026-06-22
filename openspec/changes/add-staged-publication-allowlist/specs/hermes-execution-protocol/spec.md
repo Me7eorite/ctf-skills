@@ -15,7 +15,7 @@ hash, and retention sweep.
 `src/hermes/workspace.py` MUST create a host-owned `PublicationContract`
 before Hermes invocation, then migrate to
 `publish_workspace_output(..., contract=contract)` in
-`src/services/build_publisher.py`. The
+`src/hermes/build_publisher.py`. The
 helper functions kept in `workspace.py` (`_match_claimed_id`,
 `_reject_nonconforming_output`, `_reject_tree_symlinks`,
 `_matching_directories`) remain available as internal building blocks for

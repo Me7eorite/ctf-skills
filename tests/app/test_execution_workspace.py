@@ -15,6 +15,27 @@ from uuid import uuid4
 
 import pytest
 
+from core.build_timeout import shard_timeout_policy
+from core.jsonio import write_json
+from core.paths import ProjectPaths
+from domain.reports import merge_reports
+from hermes import process as hermes_process
+from hermes.build_publisher import (
+    prepare_publication_contract,
+    publish_workspace_output,
+)
+from hermes.runner import HermesRunner
+from hermes.workspace import (
+    WorkspacePreflightError,
+    WorkspacePromotionError,
+    derive_workspace_id,
+    import_workspace_report,
+    materialize_resume_outputs,
+    preflight_workspace,
+    prepare_workspace,
+)
+from hermes.workspace_progress import WorkspaceProgressTailer, materialize_progress_shim
+
 # 中文注释：本套件覆盖 POSIX 平台的 execution workspace 行为：
 # - symlink 在 Windows 需要管理员权限，普通会话会失败
 # - `./bin/progress` shim 是 POSIX shell 脚本，Windows 无法直接 subprocess 执行
@@ -27,24 +48,6 @@ pytestmark = pytest.mark.skipif(
         "symlinks and shell shims do not run unprivileged on Windows."
     ),
 )
-
-from core.build_timeout import shard_timeout_policy
-from core.jsonio import write_json
-from core.paths import ProjectPaths
-from domain.reports import merge_reports
-from hermes import process as hermes_process
-from hermes.runner import HermesRunner
-from hermes.workspace import (
-    WorkspacePreflightError,
-    WorkspacePromotionError,
-    derive_workspace_id,
-    import_workspace_report,
-    materialize_resume_outputs,
-    preflight_workspace,
-    prepare_workspace,
-    promote_claimed_outputs,
-)
-from hermes.workspace_progress import WorkspaceProgressTailer, materialize_progress_shim
 
 
 class ExecutionWorkspaceTests(unittest.TestCase):
@@ -588,10 +591,11 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         )
         self._artifact(workspace.output / "challenges", marker="new")
 
-        promoted = promote_claimed_outputs(self.paths, workspace, payload)
+        contract = prepare_publication_contract(self.paths, workspace, payload)
+        result = publish_workspace_output(self.paths, workspace, contract=contract)
 
-        self.assertEqual(len(promoted), 1)
-        self.assertEqual((promoted[0] / "artifact.txt").read_text(), "new")
+        self.assertEqual(len(result.published_paths), 1)
+        self.assertEqual((result.published_paths[0] / "artifact.txt").read_text(), "new")
         quarantine = workspace.root / "quarantine" / "web" / old.name
         self.assertEqual((quarantine / "artifact.txt").read_text(), "old")
         self.assertTrue(unrelated.is_dir())
@@ -610,13 +614,15 @@ class ExecutionWorkspaceTests(unittest.TestCase):
             workspace.output / "challenges", challenge_id="web-9999", slug="bad"
         )
         with self.assertRaisesRegex(WorkspacePromotionError, "unclaimed"):
-            promote_claimed_outputs(self.paths, workspace, payload)
+            contract = prepare_publication_contract(self.paths, workspace, payload)
+            publish_workspace_output(self.paths, workspace, contract=contract)
 
         bad = workspace.output / "challenges" / "web" / "web-9999-bad"
         __import__("shutil").rmtree(bad)
         (workspace.output / "linked").symlink_to(self.paths.root)
         with self.assertRaisesRegex(WorkspacePromotionError, "symlink"):
-            promote_claimed_outputs(self.paths, workspace, payload)
+            contract = prepare_publication_contract(self.paths, workspace, payload)
+            publish_workspace_output(self.paths, workspace, contract=contract)
 
     def test_promotion_rejects_duplicate_metadata_and_nonconforming_layout(self) -> None:
         payload = {"challenges": [{"id": "web-0001", "category": "web"}]}
@@ -634,18 +640,21 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         self._artifact(workspace.output / "challenges", slug="one")
         self._artifact(workspace.output / "challenges", slug="two")
         with self.assertRaisesRegex(WorkspacePromotionError, "multiple output"):
-            promote_claimed_outputs(self.paths, workspace, payload)
+            contract = prepare_publication_contract(self.paths, workspace, payload)
+            publish_workspace_output(self.paths, workspace, contract=contract)
 
         workspace = fresh_workspace()
         candidate = self._artifact(workspace.output / "challenges")
         write_json(candidate / "metadata.json", {"id": "web-0002", "category": "web"})
         with self.assertRaisesRegex(WorkspacePromotionError, "metadata mismatch"):
-            promote_claimed_outputs(self.paths, workspace, payload)
+            contract = prepare_publication_contract(self.paths, workspace, payload)
+            publish_workspace_output(self.paths, workspace, contract=contract)
 
         workspace = fresh_workspace()
         self._artifact(workspace.output, slug="wrong-place")
         with self.assertRaisesRegex(WorkspacePromotionError, "non-conforming"):
-            promote_claimed_outputs(self.paths, workspace, payload)
+            contract = prepare_publication_contract(self.paths, workspace, payload)
+            publish_workspace_output(self.paths, workspace, contract=contract)
 
     def test_resume_materialization_copies_claimed_only(self) -> None:
         payload = {"challenges": [{"id": "web-0001", "category": "web"}]}
@@ -729,8 +738,6 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         Earlier regex `^(web|pwn|re)-\\d+` rejected them outright; promotion
         must accept these via the claimed-ids matcher.
         """
-        from hermes.workspace import promote_claimed_outputs
-
         real_id = "web-abcdef12-0001"
         payload = {"challenges": [{"id": real_id, "category": "web"}]}
         shard = self._running_shard(payload, name="real.worker.json")
@@ -748,10 +755,11 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         )
         (candidate / "exp.py").write_text("# stub\n", encoding="utf-8")
 
-        promoted = promote_claimed_outputs(self.paths, workspace, payload)
+        contract = prepare_publication_contract(self.paths, workspace, payload)
+        result = publish_workspace_output(self.paths, workspace, contract=contract)
 
-        self.assertEqual(len(promoted), 1)
-        self.assertEqual(promoted[0].name, f"{real_id}-demo")
+        self.assertEqual(len(result.published_paths), 1)
+        self.assertEqual(result.published_paths[0].name, f"{real_id}-demo")
         canonical = self.paths.challenges / "web" / f"{real_id}-demo"
         self.assertTrue(canonical.is_dir())
         self.assertTrue((canonical / "metadata.json").is_file())
@@ -759,7 +767,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
     def test_preflight_rejects_workspace_without_progress_shim(self) -> None:
         """Shim is part of the fixed layout; absent shim must fail preflight,
         not be discovered later during prompt rendering."""
-        from hermes.workspace import preflight_workspace, WorkspacePreflightError
+        from hermes.workspace import WorkspacePreflightError, preflight_workspace
 
         shard = self._running_shard(
             {"challenges": [{"id": "web-0001", "category": "web"}]},

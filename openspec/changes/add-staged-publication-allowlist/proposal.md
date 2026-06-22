@@ -96,7 +96,7 @@ APIs — those land in subsequent proposals.
 
 ## Impact
 
-- **Code**: a new `services/build_publisher.py` (or extension of
+- **Code**: a new `hermes/build_publisher.py` (or extension of
   `hermes/workspace.py::promote_claimed_outputs`) owning the boundary. The
   runner calls publisher instead of the narrow promotion path. Workspace
   materialization, prompt rendering, build orchestration, API, and build-list
