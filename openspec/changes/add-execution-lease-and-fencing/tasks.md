@@ -13,6 +13,7 @@
 - [ ] 2.3 Wire `LEASE_TTL` default to the existing `BUILD_LOST_GRACE` (300s)
 - [ ] 2.4 Add token-gated `update_to_running` and `update_to_terminal` (reject stale token; leave output in quarantine)
 - [ ] 2.5 Add heartbeat renewal (`lease_expires_at`/`heartbeat_at`) gated on current token
+- [ ] 2.6 Make `executions` the source of truth; derive container status and timestamps from execution transitions in the same transaction
 
 ## 3. Container status & build_attempts dedup
 
@@ -27,6 +28,7 @@
 - [ ] 4.3 Map `retry()` → execution(kind=`retry`), `clean_rebuild()` → execution(kind=`retry`, execution_mode=clean, same container), `revision` → execution(kind=`revision`, parent set)
 - [ ] 4.4 Re-render the shard as `{build_attempt_id}.json` per iteration (overwrite); snapshot immutable copy into `attempts/iter-NNN/input/`
 - [ ] 4.5 Update `_validate_task_for_submit` to anchor eligibility on the container's latest execution
+- [ ] 4.6 Reject `revalidate` when the latest execution is no longer the current execution; append only to the current container-owned latest execution
 
 ## 5. Reconciler as lease reaper
 

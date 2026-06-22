@@ -17,6 +17,9 @@ nullable), `status` (one of `claimed`, `running`, `succeeded`, `failed`,
 
 The compound unique key `(build_attempt_id, iteration_no)` SHALL hold. An
 `execution_kind` of `revision` SHALL require a non-null `parent_execution_id`.
+`executions` SHALL be the source of truth for per-run state; the container row's
+status and run metadata SHALL be derived from execution transitions in the same
+transaction.
 
 #### Scenario: Initial run inserts iteration 1
 
@@ -141,7 +144,9 @@ unrelated shard.
 
 A `revalidate` action SHALL NOT create a new `executions` row. It SHALL append a
 `revalidation_events` record (check name, result, timestamp, actor) to the
-existing execution and reuse the reconciler's existing validation logic.
+container's latest execution and reuse the reconciler's existing validation
+logic. If the latest execution is no longer the container's current execution,
+the revalidate request SHALL be rejected rather than attached to a stale run.
 
 #### Scenario: Revalidate leaves the execution row count unchanged
 

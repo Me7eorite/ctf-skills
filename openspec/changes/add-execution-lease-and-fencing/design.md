@@ -15,6 +15,15 @@ This change is proposal #3 of the Worker Pool split. Implementation-level detail
 [`option-a-execution-container-design.md`](../../../option-a-execution-container-design.md);
 this document records the architectural decisions and migration strategy.
 
+## Terminology
+
+- `build_attempts` is the **container** row for one operator-initiated build
+  session.
+- `executions` are the ordered runs inside a container.
+- `executions` is the source of truth for run state; `build_attempts.status`
+  is a derived aggregate that mirrors the latest execution and is updated in the
+  same transaction as execution transitions.
+
 ## Goals / Non-Goals
 
 **Goals:**
@@ -39,7 +48,8 @@ this document records the architectural decisions and migration strategy.
 ### D1: Container = build_attempt; run = execution (Option A)
 
 Retry no longer mints a new `build_attempts` row; it inserts an `executions`
-row under the existing container (`iteration_no = max + 1`). Chosen over
+row under the existing container (`iteration_no = max + 1`). Fresh submit still
+creates a new container and allocates the next `attempt_no`. Chosen over
 **Option B** (keep retry = new build_attempt, execution 1:1 only for lease)
 because B leaves the directory explosion and the "next retry runs blind" problem
 intact, and makes `iteration_no` / `parent_execution_id` redundant with the
@@ -53,9 +63,11 @@ Claim mints `claim_token` + `lease_expires_at` in the same transaction that
 inserts the execution (reusing the existing `with_for_update()` row lock).
 `update_to_running`, `update_to_terminal`, the publisher, and the heartbeat path
 all require the current token; a stale token is rejected and its output stays in
-quarantine. The "only the reconciler changes status" invariant is relaxed to
-"status may change from claim / worker / reconciler, but every write is
-token-gated" — safety comes from the fence, not from exclusivity.
+quarantine. The token check is the gating rule for any write that mutates the
+execution or publishes its output. The "only the reconciler changes status"
+invariant is relaxed to "status may change from claim / worker / reconciler, but
+every write is token-gated" — safety comes from the fence, not from
+exclusivity.
 
 ### D3: Reconciler becomes a lease reaper; TTL reuses the 300s grace
 
@@ -68,9 +80,10 @@ liveness window unchanged and the logic isomorphic.
 
 A partial unique index on `executions(build_attempt_id) WHERE status IN
 ('claimed','running')` enforces single-active at the database, mirroring the
-existing `one_active_build_per_task` pattern. The container's
-`one_active_build_per_task` index is retained to keep at most one active build
-session per design task.
+existing `one_active_build_per_task` pattern. The container-level
+`one_active_build_per_task` index is retained during cutover so legacy in-flight
+rows still obey the old guarantee; after cutover the execution-level unique
+constraint becomes the primary active-slot rule.
 
 ### D5: Revision base artifact is read in place from the same directory
 
@@ -81,7 +94,13 @@ a DB-path join. This is only possible because D1 keeps the retry chain in one
 folder, which is why the workspace-by-challenge consolidation is a hard
 prerequisite for revision reuse.
 
-### D6: Shard file stays `{build_attempt_id}.json`, re-rendered per iteration
+### D6: Revalidate is an event on the latest execution, not a new run
+
+`revalidate` appends an event to the container's latest execution and does not
+create a new `executions` row. It may update container-level aggregate fields
+derived from that execution, but it never changes the execution iteration chain.
+
+### D7: Shard file stays `{build_attempt_id}.json`, re-rendered per iteration
 
 The shard basename is kept stable and overwritten each iteration (carrying the
 new resume / base-artifact / feedback context) so `work/shards` scanning and
@@ -93,12 +112,14 @@ source.
 
 - **Retry semantics change is internally breaking** → guard the cutover with a
   flag/timestamp (D-migration); in-flight legacy attempts finish via the
-  reconciler legacy path and are not backfilled with executions.
+  reconciler legacy path and are not backfilled with executions. The old and new
+  active-slot rules must not both be treated as authoritative after cutover.
 - **Container aggregate status can drift from execution truth** → status is
   derived in the same transaction as execution terminal transitions; the
   reconciler reconciles any divergence on its tick.
 - **Relaxing "only reconciler writes status"** → mitigated by mandatory token
-  validation on every status write; a stale writer is always rejected.
+  validation on every status write; a stale writer is always rejected and
+  rejected publishes stay quarantined rather than mutating canonical output.
 - **Clean-rebuild shares the container directory** (decided: keep in same
   folder) → old `current/` is archived to `attempts/iter-NNN/` before the clean
   run, so "clean" applies to the new run's inputs while history is preserved for

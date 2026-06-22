@@ -43,6 +43,14 @@ The unique compound key `(design_task_id, attempt_no)` SHALL hold.
 - **AND** a new `executions` row is inserted under the same container with
   `iteration_no = 4`, `execution_kind = 'retry'`, and a fresh `claim_token`
 
+#### Scenario: Clean rebuild reuses the same container
+
+- **GIVEN** a build attempt container has a failed latest execution
+- **WHEN** the operator requests a clean rebuild
+- **THEN** no new `build_attempts` row is created
+- **AND** a new `executions` row is inserted under the same container with the
+  clean-rebuild execution mode preserved in execution metadata
+
 #### Scenario: Fresh submit after an abandoned session allocates the next attempt_no
 
 - **GIVEN** the latest container for a design task has reached a terminal
@@ -57,9 +65,9 @@ The unique compound key `(design_task_id, attempt_no)` SHALL hold.
 The system SHALL expose `POST /api/build-attempts/{id}/feedback` accepting a
 structured payload (`summary`, `requested_changes`, `preserve`, `forbid`,
 `reviewer`). The feedback SHALL be persisted as an immutable snapshot bound to
-the build attempt and SHALL be available to materialize into a subsequent
-`revision` execution's workspace. This change SHALL provide the schema,
-persistence, and materialization only; the management UI for submitting
+the build attempt container and SHALL be available to materialize into a
+subsequent `revision` execution's workspace. This change SHALL provide the
+schema, persistence, and materialization only; the management UI for submitting
 feedback is out of scope.
 
 #### Scenario: Feedback snapshot is persisted immutably
