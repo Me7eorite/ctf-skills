@@ -249,4 +249,5 @@ def _design(row: model.ChallengeDesign) -> dto.ChallengeDesign:
         status=row.status,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        legacy_grandfather=row.legacy_grandfather,
     )

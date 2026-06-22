@@ -3,17 +3,22 @@
 Section 4 of the ``add-design-task-planning`` change. The service is
 the only place that knows how to assemble candidate task rows from a
 generation request + its completed research run + findings/sources.
-The Hermes-driven requirement-planning agent is not part of this
-change; this service uses a deterministic adapter that picks fields
-straight from the request and round-robins findings across the
-``target_count`` tasks so the unit/integration tests are reproducible.
 
-The service deliberately does NOT render any prompt text. Prompt
-rendering happens at design-execution time in a later change.
+Phase 2 of the design-skill rework (D5=b) added an *optional* Hermes
+planner for hard and expert tasks: when injected via
+``hermes_planner=``, the service calls it once per hard/expert task to
+lock the technique chain and the business scenario seed before the full
+design call runs. Easy and medium tasks stay fully deterministic. When
+the planner is absent or returns ``None``, the difficulty-aware
+templates below are the sole source of scenario/finding allocation.
+
+The service deliberately does NOT render any design-output prompt text.
+Prompt rendering happens at design-execution time.
 """
 
 from __future__ import annotations
 
+import logging
 import math
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
@@ -24,6 +29,9 @@ from domain import research as research_dto
 from domain.design_task_validators import DesignTaskValidationError
 from persistence.repositories import DesignTaskRepository, ResearchRepository
 from persistence.session import SessionFactory, transaction
+from services.design_planner_hermes import HermesPlannerService, PlannerEnrichment
+
+_LOGGER = logging.getLogger(__name__)
 
 # Reasonable default scoring per difficulty. Operators can override
 # later via custom constraints on the request; this change does not
@@ -40,11 +48,17 @@ DEFAULT_PORT_BASE = 9000
 class DesignTaskPlanningService:
     """Generate design tasks for researched generation requests."""
 
-    def __init__(self, session_factory: SessionFactory | None = None) -> None:
+    def __init__(
+        self,
+        session_factory: SessionFactory | None = None,
+        *,
+        hermes_planner: HermesPlannerService | None = None,
+    ) -> None:
         # Same shape as ResearchJobService: the service owns one short
         # transaction per public method and never holds a long-lived
         # session.
         self.session_factory = session_factory
+        self.hermes_planner = hermes_planner
 
     def generate_for_request(self, request_id: UUID) -> list[dto.DesignTask]:
         """Replace draft/archived tasks with a freshly planned set.
@@ -82,7 +96,9 @@ class DesignTaskPlanningService:
                     "cannot generate design tasks"
                 )
 
-            candidates = _plan_candidates(request, latest, findings)
+            candidates = _plan_candidates(
+                request, latest, findings, hermes_planner=self.hermes_planner
+            )
             # 跨表校验：design.md §Task Generation Flow 第 5 步要求
             # “每个 task 必须引用至少一个来自当前 research_run 的 finding”。
             # 这一规则需要 SELECT，所以放在 service 层（validators 模块
@@ -137,18 +153,59 @@ def validate_finding_provenance(
             )
 
 
+# Phase 2 planner: scenario templates per difficulty tier. Medium and
+# above MUST set a believable business scenario (validator requirement).
+# Easy stays a "toy service" intentionally.
+_SCENARIO_TEMPLATES: Mapping[str, str] = {
+    "easy": (
+        "Standalone {category} target demonstrating {technique}. "
+        "Single-step solve."
+    ),
+    "medium": (
+        "Internal business app (notes, tickets, reports, or admin review) "
+        "in which {technique} is reachable through the normal user flow. "
+        "{secondary_line}"
+    ),
+    "hard": (
+        "Multi-stage {category} target. Players must chain {technique} with "
+        "{secondary_technique} to reach the flag. {tertiary_line}"
+    ),
+    "expert": (
+        "Multi-stage {category} chain with a non-trivial mechanic. "
+        "{technique} exposes {secondary_technique}, which constrains "
+        "{tertiary_technique}. Author MUST populate `novelty` describing the "
+        "0day-style trick or unusual constraint."
+    ),
+}
+
+# How many findings to draw for one task at each difficulty.
+_FINDINGS_PER_DIFFICULTY: Mapping[str, int] = {
+    "easy": 1,
+    "medium": 1,
+    "hard": 2,
+    "expert": 3,
+}
+
+
 def _plan_candidates(
     request: research_dto.GenerationRequest,
     run: research_dto.ResearchRun,
     findings: Sequence[research_dto.ResearchFinding],
+    *,
+    hermes_planner: HermesPlannerService | None = None,
 ) -> list[dict[str, Any]]:
-    """Deterministic planner: 1 candidate per target slot, findings round-robin.
+    """Deterministic planner: 1 candidate per target slot.
 
-    The output already conforms to
-    :func:`domain.design_task_validators.validate_candidate`. The
-    planning service hands these to the repository, which re-validates
-    so a future Hermes-backed planner cannot silently break the same
-    contract.
+    Phase 2 changed from a simple round-robin to a difficulty-aware
+    allocation. easy/medium tasks get one finding; hard tasks pull two;
+    expert tasks pull three. The extra findings are folded into
+    ``scenario``, ``evidence_summary``, and ``finding_ids`` so the
+    downstream Hermes design call has enough material to satisfy the
+    difficulty rubric (≥ N techniques, business scenario, etc.).
+
+    A future Hermes-backed planner replacing this function MUST keep the
+    same output shape; the repository re-validates so silent breakage is
+    not possible.
     """
     difficulty_slots: list[str] = []
     for difficulty, count in sorted(request.difficulty_distribution.items()):
@@ -165,30 +222,115 @@ def _plan_candidates(
     runtime_constraints = dict(request.runtime_constraints or {})
     for index, difficulty in enumerate(difficulty_slots):
         task_no = index + 1
-        finding = findings[index % len(findings)]
+        task_findings = _findings_for_task(difficulty, findings, index)
+        primary = task_findings[0]
+        secondaries = task_findings[1:]
         candidate: dict[str, Any] = {
             "task_no": task_no,
             "challenge_id": _challenge_id(category, request.id, task_no),
-            "title": _title(request.topic, finding, task_no),
+            "title": _title(request.topic, primary, task_no),
             "category": category,
             "difficulty": difficulty,
-            "primary_technique": finding.label,
+            "primary_technique": primary.label,
             "learning_objective": (
-                f"Reproduce {finding.label} on a {category} target "
+                f"Reproduce {primary.label} on a {category} target "
                 f"derived from research run {run.attempt}."
             ),
             "points": DEFAULT_POINTS.get(difficulty, 100),
             "port": _port_for(category, task_no),
-            "scenario": finding.summary,
+            "scenario": _scenario_for(category, difficulty, task_findings),
             "constraints": dict(runtime_constraints),
-            "evidence_summary": (
-                f"{finding.kind} cited from research run {run.id} on topic "
-                f"{request.topic!r}."
-            ),
-            "finding_ids": [finding.id],
+            "evidence_summary": _evidence_summary(run, request.topic, task_findings),
+            "finding_ids": [f.id for f in task_findings],
         }
+        # Phase 2 (D5=b): for hard/expert tasks the optional Hermes
+        # planner can replace the template scenario with a Hermes-locked
+        # technique chain. Failure is non-fatal — we keep the template
+        # values and tag the candidate so the operator can see why.
+        if hermes_planner is not None and difficulty in {"hard", "expert"}:
+            enrichment = hermes_planner.plan(
+                category=category,
+                difficulty=difficulty,
+                topic=request.topic,
+                primary=primary,
+                secondaries=secondaries,
+            )
+            if enrichment is not None:
+                _apply_planner_enrichment(candidate, enrichment)
+            else:
+                candidate["constraints"]["_planner_source"] = "template_fallback"
         candidates.append(candidate)
     return candidates
+
+
+def _apply_planner_enrichment(
+    candidate: dict[str, Any], enrichment: PlannerEnrichment
+) -> None:
+    """Merge Hermes planner output into a candidate task row."""
+    candidate["scenario"] = enrichment.scenario_seed
+    candidate["evidence_summary"] = (
+        candidate["evidence_summary"]
+        + " Planner chain: "
+        + enrichment.chain_outline
+    )
+    candidate["constraints"]["_planner_source"] = "hermes"
+    candidate["constraints"]["_planner_techniques"] = list(
+        enrichment.considered_techniques
+    )
+    if enrichment.novelty_seed:
+        candidate["constraints"]["_novelty_seed"] = enrichment.novelty_seed
+
+
+def _findings_for_task(
+    difficulty: str,
+    findings: Sequence[research_dto.ResearchFinding],
+    index: int,
+) -> list[research_dto.ResearchFinding]:
+    """Pick ``n`` findings for this task in stable, deterministic order.
+
+    When the research run produced fewer than ``n`` findings the planner
+    reuses earlier entries rather than failing — the downstream Hermes
+    design call can still rebrand the secondary technique as long as the
+    primary finding remains distinct.
+    """
+    need = _FINDINGS_PER_DIFFICULTY.get(difficulty, 1)
+    pool_size = len(findings)
+    if pool_size == 0:
+        raise DesignTaskValidationError(
+            "_plan_candidates called with no findings"
+        )
+    return [findings[(index + offset) % pool_size] for offset in range(need)]
+
+
+def _scenario_for(
+    category: str,
+    difficulty: str,
+    task_findings: Sequence[research_dto.ResearchFinding],
+) -> str:
+    template = _SCENARIO_TEMPLATES.get(difficulty, _SCENARIO_TEMPLATES["easy"])
+    primary = task_findings[0]
+    secondary = task_findings[1] if len(task_findings) > 1 else None
+    tertiary = task_findings[2] if len(task_findings) > 2 else None
+    return template.format(
+        category=category,
+        technique=primary.label,
+        secondary_technique=(secondary.label if secondary else primary.label),
+        tertiary_technique=(tertiary.label if tertiary else primary.label),
+        secondary_line=(secondary.summary if secondary else ""),
+        tertiary_line=(tertiary.summary if tertiary else ""),
+    ).strip()
+
+
+def _evidence_summary(
+    run: research_dto.ResearchRun,
+    topic: str,
+    task_findings: Sequence[research_dto.ResearchFinding],
+) -> str:
+    labels = ", ".join(sorted({f.label for f in task_findings}))
+    return (
+        f"{len(task_findings)} finding(s) cited from research run {run.id} "
+        f"on topic {topic!r}: {labels}."
+    )
 
 
 def _title(topic: str, finding: research_dto.ResearchFinding, task_no: int) -> str:

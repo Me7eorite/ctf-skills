@@ -14,7 +14,13 @@ from domain.research import GenerationRequest, ResearchFinding, ResearchSource
 # plus a unified category-tactics catalog. cve-pivot.md is read on-demand by
 # the agent, not injected into every design prompt. delivery-format moved to
 # docs/delivery-formats/ and is no longer part of design.
-ALWAYS_REFERENCE_FILES: tuple[str, ...] = ("design-core.md", "category-tactics.md")
+# Phase 2 added difficulty-rubric.md so the agent sees the machine-checked
+# tier thresholds (technique count, intended_path steps, novelty requirement).
+ALWAYS_REFERENCE_FILES: tuple[str, ...] = (
+    "design-core.md",
+    "category-tactics.md",
+    "difficulty-rubric.md",
+)
 EVIDENCE_FINDING_LIMIT = 20
 MAX_REFERENCE_CHARS = 5000
 

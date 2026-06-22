@@ -264,8 +264,8 @@ def test_generate_rejects_planner_with_empty_finding_ids(
 
     original = planning_module._plan_candidates
 
-    def _bad_planner(req, run, findings):
-        rows = original(req, run, findings)
+    def _bad_planner(req, run, findings, *, hermes_planner=None):
+        rows = original(req, run, findings, hermes_planner=hermes_planner)
         for row in rows:
             row["finding_ids"] = []
         return rows
@@ -292,8 +292,8 @@ def test_generate_rejects_planner_with_foreign_finding_id(
     original = planning_module._plan_candidates
     foreign = uuid4()
 
-    def _bad_planner(req, run, findings):
-        rows = original(req, run, findings)
+    def _bad_planner(req, run, findings, *, hermes_planner=None):
+        rows = original(req, run, findings, hermes_planner=hermes_planner)
         rows[0]["finding_ids"] = [foreign]
         return rows
 
@@ -308,6 +308,170 @@ def test_generate_rejects_planner_with_foreign_finding_id(
         assert rows == []
     finally:
         session.close()
+
+
+def _fake_finding(label: str) -> model.ResearchFinding:
+    """Domain DTO doppelganger for unit tests that bypass the DB."""
+    from domain.research import ResearchFinding
+
+    return ResearchFinding(
+        id=uuid4(),
+        research_run_id=uuid4(),
+        kind="technique",
+        label=label,
+        summary=f"summary about {label}",
+    )
+
+
+def _fake_request(difficulty_distribution):
+    from types import MappingProxyType
+    from domain.research import GenerationRequest
+
+    return GenerationRequest(
+        id=uuid4(),
+        category="web",
+        topic="JWT key confusion",
+        target_count=sum(difficulty_distribution.values()),
+        difficulty_distribution=MappingProxyType(dict(difficulty_distribution)),
+        runtime_constraints=MappingProxyType({}),
+        seed_urls=(),
+        max_attempts=3,
+        status="researched",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+
+def _fake_run():
+    from domain.research import ResearchRun
+
+    now = datetime.now(timezone.utc)
+    return ResearchRun(
+        id=uuid4(),
+        generation_request_id=uuid4(),
+        parent_run_id=None,
+        attempt=1,
+        status="completed",
+        claimed_by=None,
+        claim_token=None,
+        claimed_at=None,
+        heartbeat_at=None,
+        lease_expires_at=None,
+        started_at=None,
+        finished_at=now,
+        last_error=None,
+        hermes_log_path=None,
+        profile_name_used=None,
+        created_at=now,
+    )
+
+
+def test_plan_candidates_assigns_multiple_findings_for_hard_and_expert():
+    # Hard pulls 2 findings, expert pulls 3 — the difficulty rubric
+    # expects ≥3 distinct techniques for hard and a chain for expert.
+    findings = [_fake_finding(f"technique-{i}") for i in range(4)]
+    request = _fake_request({"easy": 1, "medium": 1, "hard": 1, "expert": 1})
+    run = _fake_run()
+
+    candidates = planning_module._plan_candidates(request, run, findings)
+
+    by_difficulty = {c["difficulty"]: c for c in candidates}
+    assert len(by_difficulty["easy"]["finding_ids"]) == 1
+    assert len(by_difficulty["medium"]["finding_ids"]) == 1
+    assert len(by_difficulty["hard"]["finding_ids"]) == 2
+    assert len(by_difficulty["expert"]["finding_ids"]) == 3
+
+
+def test_plan_candidates_scenario_template_differs_by_difficulty():
+    findings = [_fake_finding(f"technique-{i}") for i in range(4)]
+    request = _fake_request({"easy": 1, "medium": 1, "hard": 1, "expert": 1})
+    run = _fake_run()
+
+    candidates = planning_module._plan_candidates(request, run, findings)
+    scenarios = {c["difficulty"]: c["scenario"] for c in candidates}
+
+    # easy is intentionally a "toy service" line.
+    assert "Standalone" in scenarios["easy"]
+    # medium-and-up must read like a business context for the rubric.
+    assert "business" in scenarios["medium"].lower()
+    assert "chain" in scenarios["hard"].lower()
+    # expert template names the novelty contract explicitly so the
+    # downstream Hermes design call cannot forget to set it.
+    assert "novelty" in scenarios["expert"].lower()
+
+
+def test_plan_candidates_applies_hermes_planner_enrichment_for_hard():
+    # D5=b: when a Hermes planner is injected, hard tasks get its
+    # scenario seed and the candidate is tagged with `_planner_source`.
+    from services.design_planner_hermes import PlannerEnrichment
+
+    class _StubPlanner:
+        def __init__(self):
+            self.calls = []
+
+        def plan(self, **kw):
+            self.calls.append(kw)
+            return PlannerEnrichment(
+                considered_techniques=["A", "B", "C"],
+                chain_outline="A → B → C reach flag.",
+                scenario_seed="Internal supervisor approval portal.",
+                novelty_seed=None,
+                raw_response="{...}",
+            )
+
+    findings = [_fake_finding(f"technique-{i}") for i in range(4)]
+    request = _fake_request({"easy": 1, "hard": 1})
+    run = _fake_run()
+    planner = _StubPlanner()
+
+    candidates = planning_module._plan_candidates(
+        request, run, findings, hermes_planner=planner
+    )
+
+    # Only the hard task triggered the Hermes call.
+    assert len(planner.calls) == 1
+    assert planner.calls[0]["difficulty"] == "hard"
+
+    hard = next(c for c in candidates if c["difficulty"] == "hard")
+    assert hard["scenario"] == "Internal supervisor approval portal."
+    assert hard["constraints"]["_planner_source"] == "hermes"
+    assert hard["constraints"]["_planner_techniques"] == ["A", "B", "C"]
+
+    easy = next(c for c in candidates if c["difficulty"] == "easy")
+    # Easy task untouched by the planner.
+    assert "_planner_source" not in easy["constraints"]
+
+
+def test_plan_candidates_falls_back_when_planner_returns_none():
+    class _NonePlanner:
+        def plan(self, **kw):
+            return None
+
+    findings = [_fake_finding(f"technique-{i}") for i in range(4)]
+    request = _fake_request({"hard": 1})
+    run = _fake_run()
+
+    candidates = planning_module._plan_candidates(
+        request, run, findings, hermes_planner=_NonePlanner()
+    )
+
+    hard = candidates[0]
+    # Template scenario survives, fallback tag set.
+    assert hard["scenario"].lower().startswith("multi-stage")
+    assert hard["constraints"]["_planner_source"] == "template_fallback"
+
+
+def test_plan_candidates_reuses_findings_when_pool_too_small_for_expert():
+    # Expert wants 3 distinct findings; the planner falls back to a
+    # stable wrap-around when fewer are available rather than failing.
+    findings = [_fake_finding(f"technique-{i}") for i in range(2)]
+    request = _fake_request({"expert": 1})
+    run = _fake_run()
+
+    candidates = planning_module._plan_candidates(request, run, findings)
+
+    assert len(candidates[0]["finding_ids"]) == 3
+    assert len(set(candidates[0]["finding_ids"])) <= 2  # wrap-around expected
 
 
 def test_generate_replaces_archived_tasks(session_factory: SessionFactory):

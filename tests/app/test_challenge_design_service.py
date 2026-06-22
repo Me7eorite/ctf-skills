@@ -91,6 +91,7 @@ def _context_loader(_paths: ProjectPaths):
     references = {
         "design-core.md": "design core",
         "category-tactics.md": "category tactics",
+        "difficulty-rubric.md": "difficulty rubric",
     }
     return DesignPromptContext(skill_text="design skill", references=references)
 
@@ -186,6 +187,8 @@ def _seed(
 
 
 def _valid_stdout() -> str:
+    # Phase 2 rubric for medium: 2–3 distinct techniques, 2–5
+    # intended_path steps, ≥60-char player prompt.
     return json.dumps(
         {
             "event": {"flag_format": "flag{...}"},
@@ -199,8 +202,21 @@ def _valid_stdout() -> str:
                     "deployment": "single docker compose service on port 8081",
                     "port": 8081,
                     "primary_technique": "boolean blind sqli",
+                    "secondary_technique": "session-cookie role flag",
+                    "techniques": [
+                        "boolean blind sqli",
+                        "session-cookie role flag",
+                    ],
                     "learning_objective": "Extract data through conditional responses.",
-                    "prompt": "Recover the admin note.",
+                    "prompt": (
+                        "Customer-support agents triage tickets in this portal; "
+                        "recover the admin's pinned note."
+                    ),
+                    "intended_path": [
+                        "Spot the conditional response on the login form",
+                        "Extract the admin password byte-by-byte",
+                        "Log in and read the pinned note",
+                    ],
                     "artifacts": [
                         "README.md",
                         "metadata.json",

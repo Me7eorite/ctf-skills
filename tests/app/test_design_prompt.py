@@ -32,6 +32,7 @@ For machine-readable output, use this JSON shape:
     for name in (
         "design-core.md",
         "category-tactics.md",
+        "difficulty-rubric.md",
     ):
         paths.design_references.joinpath(name).write_text(
             f"# {name}\nreference body for {name}\n",

@@ -64,6 +64,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         for filename in (
             "design-core.md",
             "category-tactics.md",
+            "difficulty-rubric.md",
         ):
             (self.paths.design_references / filename).write_text(f"# {filename}\n", encoding="utf-8")
 
@@ -236,6 +237,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         # category-tactics; both are always materialized for web/pwn/re.
         self.assertTrue((reference_root / "references" / "design-core.md").is_file())
         self.assertTrue((reference_root / "references" / "category-tactics.md").is_file())
+        self.assertTrue((reference_root / "references" / "difficulty-rubric.md").is_file())
         for legacy in (
             "web-design.md",
             "pwn-design.md",

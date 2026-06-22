@@ -83,6 +83,12 @@ class ChallengeDesign(Base):
     flag_format: Mapped[str] = mapped_column(sa.Text(), nullable=False)
     validation_notes: Mapped[str] = mapped_column(sa.Text(), nullable=False)
     quality_gate_passed: Mapped[bool] = mapped_column(sa.Boolean(), nullable=False)
+    # Phase 2 (D2): rows persisted before the difficulty rubric existed
+    # are flagged so the future backfill / re-design script can pick them
+    # up without rejecting the rest of the table. New rows default FALSE.
+    legacy_grandfather: Mapped[bool] = mapped_column(
+        sa.Boolean(), nullable=False, server_default=sa.text("false"), default=False
+    )
     status: Mapped[str] = mapped_column(
         sa.Text(),
         nullable=False,

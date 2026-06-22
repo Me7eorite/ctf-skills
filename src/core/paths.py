@@ -148,6 +148,11 @@ class ProjectPaths:
         return self.root / "prompts" / "shard_prompt.md"
 
     @property
+    def prompts(self) -> Path:
+        """Prompts 模板目录（不存在的子文件由调用方解析）。"""
+        return self.root / "prompts"
+
+    @property
     def generation_profile(self) -> Path:
         """生成配置文件（generation-profiles.json），定义题目生成的参数预设。"""
         return self.root / "generation-profiles.json"

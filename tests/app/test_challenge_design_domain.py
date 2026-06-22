@@ -31,7 +31,10 @@ def _parent_task(**overrides) -> DesignTask:
         "learning_objective": "Inspect token key selection boundaries",
         "points": 300,
         "port": 8080,
-        "scenario": "",
+        # Phase 2 rubric: medium-and-up requires a non-empty scenario on
+        # the parent task. Make the baseline rubric-compliant so existing
+        # tests focus on the specific behavior they exercise.
+        "scenario": "Internal customer-support note portal with admin review.",
         "constraints": {},
         "evidence_summary": "",
         "finding_ids": [],
@@ -53,8 +56,22 @@ def _payload(**challenge_overrides):
         "deployment": "single docker compose service on port 8080",
         "port": 8080,
         "primary_technique": "JWT kid path traversal",
+        # Phase 2 rubric: medium requires 2–3 distinct techniques.
+        "secondary_technique": "Key confusion via kid override",
+        "techniques": ["JWT kid path traversal", "Key confusion via kid override"],
         "learning_objective": "Inspect token key selection boundaries",
-        "prompt": "Recover the admin note from the service.",
+        # Phase 2 rubric: medium-and-up requires a >= 60-char player prompt
+        # so the business context is visible.
+        "prompt": (
+            "Customer-support agents share notes through this internal portal; "
+            "recover the admin's pinned note."
+        ),
+        # Phase 2 rubric: medium requires 2–5 intended_path steps.
+        "intended_path": [
+            "Inspect the JWT in the support portal session cookie",
+            "Notice the kid claim is reflected into a key-lookup path",
+            "Sign a forged token using a writable key location to reach the admin note",
+        ],
         "artifacts": [
             "README.md",
             "metadata.json",
@@ -127,69 +144,43 @@ def test_parse_design_output_skips_flag_brace_noise_and_finds_real_json():
     assert parsed["challenges"][0]["id"] == "web-0001"
 
 
-def test_validate_design_payload_accepts_skill_md_shape():
-    # The published design-challenges skill uses `player_prompt`,
-    # `flag_plan.location`, and `validation` as an object. The validator
-    # MUST normalize these into its flat shape so a SKILL.md-conformant
-    # agent reply validates without code changes per attempt.
-    skill_shape = {
-        "event": {"flag_format": "flag{...}"},
-        "challenges": [
-            {
-                "id": "web-0001",
-                "title": "Key Confusion",
-                "category": "web",
-                "difficulty": "medium",
-                "points": 300,
-                "deployment": "docker compose service on port 8080",
-                "port": 8080,
-                "primary_technique": "JWT kid path traversal",
-                "learning_objective": "Inspect token key selection boundaries",
-                # SKILL.md shape uses these three:
-                "player_prompt": "Recover the admin note from the service.",
-                "flag_plan": {
-                    "format": "flag{...}",
-                    "location": "FLAG environment variable",
-                    "generation": "static",
-                },
-                "validation": {
-                    "reference_solve": "Run exp.py against the local compose service.",
-                    "expected_result": "Flag printed to stdout.",
-                    "regression_checks": ["exp.py exits 0"],
-                },
-                "artifacts": ["writeup/wp.md", "solve/solve.py"],
-                "hints": [
-                    {"stage": 1, "content": "Inspect the JWT header."},
-                    {"stage": 2, "content": "The key id influences verification."},
-                    {"stage": 3, "content": "Control the key lookup before signing a token."},
-                ],
-            }
-        ],
+def test_validate_design_payload_rejects_legacy_player_prompt_field():
+    # Phase 3 removed the SKILL.md → flat translation layer. The agent must
+    # emit ``prompt`` directly; ``player_prompt`` is no longer accepted, and
+    # without ``prompt`` the validator reports the missing required field.
+    payload = _payload()
+    payload["challenges"][0]["player_prompt"] = payload["challenges"][0].pop("prompt")
+    with pytest.raises(
+        ChallengeDesignValidationError, match="prompt must be a non-empty string"
+    ):
+        validate_design_payload(payload, _parent_task())
+
+
+def test_validate_design_payload_rejects_nested_validation_object():
+    # ``validation`` must be a single string. Nested SKILL.md objects are
+    # rejected outright rather than translated.
+    payload = _payload()
+    payload["challenges"][0]["validation"] = {
+        "reference_solve": "Run exp.py",
+        "expected_result": "Flag printed",
     }
-    validated = validate_design_payload(skill_shape, _parent_task())
-    # After normalization the flat fields exist on the persisted payload
-    # and the validation_notes is composed from the SKILL.md sub-fields.
-    assert (
-        validated.challenge["prompt"]
-        == "Recover the admin note from the service."
-    )
-    assert validated.challenge["flag_location"] == "FLAG environment variable"
-    assert "Run exp.py" in validated.validation_notes
-    assert "Flag printed to stdout." in validated.validation_notes
-    assert "exp.py exits 0" in validated.validation_notes
-    assert "writenup/wp.md" in validated.challenge["artifacts"]
-    assert "writenup/exp.py" in validated.challenge["artifacts"]
+    with pytest.raises(
+        ChallengeDesignValidationError, match="validation must be a non-empty string"
+    ):
+        validate_design_payload(payload, _parent_task())
 
 
-def test_validate_design_payload_skill_md_normalization_does_not_clobber_flat_fields():
-    # When both shapes coexist (defensive), the validator prefers the
-    # flat field that was already there.
-    payload = _payload(
-        prompt="flat wins",
-        player_prompt="should be ignored",
-    )
-    validated = validate_design_payload(payload, _parent_task())
-    assert validated.challenge["prompt"] == "flat wins"
+def test_validate_design_payload_rejects_legacy_artifact_paths():
+    # Legacy paths like ``writeup/wp.md`` and bare ``solve.py`` were silently
+    # rewritten by the old normalizer. Phase 3 cut that layer; the agent must
+    # emit ``writenup/wp.md`` and ``writenup/exp.py`` directly.
+    payload = _payload(artifacts=["writeup/wp.md", "solve/solve.py"])
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match=r"artifacts must be local challenge-relative file paths"
+        r"|web/pwn artifacts must include",
+    ):
+        validate_design_payload(payload, _parent_task())
 
 
 def test_parse_design_output_rejects_summary_only_reply():
@@ -218,71 +209,37 @@ def test_validate_design_payload_accepts_and_generates_summary():
     assert len(result.summary) <= 280
 
 
-def test_validate_design_payload_normalizes_object_artifacts_from_logs():
+def test_validate_design_payload_rejects_object_artifacts():
+    # The old normalizer translated ``artifacts`` objects (with deploy_tree,
+    # files, services keys) into flat path lists. Phase 3 requires the
+    # agent to emit the flat list itself.
     payload = _payload(
         artifacts={
             "files": ["index.html", "login.php"],
-            "services": "HTTP service on port 8080",
             "docker_notes": "Single-service container",
         },
-        delivery_format={
-            "deploy_tree": {
-                "src": ["app.py"],
-                "_files": ["start.sh"],
-                "dockerfile": "Dockerfile",
-                "docker_compose": "docker-compose.yml",
-            }
-        },
-        hints=[
-            {"stage": 1, "content": "Look at the token header."},
-            {"stage": 2, "content": "Control the key lookup."},
-            {"stage": 3, "content": "Sign a forged token."},
-        ],
     )
-
-    result = validate_design_payload(payload, _parent_task())
-
-    assert result.challenge["artifacts"] == [
-        "deploy/src/index.html",
-        "deploy/src/login.php",
-        "deploy/src/app.py",
-        "deploy/_files/start.sh",
-        "deploy/Dockerfile",
-        "deploy/docker-compose.yml",
-        "README.md",
-        "metadata.json",
-        "validate.sh",
-        "writenup/wp.md",
-        "writenup/exp.py",
-    ]
-    assert result.challenge["hints"] == [
-        "Look at the token header.",
-        "Control the key lookup.",
-        "Sign a forged token.",
-    ]
+    with pytest.raises(
+        ChallengeDesignValidationError, match="artifacts must be a non-empty list"
+    ):
+        validate_design_payload(payload, _parent_task())
 
 
-def test_validate_design_payload_ignores_prose_artifacts_but_adds_required_paths():
+def test_validate_design_payload_rejects_prose_artifacts():
+    # Prose strings ("Docker container running a PHP web application") used
+    # to be silently dropped while required paths were auto-filled. Now a
+    # non-path entry causes a hard reject so the operator catches it.
     payload = _payload(
         artifacts=[
             "Docker container running a PHP web application",
             "Web application accessible on port 8080",
         ]
     )
-
-    result = validate_design_payload(payload, _parent_task())
-
-    assert result.challenge["artifacts"] == [
-        "README.md",
-        "metadata.json",
-        "validate.sh",
-        "writenup/wp.md",
-        "writenup/exp.py",
-        "deploy/Dockerfile",
-        "deploy/docker-compose.yml",
-        "deploy/src/app.py",
-        "deploy/_files/start.sh",
-    ]
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match=r"artifacts must be local challenge-relative file paths",
+    ):
+        validate_design_payload(payload, _parent_task())
 
 
 def test_validate_design_payload_rejects_implementation_level_top_field():
@@ -360,32 +317,33 @@ def test_validate_design_payload_rejects_parent_mismatch():
         validate_design_payload(_payload(category="pwn"), _parent_task())
 
 
-def test_validate_design_payload_pads_short_hints():
-    result = validate_design_payload(_payload(hints=["only one"]), _parent_task())
+def test_validate_design_payload_rejects_short_hints():
+    # Old behavior auto-padded with generated hints when fewer than 3 were
+    # given. Phase 3 requires the agent to emit exactly 3 staged hints.
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match="hints must contain exactly 3 entries",
+    ):
+        validate_design_payload(_payload(hints=["only one"]), _parent_task())
 
-    assert result.challenge["hints"][0] == "only one"
-    assert len(result.challenge["hints"]) == 3
-    assert "JWT kid path traversal" in result.challenge["hints"][1]
 
-
-def test_validate_design_payload_normalizes_mapping_hints_and_trims_extra():
-    result = validate_design_payload(
-        _payload(
-            hints={
-                "stage_1": "Inspect the visible token.",
-                "stage_2": {"content": "Control the key lookup."},
-                "stage_3": "Forge the trusted state.",
-                "extra": "This should not be persisted.",
-            }
-        ),
-        _parent_task(),
-    )
-
-    assert result.challenge["hints"] == [
-        "Inspect the visible token.",
-        "Control the key lookup.",
-        "Forge the trusted state.",
-    ]
+def test_validate_design_payload_rejects_mapping_hints():
+    # Stage-keyed mappings ({stage_1: ..., stage_2: ...}) are no longer
+    # translated; the agent must emit a flat list of 3 strings.
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match="hints must contain exactly 3 entries",
+    ):
+        validate_design_payload(
+            _payload(
+                hints={
+                    "stage_1": "Inspect the visible token.",
+                    "stage_2": "Control the key lookup.",
+                    "stage_3": "Forge the trusted state.",
+                }
+            ),
+            _parent_task(),
+        )
 
 
 def test_validate_design_payload_rejects_web_without_docker():
@@ -443,3 +401,145 @@ def test_run_quality_gate_reports_explicit_predicates():
     assert "hints are not staged as three entries" in notes
     assert "artifacts must be relative paths" in notes
     assert "web/pwn deployment must be containerized" in notes
+
+
+# ---------- Phase 2 difficulty rubric ----------
+
+
+def _easy_payload(**overrides):
+    """A rubric-compliant easy-tier baseline used by alignment tests."""
+    payload = _payload(
+        difficulty="easy",
+        points=100,
+        # easy = exactly 1 technique, 1–3 intended_path steps,
+        # short prompt is fine, no implementation_plan required.
+        primary_technique="DOM XSS",
+        secondary_technique=None,
+        techniques=["DOM XSS"],
+        prompt="Find the reflected XSS and pop an alert.",
+        intended_path=["Inspect the search reflection", "Inject a script tag"],
+    )
+    payload["challenges"][0].pop("secondary_technique")
+    payload["challenges"][0].pop("implementation_plan", None)
+    payload["challenges"][0].update(overrides)
+    return payload
+
+
+def _easy_task(**overrides):
+    return _parent_task(difficulty="easy", points=100, **overrides)
+
+
+def test_difficulty_easy_accepts_single_technique():
+    result = validate_design_payload(_easy_payload(), _easy_task())
+    assert result.challenge["difficulty"] == "easy"
+
+
+def test_difficulty_easy_rejects_two_techniques():
+    payload = _easy_payload(
+        secondary_technique="CSP bypass",
+        techniques=["DOM XSS", "CSP bypass"],
+    )
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match=r"easy allows at most 1 distinct techniques",
+    ):
+        validate_design_payload(payload, _easy_task())
+
+
+def test_difficulty_medium_rejects_short_prompt():
+    payload = _payload(prompt="Find the bug.")
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match=r"medium-and-up difficulty requires a player prompt",
+    ):
+        validate_design_payload(payload, _parent_task())
+
+
+def test_difficulty_medium_rejects_single_technique():
+    payload = _payload(
+        secondary_technique=None,
+        techniques=["JWT kid path traversal"],
+    )
+    payload["challenges"][0].pop("secondary_technique")
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match=r"medium requires at least 2 distinct techniques",
+    ):
+        validate_design_payload(payload, _parent_task())
+
+
+def test_difficulty_hard_requires_implementation_plan():
+    parent = _parent_task(difficulty="hard")
+    payload = _payload(
+        difficulty="hard",
+        techniques=["JWT kid", "Key confusion", "Token replay"],
+        secondary_technique="Key confusion via kid override",
+        intended_path=[
+            "Inspect the JWT in the session cookie",
+            "Notice the kid claim drives the key path",
+            "Forge the key path to point at a writable file",
+            "Sign a forged admin token and read the flag",
+        ],
+    )
+    payload["challenges"][0]["techniques"] = [
+        "JWT kid path traversal",
+        "Key confusion via kid override",
+        "Token replay across services",
+    ]
+    payload["challenges"][0].pop("implementation_plan")
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match=r"hard requires a non-empty implementation_plan",
+    ):
+        validate_design_payload(payload, parent)
+
+
+def test_difficulty_expert_requires_novelty():
+    parent = _parent_task(difficulty="expert")
+    payload = _payload(
+        difficulty="expert",
+        intended_path=[
+            "Inspect the JWT signed by the in-house JWS library",
+            "Recognize the alg parameter is consulted after key lookup",
+            "Trigger key reuse across two endpoints with mismatched alg",
+            "Forge an admin token by chaining the differential",
+        ],
+    )
+    # Phase 2 rubric demands a substantive `novelty` field for expert.
+    payload["challenges"][0].pop("novelty", None)
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match=r"expert difficulty requires a `novelty` field",
+    ):
+        validate_design_payload(payload, parent)
+
+
+def test_difficulty_expert_accepts_substantive_novelty():
+    parent = _parent_task(difficulty="expert")
+    payload = _payload(
+        difficulty="expert",
+        intended_path=[
+            "Inspect the JWT signed by the in-house JWS library",
+            "Recognize the alg parameter is consulted after key lookup",
+            "Trigger key reuse across two endpoints with mismatched alg",
+            "Forge an admin token by chaining the differential",
+        ],
+        novelty=(
+            "Algorithm-confusion across two unsynchronized JWS verifiers "
+            "in an in-house library — no public CVE describes this exact path."
+        ),
+    )
+    result = validate_design_payload(payload, parent)
+    assert result.challenge["difficulty"] == "expert"
+
+
+def test_difficulty_legacy_grandfather_skips_alignment():
+    # A pre-rubric design with only one technique on a medium task: the
+    # alignment check would normally reject it, but operators can pass
+    # legacy_grandfather=True to keep the historical row valid.
+    payload = _payload(
+        secondary_technique=None,
+        techniques=["JWT kid path traversal"],
+    )
+    payload["challenges"][0].pop("secondary_technique")
+    validate_design_payload(payload, _parent_task(), legacy_grandfather=True)

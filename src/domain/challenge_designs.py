@@ -55,3 +55,7 @@ class ChallengeDesign:
     status: str                     # 状态（draft/accepted/superseded）
     created_at: datetime
     updated_at: datetime
+    # Phase 2: rows pre-dating the difficulty rubric are flagged so a
+    # future backfill / re-design script can pick them up explicitly.
+    # New rows default False.
+    legacy_grandfather: bool = False
