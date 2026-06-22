@@ -255,7 +255,20 @@ non-empty stdout line must be the recovered flag. For Re, `validate.sh` runs
 the solver against the player-facing artifact in `attachments/` (or legacy
 `dist/`).
 
-Do not print a hardcoded known flag merely to satisfy validation.
+Do not print a hardcoded known flag merely to satisfy validation. These rules
+are now **host-enforced** as deterministic contract checks — a build that
+violates any of them fails validation regardless of what `validate.sh` prints:
+
+- `validate.sh` and `writenup/exp.py` MUST NOT contain the literal
+  `metadata.flag` value. The solver recovers the flag at runtime; embedding the
+  answer is rejected.
+- `writenup/exp.py` MUST NOT read the flag from organizer files
+  (`metadata.json`, `challenge.yml`, or `docker-compose.yml`). Web/Pwn exploits
+  recover the flag from the live service via `CHAL_HOST`/`CHAL_PORT`; the
+  compose file merely injects it and is off-limits to the exploit.
+- A `re` `validate.sh`/`writenup/exp.py` MUST reference the distributed artifact
+  (`attachments/` or `dist/`) and MUST NOT reference `metadata.json` or
+  `challenge.yml` — derive the flag from the binary, never from organizer files.
 
 ## 5. Document
 

@@ -251,3 +251,117 @@ class ValidationTests(unittest.TestCase):
 
         self.assertEqual(summary["total"], 1)
         self.assertEqual(summary["results"][0]["status"], "invalid_metadata")
+
+
+class SolverIntegrityTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.paths = ProjectPaths(
+            root=Path(self.temp.name) / "factory",
+            repository=Path(self.temp.name),
+        )
+        self.paths.initialize()
+        self.validator = ChallengeValidator(self.paths)
+
+    def _re_challenge(self, *, validate_sh: str, exp_py: str | None = None) -> tuple:
+        challenge = self.paths.challenges / "re" / "re-0001-demo"
+        (challenge / "dist").mkdir(parents=True)
+        header = bytearray(b"\x7fELF" + b"\x00" * 16)
+        header[18:20] = (0x3E).to_bytes(2, "little")
+        (challenge / "dist" / "checker").write_bytes(header)
+        (challenge / "validate.sh").write_text(validate_sh, encoding="utf-8")
+        if exp_py is not None:
+            (challenge / "writenup").mkdir(parents=True, exist_ok=True)
+            (challenge / "writenup" / "exp.py").write_text(exp_py, encoding="utf-8")
+        metadata = {
+            "id": "re-0001",
+            "title": "Demo",
+            "category": "re",
+            "difficulty": "easy",
+            "build_status": "passed",
+            "flag": "flag{the_secret}",
+            "target_format": "elf",
+            "target_platform": "linux/amd64",
+        }
+        return challenge, metadata
+
+    def test_hardcoded_flag_in_validate_sh_is_rejected(self):
+        challenge, metadata = self._re_challenge(
+            validate_sh="#!/bin/sh\necho flag{the_secret}\n"
+        )
+        errors = self.validator.contract_errors(challenge, metadata)
+        self.assertTrue(any("embeds the literal metadata.flag" in e for e in errors))
+
+    def test_re_solver_not_referencing_artifact_is_rejected(self):
+        challenge, metadata = self._re_challenge(
+            validate_sh="#!/bin/sh\npython3 solve.py\n"
+        )
+        errors = self.validator.contract_errors(challenge, metadata)
+        self.assertTrue(
+            any("does not reference the distributed artifact" in e for e in errors)
+        )
+
+    def test_re_solver_reading_metadata_is_rejected(self):
+        challenge, metadata = self._re_challenge(
+            validate_sh="#!/bin/sh\njq -r .flag metadata.json\n"
+        )
+        errors = self.validator.contract_errors(challenge, metadata)
+        self.assertTrue(any("metadata.json" in e for e in errors))
+
+    def test_genuine_re_solver_passes_integrity(self):
+        challenge, metadata = self._re_challenge(
+            validate_sh="#!/bin/sh\npython3 writenup/exp.py ./dist/checker\n",
+            exp_py="import sys\nbinary=open(sys.argv[1],'rb').read()\nprint(recover(binary))\n",
+        )
+        errors = self.validator.contract_errors(challenge, metadata)
+        # No solver-integrity error (other contract checks already pass for re).
+        self.assertEqual(errors, [])
+
+    def _web_challenge(self, *, exp_py: str) -> tuple:
+        challenge = self.paths.challenges / "web" / "web-0001-demo"
+        deploy = challenge / "deploy"
+        (deploy / "src").mkdir(parents=True)
+        (deploy / "Dockerfile").write_text("FROM nginx\n", encoding="utf-8")
+        (deploy / "docker-compose.yml").write_text(
+            "services:\n  app:\n    environment:\n      - FLAG=flag{the_secret}\n",
+            encoding="utf-8",
+        )
+        (challenge / "validate.sh").write_text(
+            "#!/bin/sh\ndocker compose up -d\npython3 writenup/exp.py\n",
+            encoding="utf-8",
+        )
+        (challenge / "writenup").mkdir(parents=True, exist_ok=True)
+        (challenge / "writenup" / "exp.py").write_text(exp_py, encoding="utf-8")
+        metadata = {
+            "id": "web-0001",
+            "title": "Demo",
+            "category": "web",
+            "difficulty": "easy",
+            "build_status": "passed",
+            "flag": "flag{the_secret}",
+            "runtime": "node",
+            "framework": "Express",
+        }
+        return challenge, metadata
+
+    def test_web_exp_reading_compose_for_flag_is_rejected(self):
+        challenge, metadata = self._web_challenge(
+            exp_py="import yaml\nprint(open('deploy/docker-compose.yml').read())\n"
+        )
+        errors = self.validator.contract_errors(challenge, metadata)
+        self.assertTrue(any("docker-compose" in e for e in errors))
+
+    def test_web_exp_hardcoding_flag_is_rejected(self):
+        challenge, metadata = self._web_challenge(
+            exp_py="print('flag{the_secret}')\n"
+        )
+        errors = self.validator.contract_errors(challenge, metadata)
+        self.assertTrue(any("embeds the literal metadata.flag" in e for e in errors))
+
+    def test_genuine_web_exp_passes_integrity(self):
+        challenge, metadata = self._web_challenge(
+            exp_py="import os,requests\nr=requests.get(f\"http://{os.environ['CHAL_HOST']}:{os.environ['CHAL_PORT']}/\")\nprint(r.text)\n"
+        )
+        errors = self.validator.contract_errors(challenge, metadata)
+        self.assertEqual(errors, [])
