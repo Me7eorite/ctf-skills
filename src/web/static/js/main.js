@@ -5,7 +5,7 @@ import { initIcons } from "./ui/icons.js";
 import { registerViews, setView, jumpTo } from "./router.js";
 
 import * as overview from "./views/overview.js";
-import * as progress from "./views/progress.js";
+import * as workerPool from "./views/worker-pool.js";
 import * as challenges from "./views/challenges.js";
 import * as shards from "./views/shards.js";
 import * as logs from "./views/logs.js";
@@ -19,7 +19,7 @@ import * as buildAttempts from "./views/build-attempts.js";
 
 const views = {
   overview,
-  progress,
+  "worker-pool": workerPool,
   challenges,
   shards,
   logs,
@@ -34,7 +34,7 @@ const views = {
 
 registerViews({
   overview: overview.render,
-  progress: progress.render,
+  "worker-pool": workerPool.render,
   challenges: challenges.render,
   shards: shards.render,
   logs: logs.render,
@@ -88,30 +88,32 @@ function renderAll() {
 
 function renderProcess() {
   const proc = appState.data.process || {};
-  const label = document.querySelector("#workerLabel");
-  const bar = document.querySelector("#workerBar");
-  const dot = document.querySelector("#workerDot");
+  const dot = document.querySelector("#sidebarWorkerDot");
+  const count = document.querySelector("#sidebarWorkerCount");
+  const entry = document.querySelector("#sidebarWorkerPoolEntry");
 
   if (proc.running) {
-    if (label) { label.textContent = proc.message || "运行中"; label.className = "sidebar-worker-state running"; }
-    if (bar) { bar.className = "sidebar-worker-bar-fill running"; }
-    if (dot) { dot.className = "sidebar-worker-dot running"; }
+    if (dot) dot.className = "sidebar-worker-dot running";
+    if (count) count.textContent = "运行中";
+    if (entry) entry.classList.remove("hidden");
   } else {
-    if (label) { label.textContent = "空闲"; label.className = "sidebar-worker-state idle"; }
-    if (bar) { bar.className = "sidebar-worker-bar-fill idle"; }
-    if (dot) { dot.className = "sidebar-worker-dot idle"; }
+    if (dot) dot.className = "sidebar-worker-dot idle";
+    if (count) count.textContent = "空闲";
+    if (entry) entry.classList.remove("hidden");
   }
 }
 
 document.addEventListener("click", (event) => {
-  const nav = event.target.closest(".sidebar-nav-item");
+  const nav = event.target.closest(".sidebar-nav-item, .sidebar-worker-pool-entry");
   if (nav) {
-    if (nav.dataset.target === "build-attempts") {
+    const target = nav.dataset.target;
+    if (!target) return;
+    if (target === "build-attempts") {
       if (window.location.hash === "#/build-attempts") routeFromHash();
       else window.location.hash = "#/build-attempts";
       return;
     }
-    setView(nav.dataset.target);
+    setView(target);
     return;
   }
   const jump = event.target.closest("[data-jump]");
@@ -137,6 +139,7 @@ researchRuns.bind?.(loadState);
 researchLogs.bind?.(loadState);
 designTasks.bind?.(loadState);
 buildAttempts.bind?.(loadState);
+workerPool.bind?.(loadState);
 
 routeFromHash();
 loadState();

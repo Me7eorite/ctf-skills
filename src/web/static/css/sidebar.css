@@ -8,6 +8,12 @@
   justify-content: space-between;
 }
 
+.sidebar-brand-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
 @media (max-width: 1023px) {
   .sidebar-brand {
     height: var(--mobile-header-h);
@@ -253,4 +259,283 @@
 .sidebar-worker-label-text,
 .sidebar-worker-label-status {
   /* deprecated */
+}
+
+/* === 操作入口标识（仅改 color，其余继承 .sidebar-nav-item） === */
+.sidebar-nav-item.primary {
+  color: var(--brand-600);
+}
+
+.sidebar-nav-item.primary:hover {
+  color: var(--brand-700);
+  background: var(--brand-50);
+}
+
+.sidebar-nav-item.primary.active {
+  background: var(--brand-50);
+  color: var(--brand-600);
+}
+
+/* === Legacy 标记 === */
+.sidebar-nav-item.legacy {
+  color: var(--ink-400);
+}
+
+.sidebar-legacy-badge {
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  background: var(--ink-100);
+  color: var(--ink-500);
+  font-size: var(--font-xs);
+  font-weight: 500;
+}
+
+/* === Worker 池入口行（品牌区右侧，复用 .sidebar-worker-dot） === */
+.sidebar-worker-pool-entry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-md);
+  font-size: var(--font-xs);
+  color: var(--ink-500);
+  cursor: pointer;
+  transition: background-color var(--transition-fast) ease;
+}
+
+.sidebar-worker-pool-entry:hover {
+  background: var(--ink-100);
+}
+
+.sidebar-worker-count {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* === Worker 池页面（复用 .card / .sidebar-worker-dot / .sidebar-worker-bar / .btn 等组件，少量布局追加） === */
+.wp-summary-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-lg);
+  padding: var(--space-md) var(--space-lg);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-lg);
+  font-size: var(--font-sm);
+  color: var(--ink-600);
+}
+
+.wp-summary-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wp-summary-num {
+  font-size: var(--font-md);
+  font-weight: 600;
+  color: var(--ink-900);
+  font-variant-numeric: tabular-nums;
+}
+
+.wp-summary-label {
+  color: var(--ink-500);
+}
+
+.wp-worker-grid {
+  display: grid;
+  gap: var(--space-lg);
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  margin-bottom: var(--space-lg);
+}
+
+.wp-worker-card .card-header {
+  padding: var(--space-md) var(--space-lg);
+}
+
+.wp-worker-header-left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.wp-worker-state-running {
+  background: var(--accent-amber-light);
+  color: var(--accent-amber);
+  border-color: var(--accent-amber-border);
+}
+
+.wp-worker-state-idle {
+  background: var(--accent-green-light);
+  color: var(--accent-green);
+  border-color: var(--accent-green-100);
+}
+
+.wp-current-task {
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.wp-task-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+
+.wp-task-id {
+  font-family: var(--font-mono-family);
+  font-size: var(--font-md);
+  font-weight: 600;
+  color: var(--ink-900);
+}
+
+.wp-task-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.wp-task-progress .sidebar-worker-bar {
+  flex: 1;
+}
+
+.wp-task-percent {
+  font-size: var(--font-sm);
+  font-weight: 600;
+  color: var(--ink-700);
+  font-variant-numeric: tabular-nums;
+  min-width: 36px;
+  text-align: right;
+}
+
+.wp-task-meta {
+  font-size: var(--font-xs);
+  color: var(--ink-500);
+}
+
+.wp-idle {
+  padding: var(--space-md) 0;
+  color: var(--ink-500);
+  font-size: var(--font-sm);
+  text-align: center;
+}
+
+.wp-next-task {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-top: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--ink-50);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-xs);
+}
+
+.wp-next-label {
+  color: var(--ink-400);
+  font-weight: 500;
+}
+
+.wp-next-id {
+  font-family: var(--font-mono-family);
+  color: var(--ink-700);
+  font-weight: 500;
+}
+
+.wp-next-state {
+  margin-left: auto;
+  color: var(--accent-amber);
+}
+
+.wp-worker-actions {
+  margin-top: var(--space-md);
+}
+
+.wp-warning {
+  margin-bottom: var(--space-md);
+  border: 1px solid var(--accent-amber-border);
+  background: var(--accent-amber-light);
+  color: #92400e;
+  padding: var(--space-md);
+  border-radius: var(--radius-md);
+  font-size: var(--font-sm);
+}
+
+.wp-recent-card {
+  margin-bottom: var(--space-lg);
+}
+
+.wp-events-card {
+  margin-bottom: var(--space-lg);
+}
+
+.wp-events-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-lg);
+  cursor: pointer;
+  list-style: none;
+}
+
+.wp-events-summary::-webkit-details-marker {
+  display: none;
+}
+
+.wp-events-list {
+  padding: 0 var(--space-lg) var(--space-md);
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: var(--space-sm);
+  padding-top: var(--space-md);
+}
+
+.wp-event-item {
+  display: flex;
+  gap: var(--space-sm);
+  padding: var(--space-sm) 0;
+}
+
+.wp-event-item .dot {
+  margin-top: 6px;
+  flex-shrink: 0;
+}
+
+.wp-event-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.wp-event-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+
+.wp-event-title {
+  font-family: var(--font-mono-family);
+  font-size: var(--font-sm);
+  font-weight: 600;
+  color: var(--ink-800);
+}
+
+.wp-event-time {
+  font-size: var(--font-xs);
+  color: var(--ink-400);
+}
+
+.wp-event-meta {
+  font-size: var(--font-xs);
+  color: var(--ink-500);
+  margin-top: 2px;
+}
+
+.wp-event-message {
+  font-size: var(--font-sm);
+  color: var(--ink-600);
+  margin: 4px 0 0;
 }

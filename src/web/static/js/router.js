@@ -2,6 +2,9 @@ import { appState } from "./state.js";
 import { initIcons } from "./ui/icons.js";
 
 export function setView(view) {
+  // 兼容重定向：旧入口跳转到新页面
+  if (view === "progress") view = "worker-pool";
+  if (view === "research-logs") view = "logs";
   if (!titles[view]) view = "overview";
   appState.view = view;
 
@@ -47,18 +50,20 @@ export function registerViews(map) {
 }
 
 const titles = {
-  "overview": { title: "概览", group: "" },
-  "research-submit": { title: "新建需求", group: "研究需求" },
-  "research-requests": { title: "需求列表", group: "研究需求" },
-  "design-tasks": { title: "题目设计", group: "研究需求" },
-  "build-attempts": { title: "构建列表", group: "题目管理" },
-  "progress": { title: "实时进度", group: "运行监控" },
-  "research-runs": { title: "运行记录", group: "运行监控" },
-  "research-logs": { title: "研究日志", group: "运行监控" },
-  "challenges": { title: "题目列表", group: "题目管理" },
-  "shards": { title: "任务列表", group: "题目管理" },
-  "seeds": { title: "种子配置", group: "题目管理" },
-  "logs": { title: "系统日志", group: "题目管理" },
+  "overview":         { title: "概览",     group: "生产管线" },
+  "research-submit":  { title: "新建需求", group: "生产管线" },
+  "research-requests":{ title: "需求列表", group: "生产管线" },
+  "design-tasks":     { title: "题目设计", group: "生产管线" },
+  "challenges":       { title: "题目库",   group: "生产管线" },
+  "build-attempts":   { title: "构建列表", group: "生产管线" },
+  "worker-pool":      { title: "Worker 池", group: "运行监控" },
+  "logs":             { title: "运行日志", group: "运行监控" },
+  "shards":           { title: "任务队列", group: "系统" },
+  "seeds":            { title: "种子库",   group: "系统" },
+  // 以下保留路由兼容，由 setView 重定向到新页面
+  "research-runs":    { title: "运行记录", group: "" },
+  "research-logs":    { title: "研究日志", group: "" },
+  "progress":         { title: "实时进度", group: "" },
 };
 
 let viewRenderers = {};

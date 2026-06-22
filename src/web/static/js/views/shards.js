@@ -37,6 +37,13 @@ export function render(data) {
   if (!root) return;
 
   root.innerHTML = `
+    <div class="rq-alert rq-alert-muted" style="margin-bottom: var(--space-lg);">
+      <div class="rq-alert-heading">
+        <i data-lucide="info"></i>
+        <div class="rq-alert-title">旧版任务队列</div>
+      </div>
+      <p>这是基于文件系统的本地任务队列（ShardQueue），与新版的 design_task / build_attempt 流程并存。未来版本将下线，新需求请使用「题目设计」流程。</p>
+    </div>
     <div style="display: grid; gap: var(--space-md); grid-template-columns: repeat(4, 1fr);">
       ${STATES.map(([key, label]) => {
         const rows = (data.shards || []).filter((item) => item.state === key);
