@@ -1,0 +1,4 @@
+name: add-parallel-sequential-queues-with-progress-worker
+kind: change
+summary: Add parallel sequential queues with per-queue worker progress display
+status: draft
