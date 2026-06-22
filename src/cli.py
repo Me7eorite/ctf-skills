@@ -119,6 +119,46 @@ def _record_execution_outcome(
         )
 
 
+def _mark_attempt_running(
+    attempt_id: UUID, worker: str, *, session_factory=None
+) -> None:
+    """Claim and lease one attempt's execution at the moment its build starts.
+
+    A sequential batch must NOT lease every attempt up front: only the attempt
+    currently being processed is heartbeated (see ``_execution_heartbeat``), so
+    any eagerly-leased waiter has a frozen lease that the reaper expires and
+    marks ``lost`` while it is still legitimately queued. Claiming lazily —
+    per iteration, right before ``runner.run`` — makes each lease start when its
+    work starts, so waiters stay ``queued`` (which the reaper never reaps).
+
+    Best-effort and idempotent: if the execution is already claimed/running/
+    terminal (e.g. a single-attempt launcher pre-marked it) this is a no-op.
+    """
+    if attempt_id is None or not execution_minting_enabled():
+        return
+
+    from persistence.repositories import ExecutionsRepository
+    from persistence.session import transaction
+
+    try:
+        with transaction(factory=session_factory) as session:
+            repo = ExecutionsRepository(session)
+            latest = repo.latest_for_attempt(attempt_id)
+            if latest is None or latest.status != "queued":
+                return
+            _, token = repo.claim_queued(
+                attempt_id,
+                worker_id=worker,
+                lease_ttl_seconds=lease_ttl_seconds(),
+            )
+            repo.update_to_running(latest.id, claim_token=token)
+    except Exception as exc:  # bookkeeping must never block the queue
+        print(
+            f"execution claim skipped for {attempt_id}: {exc}",
+            flush=True,
+        )
+
+
 @contextmanager
 def _execution_heartbeat(
     attempt_id: UUID | None,
@@ -193,6 +233,10 @@ def _run_build_attempt_sequence(
     interrupted_attempt: str | None = None
 
     for index, attempt_id in enumerate(build_attempt_sequence):
+        # Claim + lease this attempt only now that it is its turn, so its lease
+        # lifetime equals its processing time. Waiters stay `queued` and are not
+        # reaped as `lost` while an earlier attempt is still running.
+        _mark_attempt_running(attempt_id, worker)
         try:
             with _execution_heartbeat(attempt_id):
                 item = runner.run(

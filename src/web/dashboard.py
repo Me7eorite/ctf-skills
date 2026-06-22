@@ -114,17 +114,15 @@ class TaskManager:
         ]
         for attempt_id in build_attempt_ids:
             command.extend(["--build-attempt-sequence", str(attempt_id)])
+        # Do NOT eagerly mark the whole batch running here: the CLI sequence
+        # driver claims and leases each attempt only when its turn comes
+        # (`_mark_attempt_running`), and heartbeats just the active one. Leasing
+        # every attempt up front gave the waiters a frozen lease that the reaper
+        # expired as `lost` while an earlier attempt was still building.
         return self._start(
             "sequential-worker",
             command,
             require_pending=False,
-            on_started=lambda: [
-                self._mark_execution_running(
-                    attempt_id,
-                    worker="dashboard-sequential-01",
-                )
-                for attempt_id in build_attempt_ids
-            ],
         )
 
     def _start(
