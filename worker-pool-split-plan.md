@@ -14,6 +14,8 @@
 >
 > v3 修订原因（仍生效）: Git worktree 降级为开发调试可选项，运行时隔离改为项目侧 execution workspace
 >
+> **v5 修订（按题收敛 workspace，2026-06-22）**: 复盘当前代码后确认两处身份键错配——`derive_workspace_id` 按 `build_attempt_id` 命名目录，而 `retry()`/`clean_rebuild()` 每次重试都 `attempt_id = uuid4()` 新建 build_attempt，导致 `work/executions/` 下**每次重试一个裸 UUID 顶层目录**（10 题 × 2 重试 ≈ 30 个平铺目录），且 UUID-attributed 目录从不回收、同 attempt 重跑会 `rmtree` 抹掉失败现场。本次修订把 workspace 的隔离单元从「attempt」收敛到「challenge 容器」：**一题一个稳定顶层目录，重试在目录内 `attempts/iter-NNN/` 留存失败现场而非平铺/抹除**。这同时是「下一轮重试复用上一轮失败信息」的物理前提——见题案 1「按题收敛」与题案 3「revision base-artifact 就地捞取」。
+>
 > 背景: 原题案 [add-agent-worker-pool-management](openspec/changes/add-agent-worker-pool-management/) scope 横跨 9 个 section（schema/lease/sandbox/supervisor/UI/审计/上线），一次性推进风险高、周期长。本文档把它拆成 6 个独立可交付的子题案，按事故复发风险与依赖关系排序。
 >
 > v3 修订原因: 重新评估产物形态后确认，本项目的核心产物是本地运行时文件（`work/challenges`、`work/shards`、`work/reports`、日志、Docker 构建上下文），不是 Git 分支实验。Hermes profile 仍适合做模型/状态/人格隔离，但 Git worktree 不应作为 worker pool 的核心运行时隔离手段；题案 1 改为项目侧自建 execution workspace。
@@ -157,16 +159,23 @@
    hermes profile create cf-re   --description "Generates reverse-engineering CTF challenges"
    ```
 2. **共享 `_build_arguments` helper**：把 `hermes/research.py` 和 `hermes/design.py` 重复的 chat-index 注入函数提取到 `hermes/process.py`，research/design/build 三处统一调用（顺手消掉一处旧债）
-3. **Workspace 布局**：
+3. **Workspace 布局（v5 按题收敛）**：一题一个稳定顶层目录，`current/` 是 cwd 指向的活跃迭代区，历史失败现场就地归档到 `attempts/iter-NNN/`，**不再每次重试新建顶层 UUID 目录、也不 `rmtree` 抹除上一轮**：
    ```
-   work/executions/<workspace_id>/
-     input/{shard.json,manifest.json}            # copy（claim 快照）
-     references/                                  # symlink（静态资源不复制）
-     output/                                      # Hermes 写入区
-     bin/progress                                 # 进度蜘蛛（jq 或 python3）
-     logs/{hermes.log,report.json,progress-events.jsonl}
-     quarantine/<category>/<dirname>/             # promotion 时旧 canonical 的留存
+   work/executions/<workspace_id>/                # workspace_id = build_attempt_id（容器，跨重试稳定，见题案 3）
+     references/                                   # symlink（静态资源，整题只 materialize 一次）
+     current/                                      # cwd 指向这里；活跃迭代区
+       input/{shard.json,manifest.json}            # copy（本轮 claim 快照）
+       output/                                     # Hermes 写入区
+       bin/progress                                # 进度蜘蛛（jq 或 python3）
+       logs/{hermes.log,report.json,progress-events.jsonl}
+     attempts/                                     # 失败现场归档，供排查 + 下一轮 base-artifact 捞取
+       iter-001-<exit_class>/{output,logs,manifest.json}
+       iter-002-<exit_class>/{output,logs,manifest.json}
+     quarantine/<category>/<dirname>/              # promotion 时旧 canonical 的留存
    ```
+   - **prepare 时**：题目目录不存在则建，`references/` 只首次 materialize；推进新一轮前先把旧 `current/{output,logs}` 归档进 `attempts/iter-NNN-<exit_class>/`，**再**清空 `current/` 重建，绝不删除 `attempts/` 历史
+   - **cwd 恒定** = `work/executions/<workspace_id>/current`，对 Hermes 透明（相对路径不变）
+   - `iter-NNN` 与题案 3 的 `executions.iteration_no` 一一对应；`exit_class` 后缀让目录名一眼可读
 4. **Materialize 策略**：
 
    | 内容 | 处理 | 理由 |
@@ -190,7 +199,11 @@
     - `./bin/progress` 必须用 `jq` 或 `python3` shebang（raw POSIX sh 因 JSON 转义脆弱被拒绝）；二者均不在 PATH 则 fail-closed
     - host runner 后台 thread 以 ≤2s poll 周期 tail `./logs/progress-events.jsonl`，写入现有 `ProgressStore`，保留 dashboard 实时刷新
     - Hermes 退出后强制 catch-up read 一次
-11. **Workspace GC（最小版本）**：每次创建 workspace 前扫 `work/executions/manual-*`，删除 >7 天或孤儿；UUID-attributed workspace 不动（归题案 2 publisher）；dry-run 禁止 GC
+11. **Workspace GC（v5 改为按题目录内 bounded）**：
+    - 旧设计「只扫 `manual-*`、UUID-attributed 目录不动」会让真实批量目录无界堆积——本次修订把回收作用域从「顶层平铺」改为「每题目录内」
+    - 顶层目录数 = 活跃/历史 challenge 数，不随重试增长；GC 主要发生在题目目录**内部**：每题 `attempts/` 只保留最近 N 轮（默认 last 20 或 7 天取严，与题案 2 retention 同语义，作用域收窄到题内）
+    - 顶层目录回收仍按 manual/孤儿/超期清理；UUID-attributed（= build_attempt 容器）目录在其 build_attempt 进入终态且超过 retention 后才整目录回收（归题案 2 publisher 统一裁决）
+    - dry-run 禁止任何 GC
 12. **Hermes log redirect**：从 `paths.logs / f"{shard_name}.log"` 改到 `work/executions/<workspace_id>/logs/hermes.log`；research/design log 不动
 13. **回归测试包**：
     - 残留题目不可见（核心串题事故复现测试）
@@ -254,15 +267,17 @@
 | `revision` | 是 | 是 | 人工认为镜像、考点、题面或实现偏离预期，基于上一轮产物和反馈进行定向修改 |
 | `revalidate` | 否 | 否或只写校验事件 | 不改产物，只重新跑主机侧 validation / publisher 检查 |
 
-`revision` 的下一轮 workspace 应额外 materialize：
+`revision` 的下一轮 workspace 应额外 materialize（**v5：base-artifact 从同题目录的上一轮 `attempts/iter-NNN/` 就地捞取，不依赖跨 UUID 目录或 DB 路径反查**）：
 
 ```text
-input/
-  base-artifact/                  # 上一轮 output 的快照或只读引用
-  previous-output-manifest.json
+current/input/
+  base-artifact/                  # ← symlink/copy 自 ../../attempts/iter-(N-1)/output（同题目录内）
+  previous-output-manifest.json   # ← ../../attempts/iter-(N-1)/manifest.json
   feedback.json                   # 人工反馈快照
   change-policy.json              # 本轮允许改/必须保留/禁止改的边界
 ```
+
+> **为什么必须按题收敛才谈得上复用**：当前 `retry` 走 `execution_mode="resume"`，只在「上一轮已 publish 到 `work/challenges`」时才通过 `materialize_resume_outputs` 复用已构建产物；而**失败的 attempt 通常没 publish 任何东西**，失败现场（hermes.log / report.json / 失败的 output）只存在于上一轮 workspace 里。旧的 attempt 平铺布局下，上一轮是另一个 UUID 目录、新一轮没有指针指过去，所以「第二轮看不到第一轮挂在哪」。按题收敛后两轮同处一个题目目录，base-artifact / feedback 退化成一次本地 `../../attempts/` 查找，连 DB join 都不需要。
 
 典型人工反馈场景：
 - "基础镜像从 Ubuntu 22.04 改为 Alpine，但保留 challenge_id 和目录结构"
@@ -279,6 +294,14 @@ input/
 
 **为什么需要**: Hermes session 不知道外部 lease，多 worker 并发或 worker 崩溃恢复场景下需要项目侧 fence。
 
+> **⚠️ v5 必须先决的建模冲突（与当前代码）**：本题案的 `executions` 表把 `build_attempt` 当作**容器**、retry/revision 是其下的多行 execution（`iteration_no` 单调递增、`parent_execution_id` 串链）。但**当前代码相反**——`build_attempts` 表里一次 retry = 一个**新 build_attempt 行**（`retry()`/`clean_rebuild()` 在 [build_orchestration_service.py:347](src/services/build_orchestration_service.py#L347) `attempt_id = uuid4()`，`attempt_no` 递增，靠 `design_task_id` + `retry_sources` 串血缘），并由 `one_active_build_per_task` 部分唯一索引保证同题单活跃。两套模型不能并存。本题案**必须包含一个迁移决策**：
+> - **方案 A（推荐，与按题收敛一致）**：build_attempt 升格为「一次构建会话容器」，retry/revision **不再新建 build_attempt**，改为在现有 build_attempt 下 `INSERT executions`。好处：`derive_workspace_id` 按 `build_attempt_id` 命名**自动**变成「按题稳定目录」（题案 1 的 `<workspace_id>` 即此），`iter-NNN` ↔ `iteration_no` 天然对齐，UI 同题 N 行折叠成 1 行 + 执行历史时间线。代价：重写 `retry()`/`clean_rebuild()`，把「新 attempt」语义迁到 execution，`one_active_build_per_task` 改判到 executions.status，`attempt_no` 语义并入 `iteration_no`。
+> - **方案 B（低改动，但不解决堆积）**：保留 retry = 新 build_attempt，execution 与 build_attempt 1:1，只承载 lease/fencing/token；此时 `iteration_no`/`parent_execution_id` 与既有 `attempt_no`/`retry_sources` 冗余，workspace 仍按 attempt 平铺、堆积与「失败信息不可复用」问题原样残留，按题收敛与 base-artifact 复用都落空。
+> 
+> 结论：**选方案 A**。本题案应显式新增一节「retry/rebuild 从 build_attempt-minting 迁移到 execution-minting」，并把 workspace key 锁定为 build_attempt_id。
+>
+> **方案 A 实现级设计已落定**：见 [option-a-execution-container-design.md](option-a-execution-container-design.md)——含 `executions` 建表 DDL、`build_attempts` 字段去重表、claim/lease 单事务、`_prepare`/`_commit`/`update_to_terminal` 改写点、reconciler 升级为 lease 回收器、Alembic 0012 迁移与 cutover flag、回归测试清单。
+
 **IN scope**:
 - `executions` 表（id, build_attempt_id, parent_execution_id, iteration_no, execution_kind, worker_id, claim_token, lease_expires_at, heartbeat_at, status, started_at, finished_at, exit_class）
 - `execution_kind` 白名单：`initial` / `retry` / `revision`
@@ -287,7 +310,8 @@ input/
 - heartbeat / publish / complete / fail 都校验当前 token，旧 token 一律拒绝
 - lease 过期回收时签发新 token；旧进程可以本地跑完，但不能 publish
 - 把题案 2 的 publisher 增加"publish 前重校验 token"
-- `revision` claim 会把 parent execution 的 output manifest、base artifact 引用和人工反馈快照写入新 workspace 的 `input/`
+- **retry/rebuild 迁移到 execution-minting（方案 A）**：`retry()`/`clean_rebuild()` 不再 `attempt_id = uuid4()` 建新 build_attempt，改为在原 build_attempt 下建 `executions` 行（`execution_kind=retry`，`iteration_no=max+1`）；`one_active_build_per_task` 的单活跃判定从 build_attempts.status 迁到「该 build_attempt 下无非终态 execution」
+- `revision` claim 会把 parent execution 的 output manifest、base artifact 引用和人工反馈快照写入新 workspace 的 `current/input/`；**base-artifact 直接取同题目录 `attempts/iter-(N-1)/`，不跨目录、不靠 DB 路径反查**（题案 1 按题收敛是此项前提）
 - **反馈入口**：人工通过 `POST /api/build-attempts/{id}/feedback` 提交结构化反馈（`summary` / `requested_changes` / `preserve` / `forbid` / `reviewer`），本题案只负责 schema、持久化和 materialize；管理端 UI 入口归题案 4 或独立反馈题案，不在本 scope
 - **`revalidate` 不创建 execution 行**：只在原 execution 上追加一条 `revalidation_events` 记录（检查项 / 结果 / 时间戳 / 触发者），由 [BuildReconciler](src/services/build_reconciler.py) 复用现有逻辑执行
 - **存量数据迁移**：新 execution 行只适用于迁移后 claim 的 build_attempt；迁移瞬间 in-flight 的 attempt 由 BuildReconciler 通过 legacy 路径完成本轮，不补建 execution 行。Migration 章节须显式列出这一边界
