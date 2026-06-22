@@ -782,6 +782,30 @@ class ExecutionWorkspaceTests(unittest.TestCase):
                 profile_exists=lambda _: True,
             )
 
+    def test_materialize_progress_shim_uses_active_workspace_directory(self) -> None:
+        shard = self._running_shard(
+            {
+                "build_attempt_id": str(uuid4()),
+                "design_task_id": str(uuid4()),
+                "challenges": [{"id": "web-0001", "category": "web"}],
+            },
+            name="active.worker.json",
+        )
+        workspace = prepare_workspace(
+            self.paths,
+            shard=shard,
+            original_shard_name="active.json",
+            worker="worker-1",
+            two_layer=True,
+        )
+
+        shim = materialize_progress_shim(workspace)
+
+        self.assertEqual(shim, workspace.active / "bin" / "progress")
+        self.assertTrue(shim.is_file())
+        self.assertTrue(shim.is_relative_to(workspace.active))
+        self.assertFalse((workspace.root / "bin" / "progress").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

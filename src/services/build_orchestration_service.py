@@ -143,14 +143,17 @@ class BuildOrchestrationService:
             source = build_repo.get(build_attempt_id)
             if source is None:
                 raise BuildOrchestrationError(f"build attempt {build_attempt_id} does not exist")
-            latest = build_repo.latest_for_design_task(source.design_task_id)
             task = DesignTaskRepository(session).get_design_task(source.design_task_id)
+            if task is None or task.status != "build_failed":
+                raise BuildOrchestrationError("retry requires a parent task in build_failed status")
+            active = build_repo.active_for_design_task(source.design_task_id)
+            if active is not None:
+                return active.id
+            latest = build_repo.latest_for_design_task(source.design_task_id)
             if latest is None or latest.id != source.id:
                 raise BuildOrchestrationError("only the latest build attempt can be retried")
             if source.status not in {"failed", "lost"}:
                 raise BuildOrchestrationError("only failed or lost attempts can be retried")
-            if task is None or task.status != "build_failed":
-                raise BuildOrchestrationError("retry requires a parent task in build_failed status")
         return self._submit(
             [source.design_task_id],
             retry_sources={source.design_task_id: source.id},

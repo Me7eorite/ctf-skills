@@ -37,7 +37,8 @@ with path.open("a", encoding="utf-8") as handle:
 
 
 def materialize_progress_shim(workspace: ExecutionWorkspace) -> Path:
-    path = workspace.root / "bin" / "progress"
+    path = workspace.active / "bin" / "progress"
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_SHIM, encoding="utf-8")
     path.chmod(0o755)
     return path

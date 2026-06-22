@@ -87,6 +87,18 @@ class BuildAttemptsRepository:
         ).one_or_none()
         return _attempt(row) if row else None
 
+    def active_for_design_task(self, design_task_id: UUID) -> dto.BuildAttempt | None:
+        row = self.session.scalars(
+            sa.select(model.BuildAttempt)
+            .where(
+                model.BuildAttempt.design_task_id == design_task_id,
+                model.BuildAttempt.status.in_(("queued", "running")),
+            )
+            .order_by(model.BuildAttempt.attempt_no.desc())
+            .limit(1)
+        ).one_or_none()
+        return _attempt(row) if row else None
+
     def list_attempts(
         self,
         *,

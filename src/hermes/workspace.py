@@ -284,7 +284,7 @@ def _verify_progress_shim(workspace: ExecutionWorkspace) -> None:
     here, Hermes would only discover it mid-run, after the model has already
     started. preflight is the documented fail-closed gate.
     """
-    shim = workspace.root / "bin" / "progress"
+    shim = workspace.active / "bin" / "progress"
     if shim.is_symlink() or not shim.is_file():
         raise WorkspacePreflightError("bin/progress shim is missing; runner must materialize it before preflight")
     if not os.access(shim, os.X_OK):

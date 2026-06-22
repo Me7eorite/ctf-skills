@@ -428,6 +428,29 @@ def test_build_failed_submit_links_resume_and_stale_retry_is_rejected(
     assert third_payload["execution_mode"] == "resume"
 
 
+def test_retry_reuses_active_attempt_when_task_already_has_one(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory)
+    service = _service(tmp_path, session_factory)
+
+    source_id = service.submit_single(task_id)
+    with transaction(factory=session_factory) as session:
+        build_repo = BuildAttemptsRepository(session)
+        build_repo.update_to_terminal(source_id, status="failed", error="boom")
+        session.get(task_model.DesignTask, task_id).status = "build_failed"
+        active = build_repo.create_attempt(task_id, f"{uuid4()}.json")
+        session.get(task_model.DesignTask, task_id).status = "build_failed"
+
+    retry_id = service.retry(source_id)
+
+    assert retry_id == active.id
+
+    with session_factory() as session:
+        assert BuildAttemptsRepository(session).get(active.id) is not None
+
+
 def test_clean_rebuild_is_confirmed_idempotent_and_omits_resume_source(
     tmp_path: Path,
     session_factory: SessionFactory,
