@@ -601,3 +601,30 @@ def test_tick_reaps_expired_execution_lease(
         container = session.get(build_model.BuildAttempt, attempt_id)
         assert container.current_execution_id is None
         assert container.status == "lost"
+
+
+def test_tick_skips_filesystem_mirroring_for_execution_backed_container(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    # An execution-backed container whose shard is absent from all queues must
+    # NOT be marked lost by legacy mirroring — the worker token-write / reaper
+    # own its status. (Reaper only touches active leases; a queued execution
+    # stays queued.)
+    _task_id, attempt_id, _basename = _seed_attempt(session_factory)
+    with session_factory() as session:
+        ExecutionsRepository(session).schedule_execution(
+            attempt_id, execution_kind="initial"
+        )
+        # backdate creation so legacy lost-grace would otherwise fire
+        row = session.get(build_model.BuildAttempt, attempt_id)
+        row.created_at = datetime.now(timezone.utc) - timedelta(seconds=400)
+        session.commit()
+
+    reconciler = _reconciler(tmp_path, session_factory)
+    reconciler.tick_once_sync()
+
+    with session_factory() as session:
+        container = session.get(build_model.BuildAttempt, attempt_id)
+        # Stays queued (execution-derived), not legacy-mirrored to lost.
+        assert container.status == "queued"

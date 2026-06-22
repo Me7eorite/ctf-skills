@@ -131,6 +131,13 @@ class BuildReconciler:
         now = datetime.now(timezone.utc)
         staged_id_texts = {str(staged_id) for staged_id in staged_ids}
         for row in active_rows:
+            # Execution-backed containers (add-execution-lease-and-fencing) are
+            # driven by the worker's token-gated terminal write and the lease
+            # reaper, NOT by filesystem mirroring. Skip legacy status mirroring
+            # for them; the design_task roll-forward below still reads the
+            # execution-derived container status.
+            if row.latest_execution_id is not None:
+                continue
             observed = observations.get(row.id)
             if observed is not None and (
                 str(observed.payload.get("design_task_id"))

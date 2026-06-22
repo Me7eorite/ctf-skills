@@ -77,6 +77,50 @@ def _parse_sequential_failfast_streak(raw: str | None) -> int:
     return value
 
 
+def _record_execution_outcome(
+    attempt_id: UUID, worker: str, item: dict, *, session_factory=None
+) -> None:
+    """Record the run outcome on the scheduled execution (cutover flag only).
+
+    Best-effort and token-fenced: claims the queued execution then writes its
+    terminal status in one short transaction. Heartbeating / long-running lease
+    windows are the local supervisor's concern (split-plan #5), so this records
+    the outcome after the synchronous run rather than holding a lease across it.
+    """
+    from core.execution_config import execution_minting_enabled, lease_ttl_seconds
+
+    if not execution_minting_enabled():
+        return
+    from persistence.repositories import ExecutionsRepository
+    from persistence.session import transaction
+
+    failed = int(item.get("failed", 0))
+    processed = int(item.get("processed", 0))
+    status = "succeeded" if processed > 0 and failed == 0 else "failed"
+    error = None
+    if status == "failed":
+        outcomes = item.get("outcomes") or []
+        last = outcomes[-1] if outcomes else {}
+        error = (last.get("error") or last.get("status") or "build failed")[:2000]
+    try:
+        with transaction(factory=session_factory) as session:
+            repo = ExecutionsRepository(session)
+            latest = repo.latest_for_attempt(attempt_id)
+            if latest is None or latest.status != "queued":
+                return
+            _claimed, token = repo.claim_queued(
+                attempt_id, worker_id=worker, lease_ttl_seconds=lease_ttl_seconds()
+            )
+            repo.update_to_terminal(
+                latest.id, claim_token=token, status=status, error=error
+            )
+    except Exception as exc:  # never break the worker loop on bookkeeping
+        print(
+            f"execution outcome record skipped for {attempt_id}: {exc}",
+            flush=True,
+        )
+
+
 def _run_build_attempt_sequence(
     runner: HermesRunner,
     worker: str,
@@ -109,6 +153,8 @@ def _run_build_attempt_sequence(
                 str(tail_id) for tail_id in build_attempt_sequence[index + 1 :]
             ]
             break
+
+        _record_execution_outcome(attempt_id, worker, item)
 
         item_outcomes = item.get("outcomes", [])
         outcomes.extend(item_outcomes)

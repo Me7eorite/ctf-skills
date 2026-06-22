@@ -37,6 +37,18 @@ FLAG_TOKEN_RE = re.compile(
     r"(?<![A-Za-z0-9_])flag\{[^\r\n{}]+\}(?![A-Za-z0-9_])"
 )
 
+# Solver/validator anti-cheat: organizer files the reference exploit must never
+# read to obtain the flag — it must recover it from the live target (web/pwn) or
+# the distributed artifact (re), not from these config/answer files.
+_FORBIDDEN_EXPLOIT_SOURCES = ("metadata.json", "challenge.yml", "docker-compose")
+
+
+def _read_text(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
 
 def compose_literal_flag(compose_path: Path) -> str | None:
     """Return a literal FLAG value from an environment list entry.
@@ -365,6 +377,70 @@ class ChallengeValidator:
                         f"ELF artifact architecture is not {canonical}: "
                         + ", ".join(wrong_arch)
                     )
+
+        errors.extend(self._solver_integrity_errors(challenge_dir, metadata))
+        return errors
+
+    def _solver_integrity_errors(
+        self, challenge_dir: Path, metadata: dict
+    ) -> list[str]:
+        """Deterministic anti-cheat checks on the reference solver/validator.
+
+        The host's flag-match gate alone cannot tell a genuine solve from a
+        validator that hardcodes or sideloads the known flag. These checks make
+        the cheat deterministic-detectable for every category:
+
+          A. ``validate.sh`` / ``writenup/exp.py`` must NOT embed the literal
+             ``metadata.flag`` — a real solver recovers it at runtime.
+          B. The exploit must NOT read the flag from organizer config/answer
+             files (``metadata.json`` / ``challenge.yml`` / docker-compose);
+             web/pwn exploits recover it from the live service, never from the
+             compose file that injects it.
+          C. A ``re`` solver must actually reference the distributed artifact
+             (``attachments/`` or ``dist/``) and must not read organizer files.
+        """
+        errors: list[str] = []
+        category = metadata.get("category")
+        flag = metadata.get("flag") or ""
+        validate_text = _read_text(challenge_dir / "validate.sh")
+        exp_text = _read_text(challenge_dir / "writenup" / "exp.py")
+
+        # A — hardcoded flag literal in the solver/validator
+        if flag:
+            for name, text in (
+                ("validate.sh", validate_text),
+                ("writenup/exp.py", exp_text),
+            ):
+                if text and flag in text:
+                    errors.append(
+                        f"{name} embeds the literal metadata.flag; the reference "
+                        "solver must recover the flag, not hardcode it"
+                    )
+
+        # B — the exploit must not read the flag from organizer config/answer files
+        if exp_text:
+            for token in _FORBIDDEN_EXPLOIT_SOURCES:
+                if token in exp_text:
+                    errors.append(
+                        f"writenup/exp.py references '{token}'; the exploit must "
+                        "recover the flag from the target, not organizer files"
+                    )
+
+        # C — a re solver must open the distributed artifact, never organizer files
+        if category == "re":
+            combined = f"{validate_text or ''}\n{exp_text or ''}"
+            if combined.strip():
+                if "attachments" not in combined and "dist" not in combined:
+                    errors.append(
+                        "re solver does not reference the distributed artifact "
+                        "(attachments/ or dist/); it must derive the flag from it"
+                    )
+                for token in ("metadata.json", "challenge.yml"):
+                    if token in combined:
+                        errors.append(
+                            f"re solver references '{token}'; it must derive the "
+                            "flag from the artifact, not organizer files"
+                        )
         return errors
 
     def _challenge_dirs(self, challenge_ids: list[str]) -> list[Path]:

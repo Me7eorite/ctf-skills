@@ -33,6 +33,12 @@
 - [x] 4.5 Update `_validate_task_for_submit` to anchor eligibility on the container's latest execution (container aggregate status)
 - [ ] 4.6 Reject `revalidate` unless `current_execution_id` is null and `latest_execution_id` names a terminal execution
 
+## 4b. Worker-claim keystone (ties executions into the live flow)
+
+- [x] 4b.1 Worker records the run outcome on the scheduled execution: `cli._record_execution_outcome` claims the queued execution and writes its token-fenced terminal status after each `runner.run` (flag-gated, best-effort); verified by `test_worker_execution_outcome.py`
+- [x] 4b.2 Reconciler skips legacy filesystem status-mirroring for execution-backed containers (`latest_execution_id is not None`); only the reaper + worker token-write drive their status; verified by `test_tick_skips_filesystem_mirroring_for_execution_backed_container`
+- [~] 4b.3 Long-running lease + heartbeat across an in-flight build deferred to the local supervisor (split-plan #5); the synchronous sequential worker records the outcome post-run instead of holding a lease
+
 ## 5. Reconciler as lease reaper
 
 - [x] 5.1 Repurpose `BuildReconciler` to scan executions with expired leases → terminally mark old execution `lost`, record error, clear current, and never auto-schedule or rotate its token; operator retry (or future supervisor) schedules recovery as a new iteration (reaper wired into `tick` and `tick_once_sync`; verified by `test_tick_reaps_expired_execution_lease`)
