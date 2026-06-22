@@ -3,7 +3,6 @@ export const appState = {
   view: "overview",
   category: "all",
   search: "",
-  editingSeedId: null,
   timer: null,
   buildAttempts: {
     list: null,

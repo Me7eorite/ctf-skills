@@ -9,7 +9,6 @@ import * as workerPool from "./views/worker-pool.js";
 import * as challenges from "./views/challenges.js";
 import * as shards from "./views/shards.js";
 import * as logs from "./views/logs.js";
-import * as seeds from "./views/seeds.js";
 import * as researchSubmit from "./views/research-submit.js";
 import * as researchRequests from "./views/research-requests.js";
 import * as researchRuns from "./views/research-runs.js";
@@ -23,7 +22,6 @@ const views = {
   challenges,
   shards,
   logs,
-  seeds,
   "research-submit": researchSubmit,
   "research-requests": researchRequests,
   "research-runs": researchRuns,
@@ -38,7 +36,6 @@ registerViews({
   challenges: challenges.render,
   shards: shards.render,
   logs: logs.render,
-  seeds: seeds.render,
   "research-submit": researchSubmit.render,
   "research-requests": researchRequests.render,
   "research-runs": researchRuns.render,
@@ -130,7 +127,6 @@ document.querySelector("#mobileMenu")?.addEventListener("click", () => {
   document.querySelector("#sidebarNav")?.classList.toggle("hidden");
 });
 challenges.bind?.(loadState);
-seeds.bind?.(loadState);
 shards.bind?.(loadState);
 logs.bind?.(loadState);
 researchSubmit.bind?.(loadState);

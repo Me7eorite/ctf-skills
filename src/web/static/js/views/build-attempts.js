@@ -351,28 +351,63 @@ function renderList(root) {
   const rows = state.list || [];
   pruneSelection(rows);
   const selectedCount = state.selection.size;
+  const summary = summarizeBuildRows(rows);
   root.innerHTML = `
     ${renderBuildReadinessWarning()}
-    <section class="card">
-      <div class="card-header">
+    <div class="ba-page-header">
+      <div>
+        <h2 class="ba-page-title">构建记录</h2>
+        <p class="ba-page-desc">查看构建队列、运行结果和产物校验状态。</p>
+      </div>
+      <div class="ba-page-actions">
+        <button id="ba-start-selected" class="btn btn-primary btn-sm" ${selectedCount ? "" : "disabled"}
+          title="按表格中的勾选顺序顺序执行所选 queued 题目">
+          <i data-lucide="play"></i>启动选中${selectedCount ? `（${selectedCount}）` : ""}
+        </button>
+        <button id="ba-start-queue" class="btn btn-secondary btn-sm"
+          title="按当前的分类/生成请求筛选，启动全部 queued 题目（按创建时间从早到晚，最多 100 条）">
+          <i data-lucide="list-ordered"></i>启动全部待运行
+        </button>
+      </div>
+    </div>
+
+    <div class="ba-summary-grid">
+      ${renderBuildMetric("全部记录", rows.length, "layers-3", "neutral")}
+      ${renderBuildMetric("待运行", summary.queued, "clock", "warning")}
+      ${renderBuildMetric("运行中", summary.running, "activity", "info")}
+      ${renderBuildMetric("失败/丢失", summary.failed + summary.lost, "triangle-alert", "danger")}
+    </div>
+
+    <section class="card ba-list-card">
+      <div class="ba-list-summary">
         <div>
           <div class="card-title">构建记录</div>
           <div class="card-subtitle">${rows.length} 条最新构建运行${selectedCount ? ` · 已选 ${selectedCount} 条` : ""}</div>
         </div>
-        <div class="btn-group">
-          <button id="ba-start-selected" class="btn btn-primary btn-sm" ${selectedCount ? "" : "disabled"}
-            title="按表格中的勾选顺序顺序执行所选 queued 题目">
-            <i data-lucide="play"></i>启动选中${selectedCount ? `（${selectedCount}）` : ""}
-          </button>
-          <button id="ba-start-queue" class="btn btn-secondary btn-sm"
-            title="按当前的分类/生成请求筛选，启动全部 queued 题目（按创建时间从早到晚，最多 100 条）">
-            <i data-lucide="list-ordered"></i>启动全部待运行
-          </button>
-        </div>
+        <span class="pill">可选 ${summary.queued} 条</span>
       </div>
       ${renderFilters()}
-      ${rows.length ? renderTable(rows) : `<div class="empty card-body">没有匹配的构建记录</div>`}
+      ${rows.length ? `${renderTable(rows)}${renderAttemptCards(rows)}` : `<div class="empty card-body">没有匹配的构建记录</div>`}
     </section>
+  `;
+}
+
+function summarizeBuildRows(rows) {
+  return rows.reduce((acc, row) => {
+    if (row.status in acc) acc[row.status] += 1;
+    return acc;
+  }, { queued: 0, running: 0, succeeded: 0, failed: 0, lost: 0 });
+}
+
+function renderBuildMetric(label, value, icon, tone) {
+  return `
+    <article class="ba-metric ba-metric-${tone}">
+      <i data-lucide="${icon}"></i>
+      <div>
+        <strong>${value}</strong>
+        <span>${escapeHtml(label)}</span>
+      </div>
+    </article>
   `;
 }
 
@@ -384,7 +419,7 @@ function renderProgressCell(attempt) {
   if (attempt.status === "failed" || attempt.status === "lost") {
     return `
       <div>${value}</div>
-      <div style="margin-top: 2px; color: var(--accent-red); font-size: var(--font-xs);">
+      <div class="ba-progress-failed">
         · 校验失败
       </div>
     `;
@@ -402,7 +437,7 @@ function pruneSelection(rows) {
 
 function renderFilters() {
   return `
-    <div class="filter-bar filter-bar-vertical-sm">
+    <div class="filter-bar filter-bar-vertical-sm ba-filters">
       <label class="filter-item">状态
         <select id="ba-filter-status" class="filter-select">
           <option value=""${state.filters.status === "" ? " selected" : ""}>全部</option>
@@ -438,11 +473,11 @@ function renderTable(rows) {
   const allQueuedSelected = queuedRows.length > 0
     && queuedRows.every((r) => state.selection.has(r.id));
   return `
-    <div class="table-container">
-      <table class="table">
+    <div class="table-container ba-table-wrap">
+      <table class="table ba-table">
         <thead>
           <tr>
-            <th style="width: 36px;">
+            <th class="ba-select-col">
               <input type="checkbox" id="ba-select-all"
                 ${queuedRows.length === 0 ? "disabled" : ""}
                 ${allQueuedSelected ? "checked" : ""}
@@ -466,11 +501,11 @@ function renderTable(rows) {
               <td>
                 ${attempt.status === "queued"
                   ? `<input type="checkbox" class="ba-row-select" data-build-attempt-id="${escapeHtml(attempt.id)}" ${state.selection.has(attempt.id) ? "checked" : ""}>`
-                  : `<span style="color: var(--text-muted);" title="仅 queued 状态可选">—</span>`}
+                  : `<span class="ba-muted" title="仅 queued 状态可选">—</span>`}
               </td>
               <td>
-                <div class="truncate" style="max-width: 260px;">${escapeHtml(attempt.title || attempt.challenge_id || attempt.id)}</div>
-                ${attempt.failure_summary ? `<div style="margin-top: 2px; color: var(--accent-red); font-size: var(--font-xs);">${escapeHtml(attempt.failure_summary)}</div>` : ""}
+                <div class="ba-title">${escapeHtml(attempt.title || attempt.challenge_id || attempt.id)}</div>
+                ${attempt.failure_summary ? `<div class="ba-failure-line">${escapeHtml(attempt.failure_summary)}</div>` : ""}
               </td>
               <td>${softPill(attempt.category || "-")}</td>
               <td>${escapeHtml(attempt.difficulty || "-")}</td>
@@ -483,12 +518,6 @@ function renderTable(rows) {
               <td>
                 <div class="btn-group">
                   <button class="btn btn-secondary btn-xs ba-open-detail">详情</button>
-                  ${attempt.status === "failed" || attempt.status === "lost"
-                    ? `<button class="btn btn-primary btn-xs ba-retry">重试构建</button>`
-                    : ""}
-                  ${attempt.status === "failed" || attempt.status === "lost"
-                    ? `<button class="btn btn-secondary btn-xs ba-clean-rebuild">干净重建</button>`
-                    : ""}
                   <button class="btn btn-danger btn-xs ba-delete" title="删除">
                     <i data-lucide="trash-2"></i>
                   </button>
@@ -498,6 +527,44 @@ function renderTable(rows) {
           `).join("")}
         </tbody>
       </table>
+    </div>
+  `;
+}
+
+function renderAttemptCards(rows) {
+  return `
+    <div class="ba-card-list">
+      ${rows.map((attempt) => `
+        <article class="ba-attempt-card" data-build-attempt-id="${escapeHtml(attempt.id)}">
+          <div class="ba-card-head">
+            <label class="ba-card-select">
+              ${attempt.status === "queued"
+                ? `<input type="checkbox" class="ba-row-select" data-build-attempt-id="${escapeHtml(attempt.id)}" ${state.selection.has(attempt.id) ? "checked" : ""}>`
+                : `<span class="ba-muted">—</span>`}
+            </label>
+            <div class="ba-card-title">
+              <strong>${escapeHtml(attempt.title || attempt.challenge_id || attempt.id)}</strong>
+              <span>${escapeHtml(shortId(attempt.id))} · 第 ${escapeHtml(attempt.attempt_no)} 次</span>
+            </div>
+          </div>
+          <div class="ba-card-badges">
+            ${softPill(attempt.category || "-")}
+            ${buildStatusIndicator(attempt.status)}
+            ${artifactPill(attempt.artifact_status)}
+          </div>
+          ${attempt.failure_summary ? `<div class="ba-card-failure">${escapeHtml(attempt.failure_summary)}</div>` : ""}
+          <dl class="ba-card-meta">
+            <div><dt>难度</dt><dd>${escapeHtml(attempt.difficulty || "-")}</dd></div>
+            <div><dt>进度</dt><dd>${renderProgressCell(attempt)}</dd></div>
+            <div><dt>Worker</dt><dd>${escapeHtml(attempt.worker || "-")}</dd></div>
+            <div><dt>创建</dt><dd>${escapeHtml(formatDateTime(attempt.created_at))}</dd></div>
+          </dl>
+          <div class="ba-card-actions">
+            <button class="btn btn-primary btn-sm ba-open-detail">详情</button>
+            <button class="btn btn-danger btn-sm ba-delete" title="删除"><i data-lucide="trash-2"></i>删除</button>
+          </div>
+        </article>
+      `).join("")}
     </div>
   `;
 }
@@ -515,13 +582,14 @@ function renderDetail(root) {
   }
   const attempt = state.detail;
   if (!attempt) return;
+  const tone = buildDetailTone(attempt.status);
   root.innerHTML = `
     ${renderBuildReadinessWarning()}
-    <div style="display: flex; align-items: center; justify-content: space-between; gap: var(--space-md); flex-wrap: wrap; margin-bottom: var(--space-md);">
+    <div class="ba-detail-toolbar">
       <button class="btn btn-ghost" id="ba-back">
         <i data-lucide="arrow-left"></i> 返回列表
       </button>
-      <div class="btn-group">
+      <div class="btn-group ba-detail-actions">
         <button id="ba-refresh" class="btn btn-secondary btn-sm">
           <i data-lucide="refresh-cw"></i>刷新
         </button>
@@ -532,10 +600,10 @@ function renderDetail(root) {
           ? `<button class="btn btn-secondary btn-sm ba-revalidate" data-build-attempt-id="${escapeHtml(attempt.id)}"><i data-lucide="shield-check"></i>重新校验</button>`
           : ""}
         ${(attempt.status === "failed" || attempt.status === "lost") && buildProfileReady(attempt.category)
-          ? `<button class="btn btn-primary btn-sm ba-retry" data-build-attempt-id="${escapeHtml(attempt.id)}">重试构建</button>`
+          ? `<button class="btn btn-primary btn-sm ba-retry" data-build-attempt-id="${escapeHtml(attempt.id)}"><i data-lucide="rotate-cw"></i>重试构建</button>`
           : ""}
         ${(attempt.status === "failed" || attempt.status === "lost") && buildProfileReady(attempt.category)
-          ? `<button class="btn btn-secondary btn-sm ba-clean-rebuild" data-build-attempt-id="${escapeHtml(attempt.id)}">干净重建</button>`
+          ? `<button class="btn btn-secondary btn-sm ba-clean-rebuild" data-build-attempt-id="${escapeHtml(attempt.id)}"><i data-lucide="eraser"></i>干净重建</button>`
           : ""}
         ${["failed", "lost", "succeeded"].includes(attempt.status)
           ? `<button class="btn btn-danger btn-sm ba-delete" data-build-attempt-id="${escapeHtml(attempt.id)}">
@@ -545,14 +613,29 @@ function renderDetail(root) {
       </div>
     </div>
 
-    <section class="card card-body" data-build-attempt-id="${escapeHtml(attempt.id)}">
-      <div class="flex items-center gap-2" style="flex-wrap: wrap;">
-        ${buildStatusIndicator(attempt.status)}
-        ${artifactPill(attempt.artifact_status)}
-        ${softPill(`第 ${attempt.attempt_no} 次`)}
+    <section class="ba-detail-hero ba-detail-${tone}" data-build-attempt-id="${escapeHtml(attempt.id)}">
+      <div class="ba-detail-mainline">
+        <div class="ba-detail-badges">
+          ${buildStatusIndicator(attempt.status)}
+          ${artifactPill(attempt.artifact_status)}
+          ${softPill(`第 ${attempt.attempt_no} 次`)}
+          ${attempt.category ? softPill(attempt.category) : ""}
+        </div>
+        <h2>构建运行 #${escapeHtml(attempt.attempt_no)}</h2>
+        <div class="ba-detail-meta">
+          <span>设计任务 ${escapeHtml(shortId(attempt.design_task_id))}</span>
+          <span>${escapeHtml(attempt.shard_basename)}</span>
+          <span>${escapeHtml(formatDateTime(attempt.created_at))}</span>
+        </div>
       </div>
-      <h2 style="font-size: var(--font-lg); font-weight: 600; margin-top: var(--space-sm);">构建运行 #${escapeHtml(attempt.attempt_no)}</h2>
-      <dl style="margin-top: var(--space-lg); display: grid; gap: var(--space-md); grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));">
+      ${failureSummary(attempt) ? `<div class="ba-detail-failure"><strong>失败原因</strong><span>${escapeHtml(failureSummary(attempt))}</span></div>` : ""}
+    </section>
+
+    <section class="card ba-info-card">
+      <div class="card-header">
+        <div><div class="card-title">运行信息</div><div class="card-subtitle">构建记录与文件证据的后端状态。</div></div>
+      </div>
+      <dl class="ba-info-grid">
         <div><dt>设计任务</dt><dd><button class="btn btn-ghost btn-sm ba-open-design-task">${escapeHtml(shortId(attempt.design_task_id))}</button></dd></div>
         <div><dt>分片</dt><dd class="mono">${escapeHtml(attempt.shard_basename)}</dd></div>
         <div><dt>worker</dt><dd>${escapeHtml(attempt.worker || "-")}</dd></div>
@@ -561,10 +644,9 @@ function renderDetail(root) {
         <div><dt>完成时间</dt><dd>${escapeHtml(formatDateTime(attempt.finished_at))}</dd></div>
         <div><dt>产物目录</dt><dd class="mono">${escapeHtml(attempt.resulting_challenge_dir || "-")}</dd></div>
       </dl>
-      ${failureSummary(attempt) ? `<p style="margin-top: var(--space-md); color: var(--accent-red);">失败原因：${escapeHtml(failureSummary(attempt))}</p>` : ""}
     </section>
 
-    <section class="card" style="margin-top: var(--space-lg);">
+    <section class="card ba-section-card">
       <div class="card-header">
         <div><div class="card-title">尝试历史</div></div>
         <span class="pill">${(attempt.sibling_attempts || []).length}</span>
@@ -572,7 +654,7 @@ function renderDetail(root) {
       ${renderSiblingAttempts(attempt)}
     </section>
 
-    <section class="card" style="margin-top: var(--space-lg);">
+    <section class="card ba-section-card">
       <div class="card-header">
         <div><div class="card-title">进度事件</div></div>
         <span class="pill" id="ba-progress-event-count">${(attempt.progress_events || []).length}</span>
@@ -580,6 +662,14 @@ function renderDetail(root) {
       ${renderProgressEvents(attempt.progress_events || [])}
     </section>
   `;
+}
+
+function buildDetailTone(status) {
+  if (status === "succeeded") return "success";
+  if (status === "running") return "info";
+  if (status === "queued") return "warning";
+  if (status === "failed" || status === "lost") return "danger";
+  return "neutral";
 }
 
 function renderBuildReadinessWarning() {
@@ -631,7 +721,7 @@ function renderSiblingAttempts(attempt) {
 
 function renderProgressEvents(events) {
   return `
-    <div id="ba-progress-events" class="card-body" style="display: grid; gap: var(--space-sm);">
+    <div id="ba-progress-events" class="ba-events">
       ${events.length
         ? events.map(renderProgressEvent).join("")
         : `<div class="empty" data-empty-events>没有进度事件</div>`}
@@ -640,8 +730,9 @@ function renderProgressEvents(events) {
 }
 
 function renderProgressEvent(event) {
+  const tone = event.message?.startsWith("carry-forward:") ? "warning" : "normal";
   return `
-    <div class="mono" data-progress-event-id="${event.id}" style="font-size: var(--font-sm); color: ${event.message?.startsWith("carry-forward:") ? "var(--accent-amber)" : "var(--ink-700)"};">
+    <div class="ba-event ba-event-${tone} mono" data-progress-event-id="${event.id}">
       #${event.id} ${escapeHtml(event.stage)}/${escapeHtml(event.status)}
       ${event.challenge_id ? escapeHtml(event.challenge_id) : "shard"}
       ${escapeHtml(event.message || "")}

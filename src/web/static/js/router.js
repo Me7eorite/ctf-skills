@@ -54,12 +54,11 @@ const titles = {
   "research-submit":  { title: "新建需求", group: "生产管线" },
   "research-requests":{ title: "需求列表", group: "生产管线" },
   "design-tasks":     { title: "题目设计", group: "生产管线" },
-  "challenges":       { title: "题目库",   group: "生产管线" },
+  "challenges":       { title: "完成题目", group: "生产管线" },
   "build-attempts":   { title: "构建列表", group: "生产管线" },
   "worker-pool":      { title: "Worker 池", group: "运行监控" },
   "logs":             { title: "运行日志", group: "运行监控" },
   "shards":           { title: "任务队列", group: "系统" },
-  "seeds":            { title: "种子库",   group: "系统" },
   // 以下保留路由兼容，由 setView 重定向到新页面
   "research-runs":    { title: "运行记录", group: "" },
   "research-logs":    { title: "研究日志", group: "" },

@@ -29,6 +29,7 @@
   <link rel="stylesheet" href="/css/views/research-submit.css">
   <link rel="stylesheet" href="/css/views/research-requests.css">
   <link rel="stylesheet" href="/css/views/design-tasks.css">
+  <link rel="stylesheet" href="/css/views/build-attempts.css">
   <script src="/assets/lucide.min.js" defer></script>
 </head>
 <body>
@@ -75,7 +76,7 @@
             <i data-lucide="hammer"></i>构建列表
           </button>
           <button class="sidebar-nav-item" data-target="challenges">
-            <i data-lucide="flag"></i>题目库
+            <i data-lucide="flag"></i>完成题目
           </button>
         </div>
         <div class="sidebar-nav-divider"></div>
@@ -98,9 +99,6 @@
           <button class="sidebar-nav-item legacy" data-target="shards">
             <i data-lucide="layers-3"></i>任务队列
             <span class="sidebar-legacy-badge">旧版</span>
-          </button>
-          <button class="sidebar-nav-item" data-target="seeds">
-            <i data-lucide="database"></i>种子库
           </button>
         </div>
       </nav>
@@ -128,7 +126,6 @@
         <section data-view="shards" class="view"></section>
         <section data-view="build-attempts" class="view"></section>
         <section data-view="logs" class="view"></section>
-        <section data-view="seeds" class="view"></section>
         <section data-view="research-submit" class="view"></section>
         <section data-view="research-requests" class="view"></section>
         <section data-view="design-tasks" class="view"></section>

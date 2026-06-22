@@ -7,6 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 BUILD_ATTEMPTS_JS = ROOT / "src" / "web" / "static" / "js" / "views" / "build-attempts.js"
+BUILD_ATTEMPTS_CSS = ROOT / "src" / "web" / "static" / "css" / "views" / "build-attempts.css"
 
 
 def test_build_attempt_actions_use_constrained_endpoints():
@@ -29,6 +30,21 @@ def test_build_attempt_actions_use_constrained_endpoints():
     assert "crypto.randomUUID()" in source
     assert "confirmed: true" in source
     assert '["failed", "lost", "succeeded"].includes(attempt.status)' in source
+    assert "ba-detail-actions" in source
+    assert "ba-card-list" in source
+
+
+def test_build_attempt_view_has_mobile_card_layout():
+    index = (ROOT / "src" / "web" / "static" / "index.html").read_text(encoding="utf-8")
+    styles = BUILD_ATTEMPTS_CSS.read_text(encoding="utf-8")
+    source = BUILD_ATTEMPTS_JS.read_text(encoding="utf-8")
+
+    assert '/css/views/build-attempts.css' in index
+    assert "renderAttemptCards(rows)" in source
+    assert ".ba-card-list" in styles
+    assert "@media (max-width: 767px)" in styles
+    assert ".ba-table-wrap" in styles
+    assert "display: none;" in styles
 
 
 def test_detail_poll_supports_append_only_event_updates():

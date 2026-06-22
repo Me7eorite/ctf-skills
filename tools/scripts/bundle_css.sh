@@ -36,6 +36,7 @@ OUT="$ROOT/src/web/static/css/app.css"
     src/web/static/css/views/research-submit.css \
     src/web/static/css/views/research-requests.css \
     src/web/static/css/views/design-tasks.css \
+    src/web/static/css/views/build-attempts.css \
   ; do
     rel=${f#src/web/static/}
     printf '\n/* ==== %s ==== */\n' "$rel"
