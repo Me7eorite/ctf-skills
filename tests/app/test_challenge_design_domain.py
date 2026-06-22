@@ -533,6 +533,40 @@ def test_difficulty_expert_accepts_substantive_novelty():
     assert result.challenge["difficulty"] == "expert"
 
 
+def test_difficulty_rejects_oversized_implementation_plan_for_medium():
+    # Phase 2.5: medium caps implementation_plan at 7 top-level keys.
+    bloat = {f"k{i}": f"value {i}" for i in range(8)}
+    payload = _payload(implementation_plan=bloat)
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match=r"medium allows at most 7 implementation_plan components",
+    ):
+        validate_design_payload(payload, _parent_task())
+
+
+def test_difficulty_accepts_implementation_plan_at_hard_cap():
+    # Hard cap is 10; a plan with exactly 10 top-level keys is allowed.
+    parent = _parent_task(difficulty="hard")
+    payload = _payload(
+        difficulty="hard",
+        secondary_technique="Key confusion via kid override",
+        techniques=[
+            "JWT kid path traversal",
+            "Key confusion via kid override",
+            "Token replay across services",
+        ],
+        intended_path=[
+            "Inspect the JWT in the session cookie",
+            "Notice the kid claim drives the key path",
+            "Forge the key path to point at a writable file",
+            "Sign a forged admin token and read the flag",
+        ],
+        implementation_plan={f"k{i}": f"value {i}" for i in range(10)},
+    )
+    result = validate_design_payload(payload, parent)
+    assert result.challenge["difficulty"] == "hard"
+
+
 def test_difficulty_legacy_grandfather_skips_alignment():
     # A pre-rubric design with only one technique on a medium task: the
     # alignment check would normally reject it, but operators can pass

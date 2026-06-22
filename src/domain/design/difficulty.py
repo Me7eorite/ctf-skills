@@ -28,7 +28,14 @@ MIN_NOVELTY_CHARS = 40
 
 @dataclass(frozen=True)
 class DifficultyRubric:
-    """Machine-checked thresholds for one difficulty tier."""
+    """Machine-checked thresholds for one difficulty tier.
+
+    ``implementation_plan_max_keys`` caps top-level keys in
+    ``implementation_plan`` to keep build-phase scope under control.
+    ``estimated_loc_budget`` is rendered into the design prompt as
+    guidance (no validator-side check, since the design has no code
+    yet — the build agent uses it to self-trim).
+    """
 
     techniques_min: int
     techniques_max: int  # inclusive; use a large sentinel for "no upper bound"
@@ -37,6 +44,8 @@ class DifficultyRubric:
     needs_business_scenario: bool
     needs_implementation_plan: bool
     needs_novelty: bool
+    implementation_plan_max_keys: int
+    estimated_loc_budget: int
 
 
 RUBRIC: dict[str, DifficultyRubric] = {
@@ -48,6 +57,8 @@ RUBRIC: dict[str, DifficultyRubric] = {
         needs_business_scenario=False,
         needs_implementation_plan=False,
         needs_novelty=False,
+        implementation_plan_max_keys=5,
+        estimated_loc_budget=200,
     ),
     "medium": DifficultyRubric(
         techniques_min=2,
@@ -57,6 +68,8 @@ RUBRIC: dict[str, DifficultyRubric] = {
         needs_business_scenario=True,
         needs_implementation_plan=False,
         needs_novelty=False,
+        implementation_plan_max_keys=7,
+        estimated_loc_budget=400,
     ),
     "hard": DifficultyRubric(
         techniques_min=3,
@@ -66,6 +79,8 @@ RUBRIC: dict[str, DifficultyRubric] = {
         needs_business_scenario=True,
         needs_implementation_plan=True,
         needs_novelty=False,
+        implementation_plan_max_keys=10,
+        estimated_loc_budget=700,
     ),
     "expert": DifficultyRubric(
         techniques_min=2,
@@ -75,6 +90,8 @@ RUBRIC: dict[str, DifficultyRubric] = {
         needs_business_scenario=True,
         needs_implementation_plan=True,
         needs_novelty=True,
+        implementation_plan_max_keys=15,
+        estimated_loc_budget=1200,
     ),
 }
 
@@ -136,6 +153,17 @@ def validate_difficulty_alignment(
             raise ChallengeDesignValidationError(
                 f"{difficulty} requires a non-empty implementation_plan"
             )
+
+    # Phase 2.5 buildability cap: oversized implementation_plan blocks
+    # the build agent into Hermes timeouts. Enforce a per-tier ceiling
+    # on top-level component count whenever a plan is present.
+    plan = challenge.get("implementation_plan")
+    if isinstance(plan, Mapping) and len(plan) > rubric.implementation_plan_max_keys:
+        raise ChallengeDesignValidationError(
+            f"{difficulty} allows at most {rubric.implementation_plan_max_keys} "
+            f"implementation_plan components; design has {len(plan)}. "
+            "Split the design or downgrade the difficulty."
+        )
 
     if rubric.needs_novelty:
         novelty = challenge.get("novelty")

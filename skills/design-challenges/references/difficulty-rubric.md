@@ -4,12 +4,12 @@ Machine-checked rubric for the four difficulty tiers. The validator enforces the
 
 ## Tiers
 
-| Tier | Techniques (考点) | Intended path steps | implementation_plan | Business scenario | Novelty field |
-| --- | --- | --- | --- | --- | --- |
-| easy   | exactly **1** | 1–3 | optional | optional (toy service OK) | not required |
-| medium | **2 or 3** | 2–5 | optional | **required** (believable feature) | not required |
-| hard   | **3 or 4** | 3–7 | **required** (intent-level) | **required** | not required |
-| expert | **≥ 2** | 4–10 | **required** (show how steps chain) | **required** | **required** — describe the 0day-style trick |
+| Tier | Techniques (考点) | Intended path steps | implementation_plan | plan max top-level keys | LOC budget (build) | Business scenario | Novelty field |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| easy   | exactly **1** | 1–3 | optional | ≤ 5  | ≤ 200  | optional (toy service OK) | not required |
+| medium | **2 or 3** | 2–5 | optional | ≤ 7  | ≤ 400  | **required** | not required |
+| hard   | **3 or 4** | 3–7 | **required** | ≤ 10 | ≤ 700  | **required** | not required |
+| expert | **≥ 2** | 4–10 | **required** | ≤ 15 | ≤ 1200 | **required** | **required** — describe the 0day-style trick |
 
 **Counting technique slots:** the validator unions `techniques`, `primary_technique`, and `secondary_technique`, strips whitespace, deduplicates case-insensitively, and counts the distinct strings.
 
@@ -18,6 +18,8 @@ Machine-checked rubric for the four difficulty tiers. The validator enforces the
 **Business scenario heuristic:** for medium and harder, the `prompt` field must be at least 60 characters and the parent task `scenario` field must be non-empty. A one-line prompt like "find the SQLi and read the flag" is rejected as too thin to carry business context.
 
 **Novelty heuristic for expert:** the `novelty` field must be at least 40 characters and explicitly identify the unusual element — for example: "Parser differential between two HTTP smuggling implementations chained with a custom pickle gadget", or "Custom JWS algorithm-confusion via unregistered alg=none-like state in an in-house library". Generic statements like "advanced exploitation" are rejected.
+
+**Buildability budget (Phase 2.5):** `implementation_plan` top-level keys are capped to prevent the build phase from blowing past the category timeout. The LOC budget is guidance for the build agent — it is not validator-enforced but the agent should self-trim to stay near or below the budget. If a hard or expert design needs significantly more components or LOC than the budget allows, split it into multiple tasks rather than exceeding the cap.
 
 ## Qualitative Guidance
 

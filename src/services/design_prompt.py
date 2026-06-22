@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from core.paths import ProjectPaths
+from domain.design.difficulty import RUBRIC as DIFFICULTY_RUBRIC
 from domain.design_tasks import DesignTask
 from domain.research import GenerationRequest, ResearchFinding, ResearchSource
 
@@ -63,6 +65,8 @@ def build_design_prompt(
         _render_event_brief(generation_request),
         "## Single Challenge Task",
         _render_design_task(design_task),
+        "## Build Budget",
+        _render_build_budget(design_task.difficulty),
         "## Research Evidence",
         _render_findings(findings),
         "## Research Sources",
@@ -76,57 +80,193 @@ def build_design_prompt(
             for name in reference_names
         ),
         "## Output Contract",
-        (
-            "You MUST reply with a SINGLE JSON object and nothing else.\n"
-            "\n"
-            "Hard rules (the executor parses your reply verbatim):\n"
-            "- The first character of your reply MUST be `{` and the last MUST "
-            "be `}`.\n"
-            "- Do NOT wrap the JSON in markdown, code fences, headings, tables, "
-            "prose, or commentary.\n"
-            "- Do NOT write the JSON to a file. Do NOT call Write/Edit/Bash to "
-            "create `*.json`, `*.md`, or any other output artifact. Any files "
-            "you produce are ignored — only this reply is consumed.\n"
-            "- The object MUST match the machine-readable shape from SKILL.md "
-            "and MUST contain top-level keys `event` and `challenges`.\n"
-            "- `challenges` MUST be an array of length 1.\n"
-            "- Echo or default `event.flag_format` and include every field the "
-            "validator enforces.\n"
-            "- `challenges[0].artifacts` MUST be an array of local "
-            "challenge-directory relative file paths, not prose descriptions "
-            "and not final delivery zip paths.\n"
-            "- Include `README.md`, `metadata.json`, `validate.sh`, "
-            "`writenup/wp.md`, and `writenup/exp.py` in `artifacts`.\n"
-            "- For web/pwn, also include `deploy/Dockerfile`, "
-            "`deploy/docker-compose.yml`, `deploy/src/app.py`, and "
-            "`deploy/_files/start.sh` in `artifacts`.\n"
-            "- `writenup/wp.md` is the local Chinese writeup source. "
-            "`writenup/exp.py` is the local solve script; the packer later "
-            "ships it as `exp.py`.\n"
-            "- Use `attachments/...` or `dist/...` only for player-facing "
-            "attachments.\n"
-            "- `validation` MAY mention local compose URLs such as "
-            "`http://127.0.0.1:<port>` or `http://localhost:<port>`, but MUST "
-            "NOT require external HTTP/HTTPS URLs.\n"
-            "- `implementation_plan`, when present, MUST be an intent-level "
-            "blueprint only: runtime, framework, service model, entrypoints, "
-            "data model, vulnerability location, flag handling, and constraints.\n"
-            "- Do NOT include full file contents, code listings, Dockerfile "
-            "bodies, docker-compose.yml bodies, SQL scripts, exploit code, "
-            "writeup body, README body, or generated source files.\n"
-            "- Do NOT include these keys anywhere in `challenges[0]`: "
-            "`dockerfile`, `docker_compose`, `dockerfile_snippet`, "
-            "`compose_spec`, `source_code`, `app_code`, `init_sql`, "
-            "`exploit_sketch`, `exploit_code`, `writeup_body`, `readme_body`, "
-            "`files_content`.\n"
-            "\n"
-            "If you explored with tools, ignore those side artifacts and emit "
-            "the final JSON only."
-        ),
+        _render_output_contract(design_task),
         "## Pinned Values (copy verbatim into `challenges[0]`)",
         _render_pinned_values(design_task),
     ]
     return "\n\n".join(sections).rstrip() + "\n"
+
+
+# Phase 4: the Output Contract used to be 25+ negative don't-rules. It
+# is now a JSON Schema + 3 short invariants. The validator side
+# (``domain.design.validator``) is the authoritative enforcement; the
+# schema below is the agent-facing summary that mirrors it so the model
+# can self-check before replying.
+_OUTPUT_SCHEMA: dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["event", "challenges"],
+    "additionalProperties": False,
+    "properties": {
+        "event": {
+            "type": "object",
+            "required": ["flag_format"],
+            "properties": {
+                "name": {"type": "string"},
+                "theme": {"type": "string"},
+                "audience": {"type": "string"},
+                "flag_format": {"type": "string"},
+            },
+        },
+        "challenges": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 1,
+            "items": {
+                "type": "object",
+                "required": [
+                    "id", "title", "category", "difficulty", "points",
+                    "deployment", "primary_technique", "learning_objective",
+                    "prompt", "flag_location", "validation",
+                    "artifacts", "hints", "intended_path",
+                ],
+                "properties": {
+                    "id": {"type": "string"},
+                    "title": {"type": "string"},
+                    "category": {"type": "string"},
+                    "difficulty": {
+                        "enum": ["easy", "medium", "hard", "expert"]
+                    },
+                    "points": {"type": "integer", "minimum": 1},
+                    "deployment": {"type": "string"},
+                    "port": {"type": ["integer", "null"]},
+                    "techniques": {
+                        "type": "array",
+                        "items": {"type": "string", "minLength": 1},
+                    },
+                    "primary_technique": {"type": "string", "minLength": 1},
+                    "secondary_technique": {"type": "string"},
+                    "learning_objective": {"type": "string", "minLength": 1},
+                    "prompt": {"type": "string", "minLength": 1},
+                    "flag_location": {"type": "string", "minLength": 1},
+                    "flag_plan": {
+                        "type": "object",
+                        "properties": {
+                            "format": {"type": "string"},
+                            "location": {"type": "string"},
+                            "generation": {"type": "string"},
+                        },
+                    },
+                    "intended_path": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {"type": "string", "minLength": 1},
+                    },
+                    "artifacts": {
+                        "type": "array",
+                        "minItems": 5,
+                        "items": {
+                            "type": "string",
+                            # Relative path; URLs and absolute paths are
+                            # explicitly rejected by the validator.
+                            "pattern": r"^(?!https?://|/|[A-Za-z]:[\\/])"
+                                       r"[^\r\n\t]+\.[^\r\n\t/]+$",
+                        },
+                    },
+                    "validation": {"type": "string", "minLength": 1},
+                    "hints": {
+                        "type": "array",
+                        "minItems": 3,
+                        "maxItems": 3,
+                        "items": {"type": "string", "minLength": 1},
+                    },
+                    "implementation_plan": {
+                        "type": "object",
+                        "description": (
+                            "Intent-level only. NO Dockerfile bodies, NO "
+                            "compose YAML, NO SQL scripts, NO exploit code, "
+                            "NO file contents. Component cap depends on "
+                            "difficulty (see Build Budget section)."
+                        ),
+                    },
+                    "novelty": {
+                        "type": "string",
+                        "description": (
+                            "Required for `expert`. ≥ 40 chars. Identifies "
+                            "the 0day-style trick or unusual constraint."
+                        ),
+                    },
+                },
+            },
+        },
+    },
+}
+
+
+def _render_output_contract(task: DesignTask) -> str:
+    """Render the JSON Schema + 3 short invariants.
+
+    Phase 4: the old 25-line negative-list got modelled into the schema
+    above so the agent can self-validate against one block instead of
+    scanning a wall of prose rules.
+    """
+    schema_text = json.dumps(_OUTPUT_SCHEMA, ensure_ascii=False, indent=2)
+    container_artifacts_hint = (
+        "\n- For web/pwn, `artifacts` must additionally include "
+        "`deploy/Dockerfile`, `deploy/docker-compose.yml`, "
+        "`deploy/src/app.py`, and `deploy/_files/start.sh`."
+        if task.category in {"web", "pwn"}
+        else ""
+    )
+    invariants = (
+        "Invariants (enforced server-side; violating any of these fails "
+        "the attempt):\n"
+        "1. Your reply MUST be a SINGLE JSON object matching the schema "
+        "below — no markdown, code fences, prose, file writes, or "
+        "secondary artifacts.\n"
+        "2. `artifacts` MUST be relative local paths and MUST include "
+        "`README.md`, `metadata.json`, `validate.sh`, `writenup/wp.md`, "
+        "and `writenup/exp.py`."
+        + container_artifacts_hint
+        + "\n3. `validation` MAY reference local compose URLs "
+        "(`http://127.0.0.1:<port>`, `http://localhost:<port>`) but MUST "
+        "NOT require external HTTP/HTTPS URLs, and MUST NOT contain code "
+        "or file bodies."
+    )
+    return f"{invariants}\n\n```json\n{schema_text}\n```"
+
+
+def _render_build_budget(difficulty: str) -> str:
+    """Quote the per-tier buildability caps so the agent self-constrains.
+
+    Phase 2.5 (D5=a): timeouts stay category-based (set in core/build_timeout);
+    this block keeps the design within the scope the build phase can actually
+    finish before hitting them.
+    """
+    rubric = DIFFICULTY_RUBRIC.get(difficulty)
+    if rubric is None:
+        return "(unknown difficulty — no budget enforced)"
+    return "\n".join(
+        [
+            f"Buildability budget for `{difficulty}` (enforced by validator + "
+            "consumed by the build agent):",
+            "",
+            f"- techniques: {_range_text(rubric.techniques_min, rubric.techniques_max)}",
+            f"- intended_path steps: {_range_text(rubric.intended_path_min, rubric.intended_path_max)}",
+            f"- implementation_plan top-level components: ≤ "
+            f"{rubric.implementation_plan_max_keys}",
+            f"- estimated total build LOC (guidance, not enforced): ≤ "
+            f"{rubric.estimated_loc_budget}",
+            f"- business scenario required: "
+            f"{'yes' if rubric.needs_business_scenario else 'no'}",
+            f"- implementation_plan required: "
+            f"{'yes' if rubric.needs_implementation_plan else 'no'}",
+            f"- novelty field required: "
+            f"{'yes' if rubric.needs_novelty else 'no'}",
+            "",
+            "If your design cannot fit this budget, either downgrade the "
+            "difficulty or split the design into multiple tasks rather than "
+            "exceeding it.",
+        ]
+    )
+
+
+def _range_text(low: int, high: int) -> str:
+    if low == high:
+        return f"exactly {low}"
+    if high >= 99:
+        return f"≥ {low}"
+    return f"{low}–{high}"
 
 
 def _render_pinned_values(task: DesignTask) -> str:

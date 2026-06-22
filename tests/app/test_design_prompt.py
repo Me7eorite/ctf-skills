@@ -178,10 +178,31 @@ def test_prompt_includes_always_on_references_and_contract(tmp_path):
 
     assert "@skills/design-challenges/references/design-core.md" in prompt
     assert "@skills/design-challenges/references/category-tactics.md" in prompt
-    # Hardened Output Contract (post split-design-tasks fix #2):
-    assert "SINGLE JSON object and nothing else" in prompt
-    assert "`challenges` MUST be an array of length 1" in prompt
-    assert "Do NOT write the JSON to a file" in prompt
+    # Phase 4: the Output Contract is now a JSON Schema + 3 invariants.
+    assert "## Output Contract" in prompt
+    assert "Invariants" in prompt
+    assert "SINGLE JSON object" in prompt
+    # JSON Schema block — top-level shape must constrain to one challenge.
+    assert '"maxItems": 1' in prompt
+    assert '"minItems": 1' in prompt
+    assert '"required":' in prompt
+    # Required artifacts remain enforced via the schema pattern + invariant.
+    assert "writenup/wp.md" in prompt
+    assert "writenup/exp.py" in prompt
+
+
+def test_prompt_renders_build_budget_for_difficulty(tmp_path):
+    # Phase 2.5: the prompt MUST quote the per-tier buildability caps so
+    # the agent self-constrains to what build can actually finish.
+    context = load_design_prompt_context(_paths(tmp_path))
+
+    prompt = build_design_prompt(context, _task(), _request(), [], [])
+
+    assert "## Build Budget" in prompt
+    # Medium baseline: techniques 2–3, plan ≤ 7, LOC ≤ 400.
+    assert "techniques: 2–3" in prompt
+    assert "implementation_plan top-level components: ≤ 7" in prompt
+    assert "LOC" in prompt and "400" in prompt
 
 
 def test_prompt_pins_parent_values_verbatim(tmp_path):
