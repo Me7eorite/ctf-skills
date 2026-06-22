@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from core.jsonio import read_json, write_json
 from core.state import InMemoryProgressStore, ProgressStore
 from hermes.runner import HermesRunner
 from persistence import PersistenceConnectionError
@@ -87,9 +88,7 @@ def _copy_real_prompt(target: _Paths) -> None:
         "design-core.md",
         "category-tactics.md",
     ):
-        (target.design_references / filename).write_text(
-            f"# {filename}\n", encoding="utf-8"
-        )
+        (target.design_references / filename).write_text(f"# {filename}\n", encoding="utf-8")
 
 
 def _make_shard(
@@ -103,8 +102,7 @@ def _make_shard(
     payload = {
         **(envelope or {}),
         "challenges": [
-            {"id": cid, "category": cid.split("-", 1)[0], **(challenge_extra or {})}
-            for cid in challenge_ids
+            {"id": cid, "category": cid.split("-", 1)[0], **(challenge_extra or {})} for cid in challenge_ids
         ],
     }
     pending = paths.shards / "pending" / shard_name
@@ -301,10 +299,7 @@ class RunnerRealRunTests(unittest.TestCase):
 
             events = runner.state.events_for_shard("web-0001-0001.json")
             validate_events = [
-                event
-                for event in events
-                if event["stage"] == "validate"
-                and event["challenge_id"] == "web-0001"
+                event for event in events if event["stage"] == "validate" and event["challenge_id"] == "web-0001"
             ]
             self.assertIn(
                 ("validate", "passed"),
@@ -312,9 +307,7 @@ class RunnerRealRunTests(unittest.TestCase):
             )
             self.assertFalse(
                 any(
-                    event["status"] == "failed"
-                    and "missing_challenge" in event["message"]
-                    for event in validate_events
+                    event["status"] == "failed" and "missing_challenge" in event["message"] for event in validate_events
                 )
             )
 
@@ -336,9 +329,7 @@ class RunnerRealRunTests(unittest.TestCase):
             latest_claim = runner.state.latest_claim_event("web-0001-0001.json")
             self.assertIsNotNone(latest_claim)
             assert latest_claim is not None
-            events = runner.state.events_for_shard(
-                "web-0001-0001.json"
-            )
+            events = runner.state.events_for_shard("web-0001-0001.json")
             window = [e for e in events if e["id"] >= latest_claim["id"]]
             stages_in_window = [(e["stage"], e["status"], e["challenge_id"]) for e in window]
 
@@ -385,13 +376,95 @@ class RunnerRealRunTests(unittest.TestCase):
             self.assertTrue(source_events)
             self.assertTrue(
                 any(
-                    event["message"].startswith("carry-forward:")
-                    and event["shard"] == "web-current.json"
+                    event["message"].startswith("carry-forward:") and event["shard"] == "web-current.json"
                     for event in current_events
                 )
             )
-            self.assertFalse(
-                any(event["worker"] == "worker-retry" for event in source_events)
+            self.assertFalse(any(event["worker"] == "worker-retry" for event in source_events))
+
+    def test_clean_mode_starts_empty_and_does_not_carry_prior_progress(self):
+        with TemporaryDirectory() as tmp:
+            paths = _Paths(root=Path(tmp))
+            paths.initialize()
+            _copy_real_prompt(paths)
+            canonical = _make_web_challenge(paths, "web-0001", slug="old")
+            _make_shard(
+                paths,
+                "web-clean.json",
+                ["web-0001"],
+                envelope={"execution_mode": "clean"},
+            )
+            store = InMemoryProgressStore()
+            _seed_passed(store, "web-prior.json", "web-0001", ["design", "implement"])
+            runner = self._make_runner_with_fake_invoke(paths, progress=store)
+            runner.validation_repair_attempts = 0
+            observed_empty = False
+
+            def invoke(_prompt, log, dry_run=False, **kwargs):
+                del dry_run
+                nonlocal observed_empty
+                workspace = kwargs["workspace"]
+                observed_empty = not any(workspace.output.rglob("metadata.json"))
+                replacement = workspace.output / "challenges" / "web" / "web-0001-new"
+                replacement.parent.mkdir(parents=True, exist_ok=True)
+                __import__("shutil").copytree(canonical, replacement)
+                metadata = json.loads((replacement / "metadata.json").read_text())
+                metadata["id"] = "web-0001"
+                (replacement / "metadata.json").write_text(json.dumps(metadata))
+                log.write_text("fake invoke\n")
+                return 0
+
+            runner._invoke = invoke  # type: ignore[assignment]
+            outcome = runner.process_one("worker-clean", dry_run=False)
+
+            self.assertEqual(outcome["status"], "done")
+            self.assertTrue(observed_empty)
+            events = runner.state.events_for_shard("web-clean.json")
+            self.assertFalse(any(e["message"].startswith("carry-forward:") for e in events))
+            self.assertTrue((paths.challenges / "web" / "web-0001-new").is_dir())
+            workspace = next((paths.root / "work" / "executions").iterdir())
+            self.assertTrue((workspace / "quarantine" / "web" / "web-0001-old").is_dir())
+            self.assertFalse((workspace / "output").exists())
+            self.assertFalse((workspace / "logs").exists())
+
+    def test_publisher_rejection_returns_infrastructure_failure(self):
+        with TemporaryDirectory() as tmp:
+            paths = _Paths(root=Path(tmp))
+            paths.initialize()
+            _copy_real_prompt(paths)
+            _make_web_challenge(paths, "web-0001", slug="old")
+            _make_shard(
+                paths,
+                "web-current.json",
+                ["web-0001"],
+                envelope={
+                    "execution_mode": "resume",
+                    "resume_from_shard_basename": "web-source.json",
+                },
+            )
+            runner = self._make_runner_with_fake_invoke(paths)
+
+            def invoke(_prompt, log, dry_run=False, **kwargs):
+                del dry_run
+                workspace = kwargs["workspace"]
+                duplicate = workspace.output / "challenges" / "web" / "web-0001-other"
+                duplicate.mkdir(parents=True)
+                write_json(duplicate / "metadata.json", {"id": "web-0001", "category": "web"})
+                log.write_text("fake invoke\n")
+                return 0
+
+            runner._invoke = invoke  # type: ignore[assignment]
+            outcome = runner.process_one("worker-resume", dry_run=False)
+
+            self.assertEqual(outcome["status"], "failed")
+            self.assertEqual(outcome["failure_type"], "infrastructure")
+            self.assertTrue((paths.shards / "failed" / "web-current.json").exists())
+            self.assertTrue((paths.challenges / "web" / "web-0001-old").is_dir())
+            workspace = next((paths.root / "work" / "executions").iterdir())
+            manifest = read_json(workspace / "input" / "manifest.json", {})
+            self.assertEqual(
+                manifest["resume_output_targets"]["web-0001"],
+                "output/challenges/web/web-0001-old",
             )
 
     def test_resume_source_field_is_optional_for_first_run(self):
@@ -432,6 +505,35 @@ class RunnerRealRunTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 runner.process_one("worker-retry", dry_run=False)
             self.assertFalse(called["invoke"])
+
+    def test_clean_mode_with_resume_source_fails_before_hermes_invocation(self):
+        with TemporaryDirectory() as tmp:
+            paths = _Paths(root=Path(tmp))
+            paths.initialize()
+            _copy_real_prompt(paths)
+            _make_shard(
+                paths,
+                "web-contradictory.json",
+                ["web-0001"],
+                envelope={
+                    "execution_mode": "clean",
+                    "resume_from_shard_basename": "web-source.json",
+                },
+            )
+            runner = self._make_runner_with_fake_invoke(paths)
+            called = False
+
+            def invoke(*_args, **_kwargs):
+                nonlocal called
+                called = True
+                return 0
+
+            runner._invoke = invoke  # type: ignore[assignment]
+            outcome = runner.process_one("worker-clean", dry_run=False)
+
+            self.assertEqual(outcome["status"], "failed")
+            self.assertEqual(outcome["failure_type"], "infrastructure")
+            self.assertFalse(called)
 
     def test_validator_message_uses_validator_prefix(self):
         with TemporaryDirectory() as tmp:
@@ -489,9 +591,7 @@ class RunnerRealRunTests(unittest.TestCase):
                 for event in runner.state.events_for_shard("web-0001-0001.json")
                 if event["id"] >= latest_claim["id"]
             ]
-            stage_set = {
-                (event["stage"], event["status"], event["challenge_id"]) for event in window
-            }
+            stage_set = {(event["stage"], event["status"], event["challenge_id"]) for event in window}
             # 5 carry-forward stages + complete pair.
             for stage in ("design", "implement", "build", "validate", "document"):
                 self.assertIn((stage, "passed", "web-0001"), stage_set)
@@ -546,9 +646,7 @@ class RunnerRealRunTests(unittest.TestCase):
             files = sorted(p.name for p in failed_path.glob("*.json"))
             self.assertTrue(any("web-0001-0001" in name for name in files))
             workspace = next((paths.root / "work" / "executions").iterdir())
-            self.assertTrue(
-                (workspace / "quarantine" / "web" / "web-0001-demo").is_dir()
-            )
+            self.assertTrue((workspace / "quarantine" / "web" / "web-0001-demo").is_dir())
             self.assertTrue((paths.challenges / "web" / "web-0001-demo").is_dir())
 
     def test_failed_validation_is_fed_back_to_hermes_and_retried(self):
@@ -591,9 +689,7 @@ class RunnerRealRunTests(unittest.TestCase):
                 # 否则 publisher 会返回 noop 并跳过再次校验。
                 workspace = _kwargs.get("workspace")
                 if workspace is not None:
-                    challenge_root = (
-                        workspace.output / "challenges" / "web" / "web-0001-demo"
-                    )
+                    challenge_root = workspace.output / "challenges" / "web" / "web-0001-demo"
                     challenge_root.mkdir(parents=True, exist_ok=True)
                     marker = challenge_root / f"repair-marker-{len(prompts)}.txt"
                     marker.write_text("touched\n", encoding="utf-8")
@@ -712,9 +808,7 @@ class ShardNameNormalizationTests(unittest.TestCase):
                 self.assertFalse(".worker-" in event["shard"])
 
             # Suffixed name has zero events.
-            suffixed = runner.state.events_for_shard(
-                "web-0001-0001.worker-42.json"
-            )
+            suffixed = runner.state.events_for_shard("web-0001-0001.worker-42.json")
             self.assertEqual(suffixed, [])
 
 

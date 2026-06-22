@@ -939,7 +939,9 @@ _FAILURE_REASON_TRANSLATIONS: dict[str, str] = {
     "Workspace preflight failed": "执行 workspace 预检失败",
     "Workspace materialization failed": "执行 workspace 物化失败",
     "Workspace shim materialization failed": "进度蜘蛛生成失败",
-    "attributed shard disappeared from all queue states": "shard 文件从队列中消失（可能是 reconciler 误判，参考 /restore 接口）",
+    "attributed shard disappeared from all queue states": (
+        "shard 文件从队列中消失（可能是 reconciler 误判，参考 /restore 接口）"
+    ),
     "artifact directory missing": "构建产物目录缺失（worker 标记 done 但 work/challenges 下找不到）",
 }
 

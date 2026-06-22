@@ -85,46 +85,46 @@
 
 ## 8. Spec Migration
 
-- [ ] 8.1 REMOVE the "Claimed workspace output is promoted for existing validation" Requirement from `openspec/specs/hermes-execution-protocol/spec.md` (carried over by the previous proposal's archive).
-- [ ] 8.2 ADD the publisher Requirements (see specs/worker-pool-execution/spec.md) to the new capability.
+- [x] 8.1 REMOVE the "Claimed workspace output is promoted for existing validation" Requirement from `openspec/specs/hermes-execution-protocol/spec.md` (carried over by the previous proposal's archive).
+- [x] 8.2 ADD the publisher Requirements (see specs/worker-pool-execution/spec.md) to the new capability.
 - [x] 8.3 Verify `openspec validate add-staged-publication-allowlist --strict` passes.
 
 ## 9. Tests
 
-- [ ] 9.1 Migrate all tests previously asserting promotion semantics under the bridge requirement to assert publisher semantics. Test names should reference the publisher (`test_publisher_*`).
-- [ ] 9.2 Add output manifest hash regression: same canonical tree → same hash; one byte change → different hash.
-- [ ] 9.3 Add change-policy diff tests:
+- [x] 9.1 Migrate all tests previously asserting promotion semantics under the bridge requirement to assert publisher semantics. Test names should reference the publisher (`test_publisher_*`).
+- [x] 9.2 Add output manifest hash regression: same canonical tree → same hash; one byte change → different hash.
+- [x] 9.3 Add change-policy diff tests:
     - preserve byte-mismatch → reject (e.g. `validate.sh` modified)
     - preserve JSON-field mismatch → reject (`metadata.json#flag` changed)
     - forbid path newly present → reject
     - change-policy.json without base-artifact → reject
     - all clear → publish succeeds, hash recorded
-- [ ] 9.4 Add identity-field hard check: `metadata.json::id` ≠ claimed id → reject (even without change_policy).
-- [ ] 9.5 Add retention sweep tests:
+- [x] 9.4 Add identity-field hard check: `metadata.json::id` ≠ claimed id → reject (even without change_policy).
+- [x] 9.5 Add retention sweep tests:
     - quarantine older than 7 days → deleted
     - quarantine fresher than 7 days → kept
     - 21st quarantine triggers oldest eviction
     - sweep error does not block successful publish result
-- [ ] 9.6 Add runner integration test: publisher failure → runner returns `failure_type=infrastructure`, BuildReconciler observes failed (not lost).
-- [ ] 9.7 Add a no-change-policy test: when `input/change-policy.json` is absent, publisher skips the diff and behaves identically to the previous proposal's narrow promotion.
-- [ ] 9.8 Add resume-target regressions:
+- [x] 9.6 Add runner integration test: publisher failure → runner returns `failure_type=infrastructure`, BuildReconciler observes failed (not lost).
+- [x] 9.7 Add a no-change-policy test: when `input/change-policy.json` is absent, publisher skips the diff and behaves identically to the previous proposal's narrow promotion.
+- [x] 9.8 Add resume-target regressions:
     - materialized canonical basename is recorded exactly in the manifest
     - rendered prompt names that exact path and prohibits a second directory
     - a simulated second `<id>-<slug>` directory still fails closed and leaves canonical unchanged
-- [ ] 9.9 Add clean-rebuild regressions:
+- [x] 9.9 Add clean-rebuild regressions:
     - output starts empty even when canonical exists
     - prior progress is not carried forward
     - failed publish preserves canonical
     - successful publish quarantines and replaces canonical
 - [x] 9.10 Add API/UI tests proving retry emits `resume` while clean rebuild emits `clean` and requires explicit confirmation.
-- [ ] 9.11 Add contract/policy security tests: post-invocation input mutation, traversal, symlink, unknown schema key, missing JSON field, and new descendant under an existing forbid prefix all fail before canonical mutation.
-- [ ] 9.12 Add batch/recovery tests: overlapping publisher serialization, second-id rollback, cross-device preflight rejection, process-death journal reconciliation, manifest-write rollback, and idempotent recovery.
-- [ ] 9.13 Add hash/limit tests: executable mode and empty directory affect hash; delimiter-like filenames remain unambiguous; byte/file/depth limits fail before commit.
-- [ ] 9.14 Add retention/repair tests: publisher does not clear repair inputs, repeated publish accepts only publisher-owned manifest evolution and uses fresh journals, terminal success cleans staging, failed staging is bounded, and active journals/locks are never swept.
-- [ ] 9.15 Add clean-rebuild same-key idempotency, different-key non-collapse documentation, and contradictory-mode preflight tests.
+- [x] 9.11 Add contract/policy security tests: post-invocation input mutation, traversal, symlink, unknown schema key, missing JSON field, and new descendant under an existing forbid prefix all fail before canonical mutation.
+- [x] 9.12 Add batch/recovery tests: overlapping publisher serialization, second-id rollback, cross-device preflight rejection, process-death journal reconciliation, manifest-write rollback, and idempotent recovery.
+- [x] 9.13 Add hash/limit tests: executable mode and empty directory affect hash; delimiter-like filenames remain unambiguous; byte/file/depth limits fail before commit.
+- [x] 9.14 Add retention/repair tests: publisher does not clear repair inputs, repeated publish accepts only publisher-owned manifest evolution and uses fresh journals, terminal success cleans staging, failed staging is bounded, and active journals/locks are never swept.
+- [x] 9.15 Add clean-rebuild same-key idempotency, different-key non-collapse documentation, and contradictory-mode preflight tests.
 - [x] 9.16 On POSIX, run `uv run pytest tests/app/test_build_publisher.py tests/app/test_execution_workspace.py tests/app/test_runner_resume.py tests/app/test_build_reconciler.py tests/app/test_build_attempts_api.py tests/app/test_build_dispatch_ui.py -q` and confirm all green. On Windows, run the same command with POSIX-only publisher lock/recovery tests skipped and separately document that full publisher validation requires POSIX CI/deployment.
 
 ## 10. Cleanup
 
-- [ ] 10.1 Delete the `promote_claimed_outputs` function and its deprecation stub from `src/hermes/workspace.py` before this change archives. The exception class `WorkspacePromotionError` is NOT removed — it remains as the base class of `WorkspacePublishError` and is still imported by runner/publisher. A silent forwarding shim of the function is NOT a permitted exit; if any caller still references the function name at archive time, archival is blocked until the reference is migrated.
-- [ ] 10.2 Remove imports of the `promote_claimed_outputs` **function** from `src/hermes/runner.py` and any other call sites; only `hermes.build_publisher.publish_workspace_output` should be referenced. Add a repository-level grep guard in CI (or an equivalent unit test) matching the function call pattern (e.g. `\bpromote_claimed_outputs\s*\(`); the guard SHALL NOT match the `WorkspacePromotionError` exception class name.
+- [x] 10.1 Delete the `promote_claimed_outputs` function and its deprecation stub from `src/hermes/workspace.py` before this change archives. The exception class `WorkspacePromotionError` is NOT removed — it remains as the base class of `WorkspacePublishError` and is still imported by runner/publisher. A silent forwarding shim of the function is NOT a permitted exit; if any caller still references the function name at archive time, archival is blocked until the reference is migrated.
+- [x] 10.2 Remove imports of the `promote_claimed_outputs` **function** from `src/hermes/runner.py` and any other call sites; only `hermes.build_publisher.publish_workspace_output` should be referenced. Add a repository-level grep guard in CI (or an equivalent unit test) matching the function call pattern (e.g. `\bpromote_claimed_outputs\s*\(`); the guard SHALL NOT match the `WorkspacePromotionError` exception class name.

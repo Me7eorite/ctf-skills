@@ -65,9 +65,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
             "design-core.md",
             "category-tactics.md",
         ):
-            (self.paths.design_references / filename).write_text(
-                f"# {filename}\n", encoding="utf-8"
-            )
+            (self.paths.design_references / filename).write_text(f"# {filename}\n", encoding="utf-8")
 
     def _running_shard(self, payload: dict, name: str = "claimed.worker.json") -> Path:
         shard = self.paths.shards / "running" / name
@@ -138,9 +136,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
             self.assertTrue((workspace.root / name).is_dir())
         snapshot = workspace.input / "shard.json"
         self.assertEqual(json.loads(snapshot.read_text(encoding="utf-8")), payload)
-        manifest = json.loads(
-            (workspace.input / "manifest.json").read_text(encoding="utf-8")
-        )
+        manifest = json.loads((workspace.input / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["workspace_id"], str(attempt_id))
         self.assertEqual(manifest["original_shard_basename"], f"{attempt_id}.json")
         self.assertEqual(manifest["running_shard_basename"], shard.name)
@@ -167,9 +163,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         write_json(fresh / "input" / "manifest.json", {"workspace_id": "manual-fresh"})
         old_timestamp = (now - timedelta(days=8)).timestamp()
         os.utime(old, (old_timestamp, old_timestamp))
-        shard = self._running_shard(
-            {"challenges": [{"id": "pwn-0001", "category": "pwn"}]}
-        )
+        shard = self._running_shard({"challenges": [{"id": "pwn-0001", "category": "pwn"}]})
 
         prepare_workspace(
             self.paths,
@@ -187,9 +181,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
     def test_manual_gc_error_is_non_blocking(self) -> None:
         stale = self.paths.executions / "manual-stale"
         stale.mkdir()
-        shard = self._running_shard(
-            {"challenges": [{"id": "re-0001", "category": "re"}]}
-        )
+        shard = self._running_shard({"challenges": [{"id": "re-0001", "category": "re"}]})
         real_rmtree = __import__("shutil").rmtree
 
         def fail_stale(path: Path) -> None:
@@ -209,9 +201,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         self.assertTrue(stale.exists())
 
     def test_report_import_copies_workspace_report_to_legacy_path(self) -> None:
-        shard = self._running_shard(
-            {"challenges": [{"id": "web-0001", "category": "web"}]}
-        )
+        shard = self._running_shard({"challenges": [{"id": "web-0001", "category": "web"}]})
         workspace = prepare_workspace(
             self.paths,
             shard=shard,
@@ -230,9 +220,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         )
 
     def test_materializes_only_selected_category_context_as_regular_files(self) -> None:
-        shard = self._running_shard(
-            {"challenges": [{"id": "web-0001", "category": "web"}]}
-        )
+        shard = self._running_shard({"challenges": [{"id": "web-0001", "category": "web"}]})
 
         workspace = prepare_workspace(
             self.paths,
@@ -247,9 +235,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         # Phase 1 collapsed the per-category references into design-core +
         # category-tactics; both are always materialized for web/pwn/re.
         self.assertTrue((reference_root / "references" / "design-core.md").is_file())
-        self.assertTrue(
-            (reference_root / "references" / "category-tactics.md").is_file()
-        )
+        self.assertTrue((reference_root / "references" / "category-tactics.md").is_file())
         for legacy in (
             "web-design.md",
             "pwn-design.md",
@@ -259,17 +245,13 @@ class ExecutionWorkspaceTests(unittest.TestCase):
             "spec-template.md",
             "delivery-format.md",
         ):
-            self.assertFalse(
-                (reference_root / "references" / legacy).exists(), legacy
-            )
+            self.assertFalse((reference_root / "references" / legacy).exists(), legacy)
         self.assertFalse(any(path.is_symlink() for path in workspace.root.rglob("*")))
         manifest = json.loads(workspace.manifest.read_text(encoding="utf-8"))
         self.assertEqual(manifest["allowed_static_reference_roots"], [])
 
     def test_preflight_missing_profile_includes_recovery_command(self) -> None:
-        shard = self._running_shard(
-            {"challenges": [{"id": "web-0001", "category": "web"}]}
-        )
+        shard = self._running_shard({"challenges": [{"id": "web-0001", "category": "web"}]})
         workspace = prepare_workspace(
             self.paths,
             shard=shard,
@@ -288,9 +270,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
             )
 
     def test_preflight_rejects_malformed_snapshot(self) -> None:
-        shard = self._running_shard(
-            {"challenges": [{"id": "web-0001", "category": "web"}]}
-        )
+        shard = self._running_shard({"challenges": [{"id": "web-0001", "category": "web"}]})
         workspace = prepare_workspace(
             self.paths,
             shard=shard,
@@ -307,9 +287,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
             )
 
     def test_preflight_rejects_category_profile_mismatch(self) -> None:
-        shard = self._running_shard(
-            {"challenges": [{"id": "web-0001", "category": "web"}]}
-        )
+        shard = self._running_shard({"challenges": [{"id": "web-0001", "category": "web"}]})
         workspace = prepare_workspace(
             self.paths,
             shard=shard,
@@ -325,9 +303,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
             )
 
     def test_preflight_rejects_unrelated_challenge_artifact(self) -> None:
-        shard = self._running_shard(
-            {"challenges": [{"id": "web-0001", "category": "web"}]}
-        )
+        shard = self._running_shard({"challenges": [{"id": "web-0001", "category": "web"}]})
         workspace = prepare_workspace(
             self.paths,
             shard=shard,
@@ -345,9 +321,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
             )
 
     def test_preflight_rejects_every_reference_symlink_for_copy_only_policy(self) -> None:
-        shard = self._running_shard(
-            {"challenges": [{"id": "web-0001", "category": "web"}]}
-        )
+        shard = self._running_shard({"challenges": [{"id": "web-0001", "category": "web"}]})
         workspace = prepare_workspace(
             self.paths,
             shard=shard,
@@ -439,9 +413,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         self.assertEqual(shard_timeout_policy(payload("pwn", "hard")), 3600)
         self.assertEqual(shard_timeout_policy(payload("pwn", "expert")), 5400)
         mixed = payload("pwn", "hard")
-        mixed["challenges"].append(
-            {"id": "pwn-0002", "category": "pwn", "difficulty": "expert"}
-        )
+        mixed["challenges"].append({"id": "pwn-0002", "category": "pwn", "difficulty": "expert"})
         self.assertEqual(shard_timeout_policy(mixed), 5400)
 
     def test_workspace_prompt_uses_only_relative_runtime_paths(self) -> None:
@@ -451,9 +423,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
             "{design_skill}\n{design_references}\n{progress_command}\n",
             encoding="utf-8",
         )
-        shard = self._running_shard(
-            {"challenges": [{"id": "web-0001", "category": "web"}]}
-        )
+        shard = self._running_shard({"challenges": [{"id": "web-0001", "category": "web"}]})
         stale = self.paths.challenges / "pwn" / "pwn-9999-stale"
         stale.mkdir(parents=True)
 
@@ -483,9 +453,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
             )
 
     def test_progress_shim_encodes_special_characters(self) -> None:
-        shard = self._running_shard(
-            {"challenges": [{"id": "web-0001", "category": "web"}]}
-        )
+        shard = self._running_shard({"challenges": [{"id": "web-0001", "category": "web"}]})
         workspace = prepare_workspace(
             self.paths,
             shard=shard,
@@ -511,15 +479,11 @@ class ExecutionWorkspaceTests(unittest.TestCase):
             check=True,
         )
 
-        event = json.loads(
-            (workspace.logs / "progress-events.jsonl").read_text(encoding="utf-8")
-        )
+        event = json.loads((workspace.logs / "progress-events.jsonl").read_text(encoding="utf-8"))
         self.assertEqual(event["message"], message)
 
     def test_progress_shim_fails_when_python3_is_absent(self) -> None:
-        shard = self._running_shard(
-            {"challenges": [{"id": "web-0001", "category": "web"}]}
-        )
+        shard = self._running_shard({"challenges": [{"id": "web-0001", "category": "web"}]})
         workspace = prepare_workspace(
             self.paths,
             shard=shard,
@@ -546,9 +510,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
 
     def test_live_tailer_imports_before_stop(self) -> None:
-        shard = self._running_shard(
-            {"challenges": [{"id": "web-0001", "category": "web"}]}
-        )
+        shard = self._running_shard({"challenges": [{"id": "web-0001", "category": "web"}]})
         workspace = prepare_workspace(
             self.paths,
             shard=shard,
@@ -573,7 +535,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         self.assertEqual(rows[0]["message"], "live")
         tailer.stop_and_flush()
 
-    def test_promotion_quarantines_claimed_and_preserves_unrelated(self) -> None:
+    def test_publisher_quarantines_claimed_and_preserves_unrelated(self) -> None:
         payload = {"challenges": [{"id": "web-0001", "category": "web"}]}
         shard = self._running_shard(payload)
         workspace = prepare_workspace(
@@ -600,7 +562,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         self.assertEqual((quarantine / "artifact.txt").read_text(), "old")
         self.assertTrue(unrelated.is_dir())
 
-    def test_promotion_rejects_unclaimed_and_output_symlink(self) -> None:
+    def test_publisher_rejects_unclaimed_and_output_symlink(self) -> None:
         payload = {"challenges": [{"id": "web-0001", "category": "web"}]}
         shard = self._running_shard(payload)
         workspace = prepare_workspace(
@@ -610,9 +572,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
             worker="worker-1",
         )
         self._artifact(workspace.output / "challenges")
-        self._artifact(
-            workspace.output / "challenges", challenge_id="web-9999", slug="bad"
-        )
+        self._artifact(workspace.output / "challenges", challenge_id="web-9999", slug="bad")
         with self.assertRaisesRegex(WorkspacePromotionError, "unclaimed"):
             contract = prepare_publication_contract(self.paths, workspace, payload)
             publish_workspace_output(self.paths, workspace, contract=contract)
@@ -624,7 +584,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
             contract = prepare_publication_contract(self.paths, workspace, payload)
             publish_workspace_output(self.paths, workspace, contract=contract)
 
-    def test_promotion_rejects_duplicate_metadata_and_nonconforming_layout(self) -> None:
+    def test_publisher_rejects_duplicate_metadata_and_nonconforming_layout(self) -> None:
         payload = {"challenges": [{"id": "web-0001", "category": "web"}]}
 
         def fresh_workspace():
@@ -670,17 +630,11 @@ class ExecutionWorkspaceTests(unittest.TestCase):
 
         materialize_resume_outputs(self.paths, workspace, payload)
 
-        self.assertTrue(
-            (workspace.output / "challenges" / "web" / claimed.name).is_dir()
-        )
-        self.assertFalse(
-            (workspace.output / "challenges" / "web" / "web-9999-keep").exists()
-        )
+        self.assertTrue((workspace.output / "challenges" / "web" / claimed.name).is_dir())
+        self.assertFalse((workspace.output / "challenges" / "web" / "web-9999-keep").exists())
 
     def test_report_import_remains_visible_to_merge_reports(self) -> None:
-        shard = self._running_shard(
-            {"challenges": [{"id": "web-0001", "category": "web"}]}
-        )
+        shard = self._running_shard({"challenges": [{"id": "web-0001", "category": "web"}]})
         workspace = prepare_workspace(
             self.paths,
             shard=shard,
@@ -696,9 +650,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         self.assertEqual(summary["reports"][0]["marker"], "workspace")
 
     def test_build_invoke_uses_profile_and_workspace_cwd(self) -> None:
-        shard = self._running_shard(
-            {"challenges": [{"id": "web-0001", "category": "web"}]}
-        )
+        shard = self._running_shard({"challenges": [{"id": "web-0001", "category": "web"}]})
         workspace = prepare_workspace(
             self.paths,
             shard=shard,
@@ -731,8 +683,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         self.assertEqual(captured["cwd"], workspace.root)
         self.assertNotEqual(captured["cwd"], self.paths.root)
 
-
-    def test_promotion_accepts_real_design_task_challenge_id_format(self) -> None:
+    def test_publisher_accepts_real_design_task_challenge_id_format(self) -> None:
         """Regression: design_task ids are `<cat>-<hex8>-<NNNN>` (+optional slug).
 
         Earlier regex `^(web|pwn|re)-\\d+` rejected them outright; promotion
@@ -780,9 +731,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
             worker="worker-1",
         )
         # workspace.root / "bin" exists but no progress shim was materialized
-        with self.assertRaisesRegex(
-            WorkspacePreflightError, "bin/progress shim is missing"
-        ):
+        with self.assertRaisesRegex(WorkspacePreflightError, "bin/progress shim is missing"):
             preflight_workspace(
                 workspace,
                 profile_name="cf-web",

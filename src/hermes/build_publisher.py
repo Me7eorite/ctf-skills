@@ -218,9 +218,7 @@ def publish_workspace_output(
                         phase="allowlist",
                         claimed_id=challenge_id,
                     )
-                temporary = canonical_root / (
-                    f".workspace-{workspace.workspace_id}-{uuid.uuid4().hex}"
-                )
+                temporary = canonical_root / (f".workspace-{workspace.workspace_id}-{uuid.uuid4().hex}")
                 shutil.copytree(source, temporary, symlinks=True)
                 _enforce_output_limits({challenge_id: temporary}, limits)
                 staged_temps[challenge_id] = temporary
@@ -261,9 +259,7 @@ def publish_workspace_output(
                         quarantine_root.mkdir(parents=True, exist_ok=True)
                         quarantined_path = quarantine_root / existing[0].name
                         if quarantined_path.exists():
-                            quarantined_path = quarantine_root / (
-                                f"{existing[0].name}.repair-{uuid.uuid4().hex}"
-                            )
+                            quarantined_path = quarantine_root / (f"{existing[0].name}.repair-{uuid.uuid4().hex}")
                         existing[0].replace(quarantined_path)
                         quarantined.append(quarantined_path)
                     destination = canonical_root / source.name
@@ -274,12 +270,10 @@ def publish_workspace_output(
                             claimed_id=challenge_id,
                             path=destination.name,
                         )
+                    rollback_entries.append((destination, quarantined_path, predecessor_path))
                     temporary.replace(destination)
                     published.append(destination)
                     published_by_id[challenge_id] = destination
-                    rollback_entries.append(
-                        (destination, quarantined_path, predecessor_path)
-                    )
                 _write_publish_journal(
                     workspace,
                     generation,
@@ -726,12 +720,12 @@ def _enforce_forbid_prefix(
         _reject_policy_symlink(staging_path, relative)
         _reject_policy_symlink(base_path, relative)
     if not base_path.exists():
-            raise WorkspacePublishError(
-                f"forbid newly added path: {forbidden}",
-                phase="policy",
-                claimed_id=challenge_id,
-                path=relative,
-            )
+        raise WorkspacePublishError(
+            f"forbid newly added path: {forbidden}",
+            phase="policy",
+            claimed_id=challenge_id,
+            path=relative,
+        )
 
 
 def _read_json_field(path: Path, field_name: str, selector: str) -> Any:
@@ -785,11 +779,7 @@ def _manifest_input_hashes(manifest: Mapping[str, Any]) -> dict[str, str]:
 
 
 def _manifest_projection_hash(manifest: Mapping[str, Any]) -> str:
-    projection = {
-        key: value
-        for key, value in manifest.items()
-        if key not in _MANIFEST_PROJECTION_FIELDS
-    }
+    projection = {key: value for key, value in manifest.items() if key not in _MANIFEST_PROJECTION_FIELDS}
     encoded = json.dumps(projection, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
@@ -1010,8 +1000,7 @@ def _cross_check_resume_targets(
         recorded_basename = Path(str(recorded)).name
         if observed_basename != recorded_basename:
             raise WorkspacePublishError(
-                "resume target binding disagrees with staging: "
-                f"recorded={recorded} observed={observed_basename}",
+                f"resume target binding disagrees with staging: recorded={recorded} observed={observed_basename}",
                 phase="contract",
                 claimed_id=cid,
                 path=observed_basename,
@@ -1151,15 +1140,13 @@ def _bootstrap_recover_journal(
     generation_value = raw.get("publish_generation")
     if not isinstance(generation_value, int):
         raise WorkspacePublishError(
-            "in-flight publish journal requires recovery before publication "
-            "(missing generation)",
+            "in-flight publish journal requires recovery before publication (missing generation)",
             phase="recovery",
         )
     category = raw.get("category")
     if not isinstance(category, str):
         raise WorkspacePublishError(
-            "in-flight publish journal requires recovery before publication "
-            "(missing category)",
+            "in-flight publish journal requires recovery before publication (missing category)",
             phase="recovery",
         )
     entries = raw.get("entries", [])
@@ -1171,9 +1158,7 @@ def _bootstrap_recover_journal(
         if isinstance(entry, dict) and isinstance(entry.get("claimed_id"), str)
     ]
     committed = _read_high_water(workspace)
-    committed_generation = (
-        committed.get("publish_generation") if isinstance(committed, Mapping) else 0
-    )
+    committed_generation = committed.get("publish_generation") if isinstance(committed, Mapping) else 0
     if not isinstance(committed_generation, int):
         committed_generation = 0
 
@@ -1230,6 +1215,14 @@ def _bootstrap_recover_journal(
                     temp_path = Path(temp_str)
                     if temp_path.exists():
                         shutil.rmtree(temp_path, ignore_errors=True)
+                canonical_str = entry.get("canonical")
+                if isinstance(canonical_str, str):
+                    canonical_path = Path(canonical_str)
+                    if canonical_path.exists():
+                        if canonical_path.is_dir():
+                            shutil.rmtree(canonical_path)
+                        else:
+                            canonical_path.unlink()
         # Restore quarantined predecessors when the canonical slot is empty.
         quarantine_root = workspace.root / "quarantine" / category
         if quarantine_root.exists():
@@ -1279,9 +1272,7 @@ def _run_retention_sweep(paths: ProjectPaths) -> None:
     except Exception:  # noqa: BLE001 - sweep MUST NOT block publish result
         import logging
 
-        logging.getLogger(__name__).warning(
-            "publisher retention sweep failed", exc_info=True
-        )
+        logging.getLogger(__name__).warning("publisher retention sweep failed", exc_info=True)
 
 
 def _sweep_retention_roots(paths: ProjectPaths) -> None:
@@ -1402,5 +1393,3 @@ def _purge_retained_artifacts(workspace_dir: Path) -> None:
         target = workspace_dir / relative
         if target.is_dir():
             shutil.rmtree(target, ignore_errors=True)
-
-

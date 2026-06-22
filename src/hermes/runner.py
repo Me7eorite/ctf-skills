@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -55,6 +56,7 @@ from hermes.validation import (
     validate_gate,
 )
 from hermes.workspace import (
+    ExecutionWorkspace,
     WorkspacePreflightError,
     WorkspacePromotionError,
     import_workspace_report,
@@ -409,13 +411,28 @@ class HermesRunner:
         """
         # 步骤 1: 从历史窗口中计算恢复计划
         # 【重要】必须在写入本轮 queued 事件之前计算！
-        plan = compute_resume_plan(
-            state=self.state,
-            paths=self.paths,
-            shard=resume_source_shard_name,
-            challenge_ids=challenge_ids,
-            image_exists=self._image_exists,
-        )
+        shard_payload = read_json(shard, {})
+        if isinstance(shard_payload, Mapping) and shard_payload.get("execution_mode") == "clean":
+            plan = ShardResumePlan(
+                shard=resume_source_shard_name,
+                previous_claim_event_id=None,
+                challenges=tuple(
+                    ChallengeResumePlan(
+                        challenge_id=challenge_id,
+                        directory=None,
+                        lookup_status="missing_challenge",
+                    )
+                    for challenge_id in challenge_ids
+                ),
+            )
+        else:
+            plan = compute_resume_plan(
+                state=self.state,
+                paths=self.paths,
+                shard=resume_source_shard_name,
+                challenge_ids=challenge_ids,
+                image_exists=self._image_exists,
+            )
 
         # 步骤 2: 重置快照（事件保持追加）
         self.state.reset_snapshots(original_shard_name)
@@ -827,6 +844,7 @@ class HermesRunner:
         )
         update_report(report, "passed")
         self.queue.complete(shard, "done")
+        _clear_terminal_staging(workspace)
         return {"status": "done", "shard": original_shard_name}
 
     # ------------------------------------------------------------------
@@ -1016,6 +1034,13 @@ class HermesRunner:
     @staticmethod
     def _hermes_arguments() -> list[str]:
         return hermes_process.hermes_arguments()
+
+
+def _clear_terminal_staging(workspace: ExecutionWorkspace) -> None:
+    """Remove model-writable staging only after terminal validation success."""
+    for directory in (workspace.output, workspace.logs):
+        if directory.is_dir():
+            shutil.rmtree(directory)
 
 
 def _output_signature(output_dir: Path) -> tuple[int, int, int]:

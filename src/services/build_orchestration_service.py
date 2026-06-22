@@ -191,8 +191,9 @@ class BuildOrchestrationService:
                 execution_mode="clean",
                 idempotency_key=idempotency_key,
             )[0]
-        except sa.exc.IntegrityError:
-            # Concurrent same-key inserts: re-read the surviving row.
+        except (sa.exc.IntegrityError, BuildOrchestrationError):
+            # The loser can observe either the UNIQUE violation or the task
+            # status transition during commit-time eligibility re-check.
             with self._session() as session:
                 build_repo = BuildAttemptsRepository(session)
                 existing = build_repo.find_by_idempotency_key(idempotency_key)
@@ -335,6 +336,7 @@ class BuildOrchestrationService:
                     task,
                     build_repo,
                     expected_source_id=retry_sources.get(task_id),
+                    execution_mode=execution_mode,
                 )
                 # Clean mode anchors eligibility on the source attempt id but
                 # SHALL NOT emit resume_from_shard_basename in the shard payload.
@@ -392,6 +394,7 @@ class BuildOrchestrationService:
                     current,
                     build_repo,
                     expected_source_id=retry_sources.get(row.id),
+                    execution_mode=submission.execution_mode,
                 )
                 build_repo.create_attempt(
                     row.id,
@@ -408,8 +411,15 @@ class BuildOrchestrationService:
         build_repo: BuildAttemptsRepository,
         *,
         expected_source_id: UUID | None,
+        execution_mode: str = "resume",
     ) -> str | None:
+        clean = execution_mode == "clean"
         if task.status not in {"designed", "build_failed"}:
+            if clean and expected_source_id is not None:
+                raise BuildOrchestrationError(
+                    "clean rebuild source is no longer eligible",
+                    code="stale_source_attempt",
+                )
             raise BuildOrchestrationError(f"design task {task.id} is {task.status}; expected designed or build_failed")
         latest = build_repo.latest_for_design_task(task.id)
         if task.status == "designed":
@@ -417,8 +427,18 @@ class BuildOrchestrationService:
                 raise BuildOrchestrationError("retry requires build_failed parent status")
             return None
         if latest is None or latest.status not in {"failed", "lost"}:
+            if clean:
+                raise BuildOrchestrationError(
+                    "clean rebuild source is no longer eligible",
+                    code="stale_source_attempt",
+                )
             raise BuildOrchestrationError("build_failed task requires a latest failed or lost attempt")
         if expected_source_id is not None and latest.id != expected_source_id:
+            if clean:
+                raise BuildOrchestrationError(
+                    "only the latest build attempt can be clean rebuilt",
+                    code="stale_source_attempt",
+                )
             raise BuildOrchestrationError("only the latest build attempt can be retried")
         return latest.shard_basename
 

@@ -150,15 +150,10 @@ def prepare_workspace(
         "build_attempt_id": payload.get("build_attempt_id"),
         "design_task_id": payload.get("design_task_id"),
         "created_at": created_at.astimezone(timezone.utc).isoformat(),
-        "input_hashes": {
-            path.relative_to(root).as_posix(): f"sha256:{_sha256(path)}"
-            for path in input_files
-        },
+        "input_hashes": {path.relative_to(root).as_posix(): f"sha256:{_sha256(path)}" for path in input_files},
         "allowed_static_reference_roots": [],
         "reference_files": [
-            path.relative_to(root).as_posix()
-            for path in materialized
-            if path.is_relative_to(root / "references")
+            path.relative_to(root).as_posix() for path in materialized if path.is_relative_to(root / "references")
         ],
     }
     write_json(root / "input" / "manifest.json", manifest)
@@ -174,8 +169,7 @@ def preflight_workspace(
     """Validate a materialized workspace before any model invocation."""
     if not profile_exists(profile_name):
         raise WorkspacePreflightError(
-            f"Hermes profile {profile_name!r} does not exist; "
-            f"run: hermes profile create {profile_name}"
+            f"Hermes profile {profile_name!r} does not exist; run: hermes profile create {profile_name}"
         )
 
     shard_path = workspace.input / "shard.json"
@@ -191,9 +185,7 @@ def preflight_workspace(
     category, challenge_ids = _validate_challenges(payload.get("challenges"))
     expected_profile = f"cf-{category}"
     if profile_name != expected_profile:
-        raise WorkspacePreflightError(
-            f"profile/category mismatch: {profile_name!r} != {expected_profile!r}"
-        )
+        raise WorkspacePreflightError(f"profile/category mismatch: {profile_name!r} != {expected_profile!r}")
 
     manifest = read_json(workspace.manifest, None)
     if not isinstance(manifest, dict):
@@ -217,9 +209,7 @@ def _verify_progress_shim(workspace: ExecutionWorkspace) -> None:
     """
     shim = workspace.root / "bin" / "progress"
     if shim.is_symlink() or not shim.is_file():
-        raise WorkspacePreflightError(
-            "bin/progress shim is missing; runner must materialize it before preflight"
-        )
+        raise WorkspacePreflightError("bin/progress shim is missing; runner must materialize it before preflight")
     if not os.access(shim, os.X_OK):
         raise WorkspacePreflightError("bin/progress shim is not executable")
 
@@ -266,9 +256,7 @@ def materialize_resume_outputs(
     for challenge_id in challenge_ids:
         existing = _matching_directories(paths.challenges / category, challenge_id)
         if len(existing) > 1:
-            raise WorkspacePromotionError(
-                f"multiple canonical directories for claimed id {challenge_id}"
-            )
+            raise WorkspacePromotionError(f"multiple canonical directories for claimed id {challenge_id}")
         if not existing:
             continue
         source = existing[0]
@@ -277,18 +265,6 @@ def materialize_resume_outputs(
         shutil.copytree(source, destination)
         targets[challenge_id] = destination.relative_to(workspace.root).as_posix()
     return targets
-
-
-def promote_claimed_outputs(
-    paths: ProjectPaths,
-    workspace: ExecutionWorkspace,
-    payload: Mapping[str, Any],
-) -> list[Path]:
-    del paths, workspace, payload
-    raise WorkspacePromotionError(
-        "promote_claimed_outputs removed; use hermes.build_publisher."
-        "publish_workspace_output with a PublicationContract"
-    )
 
 
 def _executions_path(paths: ProjectPaths) -> Path:
@@ -300,9 +276,7 @@ def _single_category(challenges: Any) -> str | None:
     if not isinstance(challenges, list):
         return None
     categories = {
-        item.get("category")
-        for item in challenges
-        if isinstance(item, dict) and isinstance(item.get("category"), str)
+        item.get("category") for item in challenges if isinstance(item, dict) and isinstance(item.get("category"), str)
     }
     return next(iter(categories)) if len(categories) == 1 else None
 
@@ -402,9 +376,7 @@ def _reject_unrelated_artifacts(root: Path, challenge_ids: set[str]) -> None:
                 if not _CHALLENGE_NAMESPACE.match(candidate):
                     continue
                 if _match_claimed_id(candidate, challenge_ids) is None:
-                    raise WorkspacePreflightError(
-                        f"workspace contains unrelated challenge artifact: {candidate}"
-                    )
+                    raise WorkspacePreflightError(f"workspace contains unrelated challenge artifact: {candidate}")
 
 
 def _verify_reference_symlinks(
@@ -412,9 +384,7 @@ def _verify_reference_symlinks(
     manifest: dict[str, Any],
 ) -> None:
     raw_roots = manifest.get("allowed_static_reference_roots")
-    if not isinstance(raw_roots, list) or not all(
-        isinstance(item, str) for item in raw_roots
-    ):
+    if not isinstance(raw_roots, list) or not all(isinstance(item, str) for item in raw_roots):
         raise WorkspacePreflightError("manifest reference-root allowlist is malformed")
     allowed_roots = [Path(item).resolve() for item in raw_roots]
     for entry in references.rglob("*"):
@@ -436,11 +406,7 @@ def _is_relative_to(path: Path, root: Path) -> bool:
 def _matching_directories(root: Path, challenge_id: str) -> list[Path]:
     if not root.is_dir():
         return []
-    return sorted(
-        entry
-        for entry in root.glob(f"{challenge_id}-*")
-        if entry.is_dir() and not entry.is_symlink()
-    )
+    return sorted(entry for entry in root.glob(f"{challenge_id}-*") if entry.is_dir() and not entry.is_symlink())
 
 
 def _reject_tree_symlinks(root: Path) -> None:
@@ -468,9 +434,7 @@ def _reject_nonconforming_output(
         try:
             entry.relative_to(expected_root)
         except ValueError as exc:
-            raise WorkspacePromotionError(
-                f"claimed output uses non-conforming layout: {entry}"
-            ) from exc
+            raise WorkspacePromotionError(f"claimed output uses non-conforming layout: {entry}") from exc
 
 
 def _sha256(path: Path) -> str:

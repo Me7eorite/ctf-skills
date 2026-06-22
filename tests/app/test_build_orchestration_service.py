@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -432,3 +434,52 @@ def test_clean_rebuild_is_confirmed_idempotent_and_omits_resume_source(
     payload = read_json(service.paths.shards / "pending" / f"{clean_id}.json", {})
     assert payload["execution_mode"] == "clean"
     assert "resume_from_shard_basename" not in payload
+    with pytest.raises(BuildOrchestrationError) as different_key:
+        service.clean_rebuild(source_id, idempotency_key="different-key", confirmed=True)
+    assert different_key.value.code == "stale_source_attempt"
+
+
+def test_concurrent_same_key_clean_rebuild_collapses_to_one_attempt(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    task_id = _seed_designed_task(session_factory)
+    service = _service(tmp_path, session_factory)
+    source_id = service.submit_single(task_id)
+    with transaction(factory=session_factory) as session:
+        BuildAttemptsRepository(session).update_to_terminal(source_id, status="failed")
+        session.get(task_model.DesignTask, task_id).status = "build_failed"
+
+    barrier = threading.Barrier(2)
+    original_write = BuildOrchestrationService._write_staged_payload
+
+    def synchronized_write(self, submission):
+        barrier.wait(timeout=5)
+        return original_write(self, submission)
+
+    monkeypatch.setattr(
+        BuildOrchestrationService,
+        "_write_staged_payload",
+        synchronized_write,
+    )
+    key = f"concurrent-{uuid4()}"
+
+    def submit() -> UUID:
+        return _service(tmp_path, session_factory).clean_rebuild(
+            source_id,
+            idempotency_key=key,
+            confirmed=True,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _index: submit(), range(2)))
+
+    assert results[0] == results[1]
+    with session_factory() as session:
+        count = session.scalar(
+            sa.select(sa.func.count())
+            .select_from(build_model.BuildAttempt)
+            .where(build_model.BuildAttempt.idempotency_key == key)
+        )
+    assert count == 1
