@@ -97,17 +97,17 @@ def _make_re_challenge_dir(
     (directory / "src" / "main.c").write_text(
         "int main(){return 0;}\n", encoding="utf-8"
     )
-    dist = directory / "dist"
-    dist.mkdir(parents=True, exist_ok=True)
-    (dist / artifact_name).write_bytes(b"\x7fELFnotreal")
+    attachments = directory / "attachments"
+    attachments.mkdir(parents=True, exist_ok=True)
+    (attachments / artifact_name).write_bytes(b"\x7fELFnotreal")
     sha = hashlib.sha256(b"\x7fELFnotreal").hexdigest()
     metadata = {
         "id": challenge_id,
         "category": "re",
-        "build_command": "gcc src/main.c -o dist/checker",
+        "build_command": "gcc src/main.c -o attachments/checker",
         "build_status": "passed",
         "solve_status": "passed",
-        "artifact": f"dist/{artifact_name}",
+        "artifact": f"attachments/{artifact_name}",
         "artifact_sha256": sha,
         "flag": "flag{example}",
     }

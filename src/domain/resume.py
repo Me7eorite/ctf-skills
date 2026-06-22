@@ -220,7 +220,7 @@ def _safe_artifact_path(challenge_dir: Path, artifact: str) -> Path | None:
     安全检查:
       - 拒绝绝对路径
       - 拒绝包含 .. 的路径（防止目录遍历）
-      - 解析后必须在 attchments/ 子目录下
+      - 解析后必须在 attachments/ 子目录下
     """
     candidate = Path(artifact)
     if candidate.is_absolute():
@@ -237,6 +237,15 @@ def _safe_artifact_path(challenge_dir: Path, artifact: str) -> Path | None:
     if not relative.parts or relative.parts[0] != "attachments":
         return None
     return resolved
+
+
+def _artifact_display_path(artifact: str) -> str:
+    candidate = Path(artifact)
+    if candidate.is_absolute() or any(part == ".." for part in candidate.parts):
+        return artifact
+    if candidate.parts and candidate.parts[0] == "dist":
+        return Path("attachments", *candidate.parts[1:]).as_posix()
+    return candidate.as_posix()
 
 
 def build_evidence(
@@ -278,7 +287,10 @@ def build_evidence(
             return False, "metadata.artifact_sha256 missing"
         resolved = _safe_artifact_path(challenge_dir, artifact.strip())
         if resolved is None or not resolved.is_file():
-            return False, f"artifact file {artifact!r} missing under dist/"
+            return False, (
+                f"artifact file {_artifact_display_path(artifact)!r} "
+                "missing under attachments/"
+            )
         actual = _sha256_of_file(resolved)
         if actual is None:
             return False, f"artifact file {artifact!r} unreadable"
