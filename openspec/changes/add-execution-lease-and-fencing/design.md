@@ -10,10 +10,12 @@ reconciler changes status". With more than one worker or a crash-recovery, a
 stale process can still write into `work/challenges` because nothing fences the
 write boundary.
 
-This change is proposal #3 of the Worker Pool split. Implementation-level detail
-(DDL, exact rewrite points, field-dedup table, test list) lives in
-[`option-a-execution-container-design.md`](../../../option-a-execution-container-design.md);
-this document records the architectural decisions and migration strategy.
+This change is proposal #3 of the Worker Pool split. The earlier implementation
+study [`option-a-execution-container-design.md`](../../../option-a-execution-container-design.md)
+remains background material, but this change package is authoritative where the
+study differs—specifically for queued scheduling, immutable per-execution
+tokens, recovery-as-a-new-iteration, canonical `iter-NNN` paths, and the
+feedback/revalidation persistence tables.
 
 ## Terminology
 
@@ -28,9 +30,10 @@ this document records the architectural decisions and migration strategy.
 
 **Goals:**
 
-- Reverse the retry model: `build_attempt` becomes a per-challenge container;
+- Reverse the retry model: `build_attempt` becomes a per-build-session container;
   retry / clean-rebuild / revision append `executions` rows under it.
-- Collapse the workspace directory explosion to one stable folder per challenge,
+- Collapse the workspace directory explosion to one stable folder per
+  build-session container,
   with prior failure scenes archived (not erased) under `attempts/iter-NNN/`.
 - Add a fencing token + lease so an expired worker cannot publish dirty output.
 - Make the prior iteration's failure scene reachable in place for revision.
@@ -59,27 +62,36 @@ chain with **no key change** — only the retry path changes.
 
 ### D2: Fencing via a per-execution claim_token, validated at every write
 
-Claim mints `claim_token` + `lease_expires_at` in the same transaction that
-inserts the execution (reusing the existing `with_for_update()` row lock).
-`update_to_running`, `update_to_terminal`, the publisher, and the heartbeat path
-all require the current token; a stale token is rejected and its output stays in
-quarantine. The token check is the gating rule for any write that mutates the
-execution or publishes its output. The "only the reconciler changes status"
-invariant is relaxed to "status may change from claim / worker / reconciler, but
-every write is token-gated" — safety comes from the fence, not from
+Scheduling inserts a `queued` execution with null worker/claim/lease fields and
+updates `latest_execution_id`. Worker claim later mints `claim_token` +
+`lease_expires_at` while atomically changing that row to `claimed` and setting
+`current_execution_id` (reusing the existing `with_for_update()` row lock).
+After claim, `update_to_running`, `update_to_terminal`, the publisher, and the
+heartbeat path all require the current token; a stale token is rejected and its
+output stays in quarantine. Scheduling is guarded by the container row lock;
+worker writes and publication are token-gated. The lease reaper is the sole
+exception: it uses a conditional update fenced by current execution id, active
+status, and expired lease, never by an untrusted caller token. The "only the
+reconciler changes status" invariant is relaxed to "status may change from
+claim / worker / reconciler; worker writes are token-gated and reaper writes
+are current-id/expiry-gated" — safety comes from explicit fences, not from
 exclusivity.
 
-### D3: Reconciler becomes a lease reaper; TTL reuses the 300s grace
+### D3: Reconciler terminates the expired run; recovery is a new iteration
 
 Rather than introduce a parallel liveness mechanism, `BuildReconciler` is
-repurposed to reap expired execution leases and re-mint tokens on recovery. The
-existing `BUILD_LOST_GRACE` (300s) becomes the default `LEASE_TTL`, keeping the
-liveness window unchanged and the logic isomorphic.
+repurposed to reap expired execution leases. It terminally marks the expired
+execution `lost`, clears `current_execution_id`, and leaves that execution's
+token immutable. A later retry request appends a new queued `retry` execution
+with the lost execution as parent; automatic retry policy remains proposal #5's
+responsibility. The new worker receives a new token only when it claims that new execution. The
+existing `BUILD_LOST_GRACE` (300s) becomes the default `LEASE_TTL`.
 
-### D4: One active execution per container via a partial unique index
+### D4: One non-terminal execution per container via a partial unique index
 
 A partial unique index on `executions(build_attempt_id) WHERE status IN
-('claimed','running')` enforces single-active at the database, mirroring the
+('queued','claimed','running')` enforces a single non-terminal iteration at the
+database, mirroring the
 existing `one_active_build_per_task` pattern. The container-level
 `one_active_build_per_task` index is retained during cutover so legacy in-flight
 rows still obey the old guarantee; after cutover the execution-level unique
@@ -93,11 +105,12 @@ or retry may replace it only if its own publish succeeds.
 
 ### D5: Revision base artifact is read in place from the same directory
 
-A `revision` claim resolves its base artifact from
-`work/executions/<build_attempt_id>/attempts/iter-(N-1)/output` — a local
-filesystem lookup within the same challenge directory, not a cross-UUID copy or
+A `revision` claim resolves its base artifact from its explicit parent at
+`work/executions/<build_attempt_id>/attempts/iter-<parent.iteration_no>/output`
+— a local
+filesystem lookup within the same build-session container directory, not a cross-UUID copy or
 a DB-path join. This is only possible because D1 keeps the retry chain in one
-folder, which is why the workspace-by-challenge consolidation is a hard
+folder, which is why the workspace-by-session consolidation is a hard
 prerequisite for revision reuse.
 
 ### D6: Revalidate is an event on the latest execution, not a new run
@@ -106,12 +119,14 @@ prerequisite for revision reuse.
 create a new `executions` row. It may update container-level aggregate fields
 derived from that execution, but it never changes the execution iteration chain.
 
-### D7: Current and latest execution ids must move together on claim/reap
+### D7: Current means active; latest means newest
 
-Claim and lease-recovery paths SHALL keep `current_execution_id` and
-`latest_execution_id` identical. A non-terminal current execution is always the
-latest execution, and any terminal write must validate against that same row
-before updating container aggregate state.
+Scheduling updates only `latest_execution_id`. Claim sets
+`current_execution_id` to that queued latest execution. A terminal transition
+must validate that row as current, then clear `current_execution_id` while
+retaining `latest_execution_id`. Therefore current and latest are identical only
+while an execution is claimed/running; a queued or terminal latest execution has
+no current pointer.
 
 ### D8: Shard file stays `{build_attempt_id}.json`, re-rendered per iteration
 
@@ -134,14 +149,17 @@ source.
   validation on every status write; a stale writer is always rejected and
   rejected publishes stay quarantined rather than mutating canonical output.
 - **Clean-rebuild shares the container directory** (decided: keep in same
-  folder) → old `current/` is archived to `attempts/iter-NNN/` before the clean
-  run, so "clean" applies to the new run's inputs while history is preserved for
-  triage.
+  folder) → the entire old `current/` directory is atomically renamed to
+  `attempts/iter-NNN/` before a fresh `current/` inode is created. A stale
+  process retains the renamed inode as its cwd and cannot write into the new
+  iteration's directory; "clean" applies to the new inputs while history is
+  preserved for triage.
 
 ## Migration Plan
 
-1. Alembic `0012`: `CREATE TABLE executions` + indexes
-   (`uq_executions_attempt_iter`, `one_active_execution_per_attempt`,
+1. Alembic `0012`: `CREATE TABLE executions`,
+   `build_feedback_snapshots`, and `revalidation_events` + indexes
+   (`uq_executions_attempt_iter`, `one_nonterminal_execution_per_attempt`,
    `ix_executions_lease`, `ix_executions_attempt_iter`); `ALTER build_attempts
    ADD current/latest/successful_execution_id` (nullable FKs).
 2. **No execution backfill** for pre-cutover `build_attempts`. Rows in flight at

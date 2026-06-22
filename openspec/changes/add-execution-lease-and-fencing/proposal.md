@@ -32,10 +32,10 @@ publish dirty output because nothing fences it at the write boundary.
 
 This change introduces a project-side **execution row with a lease, a fencing
 token, and an iteration chain**, and reverses the retry model: `build_attempt`
-becomes a per-challenge **container** and retry/revision/clean-rebuild append
+becomes a per-build-session **container** and retry/revision/clean-rebuild append
 **executions** under it instead of minting new build attempts. This collapses
-the directory explosion to one stable folder per challenge, makes the prior
-attempt's failure scene reachable for the next iteration (the physical
+the directory explosion to one stable folder per build-session container,
+makes the prior attempt's failure scene reachable for the next iteration (the physical
 prerequisite for revision reuse), and lets an expired worker be fenced out of
 publishing even while its Hermes process is still running.
 
@@ -47,34 +47,51 @@ publishing even while its Hermes process is still running.
   fresh submit and now means "which build session for this challenge".
 - New `executions` table: `id, build_attempt_id, parent_execution_id,
   iteration_no, execution_kind (initial|retry|revision), execution_mode
-  (standard|clean), worker_id, claim_token, lease_expires_at, heartbeat_at,
-  status, exit_class, started_at, finished_at, created_at`, with a
-  partial-unique "one active execution per attempt" index, a "revision requires
-  parent" check, and a "clean mode requires retry kind" check.
+  (standard|clean), feedback_snapshot_id, worker_id, claim_token,
+  lease_expires_at, heartbeat_at, status, exit_class, error, started_at,
+  finished_at, created_at`. Scheduling inserts `status=queued` with nullable
+  claim fields; worker claim fills them atomically. A partial-unique index
+  permits only one non-terminal (`queued|claimed|running`) execution per
+  attempt. Revision requires both a parent and feedback snapshot; clean mode
+  requires retry kind.
 - `build_attempts` gains `current_execution_id`, `latest_execution_id`,
   `successful_execution_id` (nullable); per-run fields (`worker`, `error`) are
   superseded by the execution row, while container-level result fields stay.
   `successful_execution_id` always records the latest execution whose output was
   successfully published.
-- Claim is a single transaction: lock attempt → allocate `iteration_no` → mint
-  `claim_token` + `lease_expires_at` → insert execution → set container status.
+- Scheduling is a single transaction: lock attempt → allocate `iteration_no` →
+  insert a queued execution → set `latest_execution_id`. Shard rendering stays
+  in the existing filesystem prepare/commit workflow, with compensation if the
+  database commit or pending-shard publication fails.
+  Claim is a second transaction: lock the queued execution → mint
+  `claim_token` + `lease_expires_at` → set worker/status → set
+  `current_execution_id` and container status.
 - Fencing: `update_to_running`, `update_to_terminal`, the publisher (proposal
   #2), and a new heartbeat path all validate the current `claim_token`; a stale
   token is rejected and its output is left in quarantine.
-- `BuildReconciler` is repurposed as a **lease reaper** over executions: expired
-  leases are marked `lost` and re-mint the token on recovery; the existing
-  `BUILD_LOST_GRACE` (300s) becomes the default `LEASE_TTL`.
+- `BuildReconciler` is repurposed as a **lease reaper** over executions: an
+  expired execution is terminally marked `lost` and its current pointer is
+  cleared. Recovery is a later retry request (operator now, supervisor in
+  proposal #5) that appends a new queued execution whose parent is the lost
+  execution; the reaper itself does not auto-schedule, and tokens are never
+  rotated on an existing execution. The existing `BUILD_LOST_GRACE` (300s)
+  becomes the default `LEASE_TTL`.
 - Heartbeat uses a dedicated `POST /api/executions/{id}/heartbeat` endpoint so
   token validation stays explicit and per-execution.
-- Revision claim materializes the parent execution's output manifest, base
-  artifact, and human feedback snapshot into the new workspace `current/input/`,
-  reading the base artifact **in place** from the same challenge directory's
-  `attempts/iter-(N-1)/` (no cross-directory or DB path lookup).
+- Revision claim materializes the explicitly referenced parent execution's
+  output manifest, base artifact, and human feedback snapshot into the new
+  workspace `current/input/`,
+  reading the base artifact **in place** from the same build-session directory's
+  `attempts/iter-NNN/`, where `NNN = parent.iteration_no` (no cross-directory
+  or persisted filesystem-path lookup).
 - Human feedback intake: `POST /api/build-attempts/{id}/feedback`
   (`summary` / `requested_changes` / `preserve` / `forbid` / `reviewer`) —
   schema, persistence, and materialization only.
 - `revalidate` does NOT create an execution row: it appends a
   `revalidation_events` record to the existing execution.
+- New immutable `build_feedback_snapshots` and append-only
+  `revalidation_events` tables provide the persistence required by those two
+  flows.
 
 ## Capabilities
 
@@ -85,14 +102,15 @@ publishing even while its Hermes process is still running.
 - `worker-pool-execution`: add execution-row lease + fencing-token requirements,
   the container/iteration model, the heartbeat lease-renewal path, the
   reconciler-as-reaper behavior, and revision-materialization-from-prior-iter.
-- `build-orchestration`: build attempt becomes a per-challenge container;
+- `build-orchestration`: build attempt becomes a per-build-session container;
   retry/clean-rebuild append executions rather than minting build attempts; add
   `current/latest/successful_execution_id` references and the feedback intake
   endpoint.
 
 ## Impact
 
-- **Schema / migration**: Alembic `0012` — create `executions` + indexes; alter
+- **Schema / migration**: Alembic `0012` — create `executions`,
+  `build_feedback_snapshots`, and `revalidation_events` + indexes; alter
   `build_attempts` (3 nullable execution FKs); no execution backfill for
   pre-cutover rows; cutover guarded by a flag/timestamp so in-flight legacy
   attempts finish via the reconciler legacy path.

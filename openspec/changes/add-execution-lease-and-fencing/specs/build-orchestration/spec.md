@@ -13,7 +13,9 @@ fresh submit), `status` (one of `queued`, `running`, `succeeded`, `failed`,
 execution), `shard_basename` (TEXT, the basename written into
 `work/shards/pending/` and re-rendered per iteration),
 `resulting_challenge_dir` (TEXT nullable, the final successful artifact),
-`error` (TEXT nullable), `artifact_status` (TEXT NOT NULL DEFAULT `unknown`,
+`error` (TEXT nullable compatibility aggregate mirroring the latest execution;
+authoritative per-run errors live on executions), `artifact_status` (TEXT NOT
+NULL DEFAULT `unknown`,
 one of `unknown`, `present`, `missing`), `created_at` (TIMESTAMPTZ NOT NULL
 DEFAULT now()), `started_at` (TIMESTAMPTZ nullable, set when the container's
 first execution enters `running`), and `finished_at` (TIMESTAMPTZ nullable, set
@@ -21,6 +23,9 @@ when the container reaches a terminal status). Rows SHALL additionally carry
 nullable execution references `current_execution_id`, `latest_execution_id`,
 and `successful_execution_id` (FKs to `executions.id`). The per-run `worker`
 and `error` details SHALL live on the `executions` row.
+Each execution pointer SHALL be constrained to an execution belonging to the
+same build attempt, using composite foreign keys rather than application-only
+validation.
 
 The unique compound key `(design_task_id, attempt_no)` SHALL hold.
 
@@ -30,6 +35,9 @@ The unique compound key `(design_task_id, attempt_no)` SHALL hold.
 - **THEN** exactly one container row is inserted with `attempt_no = 1`,
   `status = 'queued'`, `shard_basename` matching the rendered shard file's
   basename
+- **AND** exactly one `executions` row is inserted with `iteration_no = 1`,
+  `execution_kind = 'initial'`, `status = 'queued'`, and null worker/claim/lease
+  fields
 - **AND** `created_at` is server-set; `started_at` and `finished_at` remain
   null
 
@@ -41,7 +49,8 @@ The unique compound key `(design_task_id, attempt_no)` SHALL hold.
 - **THEN** no new `build_attempts` row is created and `attempt_no` is not
   incremented
 - **AND** a new `executions` row is inserted under the same container with
-  `iteration_no = 4`, `execution_kind = 'retry'`, and a fresh `claim_token`
+  `iteration_no = 4`, `execution_kind = 'retry'`, `status = 'queued'`, and
+  null worker/claim/lease fields; a token is minted only when a worker claims it
 
 #### Scenario: Clean rebuild reuses the same container
 
@@ -60,12 +69,18 @@ The unique compound key `(design_task_id, attempt_no)` SHALL hold.
 ### Requirement: Container status follows the latest execution deterministically
 
 The system SHALL derive `build_attempts.status` from the container's latest
-execution using the following precedence: `claimed` or `running` => `running`;
+execution using the following precedence: `queued` => `queued`; `claimed` or
+`running` => `running`;
 `succeeded` => `succeeded`; `failed` => `failed`; `lost` => `lost`. If no
 execution exists yet, the container remains `queued`. When a new execution is
 claimed, the container SHALL immediately move to `running`. A terminal write
 from an older execution SHALL NOT overwrite the status of a newer latest
 execution.
+
+When a retry or revision is scheduled after a terminal iteration, the
+container's `finished_at` and compatibility `error` aggregate SHALL be cleared
+as it returns to `queued`; `started_at` SHALL retain the timestamp at which the
+session's first execution entered running.
 
 #### Scenario: Older terminal write does not win over a newer execution
 
@@ -91,7 +106,14 @@ structured payload (`summary`, `requested_changes`, `preserve`, `forbid`,
 the build attempt container and SHALL be available to materialize into a
 subsequent `revision` execution's workspace. This change SHALL provide the
 schema, persistence, and materialization only; the management UI for submitting
-feedback is out of scope.
+feedback is out of scope. Each snapshot SHALL be a row in
+`build_feedback_snapshots` carrying `id` (UUID PK), `build_attempt_id` (FK,
+`ON DELETE CASCADE`), `summary` (TEXT), `requested_changes`, `preserve`, and
+`forbid` (JSONB arrays), `reviewer` (TEXT), and `created_at` (TIMESTAMPTZ).
+The pair `(id, build_attempt_id)` SHALL be unique for composite ownership FKs.
+Rows are append-only. A revision execution SHALL store the selected snapshot in
+its `feedback_snapshot_id`; if multiple snapshots exist, the request must name
+one explicitly rather than relying on "latest" at claim time.
 
 #### Scenario: Feedback snapshot is persisted immutably
 
