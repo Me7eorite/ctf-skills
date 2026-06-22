@@ -20,6 +20,7 @@ from core.paths import ProjectPaths
 from persistence.models import build_attempts as build_model
 from persistence.models import design_tasks as task_model
 from persistence.models.progress import ProgressEvent
+from persistence.repositories import ExecutionsRepository
 from persistence.session import SessionFactory, transaction
 from services.build_orchestration_service import BuildOrchestrationService
 
@@ -96,7 +97,10 @@ class BuildReconciler:
         self._tick_lock = threading.Lock()
 
     def tick(self, session: Session) -> None:
-        """Run staging recovery, then reconcile rows in the caller transaction."""
+        """Reap expired leases, run staging recovery, then reconcile rows."""
+        # Lease reaper (add-execution-lease-and-fencing): terminally mark expired
+        # current executions lost. No-op until executions exist (cutover flag).
+        ExecutionsRepository(session).reap_expired()
         staged_ids = self.orchestration.recover_staging()
         observations = self._scan_attributed_shards()
         self._reconcile(session, staged_ids, observations)

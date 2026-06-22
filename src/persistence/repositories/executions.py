@@ -115,7 +115,8 @@ class ExecutionsRepository:
         now: datetime | None = None,
     ) -> tuple[dto.Execution, UUID]:
         moment = _aware(now)
-        container = self._lock_container(build_attempt_id)
+        # Lock order is execution-first, then container — matching `_fenced` and
+        # the reaper so concurrent transitions on the same pair cannot deadlock.
         row = self.session.scalars(
             sa.select(model.Execution)
             .where(
@@ -130,6 +131,7 @@ class ExecutionsRepository:
             raise ExecutionPersistenceError(
                 f"no queued execution to claim for build attempt {build_attempt_id}"
             )
+        container = self._lock_container(build_attempt_id)
         token = uuid4()
         row.claim_token = token
         row.worker_id = worker_id
@@ -187,6 +189,7 @@ class ExecutionsRepository:
         if container.latest_execution_id == row.id:
             container.status = dto.CONTAINER_STATUS_BY_EXECUTION[status]
             container.finished_at = moment
+            container.error = error  # compatibility aggregate mirrors latest
         self.session.flush()
         self.session.refresh(row)
         return _execution(row)
@@ -223,18 +226,26 @@ class ExecutionsRepository:
         ).all()
         reaped: list[UUID] = []
         for row in rows:
-            container = self.session.get(build_model.BuildAttempt, row.build_attempt_id)
+            # Lock the container (execution already locked above → execution-first
+            # ordering preserved) to avoid a TOCTOU with a concurrent claim.
+            container = self.session.scalars(
+                sa.select(build_model.BuildAttempt)
+                .where(build_model.BuildAttempt.id == row.build_attempt_id)
+                .with_for_update()
+            ).one_or_none()
             # Reaper fence: only the container's current execution is reaped.
             if container is None or container.current_execution_id != row.id:
                 continue
+            message = row.error or "lease expired"
             row.status = "lost"
-            row.error = row.error or "lease expired"
+            row.error = message
             row.exit_class = row.exit_class or "lease_expired"
             row.finished_at = moment
             container.current_execution_id = None
             if container.latest_execution_id == row.id:
                 container.status = "lost"
                 container.finished_at = moment
+                container.error = message
             reaped.append(row.id)
         self.session.flush()
         return reaped

@@ -21,8 +21,9 @@ from domain.design_tasks import DesignTask
 from persistence.models import build_attempts as build_model
 from persistence.models import challenge_designs as design_model
 from persistence.models import design_tasks as task_model
+from persistence.models import executions as exec_model
 from persistence.models import research as research_model
-from persistence.repositories import BuildAttemptsRepository
+from persistence.repositories import BuildAttemptsRepository, ExecutionsRepository
 from persistence.session import SessionFactory, transaction
 from services import BuildOrchestrationError, BuildOrchestrationService
 from services.build_orchestration_service import (
@@ -70,6 +71,18 @@ def clean_database(session_factory: SessionFactory):
 
 def _clean_database(session_factory: SessionFactory) -> None:
     with session_factory() as session:
+        # Null container->execution pointers first to break the circular FK,
+        # then delete executions / feedback before the containers.
+        session.execute(sa.delete(exec_model.RevalidationEvent))
+        session.execute(
+            sa.update(build_model.BuildAttempt).values(
+                current_execution_id=None,
+                latest_execution_id=None,
+                successful_execution_id=None,
+            )
+        )
+        session.execute(sa.delete(exec_model.Execution))
+        session.execute(sa.delete(exec_model.BuildFeedbackSnapshot))
         session.execute(sa.delete(build_model.BuildAttempt))
         session.execute(sa.delete(design_model.ChallengeDesign))
         session.execute(sa.delete(design_model.DesignAttempt))
@@ -483,3 +496,83 @@ def test_concurrent_same_key_clean_rebuild_collapses_to_one_attempt(
             .where(build_model.BuildAttempt.idempotency_key == key)
         )
     assert count == 1
+
+
+def test_minting_retry_reuses_container_and_appends_execution(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+    monkeypatch,
+):
+    monkeypatch.setenv("EXECUTION_MINTING", "1")
+    task = _seed_designed_task(session_factory)
+    service = _service(tmp_path, session_factory)
+
+    [container_id] = service.submit_batch([task])
+
+    # Fresh submit scheduled the initial execution.
+    with session_factory() as session:
+        repo = ExecutionsRepository(session)
+        execs = repo.list_for_attempt(container_id)
+        assert [e.iteration_no for e in execs] == [1]
+        assert execs[0].execution_kind == "initial"
+        # Simulate the worker driving iteration 1 to a failed terminal.
+        _, token = repo.claim_queued(
+            container_id, worker_id="w", lease_ttl_seconds=300
+        )
+        repo.update_to_terminal(execs[0].id, claim_token=token, status="failed")
+        session.get(task_model.DesignTask, task).status = "build_failed"
+        session.commit()
+
+    retry_id = service.retry(container_id)
+
+    # Same container id — no new build_attempt minted.
+    assert retry_id == container_id
+    with session_factory() as session:
+        repo = ExecutionsRepository(session)
+        execs = repo.list_for_attempt(container_id)
+        assert [e.iteration_no for e in execs] == [1, 2]
+        assert execs[1].execution_kind == "retry"
+        assert execs[1].parent_execution_id == execs[0].id
+        assert execs[1].status == "queued"
+        count = session.scalar(
+            sa.select(sa.func.count()).select_from(build_model.BuildAttempt)
+        )
+        assert count == 1
+        container = session.get(build_model.BuildAttempt, container_id)
+        assert container.shard_basename == f"{container_id}.iter-002.json"
+    # Per-iteration shard published to pending.
+    assert (
+        service.paths.shards / "pending" / f"{container_id}.iter-002.json"
+    ).exists()
+
+
+def test_legacy_retry_still_mints_new_attempt_when_flag_off(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+    monkeypatch,
+):
+    monkeypatch.delenv("EXECUTION_MINTING", raising=False)
+    task = _seed_designed_task(session_factory)
+    service = _service(tmp_path, session_factory)
+
+    [first_id] = service.submit_batch([task])
+    with session_factory() as session:
+        BuildAttemptsRepository(session).update_to_terminal(
+            first_id, status="failed", error="boom"
+        )
+        session.get(task_model.DesignTask, task).status = "build_failed"
+        session.commit()
+
+    retry_id = service.retry(first_id)
+
+    # Legacy path: a brand-new build_attempt row, and no executions created.
+    assert retry_id != first_id
+    with session_factory() as session:
+        count = session.scalar(
+            sa.select(sa.func.count()).select_from(build_model.BuildAttempt)
+        )
+        assert count == 2
+        exec_count = session.scalar(
+            sa.select(sa.func.count()).select_from(exec_model.Execution)
+        )
+        assert exec_count == 0

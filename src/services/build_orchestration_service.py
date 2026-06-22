@@ -14,15 +14,19 @@ from uuid import UUID, uuid4
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
+from core.execution_config import execution_minting_enabled
 from core.jsonio import read_json, write_json
 from core.paths import ProjectPaths
 from domain import challenge_designs as design_dto
 from domain import design_tasks as task_dto
+from persistence.models import build_attempts as build_model
 from persistence.models import design_tasks as task_model
+from persistence.models import executions as exec_model
 from persistence.repositories import (
     BuildAttemptsRepository,
     ChallengeDesignRepository,
     DesignTaskRepository,
+    ExecutionsRepository,
 )
 from persistence.session import SessionFactory, transaction
 
@@ -99,6 +103,12 @@ class _PreparedSubmission:
     payload: dict[str, Any]
     execution_mode: str
     idempotency_key: str | None
+    # Option A (execution-minting) fields; populated only when the cutover flag
+    # is on. ``attempt_id`` is the container id for both fresh and retry paths.
+    minting: bool = False
+    is_fresh: bool = True
+    iteration_no: int = 1
+    execution_kind: str = "initial"
 
 
 class BuildOrchestrationService:
@@ -344,18 +354,36 @@ class BuildOrchestrationService:
                 design = design_repo.latest_design(task_id)
                 if design is None:
                     raise BuildOrchestrationError(f"design task {task_id} has no validated draft design")
-                attempt_id = uuid4()
-                basename = f"{attempt_id}.json"
+
+                minting = execution_minting_enabled()
+                source_attempt_id = retry_sources.get(task_id)
+                # Option A: a retry reuses the existing build-attempt container and
+                # appends an execution; legacy (or fresh) mints a new container.
+                is_retry = minting and source_attempt_id is not None
+                if is_retry:
+                    container_id = source_attempt_id
+                    iteration_no = self._next_iteration_no(session, container_id)
+                    # resume/clean retries are kind=retry; revision is a separate
+                    # feedback-triggered entry point added later.
+                    execution_kind = "retry"
+                else:
+                    container_id = uuid4()
+                    iteration_no = 1
+                    execution_kind = "initial"
+                if minting:
+                    basename = f"{container_id}.iter-{iteration_no:03d}.json"
+                else:
+                    basename = f"{container_id}.json"
                 payload = self.render_shard_payload(
                     task,
                     design,
-                    build_attempt_id=attempt_id,
+                    build_attempt_id=container_id,
                     resume_from_shard_basename=payload_resume_from,
                     execution_mode=execution_mode,
                 )
                 prepared.append(
                     _PreparedSubmission(
-                        attempt_id=attempt_id,
+                        attempt_id=container_id,
                         task=task,
                         design=design,
                         shard_basename=basename,
@@ -363,9 +391,22 @@ class BuildOrchestrationService:
                         payload=payload,
                         execution_mode=execution_mode,
                         idempotency_key=idempotency_key,
+                        minting=minting,
+                        is_fresh=not is_retry,
+                        iteration_no=iteration_no,
+                        execution_kind=execution_kind,
                     )
                 )
         return prepared
+
+    @staticmethod
+    def _next_iteration_no(session: Session, container_id: UUID) -> int:
+        current_max = session.scalar(
+            sa.select(sa.func.max(exec_model.Execution.iteration_no)).where(
+                exec_model.Execution.build_attempt_id == container_id
+            )
+        )
+        return int(current_max or 0) + 1
 
     def _commit(
         self,
@@ -396,12 +437,34 @@ class BuildOrchestrationService:
                     expected_source_id=retry_sources.get(row.id),
                     execution_mode=submission.execution_mode,
                 )
-                build_repo.create_attempt(
-                    row.id,
-                    submission.shard_basename,
-                    attempt_id=submission.attempt_id,
-                    idempotency_key=submission.idempotency_key,
-                )
+                if submission.is_fresh:
+                    build_repo.create_attempt(
+                        row.id,
+                        submission.shard_basename,
+                        attempt_id=submission.attempt_id,
+                        idempotency_key=submission.idempotency_key,
+                    )
+                if submission.minting:
+                    exec_repo = ExecutionsRepository(session)
+                    parent_execution_id = None
+                    mode = "clean" if submission.execution_mode == "clean" else "standard"
+                    if not submission.is_fresh:
+                        container = session.get(
+                            build_model.BuildAttempt, submission.attempt_id
+                        )
+                        parent_execution_id = (
+                            container.latest_execution_id if container else None
+                        )
+                        # Keep the legacy shard_basename in sync so reconciler and
+                        # runner attribute the reused container's current iteration.
+                        if container is not None:
+                            container.shard_basename = submission.shard_basename
+                    exec_repo.schedule_execution(
+                        submission.attempt_id,
+                        execution_kind=submission.execution_kind,
+                        parent_execution_id=parent_execution_id,
+                        execution_mode=mode,
+                    )
                 row.status = "building"
                 row.updated_at = datetime.now(timezone.utc)
 

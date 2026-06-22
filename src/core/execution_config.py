@@ -28,11 +28,14 @@ def lease_ttl_seconds() -> int:
 def execution_minting_enabled() -> bool:
     """Whether retry/clean/revision append executions (Option A) vs legacy mint.
 
-    Defaults to enabled. Operators set ``EXECUTION_MINTING=0`` to fall back to
-    legacy build-attempt minting during a migration cutover window.
+    Defaults to **disabled** during the migration cutover window: the worker
+    still claims shards from the file queue and the reconciler still mirrors
+    legacy build-attempt status, so execution rows would otherwise be orphaned.
+    The flag flips to enabled once the worker-claim + reaper integration
+    (split-plan §5-6) lands. Operators set ``EXECUTION_MINTING=1`` to opt in.
     """
 
     raw = os.environ.get("EXECUTION_MINTING")
     if raw is None:
-        return True
-    return raw.strip().lower() not in {"0", "false", "no", "off"}
+        return False
+    return raw.strip().lower() in {"1", "true", "yes", "on"}

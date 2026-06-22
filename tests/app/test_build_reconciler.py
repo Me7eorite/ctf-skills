@@ -18,8 +18,10 @@ from core.paths import ProjectPaths
 from persistence.errors import PersistenceConnectionError
 from persistence.models import build_attempts as build_model
 from persistence.models import design_tasks as task_model
+from persistence.models import executions as exec_model
 from persistence.models import research as research_model
 from persistence.models.progress import ProgressEvent, ProgressSnapshot
+from persistence.repositories import ExecutionsRepository
 from persistence.session import SessionFactory
 from services.build_reconciler import (
     DEFAULT_POLL_INTERVAL_SECONDS,
@@ -69,6 +71,16 @@ def _clean(session_factory: SessionFactory) -> None:
     with session_factory() as session:
         session.execute(sa.delete(ProgressSnapshot))
         session.execute(sa.delete(ProgressEvent))
+        session.execute(sa.delete(exec_model.RevalidationEvent))
+        session.execute(
+            sa.update(build_model.BuildAttempt).values(
+                current_execution_id=None,
+                latest_execution_id=None,
+                successful_execution_id=None,
+            )
+        )
+        session.execute(sa.delete(exec_model.Execution))
+        session.execute(sa.delete(exec_model.BuildFeedbackSnapshot))
         session.execute(sa.delete(build_model.BuildAttempt))
         session.execute(sa.delete(task_model.DesignTask))
         session.execute(sa.delete(research_model.ResearchRun))
@@ -562,3 +574,30 @@ def test_persistent_disappearance_still_marks_lost_after_rescan(
     reconciler.tick_once_sync()
 
     assert _row(session_factory, attempt_id).status == "lost"
+
+
+def test_tick_reaps_expired_execution_lease(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    from datetime import timedelta
+
+    _task_id, attempt_id, _basename = _seed_attempt(session_factory)
+    # Schedule + claim an execution with an already-expired lease.
+    with session_factory() as session:
+        repo = ExecutionsRepository(session)
+        e1 = repo.schedule_execution(attempt_id, execution_kind="initial")
+        past = datetime.now(timezone.utc) - timedelta(seconds=400)
+        repo.claim_queued(attempt_id, worker_id="w", lease_ttl_seconds=300, now=past)
+        session.commit()
+        exec_id = e1.id
+
+    reconciler = _reconciler(tmp_path, session_factory)
+    reconciler.tick_once_sync()
+
+    with session_factory() as session:
+        row = session.get(exec_model.Execution, exec_id)
+        assert row.status == "lost"
+        container = session.get(build_model.BuildAttempt, attempt_id)
+        assert container.current_execution_id is None
+        assert container.status == "lost"

@@ -19,18 +19,18 @@
 
 ## 3. Container status & build_attempts dedup
 
-- [ ] 3.1 Derive and maintain `build_attempts.status` as the container aggregate from execution transitions (same transaction as terminal writes)
-- [ ] 3.2 Move authoritative per-run `worker`/`error` writes to the execution row; keep container result fields and maintain `build_attempts.error` only as a latest-execution compatibility aggregate
-- [ ] 3.3 Keep `one_active_build_per_task` (container active = aggregate status `queued|running`); ensure it tolerates the cutover window
-- [ ] 3.4 Reject terminal writes from executions that are no longer the container's current execution
+- [x] 3.1 Derive and maintain `build_attempts.status` as the container aggregate from execution transitions (same transaction as terminal writes)
+- [x] 3.2 Move authoritative per-run `worker`/`error` writes to the execution row; keep container result fields and maintain `build_attempts.error` only as a latest-execution compatibility aggregate
+- [x] 3.3 Keep `one_active_build_per_task` (container active = aggregate status `queued|running`); ensure it tolerates the cutover window
+- [x] 3.4 Reject terminal writes from executions that are no longer the container's current execution
 
 ## 4. Orchestration retry rewrite (Option A)
 
-- [ ] 4.1 Split `_prepare` in `build_orchestration_service.py`: fresh submit → build_attempt container + execution(initial, iter=1); retry/clean → resolve existing container, no `attempt_id = uuid4()`
-- [ ] 4.2 Update `_commit` to call `create_execution(kind, parent)` on the retry path instead of `create_attempt`; do not advance `next_build_attempt_no`
-- [ ] 4.3 Map `retry()` → execution(kind=`retry`), `clean_rebuild()` → execution(kind=`retry`, execution_mode=clean, same container), `revision` → execution(kind=`revision`, parent set)
-- [ ] 4.4 Stage the per-iteration shard as `{build_attempt_id}.iter-NNN.json` (not a reused basename, so progress/resume cannot bleed across iterations) using the existing filesystem prepare/commit compensation flow; publish to pending only after DB scheduling commits, materialize the immutable input copy at `current/input/shard.json`, and let the whole-directory archive move it to `attempts/iter-NNN/input/shard.json` at the next iteration
-- [ ] 4.5 Update `_validate_task_for_submit` to anchor eligibility on the container's latest execution
+- [x] 4.1 Split `_prepare` in `build_orchestration_service.py`: fresh submit → build_attempt container + execution(initial, iter=1); retry/clean → resolve existing container, no `attempt_id = uuid4()` (flag-gated by `execution_minting_enabled()`)
+- [x] 4.2 Update `_commit` to schedule an execution on the retry path instead of `create_attempt`; do not advance `next_build_attempt_no`
+- [~] 4.3 `retry()` → execution(kind=`retry`); `clean_rebuild()` → execution(kind=`retry`, execution_mode=`clean`, same container) done; `revision` (kind=`revision`, parent set) entry point deferred to §7 feedback flow
+- [x] 4.4 Stage the per-iteration shard as `{build_attempt_id}.iter-NNN.json` (not a reused basename, so progress/resume cannot bleed across iterations); publish to pending after DB scheduling commits via the existing compensation flow
+- [x] 4.5 Update `_validate_task_for_submit` to anchor eligibility on the container's latest execution (container aggregate status)
 - [ ] 4.6 Reject `revalidate` unless `current_execution_id` is null and `latest_execution_id` names a terminal execution
 
 ## 5. Reconciler as lease reaper
