@@ -198,9 +198,7 @@ def test_submit_batch_preserves_order_commits_and_publishes(
         assert payload["build_attempt_id"] == str(attempt_id)
         assert payload["design_task_id"] == str(task_id)
         assert "resume_from_shard_basename" not in payload
-        assert set(payload["challenges"][0]) == set(MATRIX_FIELDS["web"]) | {
-            "design"
-        }
+        assert set(payload["challenges"][0]) == set(MATRIX_FIELDS["web"]) | {"design"}
     assert service.paths.build_attempt_staging.is_dir()
 
 
@@ -412,3 +410,25 @@ def test_build_failed_submit_links_resume_and_stale_retry_is_rejected(
         {},
     )
     assert third_payload["resume_from_shard_basename"] == f"{second_id}.json"
+    assert third_payload["execution_mode"] == "resume"
+
+
+def test_clean_rebuild_is_confirmed_idempotent_and_omits_resume_source(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory)
+    service = _service(tmp_path, session_factory)
+    source_id = service.submit_single(task_id)
+    with transaction(factory=session_factory) as session:
+        BuildAttemptsRepository(session).update_to_terminal(source_id, status="failed", error="failed validation")
+        session.get(task_model.DesignTask, task_id).status = "build_failed"
+
+    with pytest.raises(BuildOrchestrationError, match="confirmation_required"):
+        service.clean_rebuild(source_id, idempotency_key="clean-key", confirmed=False)
+
+    clean_id = service.clean_rebuild(source_id, idempotency_key="clean-key", confirmed=True)
+    assert service.clean_rebuild(source_id, idempotency_key="clean-key", confirmed=True) == clean_id
+    payload = read_json(service.paths.shards / "pending" / f"{clean_id}.json", {})
+    assert payload["execution_mode"] == "clean"
+    assert "resume_from_shard_basename" not in payload

@@ -24,6 +24,10 @@ def test_build_attempt_actions_use_constrained_endpoints():
     assert 'id="ba-worker"' in source
     assert "重新校验" in source
     assert "重试构建" in source
+    assert "干净重建" in source
+    assert "/clean-rebuild`" in source
+    assert "crypto.randomUUID()" in source
+    assert "confirmed: true" in source
     assert '["failed", "lost", "succeeded"].includes(attempt.status)' in source
 
 

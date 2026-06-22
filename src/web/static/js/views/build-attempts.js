@@ -260,6 +260,35 @@ async function retryAttempt(attemptId) {
   }
 }
 
+async function cleanRebuildAttempt(attemptId) {
+  if (!attemptId) return;
+  const confirmed = window.confirm("干净重建不会复用上次输出或进度，确定继续？");
+  if (!confirmed) return;
+  // One UUID per user-visible button press. Only retries of this same request
+  // may reuse it; a later click must generate a new key.
+  const idempotencyKey = crypto.randomUUID();
+  state.flags.retrying = { ...(state.flags.retrying || {}), [attemptId]: true };
+  render(appState.data);
+  initIcons();
+  try {
+    const result = await postJson(`/api/build-attempts/${attemptId}/clean-rebuild`, {
+      confirmed: true,
+      idempotency_key: idempotencyKey,
+    });
+    showToast(`已排队干净重建 ${shortId(result.build_attempt_id)}`);
+    state.detailId = result.build_attempt_id;
+    state.detail = null;
+    state.list = null;
+    await ensureDetail(state.detailId);
+  } catch (err) {
+    showToast(err.message, true);
+  } finally {
+    state.flags.retrying = { ...(state.flags.retrying || {}), [attemptId]: false };
+    render(appState.data);
+    initIcons();
+  }
+}
+
 async function deleteAttempt(attemptId) {
   if (state.flags.deleting) return;
   state.flags.deleting = true;
@@ -457,6 +486,9 @@ function renderTable(rows) {
                   ${attempt.status === "failed" || attempt.status === "lost"
                     ? `<button class="btn btn-primary btn-xs ba-retry">重试构建</button>`
                     : ""}
+                  ${attempt.status === "failed" || attempt.status === "lost"
+                    ? `<button class="btn btn-secondary btn-xs ba-clean-rebuild">干净重建</button>`
+                    : ""}
                   <button class="btn btn-danger btn-xs ba-delete" title="删除">
                     <i data-lucide="trash-2"></i>
                   </button>
@@ -501,6 +533,9 @@ function renderDetail(root) {
           : ""}
         ${(attempt.status === "failed" || attempt.status === "lost") && buildProfileReady(attempt.category)
           ? `<button class="btn btn-primary btn-sm ba-retry" data-build-attempt-id="${escapeHtml(attempt.id)}">重试构建</button>`
+          : ""}
+        ${(attempt.status === "failed" || attempt.status === "lost") && buildProfileReady(attempt.category)
+          ? `<button class="btn btn-secondary btn-sm ba-clean-rebuild" data-build-attempt-id="${escapeHtml(attempt.id)}">干净重建</button>`
           : ""}
         ${["failed", "lost", "succeeded"].includes(attempt.status)
           ? `<button class="btn btn-danger btn-sm ba-delete" data-build-attempt-id="${escapeHtml(attempt.id)}">
@@ -809,6 +844,10 @@ export function bind() {
     }
     if (event.target.closest(".ba-retry") && attemptId) {
       retryAttempt(attemptId);
+      return;
+    }
+    if (event.target.closest(".ba-clean-rebuild") && attemptId) {
+      cleanRebuildAttempt(attemptId);
       return;
     }
     if (event.target.closest(".ba-revalidate") && attemptId) {

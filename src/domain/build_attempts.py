@@ -29,6 +29,7 @@ class BuildAttempt:
     resulting_challenge_dir: str | None
     artifact_status: str
     error: str | None
+    idempotency_key: str | None
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None

@@ -41,9 +41,7 @@ class _Paths:
 
 def _copy_real_prompt_into(target_root: Path) -> Path:
     """Copy the in-tree prompt template into the temp project."""
-    real_prompt = (
-        Path(__file__).resolve().parents[2] / "prompts" / "shard_prompt.md"
-    )
+    real_prompt = Path(__file__).resolve().parents[2] / "prompts" / "shard_prompt.md"
     target_prompt = target_root / "prompts" / "shard_prompt.md"
     target_prompt.parent.mkdir(parents=True, exist_ok=True)
     target_prompt.write_text(real_prompt.read_text(encoding="utf-8"), encoding="utf-8")
@@ -116,12 +114,15 @@ class RenderPromptTests(unittest.TestCase):
                 worker="dry-01",
                 original_shard_name="web-0001-0005.json",
                 resume_plan=plan,
+                resume_output_targets={"web-0001": "output/challenges/web/web-0001-old-slug"},
             )
 
             self.assertIn("0. Resume Check", rendered)
             self.assertIn("web-0001", rendered)
             self.assertIn("skip_stages=design, implement", rendered)
             self.assertIn("next_stage=build", rendered)
+            self.assertIn("edit_exact_path=output/challenges/web/web-0001-old-slug", rendered)
+            self.assertIn("do not create or rename another directory", rendered)
 
     def test_first_run_resume_plan_renders_fallback(self):
         with TemporaryDirectory() as tmp:
@@ -222,10 +223,7 @@ class RenderPromptTests(unittest.TestCase):
             )
             designed_shard = tmp_path / "designed.json"
             designed_shard.write_text(
-                (
-                    '{"challenges": [{"id": "web-0001", "category": "web", '
-                    '"design": {"flag_location": "env"}}]}'
-                ),
+                ('{"challenges": [{"id": "web-0001", "category": "web", "design": {"flag_location": "env"}}]}'),
                 encoding="utf-8",
             )
 

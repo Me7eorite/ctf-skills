@@ -113,10 +113,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
         if status is not None and status not in BuildAttemptStatus:
             raise HTTPException(
                 status_code=HTTPStatus.BAD_REQUEST,
-                detail=(
-                    f"unknown status {status!r}; allowed: "
-                    f"{list(BuildAttemptStatus)}"
-                ),
+                detail=(f"unknown status {status!r}; allowed: {list(BuildAttemptStatus)}"),
             )
         if category is not None and category not in SUPPORTED_CATEGORIES:
             raise HTTPException(
@@ -170,9 +167,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
                 )
             siblings = repo.list_for_design_task(attempt.design_task_id)
             category = session.scalar(
-                sa.select(task_model.DesignTask.category).where(
-                    task_model.DesignTask.id == attempt.design_task_id
-                )
+                sa.select(task_model.DesignTask.category).where(task_model.DesignTask.id == attempt.design_task_id)
             )
             events = session.scalars(
                 sa.select(ProgressEvent)
@@ -192,9 +187,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
         )
         if isinstance(timeout_manifest, dict):
             if isinstance(timeout_manifest.get("effective_timeout_seconds"), int):
-                body["effective_timeout_seconds"] = timeout_manifest[
-                    "effective_timeout_seconds"
-                ]
+                body["effective_timeout_seconds"] = timeout_manifest["effective_timeout_seconds"]
                 body["timeout_source"] = timeout_manifest.get("timeout_source")
         body["sibling_attempts"] = [_attempt_dict(row) for row in siblings]
         body["progress_events"] = event_payloads
@@ -218,10 +211,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
         if category not in SUPPORTED_CATEGORIES:
             raise HTTPException(
                 status_code=HTTPStatus.BAD_REQUEST,
-                detail=(
-                    f"unknown category {category!r}; "
-                    f"allowed: {sorted(SUPPORTED_CATEGORIES)}"
-                ),
+                detail=(f"unknown category {category!r}; allowed: {sorted(SUPPORTED_CATEGORIES)}"),
             )
         _require_build_profiles(app, [category])
 
@@ -303,9 +293,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
             if status != "queued" or not matches_pending:
                 raise HTTPException(
                     status_code=HTTPStatus.CONFLICT,
-                    detail=(
-                        f"build attempt {attempt_id} is not an eligible queued task"
-                    ),
+                    detail=(f"build attempt {attempt_id} is not an eligible queued task"),
                 )
             categories.append(category)
 
@@ -345,10 +333,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
         if category is not None and category not in SUPPORTED_CATEGORIES:
             raise HTTPException(
                 status_code=HTTPStatus.BAD_REQUEST,
-                detail=(
-                    f"unknown category {category!r}; "
-                    f"allowed: {sorted(SUPPORTED_CATEGORIES)}"
-                ),
+                detail=(f"unknown category {category!r}; allowed: {sorted(SUPPORTED_CATEGORIES)}"),
             )
         request_uuid = _parse_optional_uuid(
             payload.get("generation_request_id"),
@@ -393,9 +378,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
         attempt_uuid = _parse_uuid(attempt_id, "build attempt id")
         _require_attempt_build_profile(app, attempt_uuid)
         try:
-            new_id = BuildOrchestrationService(paths=_project_paths(app)).retry(
-                attempt_uuid
-            )
+            new_id = BuildOrchestrationService(paths=_project_paths(app)).retry(attempt_uuid)
         except BuildOrchestrationError as exc:
             raise HTTPException(
                 status_code=HTTPStatus.CONFLICT,
@@ -405,6 +388,41 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
             raise HTTPException(
                 status_code=HTTPStatus.CONFLICT,
                 detail="a build is already active for this design task",
+            ) from exc
+        return JSONResponse(
+            {"build_attempt_id": str(new_id)},
+            status_code=HTTPStatus.CREATED,
+        )
+
+    @app.post("/api/build-attempts/{attempt_id}/clean-rebuild")
+    async def clean_rebuild_attempt(attempt_id: str, request: Request) -> JSONResponse:
+        attempt_uuid = _parse_uuid(attempt_id, "build attempt id")
+        try:
+            payload = await request.json()
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail="request body must be a JSON object",
+            ) from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail="request body must be a JSON object",
+            )
+        _require_attempt_build_profile(app, attempt_uuid)
+        try:
+            new_id = BuildOrchestrationService(paths=_project_paths(app)).clean_rebuild(
+                attempt_uuid,
+                idempotency_key=payload.get("idempotency_key", ""),
+                confirmed=payload.get("confirmed") is True,
+            )
+        except BuildOrchestrationError as exc:
+            detail: Any = str(exc)
+            if exc.code is not None:
+                detail = {"code": exc.code, "message": str(exc)}
+            raise HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail=detail,
             ) from exc
         return JSONResponse(
             {"build_attempt_id": str(new_id)},
@@ -430,6 +448,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
         paths = _project_paths(app)
         from persistence.session import SessionFactory as _SF
         from persistence.session import transaction as _txn
+
         with _txn(factory=_SF()) as session:
             row = session.get(build_model.BuildAttempt, attempt_uuid)
             if row is None:
@@ -453,9 +472,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
             if located is None:
                 # running/ 下文件名带 worker 后缀
                 expected = Path(shard_basename)
-                for candidate in (paths.shards / "running").glob(
-                    f"{expected.stem}.*{expected.suffix}"
-                ):
+                for candidate in (paths.shards / "running").glob(f"{expected.stem}.*{expected.suffix}"):
                     if candidate.name.endswith(".claim.json"):
                         continue
                     located = candidate
@@ -571,9 +588,7 @@ def _require_task_build_profiles(app: FastAPI, task_ids: list[UUID]) -> None:
 
     with transaction() as session:
         categories = session.scalars(
-            sa.select(task_model.DesignTask.category).where(
-                task_model.DesignTask.id.in_(task_ids)
-            )
+            sa.select(task_model.DesignTask.category).where(task_model.DesignTask.id.in_(task_ids))
         ).all()
     _require_build_profiles(app, categories)
 
@@ -605,10 +620,7 @@ def _require_build_profiles(app: FastAPI, categories) -> None:
     commands = "; ".join(item["create_command"] for item in unavailable)
     raise HTTPException(
         status_code=HTTPStatus.SERVICE_UNAVAILABLE,
-        detail=(
-            f"构建环境未就绪：缺少 Hermes Profile {profiles}；"
-            f"请先运行：{commands}"
-        ),
+        detail=(f"构建环境未就绪：缺少 Hermes Profile {profiles}；请先运行：{commands}"),
     )
 
 
@@ -675,9 +687,7 @@ def _eligible_queued_attempts(
     if category is not None:
         query = query.where(task_model.DesignTask.category == category)
     if generation_request_id is not None:
-        query = query.where(
-            task_model.DesignTask.generation_request_id == generation_request_id
-        )
+        query = query.where(task_model.DesignTask.generation_request_id == generation_request_id)
 
     selected: list[tuple[UUID, str]] = []
     with transaction() as session:
@@ -755,11 +765,7 @@ def _pending_payload_matches(
         and payload_design_task_id == design_task_id
         and isinstance(challenges, list)
         and challenges
-        and all(
-            isinstance(challenge, dict)
-            and challenge.get("category") == category
-            for challenge in challenges
-        )
+        and all(isinstance(challenge, dict) and challenge.get("category") == category for challenge in challenges)
     )
 
 
@@ -768,9 +774,7 @@ def _start_constrained_worker(
     attempt_id: UUID,
     category: str,
 ) -> JSONResponse:
-    effective_timeout, timeout_source = _effective_timeout_for_attempt(
-        _project_paths(app), attempt_id
-    )
+    effective_timeout, timeout_source = _effective_timeout_for_attempt(_project_paths(app), attempt_id)
     tasks = app.state.dashboard_tasks
     ok, message = tasks.start_worker(
         category=category,
@@ -855,8 +859,7 @@ def _list_item_dict(
 ) -> dict[str, Any]:
     row = _attempt_dict(
         item,
-        failure_summary=(summaries or {}).get(item.shard_basename)
-        or _derive_failure_summary([], item.error),
+        failure_summary=(summaries or {}).get(item.shard_basename) or _derive_failure_summary([], item.error),
     )
     row.update(
         {
@@ -885,11 +888,7 @@ def _failure_summaries(
     grouped: dict[str, list[dict[str, Any]]] = {}
     for event in events:
         grouped.setdefault(event.shard, []).append(_progress_event_dict(event))
-    return {
-        shard: summary
-        for shard, rows in grouped.items()
-        if (summary := _derive_failure_summary(rows, None))
-    }
+    return {shard: summary for shard, rows in grouped.items() if (summary := _derive_failure_summary(rows, None))}
 
 
 def _derive_failure_summary(
@@ -935,14 +934,12 @@ _FAILURE_REASON_TRANSLATIONS: dict[str, str] = {
     "no_shell": "校验所需的 shell 不可用（默认 bash）",
     "skipped_resume": "断点恢复跳过本次校验",
     # 基础设施类（来自 hermes/workspace + runner 的早期失败）
-    "no compiled ELF artifact found in attachments/ or dist/":
-        "未找到编译后的 ELF 产物（请放到 attachments/ 下）",
+    "no compiled ELF artifact found in attachments/ or dist/": "未找到编译后的 ELF 产物（请放到 attachments/ 下）",
     "shard execution failed": "Hermes 执行阶段失败",
     "Workspace preflight failed": "执行 workspace 预检失败",
     "Workspace materialization failed": "执行 workspace 物化失败",
     "Workspace shim materialization failed": "进度蜘蛛生成失败",
-    "attributed shard disappeared from all queue states":
-        "shard 文件从队列中消失（可能是 reconciler 误判，参考 /restore 接口）",
+    "attributed shard disappeared from all queue states": "shard 文件从队列中消失（可能是 reconciler 误判，参考 /restore 接口）",
     "artifact directory missing": "构建产物目录缺失（worker 标记 done 但 work/challenges 下找不到）",
 }
 
@@ -955,7 +952,7 @@ def _translate_failure_reason(reason: str) -> str:
     # 如果是 "validator: status=X" 这种带格式的，提取 status 再翻译
     if stripped.startswith("validator: status="):
         # validator: status=nonzero_exit elapsed=4.44s -> nonzero_exit
-        rest = stripped[len("validator: status="):]
+        rest = stripped[len("validator: status=") :]
         status_code = rest.split(" ", 1)[0]
         translated = _FAILURE_REASON_TRANSLATIONS.get(status_code)
         if translated is not None:

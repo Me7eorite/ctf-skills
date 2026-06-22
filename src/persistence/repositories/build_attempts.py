@@ -30,6 +30,7 @@ class BuildAttemptsRepository:
         shard_basename: str,
         *,
         attempt_id: UUID | None = None,
+        idempotency_key: str | None = None,
     ) -> dto.BuildAttempt:
         if not shard_basename:
             raise BuildAttemptPersistenceError("shard_basename is required")
@@ -53,11 +54,22 @@ class BuildAttemptsRepository:
             attempt_no=attempt_no,
             status="queued",
             shard_basename=shard_basename,
+            idempotency_key=idempotency_key,
         )
         self.session.add(row)
         self.session.flush()
         self.session.refresh(row)
         return _attempt(row)
+
+    def find_by_idempotency_key(self, key: str) -> dto.BuildAttempt | None:
+        if not key:
+            return None
+        row = self.session.scalars(
+            sa.select(model.BuildAttempt).where(
+                model.BuildAttempt.idempotency_key == key
+            )
+        ).one_or_none()
+        return _attempt(row) if row else None
 
     def get(self, attempt_id: UUID) -> dto.BuildAttempt | None:
         row = self.session.get(model.BuildAttempt, attempt_id)
@@ -300,6 +312,7 @@ def _attempt(row: model.BuildAttempt) -> dto.BuildAttempt:
         resulting_challenge_dir=row.resulting_challenge_dir,
         artifact_status=row.artifact_status,
         error=row.error,
+        idempotency_key=row.idempotency_key,
         created_at=row.created_at,
         started_at=row.started_at,
         finished_at=row.finished_at,

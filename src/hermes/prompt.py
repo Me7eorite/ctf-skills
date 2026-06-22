@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 from core.jsonio import read_json
@@ -11,9 +12,7 @@ from core.paths import ProjectPaths
 from domain.research import GenerationRequest
 from domain.resume import ShardResumePlan
 
-RESEARCH_PROMPT_TEMPLATE_PATH = (
-    Path(__file__).resolve().parents[2] / "prompts" / "research_prompt.md"
-)
+RESEARCH_PROMPT_TEMPLATE_PATH = Path(__file__).resolve().parents[2] / "prompts" / "research_prompt.md"
 
 
 def render_validation_repair_prompt(
@@ -81,7 +80,10 @@ Update documentation and metadata when the repaired implementation changes them.
 """
 
 
-def _render_resume_plan_section(resume_plan: ShardResumePlan | None) -> str:
+def _render_resume_plan_section(
+    resume_plan: ShardResumePlan | None,
+    resume_output_targets: Mapping[str, str] | None = None,
+) -> str:
     # 中文注释：把断点续跑计划整理成提示词片段，帮助 Agent 判断每道题的下一步。
     if resume_plan is None or not resume_plan.challenges:
         return (
@@ -89,11 +91,11 @@ def _render_resume_plan_section(resume_plan: ShardResumePlan | None) -> str:
             "first-time run and start each one at stage `design`."
         )
     section_lines: list[str] = []
+    targets = resume_output_targets or {}
     for challenge in resume_plan.challenges:
         if challenge.lookup_status == "missing_challenge":
             section_lines.append(
-                f"- {challenge.challenge_id}: directory not found; "
-                "start at `design` and create the challenge."
+                f"- {challenge.challenge_id}: directory not found; start at `design` and create the challenge."
             )
             continue
         if challenge.lookup_status == "ambiguous_challenge":
@@ -102,15 +104,17 @@ def _render_resume_plan_section(resume_plan: ShardResumePlan | None) -> str:
                 "the runner will report validate/failed. Skip authoring."
             )
             continue
-        skipped_stage_text = (
-            ", ".join(challenge.skipped_stages)
-            if challenge.skipped_stages
-            else "(none)"
-        )
+        skipped_stage_text = ", ".join(challenge.skipped_stages) if challenge.skipped_stages else "(none)"
         next_stage_name = challenge.first_pending_stage or "(all stages already complete)"
+        target = targets.get(challenge.challenge_id)
+        target_instruction = (
+            f"; edit_exact_path={target}; do not create or rename another directory for {challenge.challenge_id}"
+            if target
+            else ""
+        )
         section_lines.append(
             f"- {challenge.challenge_id}: skip_stages={skipped_stage_text}; "
-            f"next_stage={next_stage_name}"
+            f"next_stage={next_stage_name}{target_instruction}"
         )
     return "\n".join(section_lines)
 
@@ -125,6 +129,7 @@ def render_prompt(
     workspace_relative: bool = False,
     original_shard_name: str | None = None,
     resume_plan: ShardResumePlan | None = None,
+    resume_output_targets: Mapping[str, str] | None = None,
 ) -> str:
     # 中文注释：读取分片执行模板，并替换路径、worker、进度命令等运行上下文。
     prompt_text = paths.prompt_template.read_text(encoding="utf-8")
@@ -158,7 +163,7 @@ def render_prompt(
         **runtime_paths,
         "{worker}": worker,
         "{shard_name}": progress_shard_name,
-        "{resume_plan}": _render_resume_plan_section(resume_plan),
+        "{resume_plan}": _render_resume_plan_section(resume_plan, resume_output_targets),
         "{design_context_instruction}": design_context_instruction,
     }
     for placeholder, rendered_value in replacement_map.items():
@@ -237,12 +242,8 @@ def render_research_prompt(generation_request: GenerationRequest) -> str:
         "{category}": category_code,
         "{topic}": generation_request.topic,
         "{target_count}": str(generation_request.target_count),
-        "{difficulty_distribution}": _render_difficulty_distribution(
-            generation_request.difficulty_distribution
-        ),
-        "{runtime_constraints}": _render_runtime_constraints(
-            generation_request.runtime_constraints
-        ),
+        "{difficulty_distribution}": _render_difficulty_distribution(generation_request.difficulty_distribution),
+        "{runtime_constraints}": _render_runtime_constraints(generation_request.runtime_constraints),
         "{seed_urls}": _render_seed_urls(generation_request.seed_urls),
         "{worked_example}": _render_worked_example(category_code),
     }

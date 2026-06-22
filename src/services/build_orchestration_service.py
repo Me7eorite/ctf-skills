@@ -84,6 +84,10 @@ MATRIX_FIELDS: dict[str, tuple[str, ...]] = {
 class BuildOrchestrationError(ValueError):
     """Raised when a task cannot be submitted under the build contract."""
 
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+
 
 @dataclass(frozen=True)
 class _PreparedSubmission:
@@ -93,6 +97,8 @@ class _PreparedSubmission:
     shard_basename: str
     resume_from_shard_basename: str | None
     payload: dict[str, Any]
+    execution_mode: str
+    idempotency_key: str | None
 
 
 class BuildOrchestrationService:
@@ -114,7 +120,7 @@ class BuildOrchestrationService:
             raise BuildOrchestrationError("at least one design task is required")
         if len(set(ids)) != len(ids):
             raise BuildOrchestrationError("duplicate design task ids are not allowed")
-        return self._submit(ids, retry_sources={})
+        return self._submit(ids, retry_sources={}, execution_mode="resume")
 
     def submit_single(self, design_task_id: UUID) -> UUID:
         """Submit one task through the exact batch path."""
@@ -126,9 +132,7 @@ class BuildOrchestrationService:
             build_repo = BuildAttemptsRepository(session)
             source = build_repo.get(build_attempt_id)
             if source is None:
-                raise BuildOrchestrationError(
-                    f"build attempt {build_attempt_id} does not exist"
-                )
+                raise BuildOrchestrationError(f"build attempt {build_attempt_id} does not exist")
             latest = build_repo.latest_for_design_task(source.design_task_id)
             task = DesignTaskRepository(session).get_design_task(source.design_task_id)
             if latest is None or latest.id != source.id:
@@ -136,13 +140,65 @@ class BuildOrchestrationService:
             if source.status not in {"failed", "lost"}:
                 raise BuildOrchestrationError("only failed or lost attempts can be retried")
             if task is None or task.status != "build_failed":
-                raise BuildOrchestrationError(
-                    "retry requires a parent task in build_failed status"
-                )
+                raise BuildOrchestrationError("retry requires a parent task in build_failed status")
         return self._submit(
             [source.design_task_id],
             retry_sources={source.design_task_id: source.id},
+            execution_mode="resume",
         )[0]
+
+    def clean_rebuild(
+        self,
+        build_attempt_id: UUID,
+        *,
+        idempotency_key: str,
+        confirmed: bool,
+    ) -> UUID:
+        """Clean rebuild — same eligibility as retry, separate execution mode.
+
+        Same-key replays resolve to the existing row (UNIQUE constraint on
+        ``build_attempts.idempotency_key`` enforces single-row collapse).
+        Different-key submissions are NOT promised to collapse in this
+        proposal; that protection waits for proposal #3's lease/fencing.
+        """
+        if not idempotency_key:
+            raise BuildOrchestrationError("idempotency_key is required", code="idempotency_key_required")
+        if not confirmed:
+            raise BuildOrchestrationError("confirmation_required", code="confirmation_required")
+        with self._session() as session:
+            build_repo = BuildAttemptsRepository(session)
+            replay = build_repo.find_by_idempotency_key(idempotency_key)
+            if replay is not None:
+                return replay.id
+            source = build_repo.get(build_attempt_id)
+            if source is None:
+                raise BuildOrchestrationError(f"build attempt {build_attempt_id} does not exist")
+            latest = build_repo.latest_for_design_task(source.design_task_id)
+            task = DesignTaskRepository(session).get_design_task(source.design_task_id)
+            if latest is None or latest.id != source.id:
+                raise BuildOrchestrationError(
+                    "only the latest build attempt can be clean rebuilt",
+                    code="stale_source_attempt",
+                )
+            if source.status not in {"failed", "lost"}:
+                raise BuildOrchestrationError("only failed or lost attempts can be clean rebuilt")
+            if task is None or task.status != "build_failed":
+                raise BuildOrchestrationError("clean rebuild requires a parent task in build_failed status")
+        try:
+            return self._submit(
+                [source.design_task_id],
+                retry_sources={source.design_task_id: source.id},
+                execution_mode="clean",
+                idempotency_key=idempotency_key,
+            )[0]
+        except sa.exc.IntegrityError:
+            # Concurrent same-key inserts: re-read the surviving row.
+            with self._session() as session:
+                build_repo = BuildAttemptsRepository(session)
+                existing = build_repo.find_by_idempotency_key(idempotency_key)
+            if existing is None:
+                raise
+            return existing.id
 
     def render_shard_payload(
         self,
@@ -151,15 +207,14 @@ class BuildOrchestrationService:
         *,
         build_attempt_id: UUID,
         resume_from_shard_basename: str | None = None,
+        execution_mode: str = "resume",
     ) -> dict[str, Any]:
         """Render one attributed shard without filesystem or database effects."""
         challenge = _design_challenge(latest_design.payload)
         matrix_values = _matrix_values(design_task, challenge)
         fields = MATRIX_FIELDS.get(design_task.category)
         if fields is None:
-            raise BuildOrchestrationError(
-                f"unsupported challenge category {design_task.category!r}"
-            )
+            raise BuildOrchestrationError(f"unsupported challenge category {design_task.category!r}")
         rendered_challenge = {field: matrix_values[field] for field in fields}
         rendered_challenge["design"] = dict(latest_design.payload)
         payload: dict[str, Any] = {
@@ -167,8 +222,14 @@ class BuildOrchestrationService:
             "design_task_id": str(design_task.id),
             "challenges": [rendered_challenge],
         }
-        if resume_from_shard_basename is not None:
-            payload["resume_from_shard_basename"] = resume_from_shard_basename
+        if execution_mode == "clean":
+            payload["execution_mode"] = "clean"
+            if resume_from_shard_basename is not None:
+                raise BuildOrchestrationError("explicit clean rebuild forbids resume_from_shard_basename")
+        else:
+            if resume_from_shard_basename is not None:
+                payload["execution_mode"] = "resume"
+                payload["resume_from_shard_basename"] = resume_from_shard_basename
         return payload
 
     def recover_staging(self, *, now: float | None = None) -> set[UUID]:
@@ -219,8 +280,15 @@ class BuildOrchestrationService:
         design_task_ids: list[UUID],
         *,
         retry_sources: Mapping[UUID, UUID],
+        execution_mode: str = "resume",
+        idempotency_key: str | None = None,
     ) -> list[UUID]:
-        prepared = self._prepare(design_task_ids, retry_sources=retry_sources)
+        prepared = self._prepare(
+            design_task_ids,
+            retry_sources=retry_sources,
+            execution_mode=execution_mode,
+            idempotency_key=idempotency_key,
+        )
         self.paths.initialize()
         staged_paths: list[Path] = []
         try:
@@ -249,7 +317,11 @@ class BuildOrchestrationService:
         design_task_ids: list[UUID],
         *,
         retry_sources: Mapping[UUID, UUID],
+        execution_mode: str = "resume",
+        idempotency_key: str | None = None,
     ) -> list[_PreparedSubmission]:
+        if execution_mode not in {"resume", "clean"}:
+            raise BuildOrchestrationError(f"unsupported execution_mode {execution_mode!r}")
         prepared: list[_PreparedSubmission] = []
         with self._session() as session:
             task_repo = DesignTaskRepository(session)
@@ -264,18 +336,20 @@ class BuildOrchestrationService:
                     build_repo,
                     expected_source_id=retry_sources.get(task_id),
                 )
+                # Clean mode anchors eligibility on the source attempt id but
+                # SHALL NOT emit resume_from_shard_basename in the shard payload.
+                payload_resume_from = None if execution_mode == "clean" else resume_from
                 design = design_repo.latest_design(task_id)
                 if design is None:
-                    raise BuildOrchestrationError(
-                        f"design task {task_id} has no validated draft design"
-                    )
+                    raise BuildOrchestrationError(f"design task {task_id} has no validated draft design")
                 attempt_id = uuid4()
                 basename = f"{attempt_id}.json"
                 payload = self.render_shard_payload(
                     task,
                     design,
                     build_attempt_id=attempt_id,
-                    resume_from_shard_basename=resume_from,
+                    resume_from_shard_basename=payload_resume_from,
+                    execution_mode=execution_mode,
                 )
                 prepared.append(
                     _PreparedSubmission(
@@ -283,8 +357,10 @@ class BuildOrchestrationService:
                         task=task,
                         design=design,
                         shard_basename=basename,
-                        resume_from_shard_basename=resume_from,
+                        resume_from_shard_basename=payload_resume_from,
                         payload=payload,
+                        execution_mode=execution_mode,
+                        idempotency_key=idempotency_key,
                     )
                 )
         return prepared
@@ -301,23 +377,17 @@ class BuildOrchestrationService:
             # Stable lock order prevents two overlapping batches deadlocking.
             for task_id in sorted((item.task.id for item in prepared), key=str):
                 row = session.scalars(
-                    sa.select(task_model.DesignTask)
-                    .where(task_model.DesignTask.id == task_id)
-                    .with_for_update()
+                    sa.select(task_model.DesignTask).where(task_model.DesignTask.id == task_id).with_for_update()
                 ).one_or_none()
                 if row is None:
-                    raise BuildOrchestrationError(
-                        f"design task {task_id} disappeared before commit"
-                    )
+                    raise BuildOrchestrationError(f"design task {task_id} disappeared before commit")
                 locked_tasks[task_id] = row
 
             for submission in prepared:
                 row = locked_tasks[submission.task.id]
                 current = DesignTaskRepository(session).get_design_task(row.id)
                 if current is None:
-                    raise BuildOrchestrationError(
-                        f"design task {row.id} disappeared before commit"
-                    )
+                    raise BuildOrchestrationError(f"design task {row.id} disappeared before commit")
                 self._validate_task_for_submit(
                     current,
                     build_repo,
@@ -327,6 +397,7 @@ class BuildOrchestrationService:
                     row.id,
                     submission.shard_basename,
                     attempt_id=submission.attempt_id,
+                    idempotency_key=submission.idempotency_key,
                 )
                 row.status = "building"
                 row.updated_at = datetime.now(timezone.utc)
@@ -339,18 +410,14 @@ class BuildOrchestrationService:
         expected_source_id: UUID | None,
     ) -> str | None:
         if task.status not in {"designed", "build_failed"}:
-            raise BuildOrchestrationError(
-                f"design task {task.id} is {task.status}; expected designed or build_failed"
-            )
+            raise BuildOrchestrationError(f"design task {task.id} is {task.status}; expected designed or build_failed")
         latest = build_repo.latest_for_design_task(task.id)
         if task.status == "designed":
             if expected_source_id is not None:
                 raise BuildOrchestrationError("retry requires build_failed parent status")
             return None
         if latest is None or latest.status not in {"failed", "lost"}:
-            raise BuildOrchestrationError(
-                "build_failed task requires a latest failed or lost attempt"
-            )
+            raise BuildOrchestrationError("build_failed task requires a latest failed or lost attempt")
         if expected_source_id is not None and latest.id != expected_source_id:
             raise BuildOrchestrationError("only the latest build attempt can be retried")
         return latest.shard_basename
@@ -371,15 +438,10 @@ class BuildOrchestrationService:
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.exists():
             payload = read_json(destination, None)
-            if (
-                isinstance(payload, Mapping)
-                and str(payload.get("build_attempt_id")) == staged.stem
-            ):
+            if isinstance(payload, Mapping) and str(payload.get("build_attempt_id")) == staged.stem:
                 staged.unlink(missing_ok=True)
                 return
-            raise FileExistsError(
-                f"pending shard {destination.name} already exists for another attempt"
-            )
+            raise FileExistsError(f"pending shard {destination.name} already exists for another attempt")
         staged.replace(destination)
 
     def _remove_old_orphan(self, staged: Path, now: float) -> None:

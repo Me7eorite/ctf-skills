@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -112,9 +112,7 @@ class _BestEffortProgressStore:
         try:
             return self._store.record(**kwargs)
         except Exception as exc:
-            if not self._suppress_exceptions or not isinstance(
-                exc, self._suppress_exceptions
-            ):
+            if not self._suppress_exceptions or not isinstance(exc, self._suppress_exceptions):
                 raise
             _LOGGER.warning("progress write skipped: %s", exc)
             return {
@@ -134,9 +132,7 @@ class _BestEffortProgressStore:
         try:
             return self._store.record_batch(events)
         except Exception as exc:
-            if not self._suppress_exceptions or not isinstance(
-                exc, self._suppress_exceptions
-            ):
+            if not self._suppress_exceptions or not isinstance(exc, self._suppress_exceptions):
                 raise
             _LOGGER.warning("progress batch write skipped: %s", exc)
             return []
@@ -206,6 +202,7 @@ class HermesRunner:
         workspace_relative: bool = False,
         original_shard_name: str | None = None,
         resume_plan: ShardResumePlan | None = None,
+        resume_output_targets: Mapping[str, str] | None = None,
     ) -> str:
         """渲染送给 Hermes 的完整 prompt（含断点恢复计划）。"""
         return render_prompt(
@@ -217,6 +214,7 @@ class HermesRunner:
             workspace_relative=workspace_relative,
             original_shard_name=original_shard_name,
             resume_plan=resume_plan,
+            resume_output_targets=resume_output_targets,
         )
 
     def run(
@@ -432,9 +430,7 @@ class HermesRunner:
         )
 
         # 步骤 4: 写入断点恢复携带的阶段事件
-        plan_by_id: dict[str, ChallengeResumePlan] = {
-            cp.challenge_id: cp for cp in plan.challenges
-        }
+        plan_by_id: dict[str, ChallengeResumePlan] = {cp.challenge_id: cp for cp in plan.challenges}
         carry_forward_events: list[ProgressEventInput] = []
         for cp in plan.challenges:
             for stage in cp.skipped_stages:
@@ -453,9 +449,7 @@ class HermesRunner:
 
         # 步骤 5: 全跳捷径 —— 所有题目都已完成，不需要调 Hermes
         if plan.all_challenges_fully_skipped:
-            return self._shortcircuit_all_skipped(
-                shard, original_shard_name, worker, report, challenge_ids
-            )
+            return self._shortcircuit_all_skipped(shard, original_shard_name, worker, report, challenge_ids)
 
         # 步骤 6: 写入每个题目的第一个待处理阶段 pending 事件
         for cp in plan.challenges:
@@ -565,9 +559,7 @@ class HermesRunner:
             if resolved_mode == "clean":
                 resume_targets: dict[str, str] = {}
             else:
-                resume_targets = materialize_resume_outputs(
-                    self.paths, workspace, payload
-                )
+                resume_targets = materialize_resume_outputs(self.paths, workspace, payload)
             if resume_targets:
                 manifest = read_json(workspace.manifest, {}) or {}
                 if not isinstance(manifest, dict):
@@ -638,6 +630,7 @@ class HermesRunner:
             workspace_relative=True,
             original_shard_name=original_shard_name,
             resume_plan=plan,
+            resume_output_targets=resume_targets,
         )
         tailer = WorkspaceProgressTailer(workspace, self._progress.record)
         tailer.start()
@@ -697,9 +690,7 @@ class HermesRunner:
         # Hermes 返回非零 → 检查是否为超时 + 超时恢复通过
         if returncode != 0:
             timed_out = returncode == HERMES_TIMEOUT_RETURNCODE
-            if not timed_out or not self._timeout_recovery_complete(
-                original_shard_name, challenge_ids
-            ):
+            if not timed_out or not self._timeout_recovery_complete(original_shard_name, challenge_ids):
                 # 非超时错误，或超时恢复失败 → 直接标记失败
                 self._mark_shard_failed(
                     shard,
@@ -722,9 +713,7 @@ class HermesRunner:
         ensure_report(report, shard, worker, "completed_by_runner", returncode)
 
         # 步骤 9: 执行强制校验
-        per_results = self._run_validation(
-            original_shard_name, worker, challenge_ids, plan_by_id
-        )
+        per_results = self._run_validation(original_shard_name, worker, challenge_ids, plan_by_id)
         merge_validation_into_report(report, per_results)
 
         # Host validation is authoritative, but a generated exploit frequently needs
@@ -732,9 +721,7 @@ class HermesRunner:
         # was unavailable during the initial authoring pass. Feed deterministic failure
         # diagnostics back to Hermes and revalidate a bounded number of times.
         for repair_attempt in range(1, self.validation_repair_attempts + 1):
-            if not any(
-                result.get("solve_status") == "failed" for result in per_results
-            ):
+            if not any(result.get("solve_status") == "failed" for result in per_results):
                 break
             self._progress.record(
                 shard=original_shard_name,
@@ -777,8 +764,7 @@ class HermesRunner:
             post_signature = _output_signature(workspace.output)
             if pre_signature == post_signature:
                 _LOGGER.warning(
-                    "validation repair attempt %s made no changes under output/; "
-                    "aborting further repair attempts",
+                    "validation repair attempt %s made no changes under output/; aborting further repair attempts",
                     repair_attempt,
                 )
                 self._progress.record(
@@ -787,8 +773,7 @@ class HermesRunner:
                     stage="validate",
                     status="running",
                     message=(
-                        f"validation repair attempt {repair_attempt}: "
-                        "no changes detected, aborting further attempts"
+                        f"validation repair attempt {repair_attempt}: no changes detected, aborting further attempts"
                     ),
                 )
                 break
@@ -812,20 +797,14 @@ class HermesRunner:
                     repair_attempt,
                 )
                 break
-            per_results = self._run_validation(
-                original_shard_name, worker, challenge_ids, plan_by_id
-            )
+            per_results = self._run_validation(original_shard_name, worker, challenge_ids, plan_by_id)
             merge_validation_into_report(report, per_results)
 
         # 步骤 10: 根据校验结果判定最终状态
-        any_failed = any(
-            result.get("solve_status") == "failed" for result in per_results
-        )
+        any_failed = any(result.get("solve_status") == "failed" for result in per_results)
         if any_failed:
             # 有题目校验失败 → 标记分片为 failed
-            self._record_per_challenge_complete(
-                original_shard_name, worker, per_results
-            )
+            self._record_per_challenge_complete(original_shard_name, worker, per_results)
             self._progress.record(
                 shard=original_shard_name,
                 worker=worker,
@@ -838,9 +817,7 @@ class HermesRunner:
             return {"status": "failed", "shard": original_shard_name}
 
         # 所有题目校验通过 → 完成!
-        self._record_per_challenge_complete(
-            original_shard_name, worker, per_results
-        )
+        self._record_per_challenge_complete(original_shard_name, worker, per_results)
         self._progress.record(
             shard=original_shard_name,
             worker=worker,
@@ -872,9 +849,7 @@ class HermesRunner:
             }
             for challenge_id in challenge_ids
         ]
-        merge_validation_into_report(
-            report, per_results, shard=shard, worker=worker, runner_status="passed"
-        )
+        merge_validation_into_report(report, per_results, shard=shard, worker=worker, runner_status="passed")
         for challenge_id in challenge_ids:
             self._progress.record(
                 shard=original_shard_name,
@@ -895,9 +870,7 @@ class HermesRunner:
         self.queue.complete(shard, "done")
         return {"status": "done", "shard": original_shard_name, "short_circuit": True}
 
-    def _timeout_recovery_complete(
-        self, original_shard_name: str, challenge_ids: list[str]
-    ) -> bool:
+    def _timeout_recovery_complete(self, original_shard_name: str, challenge_ids: list[str]) -> bool:
         """Return True when every challenge passes design/implement/build/document evidence."""
         recovery_plan = compute_resume_plan(
             state=self.state,
@@ -914,9 +887,7 @@ class HermesRunner:
                 return False
             if not implement_evidence(cp.directory, category):
                 return False
-            build_ok, _ = build_evidence(
-                cp.directory, category, self._image_exists
-            )
+            build_ok, _ = build_evidence(cp.directory, category, self._image_exists)
             if not build_ok:
                 return False
             if not document_evidence(cp.directory):
@@ -945,9 +916,7 @@ class HermesRunner:
             plan_by_id=plan_by_id,
         )
 
-    def _validate_gate(
-        self, challenge_id: str, plan: ChallengeResumePlan | None
-    ) -> str | None:
+    def _validate_gate(self, challenge_id: str, plan: ChallengeResumePlan | None) -> str | None:
         return validate_gate(challenge_id, plan, self.paths, self._image_exists)
 
     # ------------------------------------------------------------------
@@ -1025,9 +994,7 @@ class HermesRunner:
             environment["HERMES_HOME"] = str(self.paths.hermes_home)
         if self._apply_legacy_custom_provider(environment):
             self._remove_conflicting_custom_pool()
-            query_index = (
-                arguments.index("-q") if "-q" in arguments else len(arguments)
-            )
+            query_index = arguments.index("-q") if "-q" in arguments else len(arguments)
             arguments[query_index:query_index] = ["--provider", "custom"]
 
         effective_timeout = timeout if timeout is not None else DEFAULT_HERMES_TIMEOUT
@@ -1041,9 +1008,7 @@ class HermesRunner:
         )
 
     def _apply_legacy_custom_provider(self, environment: dict[str, str]) -> bool:
-        return hermes_process.apply_legacy_custom_provider(
-            self.paths.hermes_home, environment
-        )
+        return hermes_process.apply_legacy_custom_provider(self.paths.hermes_home, environment)
 
     def _remove_conflicting_custom_pool(self) -> bool:
         return hermes_process.remove_conflicting_custom_pool(self.paths.hermes_home)

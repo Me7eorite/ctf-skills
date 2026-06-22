@@ -190,11 +190,7 @@ def _write_pending_attempt(
     category: str = "web",
     design_task_id: UUID | None = None,
 ) -> Path:
-    path = (
-        client.app.state.project_paths.shards
-        / "pending"
-        / attempt.shard_basename
-    )
+    path = client.app.state.project_paths.shards / "pending" / attempt.shard_basename
     write_json(
         path,
         {
@@ -352,10 +348,7 @@ def test_detail_exposes_siblings_and_progress_events(
     payload = response.json()
     assert [item["attempt_no"] for item in payload["sibling_attempts"]] == [1, 2]
     assert payload["sibling_attempts"][1]["id"] == str(second.id)
-    assert any(
-        event["message"].startswith("carry-forward:")
-        for event in payload["progress_events"]
-    )
+    assert any(event["message"].startswith("carry-forward:") for event in payload["progress_events"])
 
 
 def test_retry_rejects_stale_sibling(
@@ -375,6 +368,38 @@ def test_retry_rejects_stale_sibling(
 
     assert response.status_code == 409
     assert "latest" in response.json()["detail"]
+
+
+def test_clean_rebuild_requires_confirmation_and_replays_idempotently(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory)
+    with transaction(factory=session_factory) as session:
+        repo = BuildAttemptsRepository(session)
+        source = repo.create_attempt(task_id, f"{uuid4()}.json")
+        repo.update_to_terminal(source.id, status="failed", error="failed")
+        session.get(task_model.DesignTask, task_id).status = "build_failed"
+
+    key = str(uuid4())
+    missing_confirmation = client.post(
+        f"/api/build-attempts/{source.id}/clean-rebuild",
+        json={"idempotency_key": key},
+    )
+    assert missing_confirmation.status_code == 409
+    assert missing_confirmation.json()["detail"]["code"] == "confirmation_required"
+
+    first = client.post(
+        f"/api/build-attempts/{source.id}/clean-rebuild",
+        json={"confirmed": True, "idempotency_key": key},
+    )
+    replay = client.post(
+        f"/api/build-attempts/{source.id}/clean-rebuild",
+        json={"confirmed": True, "idempotency_key": key},
+    )
+    assert first.status_code == 201
+    assert replay.status_code == 201
+    assert replay.json()["build_attempt_id"] == first.json()["build_attempt_id"]
 
 
 def test_revalidate_endpoint_rejects_non_failed_attempt(
@@ -399,11 +424,7 @@ def test_revalidate_endpoint_returns_404_for_missing_attempt(client: TestClient)
 
 def test_validation_errors_return_400(client: TestClient):
     assert client.post("/api/design-tasks/not-a-uuid/build").status_code == 400
-    assert (
-        client.post("/api/design-tasks/build", json={"design_task_ids": ["nope"]})
-        .status_code
-        == 400
-    )
+    assert client.post("/api/design-tasks/build", json={"design_task_ids": ["nope"]}).status_code == 400
     assert client.get("/api/build-attempts?status=bogus").status_code == 400
     assert client.get("/api/build-attempts?category=crypto").status_code == 400
     assert client.get("/api/build-attempts?limit=zero").status_code == 400
@@ -481,15 +502,9 @@ def test_queue_start_runs_all_eligible_attempts_in_created_order(
         first = _create_canonical_attempt(repo, first_task)
         second = _create_canonical_attempt(repo, second_task)
         third = _create_canonical_attempt(repo, third_task)
-        session.get(build_model.BuildAttempt, first.id).created_at = datetime(
-            2026, 1, 1, tzinfo=timezone.utc
-        )
-        session.get(build_model.BuildAttempt, second.id).created_at = datetime(
-            2026, 1, 2, tzinfo=timezone.utc
-        )
-        session.get(build_model.BuildAttempt, third.id).created_at = datetime(
-            2026, 1, 3, tzinfo=timezone.utc
-        )
+        session.get(build_model.BuildAttempt, first.id).created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        session.get(build_model.BuildAttempt, second.id).created_at = datetime(2026, 1, 2, tzinfo=timezone.utc)
+        session.get(build_model.BuildAttempt, third.id).created_at = datetime(2026, 1, 3, tzinfo=timezone.utc)
 
     _write_pending_attempt(client, first)
     _write_pending_attempt(client, second)
@@ -518,12 +533,8 @@ def test_category_worker_skips_mismatched_payload(
         repo = BuildAttemptsRepository(session)
         first = _create_canonical_attempt(repo, first_task)
         second = _create_canonical_attempt(repo, second_task)
-        session.get(build_model.BuildAttempt, first.id).created_at = datetime(
-            2026, 1, 1, tzinfo=timezone.utc
-        )
-        session.get(build_model.BuildAttempt, second.id).created_at = datetime(
-            2026, 1, 2, tzinfo=timezone.utc
-        )
+        session.get(build_model.BuildAttempt, first.id).created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        session.get(build_model.BuildAttempt, second.id).created_at = datetime(2026, 1, 2, tzinfo=timezone.utc)
 
     _write_pending_attempt(client, first, design_task_id=uuid4())
     _write_pending_attempt(client, second)
@@ -693,9 +704,7 @@ def test_failure_message_reason_translates_known_status_codes():
     }
     for code, expected_fragment in cases.items():
         translated = _failure_message_reason(code)
-        assert expected_fragment in translated, (
-            f"code={code!r} expected '{expected_fragment}' in {translated!r}"
-        )
+        assert expected_fragment in translated, f"code={code!r} expected '{expected_fragment}' in {translated!r}"
 
 
 def test_failure_message_reason_translates_validator_format_string():

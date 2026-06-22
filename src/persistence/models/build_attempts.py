@@ -41,6 +41,12 @@ class BuildAttempt(Base):
             sa.text("created_at DESC"),
         ),
         sa.Index("ix_build_attempts_shard", "shard_basename"),
+        sa.Index(
+            "uq_build_attempts_idempotency_key",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=sa.text("idempotency_key IS NOT NULL"),
+        ),
     )
 
     id: Mapped[UuidPk]
@@ -60,6 +66,7 @@ class BuildAttempt(Base):
         server_default=sa.text("'unknown'"),
     )
     error: Mapped[str | None] = mapped_column(sa.Text())
+    idempotency_key: Mapped[str | None] = mapped_column(sa.Text())
     created_at: Mapped[CreatedAt]
     started_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
