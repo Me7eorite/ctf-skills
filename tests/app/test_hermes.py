@@ -38,12 +38,8 @@ class HermesRunnerTests(unittest.TestCase):
         self.paths.design_skill.write_text("# Design\n", encoding="utf-8")
         self.paths.design_references.mkdir(parents=True, exist_ok=True)
         for filename in (
-            "web-design.md",
-            "pwn-design.md",
-            "reverse-design.md",
-            "quality-gate.md",
-            "spec-template.md",
-            "delivery-format.md",
+            "design-core.md",
+            "category-tactics.md",
         ):
             (self.paths.design_references / filename).write_text(
                 f"# {filename}\n", encoding="utf-8"

@@ -71,12 +71,8 @@ def _copy_real_prompt(target: _Paths) -> None:
     target.design_skill.write_text("# s\n", encoding="utf-8")
     target.design_references.mkdir(parents=True, exist_ok=True)
     for filename in (
-        "web-design.md",
-        "pwn-design.md",
-        "reverse-design.md",
-        "quality-gate.md",
-        "spec-template.md",
-        "delivery-format.md",
+        "design-core.md",
+        "category-tactics.md",
     ):
         (target.design_references / filename).write_text(
             f"# {filename}\n", encoding="utf-8"

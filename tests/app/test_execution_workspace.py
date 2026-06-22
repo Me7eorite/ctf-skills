@@ -59,12 +59,8 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         self.paths.design_skill.write_text("# Design\n", encoding="utf-8")
         self.paths.design_references.mkdir(parents=True, exist_ok=True)
         for filename in (
-            "web-design.md",
-            "pwn-design.md",
-            "reverse-design.md",
-            "quality-gate.md",
-            "spec-template.md",
-            "delivery-format.md",
+            "design-core.md",
+            "category-tactics.md",
         ):
             (self.paths.design_references / filename).write_text(
                 f"# {filename}\n", encoding="utf-8"
@@ -245,9 +241,24 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         self.assertTrue((workspace.input / "generation-profiles.json").is_file())
         reference_root = workspace.references / "design-challenges"
         self.assertTrue((reference_root / "SKILL.md").is_file())
-        self.assertTrue((reference_root / "references" / "web-design.md").is_file())
-        self.assertFalse((reference_root / "references" / "pwn-design.md").exists())
-        self.assertFalse((reference_root / "references" / "reverse-design.md").exists())
+        # Phase 1 collapsed the per-category references into design-core +
+        # category-tactics; both are always materialized for web/pwn/re.
+        self.assertTrue((reference_root / "references" / "design-core.md").is_file())
+        self.assertTrue(
+            (reference_root / "references" / "category-tactics.md").is_file()
+        )
+        for legacy in (
+            "web-design.md",
+            "pwn-design.md",
+            "reverse-design.md",
+            "other-categories.md",
+            "quality-gate.md",
+            "spec-template.md",
+            "delivery-format.md",
+        ):
+            self.assertFalse(
+                (reference_root / "references" / legacy).exists(), legacy
+            )
         self.assertFalse(any(path.is_symlink() for path in workspace.root.rglob("*")))
         manifest = json.loads(workspace.manifest.read_text(encoding="utf-8"))
         self.assertEqual(manifest["allowed_static_reference_roots"], [])

@@ -24,12 +24,12 @@ _LOGGER = logging.getLogger(__name__)
 _MANUAL_PREFIX = "manual-"
 _MANUAL_RETENTION = timedelta(days=7)
 _LAYOUT = ("input", "references", "output", "logs", "bin")
-_CATEGORY_REFERENCE = {
-    "web": "web-design.md",
-    "pwn": "pwn-design.md",
-    "re": "reverse-design.md",
-}
-_COMMON_REFERENCES = ("quality-gate.md", "spec-template.md", "delivery-format.md")
+# Phase 1 (9-references → 3): the design skill is now a single core file
+# (`design-core.md` — output shape, spec template, quality gate, safety) plus
+# a unified `category-tactics.md` covering every category. Per-category
+# splits and the standalone delivery-format reference were removed.
+_COMMON_REFERENCES = ("design-core.md", "category-tactics.md")
+_CATEGORIES_WITH_REFERENCES = frozenset({"web", "pwn", "re"})
 # 中文注释：`_CHALLENGE_NAMESPACE` 只用来识别"这个目录名属于挑战命名空间"，
 # 比之前 ^(web|pwn|re)-\d+ 宽松，能覆盖真实 design-task 生成的
 # web-<hex8>-<NNNN>-<slug> 形态。具体哪一个 id 是已认领的，由 `_match_claimed_id`
@@ -372,11 +372,11 @@ def _materialize_context(
     skill_target = root / "references" / "design-challenges" / "SKILL.md"
     _copy_regular_file(paths.design_skill, skill_target)
     copied.append(skill_target)
-    if category not in _CATEGORY_REFERENCE:
+    if category not in _CATEGORIES_WITH_REFERENCES:
         return copied
 
     references_target = skill_target.parent / "references"
-    for filename in (*_COMMON_REFERENCES, _CATEGORY_REFERENCE[category]):
+    for filename in _COMMON_REFERENCES:
         target = references_target / filename
         _copy_regular_file(paths.design_references / filename, target)
         copied.append(target)

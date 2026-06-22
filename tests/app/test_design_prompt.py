@@ -30,13 +30,8 @@ For machine-readable output, use this JSON shape:
     )
     paths.design_references.mkdir(parents=True, exist_ok=True)
     for name in (
-        "web-design.md",
-        "pwn-design.md",
-        "reverse-design.md",
-        "other-categories.md",
-        "spec-template.md",
-        "quality-gate.md",
-        "delivery-format.md",
+        "design-core.md",
+        "category-tactics.md",
     ):
         paths.design_references.joinpath(name).write_text(
             f"# {name}\nreference body for {name}\n",
@@ -132,24 +127,34 @@ def test_build_design_prompt_is_byte_identical_for_identical_inputs(tmp_path):
     assert '"challenges"' in first
 
 
-def test_category_routing_uses_pwn_reference(tmp_path):
+def test_prompt_injects_unified_references_for_every_category(tmp_path):
+    """After the 9→3 ref collapse the prompt no longer routes by category.
+
+    design-core (output + quality gate) and category-tactics (one table for
+    every category, including web/pwn/reverse and crypto/forensics/misc) are
+    always injected. delivery-format.md was moved out of the skill into
+    docs/delivery-formats/ and must not appear in any prompt.
+    """
     context = load_design_prompt_context(_paths(tmp_path))
 
-    prompt = build_design_prompt(context, _task("pwn"), _request("pwn"), [], [])
-
-    assert "@skills/design-challenges/references/pwn-design.md" in prompt
-    assert "@skills/design-challenges/references/web-design.md" not in prompt
-    assert "@skills/design-challenges/references/reverse-design.md" not in prompt
-    assert "@skills/design-challenges/references/delivery-format.md" in prompt
-
-
-def test_category_routing_uses_other_reference_for_dynamic_category(tmp_path):
-    context = load_design_prompt_context(_paths(tmp_path))
-
-    prompt = build_design_prompt(context, _task("crypto"), _request("crypto"), [], [])
-
-    assert "@skills/design-challenges/references/other-categories.md" in prompt
-    assert "@skills/design-challenges/references/delivery-format.md" not in prompt
+    for category in ("web", "pwn", "re", "crypto", "forensics"):
+        prompt = build_design_prompt(
+            context, _task(category), _request(category), [], []
+        )
+        assert "@skills/design-challenges/references/design-core.md" in prompt
+        assert "@skills/design-challenges/references/category-tactics.md" in prompt
+        # Legacy split references must be gone for every category.
+        for legacy in (
+            "web-design.md",
+            "pwn-design.md",
+            "reverse-design.md",
+            "other-categories.md",
+            "spec-template.md",
+            "quality-gate.md",
+            "delivery-format.md",
+            "glm5-generation.md",
+        ):
+            assert f"references/{legacy}" not in prompt, legacy
 
 
 def test_evidence_cap_preserves_insertion_order(tmp_path):
@@ -170,8 +175,8 @@ def test_prompt_includes_always_on_references_and_contract(tmp_path):
     task = _task()
     prompt = build_design_prompt(context, task, _request(), [], [])
 
-    assert "@skills/design-challenges/references/spec-template.md" in prompt
-    assert "@skills/design-challenges/references/quality-gate.md" in prompt
+    assert "@skills/design-challenges/references/design-core.md" in prompt
+    assert "@skills/design-challenges/references/category-tactics.md" in prompt
     # Hardened Output Contract (post split-design-tasks fix #2):
     assert "SINGLE JSON object and nothing else" in prompt
     assert "`challenges` MUST be an array of length 1" in prompt

@@ -89,13 +89,8 @@ def _context_loader(_paths: ProjectPaths):
     from services.design_prompt import DesignPromptContext
 
     references = {
-        "delivery-format.md": "delivery format",
-        "other-categories.md": "other categories",
-        "pwn-design.md": "pwn reference",
-        "quality-gate.md": "quality gate",
-        "reverse-design.md": "reverse reference",
-        "spec-template.md": "spec template",
-        "web-design.md": "web reference",
+        "design-core.md": "design core",
+        "category-tactics.md": "category tactics",
     }
     return DesignPromptContext(skill_text="design skill", references=references)
 

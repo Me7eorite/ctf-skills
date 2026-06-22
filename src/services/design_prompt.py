@@ -10,14 +10,11 @@ from core.paths import ProjectPaths
 from domain.design_tasks import DesignTask
 from domain.research import GenerationRequest, ResearchFinding, ResearchSource
 
-CATEGORY_REFERENCE_FILES: Mapping[str, str] = {
-    "web": "web-design.md",
-    "pwn": "pwn-design.md",
-    "re": "reverse-design.md",
-}
-OTHER_CATEGORY_REFERENCE_FILE = "other-categories.md"
-ALWAYS_REFERENCE_FILES: tuple[str, ...] = ("spec-template.md", "quality-gate.md")
-DELIVERY_REFERENCE_FILE = "delivery-format.md"
+# Phase 1 (9-references → 3): the design skill is now a single core file
+# plus a unified category-tactics catalog. cve-pivot.md is read on-demand by
+# the agent, not injected into every design prompt. delivery-format moved to
+# docs/delivery-formats/ and is no longer part of design.
+ALWAYS_REFERENCE_FILES: tuple[str, ...] = ("design-core.md", "category-tactics.md")
 EVIDENCE_FINDING_LIMIT = 20
 MAX_REFERENCE_CHARS = 5000
 
@@ -30,15 +27,9 @@ class DesignPromptContext:
 
 def load_design_prompt_context(paths: ProjectPaths) -> DesignPromptContext:
     """Read the design skill and all reference files used by the prompt."""
-    reference_names = {
-        *CATEGORY_REFERENCE_FILES.values(),
-        OTHER_CATEGORY_REFERENCE_FILE,
-        *ALWAYS_REFERENCE_FILES,
-        DELIVERY_REFERENCE_FILE,
-    }
     references = {
         name: (paths.design_references / name).read_text(encoding="utf-8")
-        for name in sorted(reference_names)
+        for name in sorted(ALWAYS_REFERENCE_FILES)
     }
     return DesignPromptContext(
         skill_text=paths.design_skill.read_text(encoding="utf-8"),
@@ -54,10 +45,7 @@ def build_design_prompt(
     sources: Sequence[ResearchSource],
 ) -> str:
     """Build a deterministic Hermes prompt without filesystem or DB access."""
-    category_reference = _category_reference_file(design_task.category)
-    reference_names = [category_reference, *ALWAYS_REFERENCE_FILES]
-    if design_task.category in {"web", "pwn"}:
-        reference_names.append(DELIVERY_REFERENCE_FILE)
+    reference_names = list(ALWAYS_REFERENCE_FILES)
 
     sections = [
         "# Structured Challenge Design Attempt",
@@ -133,10 +121,6 @@ def build_design_prompt(
         _render_pinned_values(design_task),
     ]
     return "\n\n".join(sections).rstrip() + "\n"
-
-
-def _category_reference_file(category: str) -> str:
-    return CATEGORY_REFERENCE_FILES.get(category, OTHER_CATEGORY_REFERENCE_FILE)
 
 
 def _render_pinned_values(task: DesignTask) -> str:
