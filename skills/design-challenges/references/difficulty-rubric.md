@@ -4,9 +4,9 @@ Machine-checked rubric for the four difficulty tiers. The validator enforces the
 
 ## Tiers
 
-| Tier | Techniques (考点) | Intended path steps | implementation_plan | plan max top-level keys | LOC budget (build) | Business scenario | Novelty field |
+| Tier | Techniques (考点) | Intended path steps | implementation_plan | max explicit components | LOC budget (build) | Business scenario | Novelty field |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| easy   | exactly **1** | 1–3 | optional | ≤ 5  | ≤ 200  | optional (toy service OK) | not required |
+| easy   | exactly **1** | 1–4 | optional | ≤ 5  | ≤ 200  | optional (toy service OK) | not required |
 | medium | **2 or 3** | 2–5 | optional | ≤ 7  | ≤ 400  | **required** | not required |
 | hard   | **3 or 4** | 3–7 | **required** | ≤ 10 | ≤ 700  | **required** | not required |
 | expert | **≥ 2** | 4–10 | **required** | ≤ 15 | ≤ 1200 | **required** | **required** — describe the 0day-style trick |
@@ -19,7 +19,7 @@ Machine-checked rubric for the four difficulty tiers. The validator enforces the
 
 **Novelty heuristic for expert:** the `novelty` field must be at least 40 characters and explicitly identify the unusual element — for example: "Parser differential between two HTTP smuggling implementations chained with a custom pickle gadget", or "Custom JWS algorithm-confusion via unregistered alg=none-like state in an in-house library". Generic statements like "advanced exploitation" are rejected.
 
-**Buildability budget (Phase 2.5):** `implementation_plan` top-level keys are capped to prevent the build phase from blowing past the category timeout. The LOC budget is guidance for the build agent — it is not validator-enforced but the agent should self-trim to stay near or below the budget. If a hard or expert design needs significantly more components or LOC than the budget allows, split it into multiple tasks rather than exceeding the cap.
+**Buildability budget:** only entries in the optional `implementation_plan.components` array count as build/deploy components. Descriptive top-level fields such as `runtime`, `framework`, `entrypoints`, and `flag_handling` are metadata and do not count toward the cap. The LOC budget is guidance for the build agent — it is not validator-enforced. If a design needs more real components or LOC than its tier allows, simplify or split it; otherwise upgrade the difficulty tier.
 
 ## Qualitative Guidance
 
@@ -58,7 +58,7 @@ When generating a design, populate these fields with the rubric in mind:
 - `primary_technique` — the headline technique (one of the entries in `techniques`).
 - `secondary_technique` — present iff your count is ≥ 2.
 - `intended_path` — one step per significant observation/action; do not pad with filler.
-- `implementation_plan` — required for hard/expert; describe vulnerability location, flag handling, and what forces the intended chain.
+- `implementation_plan` — required for hard/expert; describe vulnerability location, flag handling, and what forces the intended chain. When useful, add `components` as an array naming only independently buildable or deployable units.
 - `novelty` — required for expert; describe what is non-trivial in 1–3 sentences.
 
-If the validator rejects with a difficulty-alignment error, do not edit the validator to pass — revise the design to meet the tier, or downgrade the difficulty.
+If the validator rejects with a difficulty-alignment error, revise or split the design to meet the tier, or upgrade it to the appropriate difficulty.

@@ -56,8 +56,10 @@ def _enforcement_mode() -> str:
 class DifficultyRubric:
     """Machine-checked thresholds for one difficulty tier.
 
-    ``implementation_plan_max_keys`` caps top-level keys in
-    ``implementation_plan`` to keep build-phase scope under control.
+    ``implementation_component_max`` caps the explicit entries in
+    ``implementation_plan.components`` to keep build-phase scope under control.
+    Descriptive fields such as ``runtime`` and ``flag_handling`` are metadata,
+    not independently buildable components.
     ``estimated_loc_budget`` is rendered into the design prompt as
     guidance (no validator-side check, since the design has no code
     yet — the build agent uses it to self-trim).
@@ -70,7 +72,7 @@ class DifficultyRubric:
     needs_business_scenario: bool
     needs_implementation_plan: bool
     needs_novelty: bool
-    implementation_plan_max_keys: int
+    implementation_component_max: int
     estimated_loc_budget: int
 
 
@@ -79,11 +81,11 @@ RUBRIC: dict[str, DifficultyRubric] = {
         techniques_min=1,
         techniques_max=1,
         intended_path_min=1,
-        intended_path_max=3,
+        intended_path_max=4,
         needs_business_scenario=False,
         needs_implementation_plan=False,
         needs_novelty=False,
-        implementation_plan_max_keys=5,
+        implementation_component_max=5,
         estimated_loc_budget=200,
     ),
     "medium": DifficultyRubric(
@@ -94,7 +96,7 @@ RUBRIC: dict[str, DifficultyRubric] = {
         needs_business_scenario=True,
         needs_implementation_plan=False,
         needs_novelty=False,
-        implementation_plan_max_keys=7,
+        implementation_component_max=7,
         estimated_loc_budget=400,
     ),
     "hard": DifficultyRubric(
@@ -105,7 +107,7 @@ RUBRIC: dict[str, DifficultyRubric] = {
         needs_business_scenario=True,
         needs_implementation_plan=True,
         needs_novelty=False,
-        implementation_plan_max_keys=10,
+        implementation_component_max=10,
         estimated_loc_budget=700,
     ),
     "expert": DifficultyRubric(
@@ -116,7 +118,7 @@ RUBRIC: dict[str, DifficultyRubric] = {
         needs_business_scenario=True,
         needs_implementation_plan=True,
         needs_novelty=True,
-        implementation_plan_max_keys=15,
+        implementation_component_max=15,
         estimated_loc_budget=1200,
     ),
 }
@@ -165,7 +167,8 @@ def validate_difficulty_alignment(
     if technique_count > rubric.techniques_max:
         _flag(
             f"{difficulty} allows at most {rubric.techniques_max} distinct "
-            f"techniques; design declares {technique_count}. Split or downgrade."
+            f"techniques; design declares {technique_count}. Simplify the design "
+            "or upgrade the difficulty tier."
         )
 
     step_count = _count_intended_path_steps(challenge)
@@ -191,15 +194,18 @@ def validate_difficulty_alignment(
         if not isinstance(plan, Mapping) or not plan:
             _flag(f"{difficulty} requires a non-empty implementation_plan")
 
-    # Phase 2.5 buildability cap: oversized implementation_plan blocks
-    # the build agent into Hermes timeouts. Enforce a per-tier ceiling
-    # on top-level component count whenever a plan is present.
+    # Buildability cap: count only explicitly declared build/deploy components.
+    # Top-level keys such as runtime, framework, entrypoints, and flag_handling
+    # are descriptive metadata and are not a valid proxy for implementation
+    # complexity.
     plan = challenge.get("implementation_plan")
-    if isinstance(plan, Mapping) and len(plan) > rubric.implementation_plan_max_keys:
+    components = plan.get("components") if isinstance(plan, Mapping) else None
+    component_count = len(components) if isinstance(components, list) else 0
+    if component_count > rubric.implementation_component_max:
         _flag(
-            f"{difficulty} allows at most {rubric.implementation_plan_max_keys} "
-            f"implementation_plan components; design has {len(plan)}. "
-            "Split the design or downgrade the difficulty."
+            f"{difficulty} allows at most {rubric.implementation_component_max} "
+            "explicit implementation_plan.components entries; design has "
+            f"{component_count}. Split the design or upgrade the difficulty tier."
         )
 
     if rubric.needs_novelty:

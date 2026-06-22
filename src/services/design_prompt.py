@@ -51,6 +51,7 @@ def build_design_prompt(
     generation_request: GenerationRequest,
     findings: Sequence[ResearchFinding],
     sources: Sequence[ResearchSource],
+    previous_error: str | None = None,
 ) -> str:
     """Build a deterministic Hermes prompt without filesystem or DB access."""
     reference_names = list(ALWAYS_REFERENCE_FILES)
@@ -79,6 +80,7 @@ def build_design_prompt(
             )
             for name in reference_names
         ),
+        _render_retry_feedback(previous_error),
         "## Output Contract",
         _render_output_contract(design_task),
         "## Pinned Values (copy verbatim into `challenges[0]`)",
@@ -157,10 +159,16 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                         "minItems": 5,
                         "items": {
                             "type": "string",
-                            # Relative path; URLs and absolute paths are
-                            # explicitly rejected by the validator.
-                            "pattern": r"^(?!https?://|/|[A-Za-z]:[\\/])"
-                                       r"[^\r\n\t]+\.[^\r\n\t/]+$",
+                            "description": (
+                                "A safe challenge-relative file path. Native "
+                                "executables and Makefiles may be extensionless."
+                            ),
+                            "pattern": (
+                                r"^(?:README\.md|metadata\.json|validate\.sh|"
+                                r"(?:deploy|writenup|attachments|dist|src)/"
+                                r"(?!\.\.(?:/|$))(?!.*\/\.\.(?:/|$))"
+                                r"[^\r\n\t/]+(?:/[^\r\n\t/]+)*)$"
+                            ),
                         },
                     },
                     "validation": {"type": "string", "minLength": 1},
@@ -178,6 +186,17 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                             "NO file contents. Component cap depends on "
                             "difficulty (see Build Budget section)."
                         ),
+                        "properties": {
+                            "components": {
+                                "type": "array",
+                                "description": (
+                                    "Optional names of independently buildable "
+                                    "or deployable components. Do not list metadata "
+                                    "fields such as runtime, entrypoints, or flag handling."
+                                ),
+                                "items": {"type": "string", "minLength": 1},
+                            }
+                        },
                     },
                     "novelty": {
                         "type": "string",
@@ -216,7 +235,9 @@ def _render_output_contract(task: DesignTask) -> str:
         "secondary artifacts.\n"
         "2. `artifacts` MUST be relative local paths and MUST include "
         "`README.md`, `metadata.json`, `validate.sh`, `writenup/wp.md`, "
-        "and `writenup/exp.py`."
+        "and `writenup/exp.py`. Extensionless native executables and "
+        "conventional build files are valid; for example "
+        "`attachments/crackme`, `dist/crackme`, and `deploy/Makefile`."
         + container_artifacts_hint
         + "\n3. `validation` MAY reference local compose URLs "
         "(`http://127.0.0.1:<port>`, `http://localhost:<port>`) but MUST "
@@ -224,6 +245,23 @@ def _render_output_contract(task: DesignTask) -> str:
         "or file bodies."
     )
     return f"{invariants}\n\n```json\n{schema_text}\n```"
+
+
+def _render_retry_feedback(previous_error: str | None) -> str:
+    """Tell a retry what the preceding attempt must correct."""
+    if not previous_error:
+        return ""
+    concise_error = previous_error.strip()[:1000]
+    return "\n".join(
+        [
+            "## Retry Feedback",
+            "The preceding attempt failed server-side validation. Correct this "
+            "specific problem before replying:",
+            "",
+            f"- {concise_error}",
+            "- Re-check the complete Output Contract after making the correction.",
+        ]
+    )
 
 
 def _render_build_budget(difficulty: str) -> str:
@@ -243,8 +281,8 @@ def _render_build_budget(difficulty: str) -> str:
             "",
             f"- techniques: {_range_text(rubric.techniques_min, rubric.techniques_max)}",
             f"- intended_path steps: {_range_text(rubric.intended_path_min, rubric.intended_path_max)}",
-            f"- implementation_plan top-level components: ≤ "
-            f"{rubric.implementation_plan_max_keys}",
+            f"- explicit `implementation_plan.components` entries: ≤ "
+            f"{rubric.implementation_component_max}",
             f"- estimated total build LOC (guidance, not enforced): ≤ "
             f"{rubric.estimated_loc_budget}",
             f"- business scenario required: "
@@ -254,9 +292,8 @@ def _render_build_budget(difficulty: str) -> str:
             f"- novelty field required: "
             f"{'yes' if rubric.needs_novelty else 'no'}",
             "",
-            "If your design cannot fit this budget, either downgrade the "
-            "difficulty or split the design into multiple tasks rather than "
-            "exceeding it.",
+            "If your design cannot fit this budget, simplify or split it; "
+            "otherwise upgrade the difficulty tier.",
         ]
     )
 

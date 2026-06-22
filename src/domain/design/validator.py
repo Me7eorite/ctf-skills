@@ -176,7 +176,10 @@ def _validate_artifacts(challenge: dict[str, Any]) -> None:
             )
         if not _is_artifact_path_like(entry):
             raise ChallengeDesignValidationError(
-                "artifacts must be local challenge-relative file paths"
+                "artifacts must be local challenge-relative file paths; "
+                f"invalid entry: {entry!r}. Use README.md, metadata.json, "
+                "validate.sh, or a path under deploy/, writenup/, "
+                "attachments/, dist/, or src/"
             )
 
 
@@ -223,6 +226,20 @@ def _validate_implementation_plan(plan: Any) -> None:
         raise ChallengeDesignValidationError(
             "implementation_plan must be an object"
         )
+
+    components = plan.get("components")
+    if components is not None:
+        if not isinstance(components, list):
+            raise ChallengeDesignValidationError(
+                "implementation_plan.components must be an array of component names"
+            )
+        if any(
+            not isinstance(component, str) or not component.strip()
+            for component in components
+        ):
+            raise ChallengeDesignValidationError(
+                "implementation_plan.components must contain non-empty strings"
+            )
 
     encoded = json.dumps(plan, ensure_ascii=False, sort_keys=True)
     if len(encoded) > MAX_IMPLEMENTATION_PLAN_CHARS:
@@ -309,10 +326,17 @@ def _is_artifact_path_like(value: str) -> bool:
         return False
     if any(char in stripped for char in "\r\n\t"):
         return False
+    parts = stripped.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        return False
     if stripped in COMMON_ARTIFACTS or stripped in CONTAINER_ARTIFACTS:
         return True
     if stripped.startswith(KNOWN_ARTIFACT_PREFIXES):
-        return bool(PurePosixPath(stripped).suffix)
+        # Native binaries and conventional build files commonly have no
+        # suffix (for example ``attachments/crackme`` and
+        # ``deploy/Makefile``).  Their containing challenge-local directory,
+        # not a filename extension, is the security boundary.
+        return bool(PurePosixPath(stripped).name)
     return stripped in {"README.md", "metadata.json", "validate.sh"}
 
 

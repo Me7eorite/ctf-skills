@@ -46,6 +46,7 @@ KNOWN_ARTIFACT_PREFIXES: tuple[str, ...] = (
     "writenup/",
     "attachments/",
     "dist/",
+    "src/",
 )
 
 # ---------- Implementation-leakage guards ----------

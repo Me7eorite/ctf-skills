@@ -9,7 +9,9 @@ monotonic `iteration_no`. Each `executions` row SHALL carry: `id` (UUID PK),
 `build_attempt_id` (FK to `build_attempts.id`, `ON DELETE CASCADE`, NOT NULL),
 `parent_execution_id` (FK to `executions.id`, nullable), `iteration_no`
 (positive integer), `execution_kind` (one of `initial`, `retry`, `revision`),
-`worker_id` (TEXT nullable), `claim_token` (UUID NOT NULL),
+`execution_mode` (one of `standard`, `clean`; `clean` is only valid when
+`execution_kind = 'retry'`), `worker_id` (TEXT nullable), `claim_token` (UUID NOT
+NULL),
 `lease_expires_at` (TIMESTAMPTZ NOT NULL), `heartbeat_at` (TIMESTAMPTZ
 nullable), `status` (one of `claimed`, `running`, `succeeded`, `failed`,
 `lost`), `exit_class` (TEXT nullable), `started_at` / `finished_at`
@@ -17,9 +19,12 @@ nullable), `status` (one of `claimed`, `running`, `succeeded`, `failed`,
 
 The compound unique key `(build_attempt_id, iteration_no)` SHALL hold. An
 `execution_kind` of `revision` SHALL require a non-null `parent_execution_id`.
+An `execution_mode` of `clean` SHALL require `execution_kind = 'retry'`.
 `executions` SHALL be the source of truth for per-run state; the container row's
 status and run metadata SHALL be derived from execution transitions in the same
 transaction.
+On claim and on lease recovery, `current_execution_id` and `latest_execution_id`
+SHALL be identical; the active execution is always the latest execution.
 
 #### Scenario: Initial run inserts iteration 1
 
@@ -32,6 +37,12 @@ transaction.
 
 - **WHEN** an `executions` row with `execution_kind = 'revision'` is inserted
   with a null `parent_execution_id`
+- **THEN** the database rejects the row via a check constraint
+
+#### Scenario: Clean execution mode requires retry kind
+
+- **WHEN** an `executions` row is inserted with `execution_mode = 'clean'`
+  and `execution_kind != 'retry'`
 - **THEN** the database rejects the row via a check constraint
 
 ### Requirement: At most one active execution per build-attempt container
@@ -68,11 +79,11 @@ the existing build-lost grace value (300 seconds).
 
 ### Requirement: Heartbeat renews the lease under a valid token
 
-The system SHALL expose a heartbeat path that, given a `build_attempt_id` and a
-`claim_token`, renews the active execution's lease
-(`lease_expires_at = now() + LEASE_TTL`, `heartbeat_at = now()`) only when the
-supplied token matches the row's current `claim_token`. A heartbeat with a
-stale token SHALL be rejected without renewing the lease.
+The system SHALL expose a dedicated `POST /api/executions/{id}/heartbeat`
+endpoint that, given an execution id and a `claim_token`, renews the active
+execution's lease (`lease_expires_at = now() + LEASE_TTL`, `heartbeat_at =
+now()`) only when the supplied token matches the row's current `claim_token`.
+A heartbeat with a stale token SHALL be rejected without renewing the lease.
 
 #### Scenario: Valid heartbeat extends the lease
 
@@ -92,7 +103,9 @@ The system SHALL require a matching current `claim_token` before transitioning
 an execution to a terminal status (`succeeded` / `failed`) or before the
 publisher promotes any output into `work/challenges`. A request carrying a
 stale token SHALL be rejected; the affected output SHALL be left in quarantine
-and SHALL NOT be published.
+and SHALL NOT be published. A terminal write from any execution other than the
+container's current execution SHALL be rejected and SHALL NOT overwrite the
+container aggregate.
 
 #### Scenario: Expired worker cannot publish
 
@@ -110,7 +123,8 @@ executions whose `status` is `claimed` or `running` and whose
 `lease_expires_at` has passed without a fresh heartbeat, mark them `lost`, and,
 when recovering the work, re-mint the `claim_token` so the prior process's
 token is invalidated. Execution terminal transitions SHALL propagate to the
-container's aggregate `build_attempts.status` and `latest_execution_id`.
+container's aggregate `build_attempts.status` and `latest_execution_id` only
+when they apply to the container's current execution.
 
 #### Scenario: Expired lease is reaped
 
@@ -145,8 +159,8 @@ unrelated shard.
 A `revalidate` action SHALL NOT create a new `executions` row. It SHALL append a
 `revalidation_events` record (check name, result, timestamp, actor) to the
 container's latest execution and reuse the reconciler's existing validation
-logic. If the latest execution is no longer the container's current execution,
-the revalidate request SHALL be rejected rather than attached to a stale run.
+logic. The request SHALL be rejected if `latest_execution_id` and
+`current_execution_id` do not match, so it never attaches to a stale run.
 
 #### Scenario: Revalidate leaves the execution row count unchanged
 

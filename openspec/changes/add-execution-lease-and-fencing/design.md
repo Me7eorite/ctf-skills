@@ -85,6 +85,12 @@ existing `one_active_build_per_task` pattern. The container-level
 rows still obey the old guarantee; after cutover the execution-level unique
 constraint becomes the primary active-slot rule.
 
+### D4b: Successful publication remembers the latest canonical execution
+
+`successful_execution_id` is a last-successful-publish pointer. Each successful
+canonical rename updates it to the execution that just published; a later repair
+or retry may replace it only if its own publish succeeds.
+
 ### D5: Revision base artifact is read in place from the same directory
 
 A `revision` claim resolves its base artifact from
@@ -100,7 +106,14 @@ prerequisite for revision reuse.
 create a new `executions` row. It may update container-level aggregate fields
 derived from that execution, but it never changes the execution iteration chain.
 
-### D7: Shard file stays `{build_attempt_id}.json`, re-rendered per iteration
+### D7: Current and latest execution ids must move together on claim/reap
+
+Claim and lease-recovery paths SHALL keep `current_execution_id` and
+`latest_execution_id` identical. A non-terminal current execution is always the
+latest execution, and any terminal write must validate against that same row
+before updating container aggregate state.
+
+### D8: Shard file stays `{build_attempt_id}.json`, re-rendered per iteration
 
 The shard basename is kept stable and overwritten each iteration (carrying the
 new resume / base-artifact / feedback context) so `work/shards` scanning and
@@ -140,12 +153,3 @@ source.
    during the transition window.
 4. Rollback: disable the flag (retry reverts to minting build attempts); the
    `executions` table and new FKs are additive and can remain unused.
-
-## Open Questions
-
-- Should `successful_execution_id` be populated by this change's publisher hook
-  or deferred entirely to proposal #6's audit wiring? (Leaning: populate the
-  reference here, defer the immutable audit fields to #6.)
-- Heartbeat transport: a dedicated `/api/executions/{id}/heartbeat` endpoint vs.
-  piggy-backing on the existing progress-event spool. (Leaning: dedicated path
-  for an explicit token check; revisit if it duplicates the spool.)

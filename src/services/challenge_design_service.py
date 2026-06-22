@@ -60,6 +60,7 @@ class _AttemptStart:
     findings: Sequence[research_dto.ResearchFinding]
     sources: Sequence[research_dto.ResearchSource]
     max_attempts: int
+    previous_error: str | None
 
 
 PromptContextLoader = Callable[[ProjectPaths], DesignPromptContext]
@@ -106,6 +107,7 @@ class ChallengeDesignService:
                 started.generation_request,
                 started.findings,
                 started.sources,
+                previous_error=started.previous_error,
             )
             prompt_path.parent.mkdir(parents=True, exist_ok=True)
             prompt_path.write_text(prompt_text, encoding="utf-8")
@@ -223,6 +225,9 @@ class ChallengeDesignService:
                 findings=findings,
                 sources=sources,
                 max_attempts=request.max_attempts,
+                previous_error=(
+                    latest_attempt.last_error if latest_attempt is not None else None
+                ),
             )
 
     def _fail_attempt(

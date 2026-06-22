@@ -189,6 +189,25 @@ def test_prompt_includes_always_on_references_and_contract(tmp_path):
     # Required artifacts remain enforced via the schema pattern + invariant.
     assert "writenup/wp.md" in prompt
     assert "writenup/exp.py" in prompt
+    assert "attachments/crackme" in prompt
+    assert "deploy/Makefile" in prompt
+
+
+def test_prompt_includes_previous_validation_error_on_retry(tmp_path):
+    context = load_design_prompt_context(_paths(tmp_path))
+
+    prompt = build_design_prompt(
+        context,
+        _task(),
+        _request(),
+        [],
+        [],
+        previous_error="invalid entry: 'dist/bad path'",
+    )
+
+    assert "## Retry Feedback" in prompt
+    assert "invalid entry: 'dist/bad path'" in prompt
+    assert "Re-check the complete Output Contract" in prompt
 
 
 def test_prompt_renders_build_budget_for_difficulty(tmp_path):
@@ -199,9 +218,10 @@ def test_prompt_renders_build_budget_for_difficulty(tmp_path):
     prompt = build_design_prompt(context, _task(), _request(), [], [])
 
     assert "## Build Budget" in prompt
-    # Medium baseline: techniques 2–3, plan ≤ 7, LOC ≤ 400.
+    # Medium baseline: techniques 2–3, explicit components ≤ 7, LOC ≤ 400.
     assert "techniques: 2–3" in prompt
-    assert "implementation_plan top-level components: ≤ 7" in prompt
+    assert "explicit `implementation_plan.components` entries: ≤ 7" in prompt
+    assert "upgrade the difficulty tier" in prompt
     assert "LOC" in prompt and "400" in prompt
 
 

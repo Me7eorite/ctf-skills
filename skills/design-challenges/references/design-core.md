@@ -70,7 +70,8 @@ Field rules:
 - `validation` is a single string. Do not nest it as an object.
 - `hints` MUST contain exactly 3 entries, staged from gentle to direct.
 - `intended_path` MUST be a list of step strings ordered observation → flag.
-- `artifacts` MUST be relative local paths (no URLs, no absolute paths). Use `writenup/wp.md` and `writenup/exp.py` — not `writeup/...` or bare `solve.py`.
+- `artifacts` MUST be relative local paths (no URLs, no absolute paths, no `..` traversal). Use `writenup/wp.md` and `writenup/exp.py` — not `writeup/...` or bare `solve.py`.
+- Native executables and conventional build files do not need extensions. Valid examples include `attachments/crackme`, `dist/crackme`, and `deploy/Makefile`. Put challenge source files under `src/` or `deploy/src/`.
 - `implementation_plan` is intent-level only. Never include code, Dockerfile bodies, compose YAML, SQL scripts, or exploit code.
 - For `web` and `pwn`, `deployment` MUST include the substring `docker` and `port` MUST be set.
 - `expert` difficulty requires a `novelty` field describing the non-trivial trick (0day-style, custom protocol, multi-stage chain, parser differential, etc.). See `category-tactics.md` for examples.

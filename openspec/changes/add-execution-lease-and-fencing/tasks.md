@@ -1,7 +1,7 @@
 ## 1. Schema & migration
 
 - [ ] 1.1 Add `Execution` SQLAlchemy model in `src/persistence/models/executions.py` (fields per spec: build_attempt_id, parent_execution_id, iteration_no, execution_kind, worker_id, claim_token, lease_expires_at, heartbeat_at, status, exit_class, timestamps)
-- [ ] 1.2 Add table args: `uq_executions_attempt_iter`, `one_active_execution_per_attempt` partial unique, `ix_executions_lease`, `ix_executions_attempt_iter`, `execution_kind`/`status` CHECKs, and the revision-requires-parent CHECK
+- [ ] 1.2 Add table args: `uq_executions_attempt_iter`, `one_active_execution_per_attempt` partial unique, `ix_executions_lease`, `ix_executions_attempt_iter`, `execution_kind`/`status`/`execution_mode` CHECKs, and the revision-requires-parent CHECK
 - [ ] 1.3 Extend `BuildAttempt` model with nullable `current_execution_id` / `latest_execution_id` / `successful_execution_id` FKs
 - [ ] 1.4 Alembic `0012`: create `executions` + indexes and alter `build_attempts`; no execution backfill for pre-cutover rows
 - [ ] 1.5 Add a cutover flag/setting (env or config) gating execution-minting vs legacy build_attempt-minting
@@ -12,14 +12,17 @@
 - [ ] 2.2 Implement single-transaction claim: lock attempt → allocate `iteration_no` → mint `claim_token` + `lease_expires_at = now + LEASE_TTL` → insert execution(`claimed`) → set container `current/latest_execution_id`
 - [ ] 2.3 Wire `LEASE_TTL` default to the existing `BUILD_LOST_GRACE` (300s)
 - [ ] 2.4 Add token-gated `update_to_running` and `update_to_terminal` (reject stale token; leave output in quarantine)
-- [ ] 2.5 Add heartbeat renewal (`lease_expires_at`/`heartbeat_at`) gated on current token
+- [ ] 2.5 Add dedicated `POST /api/executions/{id}/heartbeat` lease renewal (`lease_expires_at`/`heartbeat_at`) gated on current token
 - [ ] 2.6 Make `executions` the source of truth; derive container status and timestamps from execution transitions in the same transaction
+- [ ] 2.7 Mark `successful_execution_id` only when the publisher completes a canonical rename successfully
+- [ ] 2.8 Keep `current_execution_id` and `latest_execution_id` identical on claim and lease recovery
 
 ## 3. Container status & build_attempts dedup
 
 - [ ] 3.1 Derive and maintain `build_attempts.status` as the container aggregate from execution transitions (same transaction as terminal writes)
 - [ ] 3.2 Move per-run `worker`/`error` writes to the execution row; keep container result fields (`resulting_challenge_dir`, `artifact_status`)
 - [ ] 3.3 Keep `one_active_build_per_task` (container active = has a non-terminal execution); ensure it tolerates the cutover window
+- [ ] 3.4 Reject terminal writes from executions that are no longer the container's current execution
 
 ## 4. Orchestration retry rewrite (Option A)
 

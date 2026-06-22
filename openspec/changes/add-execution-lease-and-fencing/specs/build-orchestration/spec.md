@@ -51,6 +51,29 @@ The unique compound key `(design_task_id, attempt_no)` SHALL hold.
 - **AND** a new `executions` row is inserted under the same container with the
   clean-rebuild execution mode preserved in execution metadata
 
+#### Scenario: Successful publish records the canonical execution
+
+- **GIVEN** an execution whose output is published successfully
+- **WHEN** the publisher commits the canonical rename
+- **THEN** the container's `successful_execution_id` is set to that execution
+
+### Requirement: Container status follows the latest execution deterministically
+
+The system SHALL derive `build_attempts.status` from the container's latest
+execution using the following precedence: `claimed` or `running` => `running`;
+`succeeded` => `succeeded`; `failed` => `failed`; `lost` => `lost`. If no
+execution exists yet, the container remains `queued`. When a new execution is
+claimed, the container SHALL immediately move to `running`. A terminal write
+from an older execution SHALL NOT overwrite the status of a newer latest
+execution.
+
+#### Scenario: Older terminal write does not win over a newer execution
+
+- **GIVEN** execution `E1` has already been superseded by newer execution `E2`
+- **WHEN** `E1` later attempts a terminal write
+- **THEN** the write is rejected or ignored and the container status remains
+  governed by `E2`
+
 #### Scenario: Fresh submit after an abandoned session allocates the next attempt_no
 
 - **GIVEN** the latest container for a design task has reached a terminal

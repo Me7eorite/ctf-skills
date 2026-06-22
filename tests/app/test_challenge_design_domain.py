@@ -242,6 +242,44 @@ def test_validate_design_payload_rejects_prose_artifacts():
         validate_design_payload(payload, _parent_task())
 
 
+@pytest.mark.parametrize(
+    "artifact",
+    [
+        "attachments/crackme",
+        "dist/crackme",
+        "deploy/Makefile",
+        "src/crackme.c",
+    ],
+)
+def test_validate_design_payload_accepts_safe_artifacts_without_extensions(
+    artifact: str,
+):
+    payload = _payload()
+    payload["challenges"][0]["artifacts"].append(artifact)
+
+    validate_design_payload(payload, _parent_task())
+
+
+@pytest.mark.parametrize(
+    "artifact",
+    [
+        "attachments/../flag.txt",
+        "dist/../../etc/passwd",
+        "deploy/",
+        "src//crackme.c",
+    ],
+)
+def test_validate_design_payload_rejects_unsafe_artifact_paths(artifact: str):
+    payload = _payload()
+    payload["challenges"][0]["artifacts"].append(artifact)
+
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match=r"artifacts must be local challenge-relative file paths",
+    ):
+        validate_design_payload(payload, _parent_task())
+
+
 def test_validate_design_payload_rejects_implementation_level_top_field():
     with pytest.raises(
         ChallengeDesignValidationError,
@@ -534,18 +572,21 @@ def test_difficulty_expert_accepts_substantive_novelty():
 
 
 def test_difficulty_rejects_oversized_implementation_plan_for_medium():
-    # Phase 2.5: medium caps implementation_plan at 7 top-level keys.
-    bloat = {f"k{i}": f"value {i}" for i in range(8)}
+    # Medium caps explicitly declared build/deploy components at 7.
+    bloat = {
+        "runtime": "Python",
+        "components": [f"component-{i}" for i in range(8)],
+    }
     payload = _payload(implementation_plan=bloat)
     with pytest.raises(
         ChallengeDesignValidationError,
-        match=r"medium allows at most 7 implementation_plan components",
+        match=r"medium allows at most 7 explicit implementation_plan.components",
     ):
         validate_design_payload(payload, _parent_task())
 
 
 def test_difficulty_accepts_implementation_plan_at_hard_cap():
-    # Hard cap is 10; a plan with exactly 10 top-level keys is allowed.
+    # Hard cap is 10; a plan with exactly 10 explicit components is allowed.
     parent = _parent_task(difficulty="hard")
     payload = _payload(
         difficulty="hard",
@@ -561,10 +602,60 @@ def test_difficulty_accepts_implementation_plan_at_hard_cap():
             "Forge the key path to point at a writable file",
             "Sign a forged admin token and read the flag",
         ],
-        implementation_plan={f"k{i}": f"value {i}" for i in range(10)},
+        implementation_plan={
+            "runtime": "Python",
+            "framework": "Flask",
+            "components": [f"component-{i}" for i in range(10)],
+        },
     )
     result = validate_design_payload(payload, parent)
     assert result.challenge["difficulty"] == "hard"
+
+
+def test_difficulty_does_not_count_plan_metadata_as_components():
+    metadata_plan = {f"metadata_{i}": f"value {i}" for i in range(12)}
+    payload = _payload(implementation_plan=metadata_plan)
+
+    validate_design_payload(payload, _parent_task())
+
+
+def test_implementation_plan_components_requires_string_array():
+    payload = _payload(implementation_plan={"components": "web, database"})
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match=r"implementation_plan.components must be an array",
+    ):
+        validate_design_payload(payload, _parent_task())
+
+
+def _easy_re_payload(step_count: int):
+    payload = _payload(
+        category="re",
+        difficulty="easy",
+        deployment="static",
+        port=None,
+        techniques=["static comparison analysis"],
+        primary_technique="static comparison analysis",
+        secondary_technique=None,
+        intended_path=[f"Solve step {index}" for index in range(1, step_count + 1)],
+    )
+    payload["challenges"][0].pop("secondary_technique")
+    return payload
+
+
+def test_difficulty_easy_accepts_four_intended_path_steps():
+    parent = _parent_task(category="re", difficulty="easy", port=None)
+
+    validate_design_payload(_easy_re_payload(4), parent)
+
+
+def test_difficulty_easy_rejects_five_intended_path_steps():
+    parent = _parent_task(category="re", difficulty="easy", port=None)
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match=r"easy allows at most 4 intended_path steps",
+    ):
+        validate_design_payload(_easy_re_payload(5), parent)
 
 
 def test_difficulty_legacy_grandfather_skips_alignment():

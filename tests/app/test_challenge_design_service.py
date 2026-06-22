@@ -308,6 +308,22 @@ def test_schema_invalid_requeues_when_retry_remains(
         assert attempts[0].last_error == result.error
 
 
+def test_retry_prompt_includes_previous_validation_error(
+    session_factory: SessionFactory,
+    tmp_path: Path,
+):
+    task_id, _ = _seed(session_factory, max_attempts=2)
+    executor = FakeDesignExecutor(stdout="{}")
+    service = _service(tmp_path, session_factory, executor)
+
+    first = service.design_for_task(task_id, "alice")
+    service.design_for_task(task_id, "alice")
+
+    assert first.error is not None
+    assert "## Retry Feedback" in executor.calls[1]["prompt_text"]
+    assert first.error in executor.calls[1]["prompt_text"]
+
+
 def test_exhausted_retry_marks_task_failed(
     session_factory: SessionFactory,
     tmp_path: Path,

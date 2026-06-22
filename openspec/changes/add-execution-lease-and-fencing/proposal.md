@@ -46,13 +46,16 @@ publishing even while its Hermes process is still running.
   build attempt (`iteration_no = max + 1`). `attempt_no` is allocated only on a
   fresh submit and now means "which build session for this challenge".
 - New `executions` table: `id, build_attempt_id, parent_execution_id,
-  iteration_no, execution_kind (initial|retry|revision), worker_id, claim_token,
-  lease_expires_at, heartbeat_at, status, exit_class, started_at, finished_at,
-  created_at`, with a partial-unique "one active execution per attempt" index
-  and a "revision requires parent" check.
+  iteration_no, execution_kind (initial|retry|revision), execution_mode
+  (standard|clean), worker_id, claim_token, lease_expires_at, heartbeat_at,
+  status, exit_class, started_at, finished_at, created_at`, with a
+  partial-unique "one active execution per attempt" index, a "revision requires
+  parent" check, and a "clean mode requires retry kind" check.
 - `build_attempts` gains `current_execution_id`, `latest_execution_id`,
   `successful_execution_id` (nullable); per-run fields (`worker`, `error`) are
   superseded by the execution row, while container-level result fields stay.
+  `successful_execution_id` always records the latest execution whose output was
+  successfully published.
 - Claim is a single transaction: lock attempt → allocate `iteration_no` → mint
   `claim_token` + `lease_expires_at` → insert execution → set container status.
 - Fencing: `update_to_running`, `update_to_terminal`, the publisher (proposal
@@ -61,6 +64,8 @@ publishing even while its Hermes process is still running.
 - `BuildReconciler` is repurposed as a **lease reaper** over executions: expired
   leases are marked `lost` and re-mint the token on recovery; the existing
   `BUILD_LOST_GRACE` (300s) becomes the default `LEASE_TTL`.
+- Heartbeat uses a dedicated `POST /api/executions/{id}/heartbeat` endpoint so
+  token validation stays explicit and per-execution.
 - Revision claim materializes the parent execution's output manifest, base
   artifact, and human feedback snapshot into the new workspace `current/input/`,
   reading the base artifact **in place** from the same challenge directory's
