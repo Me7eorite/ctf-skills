@@ -205,14 +205,21 @@ are already the new authoritative version.
 #### Scenario: Repair with byte-identical output is a publisher no-op
 
 - **GIVEN** the prior publication committed `output_manifest_hash = H`
-- **AND** the repair invocation produced staging whose computed hash equals
-  `H` (byte-identical output — for example because the runner's
-  no-changes detector aborted the repair before Hermes edited anything)
+- **AND** the repair invocation completed and produced staging whose computed
+  hash equals `H` (for example because Hermes only modified files under
+  `./logs/` or made an edit that happens to be byte-identical to the previous
+  canonical tree)
 - **WHEN** the publisher prepares to publish
 - **THEN** it MUST short-circuit: no journal is written, `publish_generation`
   is unchanged, no quarantine is created, no canonical rename runs, and the
   retention sweep is not triggered
 - **AND** the publisher reports a `noop` outcome distinct from `succeeded`
+
+The publisher's staging-hash `noop` is the authoritative no-op signal. The
+runner MAY also have an earlier output-signature pre-check that skips the
+publisher entirely (see design Decision 13), but spec compliance is judged
+by the publisher's behavior — removing the runner pre-check SHALL NOT change
+the observable outcome of this scenario.
 
 #### Scenario: Runner observes noop and exits the repair loop
 

@@ -21,7 +21,7 @@ from uuid import UUID
 
 from core.build_timeout import shard_timeout_policy
 from core.docker import image_exists as default_image_exists
-from core.jsonio import read_json
+from core.jsonio import read_json, write_json
 from core.paths import ProjectPaths, category_of
 from core.queue import ShardQueue
 from core.state import InMemoryProgressStore, ProgressEventInput, ProgressStore
@@ -545,7 +545,35 @@ class HermesRunner:
                 "error": message,
             }
         try:
-            materialize_resume_outputs(self.paths, workspace, payload)
+            execution_mode_raw = payload.get("execution_mode")
+            resume_source = payload.get("resume_from_shard_basename")
+            if execution_mode_raw is None:
+                # Compatibility: legacy payloads without execution_mode keep
+                # the materialize-resume-outputs behavior. The spec maps such
+                # payloads to "clean" semantically, but the publisher's
+                # contract-level decision is what enforces clean's "no prior
+                # artifact" guarantee for explicit clean-rebuild submissions.
+                resolved_mode = "resume" if resume_source else "implicit"
+            elif execution_mode_raw in {"resume", "clean"}:
+                resolved_mode = execution_mode_raw
+            else:
+                raise ValueError(f"unsupported execution_mode: {execution_mode_raw!r}")
+            if resolved_mode == "resume" and not isinstance(resume_source, str):
+                raise ValueError("explicit resume requires resume_from_shard_basename")
+            if resolved_mode == "clean" and resume_source is not None:
+                raise ValueError("explicit clean forbids resume_from_shard_basename")
+            if resolved_mode == "clean":
+                resume_targets: dict[str, str] = {}
+            else:
+                resume_targets = materialize_resume_outputs(
+                    self.paths, workspace, payload
+                )
+            if resume_targets:
+                manifest = read_json(workspace.manifest, {}) or {}
+                if not isinstance(manifest, dict):
+                    manifest = {}
+                manifest["resume_output_targets"] = resume_targets
+                write_json(workspace.manifest, manifest)
         except (OSError, WorkspacePromotionError, ValueError) as exc:
             message = f"Workspace materialization failed: {exc}"
             self._mark_shard_failed(
@@ -765,7 +793,7 @@ class HermesRunner:
                 )
                 break
             try:
-                publish_workspace_output(
+                repair_publish_result = publish_workspace_output(
                     self.paths,
                     workspace,
                     contract=publication_contract,
@@ -775,6 +803,13 @@ class HermesRunner:
                     "validation repair attempt %s promotion failed: %s",
                     repair_attempt,
                     exc,
+                )
+                break
+            if repair_publish_result.outcome == "noop":
+                _LOGGER.info(
+                    "validation repair attempt %s: publisher reported noop; "
+                    "exiting repair loop without rerunning validator",
+                    repair_attempt,
                 )
                 break
             per_results = self._run_validation(

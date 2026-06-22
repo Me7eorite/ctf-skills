@@ -353,6 +353,29 @@ where safe. Runner error messages and terminal markers include this phase so an
 agent-output duplicate can be distinguished operationally from filesystem or
 rollback failure without parsing free-form exception text.
 
+### Decision 13: Runner pre-check and publisher noop coexist with explicit priority
+
+`runner.py` already has a `pre_signature == post_signature → break` fast-path
+that aborts the validation-repair loop when Hermes left `./output/` untouched.
+The publisher (Decision 2 + Task 4.4) independently short-circuits to a `noop`
+result when the staged manifest hash equals the last committed hash.
+
+The two layers serve different purposes and SHALL NOT be collapsed:
+
+- The runner pre-check is a **performance optimization** that avoids spawning
+  the publisher (and its hashing/locking work) when no bytes changed. It MAY
+  be removed in a future change without spec impact.
+- The publisher `noop` is the **fail-closed semantic source of truth**: even
+  if the runner pre-check is bypassed (e.g. Hermes edited and then reverted),
+  the publisher MUST still produce a `noop` outcome and the runner MUST exit
+  the repair loop on it.
+
+The runner therefore consumes `PublishResult.outcome` (Task 7.10) and exits
+the repair loop on `noop` *regardless* of whether the pre-check fired. The
+spec scenario for noop describes a case where the publisher is actually
+invoked (Hermes ran and emitted byte-identical output), not the runner
+fast-path; otherwise the scenario would be unobservable.
+
 ## Risks / Trade-offs
 
 - The 7-day / last-20 retention policy is a baked-in heuristic. A

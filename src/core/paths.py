@@ -85,6 +85,22 @@ class ProjectPaths:
         """Build execution workspaces, isolated by workspace id."""
         return self.work / "executions"
 
+    @property
+    def locks_root(self) -> Path:
+        """Cross-process lock root. Future proposals add sibling subdirectories
+        here (e.g. lease locks in proposal #3); never nest under
+        build-publisher/."""
+        return self.work / "locks"
+
+    @property
+    def build_publisher_locks(self) -> Path:
+        """Cross-process lock directory owned by hermes.build_publisher.
+
+        Lock filenames are a hex digest of `(category, claimed_id)` and
+        carry no secrets, so default umask permissions are sufficient.
+        """
+        return self.locks_root / "build-publisher"
+
     # ========== Research 研究流程路径 ==========
 
     @property
@@ -174,6 +190,8 @@ class ProjectPaths:
             self.reports,
             self.logs,
             self.executions,
+            self.locks_root,
+            self.build_publisher_locks,
             self.research_sources,
             self.research_sources_staging,
             self.research_logs,

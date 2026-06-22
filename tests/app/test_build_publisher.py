@@ -144,10 +144,10 @@ def test_manifest_write_failure_rolls_back_canonical(
         contract = prepare_publication_contract(paths, workspace, payload)
         original_writer = build_publisher._write_atomic_json
 
-        def fail_manifest(path: Path, payload):
+        def fail_manifest(path: Path, payload, **kwargs):
             if path.name == "manifest.json":
                 raise OSError("manifest blocked")
-            original_writer(path, payload)
+            original_writer(path, payload, **kwargs)
 
         monkeypatch.setattr(build_publisher, "_write_atomic_json", fail_manifest)
 

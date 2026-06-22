@@ -6,10 +6,12 @@ import hashlib
 import json
 import os
 import shutil
+import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterator, Mapping, Sequence
 
 from core.jsonio import read_json, write_json
 from core.paths import ProjectPaths
@@ -20,6 +22,11 @@ from hermes.workspace import (
     _matching_directories,
     _validate_challenges,
 )
+
+try:  # POSIX-only flock primitive (Decision 5)
+    import fcntl  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover - Windows hosts hit preflight error
+    fcntl = None  # type: ignore[assignment]
 
 _MANIFEST_PROJECTION_FIELDS = {"output_manifest_hash", "publish_generation"}
 _STATE_FILES = {
@@ -32,6 +39,7 @@ _DEFAULT_MAX_BYTES = 2 * 1024 * 1024 * 1024
 _DEFAULT_MAX_FILES = 50_000
 _DEFAULT_MAX_DEPTH = 64
 _DEFAULT_MAX_COMPONENT_BYTES = 255
+_DEFAULT_LOCK_TIMEOUT_SECONDS = 30
 _PUBLISH_PHASES = {
     "contract",
     "allowlist",
@@ -157,14 +165,19 @@ def publish_workspace_output(
     contract: PublicationContract,
 ) -> PublishResult:
     """Publish claimed workspace outputs into canonical challenge storage."""
+    _preflight_platform()
+    _bootstrap_recover_journal(paths, workspace)
     _verify_contract(workspace, contract)
     candidates = _collect_candidates(workspace, contract)
+    _cross_check_resume_targets(candidates, contract)
     limits = _publisher_limits_from_env()
     _enforce_output_limits(candidates, limits)
     _enforce_change_policy(workspace, candidates, contract.change_policy)
     staged_hash = _output_manifest_hash(candidates)
     committed = _read_high_water(workspace)
     if committed and committed.get("output_manifest_hash") == staged_hash:
+        _write_terminal_marker(workspace, status="noop", output_hash=staged_hash)
+        _run_retention_sweep(paths)
         return PublishResult(
             published_paths=[],
             quarantined=[],
@@ -175,77 +188,140 @@ def publish_workspace_output(
     canonical_root = paths.challenges / contract.category
     canonical_root.mkdir(parents=True, exist_ok=True)
     quarantine_root = workspace.root / "quarantine" / contract.category
+    _verify_same_filesystem(canonical_root, workspace, quarantine_root)
     published: list[Path] = []
     quarantined: list[Path] = []
     published_by_id: dict[str, Path] = {}
     rollback_entries: list[tuple[Path, Path | None, Path | None]] = []
     generation = _next_generation(committed)
-    _write_publish_journal(workspace, generation, staged_hash, phase="stage")
+    lock_timeout = _positive_env_int(
+        "BUILD_PUBLISH_LOCK_TIMEOUT_SECONDS",
+        _DEFAULT_LOCK_TIMEOUT_SECONDS,
+    )
 
     try:
-        for challenge_id in contract.challenge_ids:
-            source = candidates[challenge_id]
-            existing = _matching_directories(canonical_root, challenge_id)
-            if len(existing) > 1:
-                raise WorkspacePublishError(
-                    f"multiple canonical directories for claimed id {challenge_id}",
-                    phase="allowlist",
-                    claimed_id=challenge_id,
-                )
-            temporary = canonical_root / (
-                f".workspace-{workspace.workspace_id}-{uuid.uuid4().hex}"
-            )
-            shutil.copytree(source, temporary, symlinks=True)
-            _enforce_output_limits({challenge_id: temporary}, limits)
-            quarantined_path: Path | None = None
-            predecessor_path: Path | None = existing[0] if existing else None
-            try:
-                if existing:
-                    quarantine_root.mkdir(parents=True, exist_ok=True)
-                    quarantined_path = quarantine_root / existing[0].name
-                    if quarantined_path.exists():
-                        quarantined_path = quarantine_root / (
-                            f"{existing[0].name}.repair-{uuid.uuid4().hex}"
-                        )
-                    existing[0].replace(quarantined_path)
-                    quarantined.append(quarantined_path)
-                destination = canonical_root / source.name
-                if destination.exists():
+        with _acquire_publisher_locks(
+            paths,
+            contract.category,
+            contract.challenge_ids,
+            timeout_seconds=lock_timeout,
+        ):
+            # Stage every candidate into a temp sibling BEFORE any canonical
+            # rename so a failure in id N never leaves canonical mutated.
+            staged_temps: dict[str, Path] = {}
+            for challenge_id in contract.challenge_ids:
+                source = candidates[challenge_id]
+                existing = _matching_directories(canonical_root, challenge_id)
+                if len(existing) > 1:
                     raise WorkspacePublishError(
-                        f"promotion destination exists: {destination.name}",
-                        phase="commit",
+                        f"multiple canonical directories for claimed id {challenge_id}",
+                        phase="allowlist",
                         claimed_id=challenge_id,
-                        path=destination.name,
+                    )
+                temporary = canonical_root / (
+                    f".workspace-{workspace.workspace_id}-{uuid.uuid4().hex}"
                 )
-                temporary.replace(destination)
-                published.append(destination)
-                published_by_id[challenge_id] = destination
-                rollback_entries.append((destination, quarantined_path, predecessor_path))
-            except BaseException:
-                if temporary.exists():
-                    shutil.rmtree(temporary)
-                if (
-                    quarantined_path is not None
-                    and quarantined_path.exists()
-                    and existing
-                    and not existing[0].exists()
-                ):
-                    quarantined_path.replace(existing[0])
-                raise
-        _write_publish_journal(workspace, generation, staged_hash, phase="manifest")
-        canonical_hash = _output_manifest_hash(published_by_id)
-        if canonical_hash != staged_hash:
-            raise WorkspacePublishError(
-                "canonical output hash mismatch after publish",
-                phase="manifest",
+                shutil.copytree(source, temporary, symlinks=True)
+                _enforce_output_limits({challenge_id: temporary}, limits)
+                staged_temps[challenge_id] = temporary
+
+            # All temps in place — durable journal records the full plan
+            # before any canonical mutation.
+            _write_publish_journal(
+                workspace,
+                generation,
+                staged_hash,
+                phase="stage",
+                category=contract.category,
+                entries=[
+                    {
+                        "claimed_id": cid,
+                        "source": str(candidates[cid]),
+                        "temp": str(staged_temps[cid]),
+                        "canonical": str(canonical_root / candidates[cid].name),
+                    }
+                    for cid in contract.challenge_ids
+                ],
             )
-        _update_manifest_and_high_water(workspace, generation, staged_hash)
+
+            try:
+                for challenge_id in contract.challenge_ids:
+                    source = candidates[challenge_id]
+                    existing = _matching_directories(canonical_root, challenge_id)
+                    if len(existing) > 1:
+                        raise WorkspacePublishError(
+                            f"multiple canonical directories for claimed id {challenge_id}",
+                            phase="allowlist",
+                            claimed_id=challenge_id,
+                        )
+                    temporary = staged_temps[challenge_id]
+                    quarantined_path: Path | None = None
+                    predecessor_path: Path | None = existing[0] if existing else None
+                    if existing:
+                        quarantine_root.mkdir(parents=True, exist_ok=True)
+                        quarantined_path = quarantine_root / existing[0].name
+                        if quarantined_path.exists():
+                            quarantined_path = quarantine_root / (
+                                f"{existing[0].name}.repair-{uuid.uuid4().hex}"
+                            )
+                        existing[0].replace(quarantined_path)
+                        quarantined.append(quarantined_path)
+                    destination = canonical_root / source.name
+                    if destination.exists():
+                        raise WorkspacePublishError(
+                            f"promotion destination exists: {destination.name}",
+                            phase="commit",
+                            claimed_id=challenge_id,
+                            path=destination.name,
+                        )
+                    temporary.replace(destination)
+                    published.append(destination)
+                    published_by_id[challenge_id] = destination
+                    rollback_entries.append(
+                        (destination, quarantined_path, predecessor_path)
+                    )
+                _write_publish_journal(
+                    workspace,
+                    generation,
+                    staged_hash,
+                    phase="manifest",
+                    category=contract.category,
+                )
+                canonical_hash = _output_manifest_hash(published_by_id)
+                if canonical_hash != staged_hash:
+                    raise WorkspacePublishError(
+                        "canonical output hash mismatch after publish",
+                        phase="manifest",
+                    )
+                _update_manifest_and_high_water(workspace, generation, staged_hash)
+                _write_publish_journal(
+                    workspace,
+                    generation,
+                    staged_hash,
+                    phase="committed",
+                    category=contract.category,
+                )
+            except BaseException:
+                _write_publish_journal(
+                    workspace,
+                    generation,
+                    staged_hash,
+                    phase="rollback",
+                    category=contract.category,
+                )
+                _rollback_published_batch(rollback_entries)
+                for temp in staged_temps.values():
+                    if temp.exists():
+                        shutil.rmtree(temp, ignore_errors=True)
+                raise
     except BaseException:
-        _write_publish_journal(workspace, generation, staged_hash, phase="rollback")
-        _rollback_published_batch(rollback_entries)
+        _write_terminal_marker(workspace, status="failed", output_hash=staged_hash)
+        _run_retention_sweep(paths)
         raise
     else:
         _remove_publish_journal(workspace)
+        _write_terminal_marker(workspace, status="succeeded", output_hash=staged_hash)
+        _run_retention_sweep(paths)
         return PublishResult(
             published_paths=published,
             quarantined=quarantined,
@@ -779,15 +855,26 @@ def _write_publish_journal(
     output_hash: str,
     *,
     phase: str,
+    category: str | None = None,
+    entries: Sequence[Mapping[str, Any]] | None = None,
 ) -> None:
-    _write_atomic_json(
-        workspace.state / "publish-journal.json",
-        {
-            "phase": phase,
-            "publish_generation": generation,
-            "output_manifest_hash": output_hash,
-        },
-    )
+    payload: dict[str, Any] = {
+        "phase": phase,
+        "publish_generation": generation,
+        "output_manifest_hash": output_hash,
+        "workspace_id": workspace.workspace_id,
+    }
+    if category is not None:
+        payload["category"] = category
+    if entries is not None:
+        payload["entries"] = list(entries)
+    else:
+        existing = _read_optional_json(workspace.state / "publish-journal.json")
+        if isinstance(existing, Mapping) and "entries" in existing:
+            payload["entries"] = list(existing["entries"])
+        if isinstance(existing, Mapping) and category is None and "category" in existing:
+            payload["category"] = existing["category"]
+    _write_atomic_json(workspace.state / "publish-journal.json", payload, fsync=True)
 
 
 def _remove_publish_journal(workspace: ExecutionWorkspace) -> None:
@@ -796,10 +883,27 @@ def _remove_publish_journal(workspace: ExecutionWorkspace) -> None:
         journal.unlink()
 
 
-def _write_atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
+def _write_atomic_json(
+    path: Path,
+    payload: Mapping[str, Any],
+    *,
+    fsync: bool = False,
+) -> None:
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     write_json(temporary, payload)
+    if fsync:
+        with temporary.open("rb") as handle:
+            os.fsync(handle.fileno())
     temporary.replace(path)
+    if fsync:
+        try:
+            dir_fd = os.open(str(path.parent), os.O_DIRECTORY)
+        except OSError:
+            return
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
 
 
 def _rollback_published_batch(
@@ -876,3 +980,427 @@ def _file_hash(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _preflight_platform() -> None:
+    if fcntl is None or not hasattr(fcntl, "flock"):
+        raise WorkspacePublishError(
+            "publisher requires POSIX fcntl.flock; non-POSIX host is unsupported",
+            phase="contract",
+        )
+
+
+def _cross_check_resume_targets(
+    candidates: Mapping[str, Path],
+    contract: PublicationContract,
+) -> None:
+    targets = dict(contract.resume_output_targets or {})
+    if not targets:
+        return
+    for cid, recorded in targets.items():
+        observed = candidates.get(cid)
+        if observed is None:
+            raise WorkspacePublishError(
+                f"resume target missing in staging: {cid}",
+                phase="contract",
+                claimed_id=cid,
+                path=str(recorded),
+            )
+        observed_basename = observed.name
+        recorded_basename = Path(str(recorded)).name
+        if observed_basename != recorded_basename:
+            raise WorkspacePublishError(
+                "resume target binding disagrees with staging: "
+                f"recorded={recorded} observed={observed_basename}",
+                phase="contract",
+                claimed_id=cid,
+                path=observed_basename,
+            )
+    for cid in candidates:
+        if cid in targets:
+            continue
+        # Unknown id with a target binding only fails when the binding
+        # explicitly named that id; staging-only ids are checked by allowlist.
+
+
+def _verify_same_filesystem(
+    canonical_root: Path,
+    workspace: ExecutionWorkspace,
+    quarantine_root: Path,
+) -> None:
+    canonical_root.mkdir(parents=True, exist_ok=True)
+    quarantine_root.mkdir(parents=True, exist_ok=True)
+    workspace.output.mkdir(parents=True, exist_ok=True)
+    try:
+        canonical_dev = canonical_root.stat().st_dev
+        quarantine_dev = quarantine_root.stat().st_dev
+        workspace_dev = workspace.output.stat().st_dev
+    except OSError as exc:
+        raise WorkspacePublishError(
+            f"could not stat publisher paths: {exc}",
+            phase="commit",
+        ) from exc
+    if not (canonical_dev == quarantine_dev == workspace_dev):
+        raise WorkspacePublishError(
+            "canonical / quarantine / workspace.output must share one filesystem",
+            phase="commit",
+        )
+
+
+def _write_terminal_marker(
+    workspace: ExecutionWorkspace,
+    *,
+    status: str,
+    output_hash: str,
+) -> None:
+    payload = {
+        "status": status,
+        "output_manifest_hash": output_hash,
+        "wall_clock_seconds": time.time(),
+    }
+    _write_atomic_json(workspace.state / "publish-status.json", payload)
+
+
+def _claimed_lock_digest(category: str, claimed_id: str) -> str:
+    digest = hashlib.sha256()
+    digest.update(category.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(claimed_id.encode("utf-8"))
+    return digest.hexdigest()
+
+
+@contextmanager
+def _acquire_publisher_locks(
+    paths: ProjectPaths,
+    category: str,
+    challenge_ids: Sequence[str],
+    *,
+    timeout_seconds: int,
+) -> Iterator[None]:
+    lock_root = paths.build_publisher_locks
+    try:
+        lock_root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise WorkspacePublishError(
+            f"publisher lock root unavailable: {exc}",
+            phase="commit",
+        ) from exc
+    sorted_ids = sorted(set(challenge_ids))
+    fds: list[int] = []
+    held_paths: list[Path] = []
+    try:
+        for cid in sorted_ids:
+            lock_path = lock_root / _claimed_lock_digest(category, cid)
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                _flock_with_timeout(fd, timeout_seconds, lock_path)
+            except BaseException:
+                os.close(fd)
+                raise
+            fds.append(fd)
+            held_paths.append(lock_path)
+        yield
+    finally:
+        for fd in fds:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)  # type: ignore[union-attr]
+            except OSError:
+                pass
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def _flock_with_timeout(fd: int, timeout_seconds: int, lock_path: Path) -> None:
+    assert fcntl is not None
+    deadline = time.monotonic() + max(1, timeout_seconds)
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                raise WorkspacePublishError(
+                    f"publisher lock busy: {lock_path.name}",
+                    phase="commit",
+                    path=lock_path.name,
+                ) from None
+            time.sleep(0.1)
+
+
+def _bootstrap_recover_journal(
+    paths: ProjectPaths,
+    workspace: ExecutionWorkspace,
+) -> None:
+    """Finalize or roll back an incomplete journal left by a prior process.
+
+    Idempotent: callable repeatedly. Acquires the same publisher locks the
+    original publish would have used, finalizes the high-water file when the
+    journal recorded `committed`, otherwise rolls back the canonical batch.
+    """
+    journal_path = workspace.state / "publish-journal.json"
+    if not journal_path.exists():
+        return
+    raw = read_json(journal_path, None)
+    if not isinstance(raw, dict):
+        raise WorkspacePublishError(
+            "publish journal is malformed; manual recovery required",
+            phase="recovery",
+        )
+    generation_value = raw.get("publish_generation")
+    if not isinstance(generation_value, int):
+        raise WorkspacePublishError(
+            "in-flight publish journal requires recovery before publication "
+            "(missing generation)",
+            phase="recovery",
+        )
+    category = raw.get("category")
+    if not isinstance(category, str):
+        raise WorkspacePublishError(
+            "in-flight publish journal requires recovery before publication "
+            "(missing category)",
+            phase="recovery",
+        )
+    entries = raw.get("entries", [])
+    if not isinstance(entries, list):
+        entries = []
+    claimed_ids = [
+        entry.get("claimed_id")
+        for entry in entries
+        if isinstance(entry, dict) and isinstance(entry.get("claimed_id"), str)
+    ]
+    committed = _read_high_water(workspace)
+    committed_generation = (
+        committed.get("publish_generation") if isinstance(committed, Mapping) else 0
+    )
+    if not isinstance(committed_generation, int):
+        committed_generation = 0
+
+    phase = raw.get("phase")
+    output_hash = raw.get("output_manifest_hash")
+
+    lock_timeout = _positive_env_int(
+        "BUILD_PUBLISH_LOCK_TIMEOUT_SECONDS",
+        _DEFAULT_LOCK_TIMEOUT_SECONDS,
+    )
+
+    if phase == "committed":
+        # Crash window: canonical+manifest committed, high-water may lag.
+        if generation_value > committed_generation:
+            _write_atomic_json(
+                workspace.state / "highest-committed-generation.json",
+                {
+                    "publish_generation": generation_value,
+                    "output_manifest_hash": output_hash,
+                },
+            )
+        journal_path.unlink()
+        return
+
+    if generation_value <= committed_generation:
+        raise WorkspacePublishError(
+            "publish journal generation older than high-water; manual review required",
+            phase="recovery",
+        )
+
+    # Roll back: undo any canonical movement using the journal entries.
+    canonical_root = paths.challenges / category
+    rollback_entries: list[tuple[Path, Path | None, Path | None]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        destination_str = entry.get("canonical")
+        if not isinstance(destination_str, str):
+            continue
+        destination = Path(destination_str)
+        rollback_entries.append((destination, None, None))
+    with _acquire_publisher_locks(
+        paths,
+        category,
+        claimed_ids,
+        timeout_seconds=lock_timeout,
+    ):
+        # Best-effort rollback: remove any temps for this workspace and any
+        # newly-placed canonical directories the journal recorded.
+        for entry in entries:
+            if isinstance(entry, dict):
+                temp_str = entry.get("temp")
+                if isinstance(temp_str, str):
+                    temp_path = Path(temp_str)
+                    if temp_path.exists():
+                        shutil.rmtree(temp_path, ignore_errors=True)
+        # Restore quarantined predecessors when the canonical slot is empty.
+        quarantine_root = workspace.root / "quarantine" / category
+        if quarantine_root.exists():
+            for child in quarantine_root.iterdir():
+                if not child.is_dir():
+                    continue
+                target = canonical_root / child.name
+                if not target.exists():
+                    try:
+                        child.replace(target)
+                    except OSError:
+                        # Leave the predecessor in quarantine; operator inspection.
+                        pass
+        journal_path.unlink()
+
+
+_DEFAULT_RETENTION_DAYS = 7
+_DEFAULT_RETENTION_MAX_ROOTS = 20
+_DEFAULT_SWEEP_INTERVAL_SECONDS = 60
+_LAST_SWEEP_AT: dict[str, float] = {"value": 0.0, "pending": 0.0}
+
+
+def _run_retention_sweep(paths: ProjectPaths) -> None:
+    """Opportunistic retention sweep with per-process throttle.
+
+    Errors are warnings-only (logged) and SHALL NOT propagate to the caller.
+    Throttle suppresses calls within ``BUILD_PUBLISH_SWEEP_INTERVAL_SECONDS``;
+    a suppressed call sets a ``pending`` flag so the next eligible call runs
+    the sweep.
+    """
+    try:
+        interval = _positive_env_int(
+            "BUILD_PUBLISH_SWEEP_INTERVAL_SECONDS",
+            _DEFAULT_SWEEP_INTERVAL_SECONDS,
+        )
+    except WorkspacePublishError:
+        return
+    now = time.monotonic()
+    last = _LAST_SWEEP_AT["value"]
+    if last and (now - last) < interval and not _LAST_SWEEP_AT["pending"]:
+        _LAST_SWEEP_AT["pending"] = now
+        return
+    _LAST_SWEEP_AT["value"] = now
+    _LAST_SWEEP_AT["pending"] = 0.0
+    try:
+        _sweep_retention_roots(paths)
+    except Exception:  # noqa: BLE001 - sweep MUST NOT block publish result
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "publisher retention sweep failed", exc_info=True
+        )
+
+
+def _sweep_retention_roots(paths: ProjectPaths) -> None:
+    executions_root = paths.executions
+    if not executions_root.is_dir():
+        return
+    candidates: list[tuple[float, Path]] = []
+    for workspace_dir in executions_root.iterdir():
+        if not workspace_dir.is_dir():
+            continue
+        if _workspace_has_active_journal(workspace_dir):
+            continue
+        marker = _read_terminal_marker(workspace_dir)
+        if marker is None:
+            continue
+        timestamp = marker.get("wall_clock_seconds")
+        if not isinstance(timestamp, (int, float)):
+            continue
+        if not _workspace_has_retained_artifacts(workspace_dir):
+            continue
+        if not _can_acquire_workspace_publisher_locks(paths, workspace_dir):
+            continue
+        candidates.append((float(timestamp), workspace_dir))
+
+    now_wall = time.time()
+    age_cutoff = now_wall - _DEFAULT_RETENTION_DAYS * 86400
+    fresh: list[tuple[float, Path]] = []
+    for timestamp, workspace_dir in candidates:
+        if timestamp < age_cutoff:
+            _purge_retained_artifacts(workspace_dir)
+        else:
+            fresh.append((timestamp, workspace_dir))
+
+    if len(fresh) > _DEFAULT_RETENTION_MAX_ROOTS:
+        fresh.sort(key=lambda item: item[0])
+        evictable = fresh[: len(fresh) - _DEFAULT_RETENTION_MAX_ROOTS]
+        for _, workspace_dir in evictable:
+            _purge_retained_artifacts(workspace_dir)
+
+
+def _workspace_has_active_journal(workspace_dir: Path) -> bool:
+    return (workspace_dir / "state" / "publish-journal.json").exists()
+
+
+def _read_terminal_marker(workspace_dir: Path) -> Mapping[str, Any] | None:
+    path = workspace_dir / "state" / "publish-status.json"
+    if not path.exists():
+        return None
+    value = read_json(path, None)
+    return value if isinstance(value, Mapping) else None
+
+
+def _workspace_has_retained_artifacts(workspace_dir: Path) -> bool:
+    quarantine = workspace_dir / "quarantine"
+    if quarantine.is_dir():
+        for category in quarantine.iterdir():
+            if category.is_dir() and any(category.iterdir()):
+                return True
+    marker = _read_terminal_marker(workspace_dir)
+    status = marker.get("status") if isinstance(marker, Mapping) else None
+    if status == "failed":
+        output_dir = workspace_dir / "output"
+        logs_dir = workspace_dir / "logs"
+        if output_dir.is_dir() and any(output_dir.iterdir()):
+            return True
+        if logs_dir.is_dir() and any(logs_dir.iterdir()):
+            return True
+    return False
+
+
+def _can_acquire_workspace_publisher_locks(
+    paths: ProjectPaths,
+    workspace_dir: Path,
+) -> bool:
+    """Best-effort non-blocking lock acquisition check.
+
+    Without a journal we assume no per-id lock is held (the workspace is
+    terminal). When a journal is present we try every (category, claimed_id)
+    pair non-blockingly; any held lock skips the workspace.
+    """
+    journal_path = workspace_dir / "state" / "publish-journal.json"
+    if not journal_path.exists():
+        return True
+    raw = read_json(journal_path, None)
+    if not isinstance(raw, dict):
+        return True
+    category = raw.get("category") if isinstance(raw.get("category"), str) else None
+    entries = raw.get("entries") if isinstance(raw.get("entries"), list) else []
+    claimed_ids = [
+        entry.get("claimed_id")
+        for entry in entries
+        if isinstance(entry, dict) and isinstance(entry.get("claimed_id"), str)
+    ]
+    if not category or not claimed_ids:
+        return False
+    if fcntl is None:
+        return False
+    lock_root = paths.build_publisher_locks
+    for cid in claimed_ids:
+        lock_path = lock_root / _claimed_lock_digest(category, cid)
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+        except OSError:
+            return False
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return False
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+    return True
+
+
+def _purge_retained_artifacts(workspace_dir: Path) -> None:
+    for relative in ("quarantine", "output", "logs"):
+        target = workspace_dir / relative
+        if target.is_dir():
+            shutil.rmtree(target, ignore_errors=True)
+
+

@@ -252,11 +252,17 @@ def materialize_resume_outputs(
     paths: ProjectPaths,
     workspace: ExecutionWorkspace,
     payload: Mapping[str, Any],
-) -> None:
-    """Copy existing claimed canonical artifacts into isolated workspace output."""
+) -> dict[str, str]:
+    """Copy existing claimed canonical artifacts into isolated workspace output.
+
+    Returns a mapping ``{claimed_id: workspace_relative_path}`` for every id
+    that already had a canonical directory; ids without a canonical
+    predecessor are omitted.
+    """
     category, challenge_ids = _validate_challenges(payload.get("challenges"))
     destination_root = workspace.output / "challenges" / category
     destination_root.mkdir(parents=True, exist_ok=True)
+    targets: dict[str, str] = {}
     for challenge_id in challenge_ids:
         existing = _matching_directories(paths.challenges / category, challenge_id)
         if len(existing) > 1:
@@ -267,7 +273,10 @@ def materialize_resume_outputs(
             continue
         source = existing[0]
         _reject_tree_symlinks(source)
-        shutil.copytree(source, destination_root / source.name)
+        destination = destination_root / source.name
+        shutil.copytree(source, destination)
+        targets[challenge_id] = destination.relative_to(workspace.root).as_posix()
+    return targets
 
 
 def promote_claimed_outputs(

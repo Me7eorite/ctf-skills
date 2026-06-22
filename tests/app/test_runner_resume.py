@@ -53,6 +53,18 @@ class _Paths:
     def hermes_home(self) -> Path:
         return self.root / ".hermes"
 
+    @property
+    def executions(self) -> Path:
+        return self.root / "work" / "executions"
+
+    @property
+    def locks_root(self) -> Path:
+        return self.root / "work" / "locks"
+
+    @property
+    def build_publisher_locks(self) -> Path:
+        return self.locks_root / "build-publisher"
+
     def initialize(self) -> None:
         for state in ("pending", "running", "done", "failed"):
             (self.shards / state).mkdir(parents=True, exist_ok=True)
@@ -60,6 +72,7 @@ class _Paths:
             (self.challenges / category).mkdir(parents=True, exist_ok=True)
         self.reports.mkdir(parents=True, exist_ok=True)
         self.logs.mkdir(parents=True, exist_ok=True)
+        self.build_publisher_locks.mkdir(parents=True, exist_ok=True)
 
 
 def _copy_real_prompt(target: _Paths) -> None:
@@ -573,11 +586,16 @@ class RunnerRealRunTests(unittest.TestCase):
                 log.parent.mkdir(parents=True, exist_ok=True)
                 log.write_text("fake invoke\n", encoding="utf-8")
                 # 模拟 Hermes 真实修改了 workspace.output（runner 在 repair attempt
-                # 前后会对此目录采样签名，无变更即终止后续重试）
+                # 前后会对此目录采样签名，无变更即终止后续重试）。Marker 必须落在
+                # 已认领题目目录内，publisher 的 staging-hash 比较才会发现差异，
+                # 否则 publisher 会返回 noop 并跳过再次校验。
                 workspace = _kwargs.get("workspace")
                 if workspace is not None:
-                    marker = workspace.output / f"repair-marker-{len(prompts)}.txt"
-                    marker.parent.mkdir(parents=True, exist_ok=True)
+                    challenge_root = (
+                        workspace.output / "challenges" / "web" / "web-0001-demo"
+                    )
+                    challenge_root.mkdir(parents=True, exist_ok=True)
+                    marker = challenge_root / f"repair-marker-{len(prompts)}.txt"
                     marker.write_text("touched\n", encoding="utf-8")
                 return 0
 
