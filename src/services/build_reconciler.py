@@ -223,7 +223,54 @@ class BuildReconciler:
                         error=f"artifact solve_status is {solve_status or 'unknown'}",
                     )
 
+        self._roll_forward_execution_tasks(session, now)
         session.flush()
+
+    def _roll_forward_execution_tasks(self, session: Session, now: datetime) -> None:
+        """Advance design_task status for execution-backed terminal attempts.
+
+        Execution-minted attempts (``latest_execution_id`` set) reach their
+        terminal state via the worker's token-gated write or the lease reaper —
+        both update only the execution and build_attempt rows. The legacy
+        ``_finish`` path that also advances the design_task is skipped for them
+        (see the ``latest_execution_id is not None`` guard above). Without this
+        pass the task is stranded at ``building`` after the build succeeds,
+        fails, or is lost, which blocks retry and clean rebuild (both require a
+        ``build_failed`` parent) and never surfaces ``built``.
+
+        Keyed off the build_attempt terminal status, so it also recovers tasks
+        left behind by a ``Runner interrupted`` outcome. Recomputes from the
+        latest attempt, so a newer running attempt keeps the task ``building``
+        and retries never regress.
+        """
+        stale_task_ids = session.scalars(
+            sa.select(build_model.BuildAttempt.design_task_id)
+            .where(
+                build_model.BuildAttempt.latest_execution_id.is_not(None),
+                build_model.BuildAttempt.status.in_(("succeeded", "failed", "lost")),
+                build_model.BuildAttempt.design_task_id.in_(
+                    sa.select(task_model.DesignTask.id).where(
+                        task_model.DesignTask.status == "building"
+                    )
+                ),
+            )
+            .distinct()
+        ).all()
+        for task_id in stale_task_ids:
+            latest = session.scalar(
+                sa.select(build_model.BuildAttempt)
+                .where(build_model.BuildAttempt.design_task_id == task_id)
+                .order_by(build_model.BuildAttempt.attempt_no.desc())
+                .limit(1)
+                .with_for_update()
+            )
+            task = session.get(task_model.DesignTask, task_id)
+            if task is None or task.status != "building" or latest is None:
+                continue
+            if latest.status in ("queued", "running"):
+                continue
+            task.status = "built" if latest.status == "succeeded" else "build_failed"
+            task.updated_at = now
 
     def tick_once_sync(self) -> None:
         """Open one short transaction and run a single reconciliation tick.

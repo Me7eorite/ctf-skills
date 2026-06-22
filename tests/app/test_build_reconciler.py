@@ -582,7 +582,7 @@ def test_tick_reaps_expired_execution_lease(
 ):
     from datetime import timedelta
 
-    _task_id, attempt_id, _basename = _seed_attempt(session_factory)
+    task_id, attempt_id, _basename = _seed_attempt(session_factory)
     # Schedule + claim an execution with an already-expired lease.
     with session_factory() as session:
         repo = ExecutionsRepository(session)
@@ -601,6 +601,32 @@ def test_tick_reaps_expired_execution_lease(
         container = session.get(build_model.BuildAttempt, attempt_id)
         assert container.current_execution_id is None
         assert container.status == "lost"
+        # The roll-forward must advance the parent task out of `building`,
+        # otherwise retry / clean rebuild stay blocked on a lost attempt.
+        assert session.get(task_model.DesignTask, task_id).status == "build_failed"
+
+
+def test_roll_forward_advances_execution_backed_success_to_built(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    # A succeeded execution-backed attempt whose task is still `building`
+    # (the worker token-write does not touch the design_task) must be rolled
+    # forward to `built` by the reconciler, not stranded at `building`.
+    task_id, attempt_id, _basename = _seed_attempt(session_factory)
+    with session_factory() as session:
+        ExecutionsRepository(session).schedule_execution(
+            attempt_id, execution_kind="initial"
+        )
+        row = session.get(build_model.BuildAttempt, attempt_id)
+        row.status = "succeeded"
+        session.commit()
+
+    reconciler = _reconciler(tmp_path, session_factory)
+    reconciler.tick_once_sync()
+
+    with session_factory() as session:
+        assert session.get(task_model.DesignTask, task_id).status == "built"
 
 
 def test_tick_skips_filesystem_mirroring_for_execution_backed_container(
