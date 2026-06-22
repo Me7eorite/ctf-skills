@@ -11,12 +11,67 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
+import os
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 from urllib.parse import urlparse
 from uuid import UUID
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def _quality_ratio() -> float:
+    """Fraction of ``target_count`` that must materialize as findings.
+
+    GLM-5 and other lower-recall models often produce 4–5 findings when
+    asked for 10. The legacy 0.5 default rejects those runs; operators
+    can lower the ratio via ``RESEARCH_QUALITY_RATIO`` (e.g. ``0.3``)
+    for GLM-5-first deployments without touching the validator.
+    """
+    raw = os.environ.get("RESEARCH_QUALITY_RATIO", "0.5")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        _LOGGER.warning(
+            "invalid RESEARCH_QUALITY_RATIO=%r; falling back to 0.5", raw
+        )
+        return 0.5
+    if not 0.0 < value <= 1.0:
+        _LOGGER.warning(
+            "RESEARCH_QUALITY_RATIO=%r out of (0, 1] range; falling back to 0.5",
+            raw,
+        )
+        return 0.5
+    return value
+
+
+def _quality_soft_pass_slack() -> int:
+    """How many findings below `needed` the gate accepts with a warning.
+
+    GLM-5 has run-to-run variance of ±2 findings on the same prompt;
+    operators can set ``RESEARCH_QUALITY_SOFT_PASS_BELOW_BY=1`` so that
+    a single missing finding logs a warning but does not waste the whole
+    batch. Default ``0`` preserves strict behavior.
+    """
+    raw = os.environ.get("RESEARCH_QUALITY_SOFT_PASS_BELOW_BY", "0")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        _LOGGER.warning(
+            "invalid RESEARCH_QUALITY_SOFT_PASS_BELOW_BY=%r; falling back to 0",
+            raw,
+        )
+        return 0
+    if value < 0:
+        _LOGGER.warning(
+            "RESEARCH_QUALITY_SOFT_PASS_BELOW_BY=%r negative; falling back to 0",
+            raw,
+        )
+        return 0
+    return value
 
 from domain.research import DIFFICULTY_LABELS, ResearchFindingKind
 
@@ -216,10 +271,20 @@ def apply_research_quality_gate(
             return False, f"content_hash_dup:{content_hash}"
         seen_hashes.add(content_hash)
 
-    needed = math.ceil(target_count * 0.5)
+    needed = max(1, math.ceil(target_count * _quality_ratio()))
+    slack = _quality_soft_pass_slack()
+    soft_floor = max(1, needed - slack)
     got = len(findings)
-    if got < needed:
+    if got < soft_floor:
         return False, f"insufficient_findings:got={got},need={needed}"
+    if got < needed:
+        _LOGGER.warning(
+            "research quality gate soft-passed: got=%d, needed=%d, slack=%d "
+            "(set RESEARCH_QUALITY_SOFT_PASS_BELOW_BY=0 to disable soft pass)",
+            got,
+            needed,
+            slack,
+        )
     return True, None
 
 

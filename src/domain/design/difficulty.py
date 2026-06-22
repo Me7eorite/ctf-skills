@@ -11,6 +11,8 @@ verbatim; change one and update the other.
 
 from __future__ import annotations
 
+import logging
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -18,12 +20,36 @@ from typing import Any
 from domain.design.schema import ChallengeDesignValidationError
 from domain.design_tasks import DesignTask
 
+_LOGGER = logging.getLogger(__name__)
+
 # Minimum length for the player prompt at medium and above. A one-liner
 # is too thin to carry business context.
 MIN_BUSINESS_PROMPT_CHARS = 60
 
 # Expert ``novelty`` must be substantive enough to identify the trick.
 MIN_NOVELTY_CHARS = 40
+
+# Enforcement modes for the difficulty rubric. Default is ``strict`` —
+# any violation raises ChallengeDesignValidationError. ``lenient`` logs
+# each violation and lets the design through; that mode exists so
+# GLM-5 / DeepSeek-class models that are less consistent at hitting
+# the rubric do not waste an entire design attempt over a single edge.
+# Set ``DESIGN_DIFFICULTY_ENFORCEMENT=lenient`` in the runtime env to
+# opt in per-deployment.
+_ENFORCEMENT_STRICT = "strict"
+_ENFORCEMENT_LENIENT = "lenient"
+
+
+def _enforcement_mode() -> str:
+    raw = os.environ.get("DESIGN_DIFFICULTY_ENFORCEMENT", _ENFORCEMENT_STRICT)
+    mode = raw.strip().lower() if isinstance(raw, str) else _ENFORCEMENT_STRICT
+    if mode not in {_ENFORCEMENT_STRICT, _ENFORCEMENT_LENIENT}:
+        _LOGGER.warning(
+            "invalid DESIGN_DIFFICULTY_ENFORCEMENT=%r; falling back to strict",
+            raw,
+        )
+        return _ENFORCEMENT_STRICT
+    return mode
 
 
 @dataclass(frozen=True)
@@ -107,6 +133,10 @@ def validate_difficulty_alignment(
     Set ``legacy_grandfather=True`` for designs created before this
     validator existed; the function returns immediately in that case so
     historical rows do not have to be regenerated.
+
+    Set ``DESIGN_DIFFICULTY_ENFORCEMENT=lenient`` in the runtime env to
+    log violations instead of raising. Useful when the model is GLM-5 /
+    DeepSeek-class and operators want the design through with a warning.
     """
     if legacy_grandfather:
         return
@@ -120,46 +150,53 @@ def validate_difficulty_alignment(
             f"no difficulty rubric defined for {difficulty!r}"
         )
 
+    enforcement = _enforcement_mode()
+    violations: list[str] = []
+
+    def _flag(message: str) -> None:
+        violations.append(message)
+
     technique_count = _count_techniques(challenge)
     if technique_count < rubric.techniques_min:
-        raise ChallengeDesignValidationError(
+        _flag(
             f"{difficulty} requires at least {rubric.techniques_min} distinct "
             f"techniques; design only declares {technique_count}"
         )
     if technique_count > rubric.techniques_max:
-        raise ChallengeDesignValidationError(
+        _flag(
             f"{difficulty} allows at most {rubric.techniques_max} distinct "
             f"techniques; design declares {technique_count}. Split or downgrade."
         )
 
     step_count = _count_intended_path_steps(challenge)
     if step_count < rubric.intended_path_min:
-        raise ChallengeDesignValidationError(
+        _flag(
             f"{difficulty} requires at least {rubric.intended_path_min} "
             f"intended_path steps; design has {step_count}"
         )
     if step_count > rubric.intended_path_max:
-        raise ChallengeDesignValidationError(
+        _flag(
             f"{difficulty} allows at most {rubric.intended_path_max} "
             f"intended_path steps; design has {step_count}. Trim filler."
         )
 
     if rubric.needs_business_scenario:
-        _require_business_scenario(challenge, parent_task)
+        try:
+            _require_business_scenario(challenge, parent_task)
+        except ChallengeDesignValidationError as exc:
+            _flag(str(exc))
 
     if rubric.needs_implementation_plan:
         plan = challenge.get("implementation_plan")
         if not isinstance(plan, Mapping) or not plan:
-            raise ChallengeDesignValidationError(
-                f"{difficulty} requires a non-empty implementation_plan"
-            )
+            _flag(f"{difficulty} requires a non-empty implementation_plan")
 
     # Phase 2.5 buildability cap: oversized implementation_plan blocks
     # the build agent into Hermes timeouts. Enforce a per-tier ceiling
     # on top-level component count whenever a plan is present.
     plan = challenge.get("implementation_plan")
     if isinstance(plan, Mapping) and len(plan) > rubric.implementation_plan_max_keys:
-        raise ChallengeDesignValidationError(
+        _flag(
             f"{difficulty} allows at most {rubric.implementation_plan_max_keys} "
             f"implementation_plan components; design has {len(plan)}. "
             "Split the design or downgrade the difficulty."
@@ -168,10 +205,28 @@ def validate_difficulty_alignment(
     if rubric.needs_novelty:
         novelty = challenge.get("novelty")
         if not isinstance(novelty, str) or len(novelty.strip()) < MIN_NOVELTY_CHARS:
-            raise ChallengeDesignValidationError(
+            _flag(
                 f"expert difficulty requires a `novelty` field of at least "
                 f"{MIN_NOVELTY_CHARS} characters describing the non-trivial trick"
             )
+
+    if not violations:
+        return
+
+    if enforcement == _ENFORCEMENT_LENIENT:
+        for message in violations:
+            _LOGGER.warning(
+                "design difficulty soft-passed for challenge %s (%s): %s "
+                "(set DESIGN_DIFFICULTY_ENFORCEMENT=strict to reject)",
+                challenge.get("id", "<unknown>"),
+                difficulty,
+                message,
+            )
+        return
+
+    # Strict (default): surface the first violation so the operator sees
+    # a single, actionable error rather than a wall of bullets.
+    raise ChallengeDesignValidationError(violations[0])
 
 
 # ---------- Counting helpers ----------

@@ -27,6 +27,10 @@ from uuid import UUID
 from domain import design_tasks as dto
 from domain import research as research_dto
 from domain.design_task_validators import DesignTaskValidationError
+from domain.research_validators import (
+    _quality_ratio,
+    _quality_soft_pass_slack,
+)
 from persistence.repositories import DesignTaskRepository, ResearchRepository
 from persistence.session import SessionFactory, transaction
 from services.design_planner_hermes import HermesPlannerService, PlannerEnrichment
@@ -88,7 +92,14 @@ class DesignTaskPlanningService:
 
             findings = research_repo.list_findings(latest.id)
             sources = research_repo.list_sources(latest.id)
-            if len(findings) < math.ceil(request.target_count * 0.5):
+            # Same gate as research_validators.apply_research_quality_gate
+            # so RESEARCH_QUALITY_RATIO / RESEARCH_QUALITY_SOFT_PASS_BELOW_BY
+            # honor both call sites. Without this, a research run could
+            # soft-pass at completion time but then be rejected by the
+            # planner with a different error message.
+            needed = max(1, math.ceil(request.target_count * _quality_ratio()))
+            soft_floor = max(1, needed - _quality_soft_pass_slack())
+            if len(findings) < soft_floor:
                 raise DesignTaskValidationError("insufficient_findings")
             if not findings or not sources:
                 raise DesignTaskValidationError(

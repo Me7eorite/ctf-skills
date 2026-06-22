@@ -217,6 +217,75 @@ def test_terminal_json_extraction_and_quality_gate_contracts():
     ) == (False, "insufficient_findings:got=0,need=2")
 
 
+def test_quality_gate_ratio_env_var(monkeypatch):
+    # GLM-5 deployments lower the ratio so target_count=10 only needs 3
+    # findings, not 5. Default behavior (ratio=0.5) is preserved when
+    # the env var is unset.
+    from domain.research_validators import apply_research_quality_gate
+
+    valid_source = {"url": "https://example.com/x", "content_hash": "a" * 64}
+    payload = {
+        "sources": [valid_source],
+        "findings": [{}, {}, {}],  # only 3 findings
+    }
+
+    # Default ratio 0.5 with target_count=10 requires 5 → reject 3.
+    monkeypatch.delenv("RESEARCH_QUALITY_RATIO", raising=False)
+    monkeypatch.delenv("RESEARCH_QUALITY_SOFT_PASS_BELOW_BY", raising=False)
+    ok, error = apply_research_quality_gate(payload, 10)
+    assert (ok, error) == (False, "insufficient_findings:got=3,need=5")
+
+    # Lower ratio to 0.3 → needs ceil(10*0.3)=3 → 3 passes.
+    monkeypatch.setenv("RESEARCH_QUALITY_RATIO", "0.3")
+    ok, error = apply_research_quality_gate(payload, 10)
+    assert (ok, error) == (True, None)
+
+
+def test_quality_gate_soft_pass_slack_env_var(monkeypatch, caplog):
+    # Slack=1 with default 0.5 ratio: target_count=10 needs 5, accepts 4
+    # with a warning.
+    from domain.research_validators import apply_research_quality_gate
+
+    valid_source = {"url": "https://example.com/x", "content_hash": "a" * 64}
+    payload = {
+        "sources": [valid_source],
+        "findings": [{}, {}, {}, {}],  # 4 findings
+    }
+
+    monkeypatch.setenv("RESEARCH_QUALITY_RATIO", "0.5")
+    monkeypatch.setenv("RESEARCH_QUALITY_SOFT_PASS_BELOW_BY", "1")
+
+    with caplog.at_level("WARNING", logger="domain.research_validators"):
+        ok, error = apply_research_quality_gate(payload, 10)
+
+    assert (ok, error) == (True, None)
+    assert any(
+        "research quality gate soft-passed" in rec.message
+        for rec in caplog.records
+    )
+
+    # got=2 still below the soft floor (needed=5 - slack=1 = 4) → reject.
+    payload["findings"] = [{}, {}]
+    ok, error = apply_research_quality_gate(payload, 10)
+    assert (ok, error) == (False, "insufficient_findings:got=2,need=5")
+
+
+def test_quality_gate_invalid_env_falls_back(monkeypatch):
+    # Garbage env vars do not break the gate; the validator logs a
+    # warning and uses the safe default.
+    from domain.research_validators import apply_research_quality_gate
+
+    valid_source = {"url": "https://example.com/x", "content_hash": "a" * 64}
+    payload = {"sources": [valid_source], "findings": [{}]}
+
+    monkeypatch.setenv("RESEARCH_QUALITY_RATIO", "not-a-float")
+    monkeypatch.setenv("RESEARCH_QUALITY_SOFT_PASS_BELOW_BY", "-3")
+
+    # Falls back to ratio=0.5 (needs ceil(2*0.5)=1) and slack=0 → 1 finding passes.
+    ok, error = apply_research_quality_gate(payload, 2)
+    assert (ok, error) == (True, None)
+
+
 class _FakeBinding:
     # 中文注释：R1 之后 binding 缺失会 fail-fast，commit-validation 路径需要先满足
     # binding 这一关，所以提供一个 enabled binding 让测试能走到 commit 那一步。

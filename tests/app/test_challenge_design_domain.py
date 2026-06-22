@@ -577,3 +577,36 @@ def test_difficulty_legacy_grandfather_skips_alignment():
     )
     payload["challenges"][0].pop("secondary_technique")
     validate_design_payload(payload, _parent_task(), legacy_grandfather=True)
+
+
+def test_difficulty_lenient_mode_logs_and_passes(monkeypatch, caplog):
+    # GLM-5 / DeepSeek deployments set DESIGN_DIFFICULTY_ENFORCEMENT=lenient
+    # so a design that misses the rubric is logged but not rejected.
+    monkeypatch.setenv("DESIGN_DIFFICULTY_ENFORCEMENT", "lenient")
+    payload = _payload(
+        secondary_technique=None,
+        techniques=["JWT kid path traversal"],
+    )
+    payload["challenges"][0].pop("secondary_technique")
+
+    with caplog.at_level("WARNING", logger="domain.design.difficulty"):
+        validate_design_payload(payload, _parent_task())
+
+    assert any(
+        "design difficulty soft-passed" in rec.message for rec in caplog.records
+    )
+
+
+def test_difficulty_strict_mode_still_raises(monkeypatch):
+    # Default behavior is preserved: env var unset (or 'strict') = raise.
+    monkeypatch.setenv("DESIGN_DIFFICULTY_ENFORCEMENT", "strict")
+    payload = _payload(
+        secondary_technique=None,
+        techniques=["JWT kid path traversal"],
+    )
+    payload["challenges"][0].pop("secondary_technique")
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match=r"medium requires at least 2 distinct techniques",
+    ):
+        validate_design_payload(payload, _parent_task())
