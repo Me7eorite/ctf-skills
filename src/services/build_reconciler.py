@@ -230,6 +230,7 @@ class BuildReconciler:
             staged_ids = self.orchestration.recover_staging()
             observations = self._scan_attributed_shards()
             with transaction(factory=self.session_factory) as session:
+                ExecutionsRepository(session).reap_expired()
                 self._reconcile(session, staged_ids, observations)
 
     def run_forever(self) -> None:

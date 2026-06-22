@@ -35,9 +35,9 @@
 
 ## 5. Reconciler as lease reaper
 
-- [ ] 5.1 Repurpose `BuildReconciler` to scan executions with expired leases → terminally mark old execution `lost`, record error, clear current, and never auto-schedule or rotate its token; operator retry (or future supervisor) schedules recovery as a new iteration
-- [ ] 5.2 Propagate execution terminal transitions to container aggregate status / `latest_execution_id`
-- [ ] 5.3 Keep the legacy path for pre-cutover in-flight attempts (no execution rows backfilled)
+- [x] 5.1 Repurpose `BuildReconciler` to scan executions with expired leases → terminally mark old execution `lost`, record error, clear current, and never auto-schedule or rotate its token; operator retry (or future supervisor) schedules recovery as a new iteration (reaper wired into `tick` and `tick_once_sync`; verified by `test_tick_reaps_expired_execution_lease`)
+- [x] 5.2 Propagate execution terminal transitions to container aggregate status / `latest_execution_id` (in repository, shared by reaper)
+- [x] 5.3 Keep the legacy path for pre-cutover in-flight attempts (no execution rows backfilled); legacy filesystem mirroring untouched while cutover flag is off
 
 ## 6. Workspace materialization (ties to proposal #1 layout)
 
