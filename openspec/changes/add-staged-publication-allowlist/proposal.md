@@ -14,7 +14,8 @@ owns the write boundary into `work/challenges/`. The publisher:
   field validation, change-policy diff)
 - consumes a **change policy** materialized into the workspace for revision
   iterations (see `add-execution-lease-and-fencing` for the iteration model)
-- atomically publishes the complete accepted output set or publishes nothing
+- serializes overlapping publications, commits the accepted output set as a
+  recoverable batch, and rolls back ordinary failures
 - records output manifest hashes for downstream audit
 - retains failed staging under a bounded retention policy
 
@@ -32,18 +33,30 @@ APIs — those land in subsequent proposals.
   `..` traversal, unexpected category roots, non-claimed challenge ids,
   duplicate-id directories, and metadata id/category mismatch.
 - **Change-policy hard diff** (when `change-policy.json` is present in
-  `input/`): identity fields (`challenge_id`, `flag`, `category`,
+  `input/`): identity fields (`id`, `flag`, `category`,
   `build_status`) and any path in `change_policy.preserve` MUST equal the
   `base-artifact/` snapshot byte-for-byte; any new file in
   `change_policy.forbid` is rejected.
-- **Atomic publish**: temp sibling → rename; previous canonical directory is
+- **Pre-invocation publication contract**: shard identity, policy, base hashes,
+  and resume targets are captured before Hermes runs; publisher rejects any
+  post-invocation mutation of host-owned input.
+- **Serialized, recoverable publish**: deterministic per-id locks, whole-batch
+  validation/staging, a durable journal, then temp sibling → rename; previous canonical directory is
   quarantined to `work/executions/<workspace_id>/quarantine/<category>/<dirname>/`
-  (path locked by the previous proposal's spec).
-- **Output manifest hash** (sha256 over the published tree) recorded in
+  (path locked by the previous proposal's spec). Ordinary exceptions roll back
+  synchronously; process death is repaired from the journal at bootstrap.
+- **Resume target binding**: retry workspaces record the exact materialized
+  output directory for every claimed id and require Hermes to edit that
+  directory in place, without creating or renaming a second `<id>-<slug>`
+  directory.
+- **Explicit clean rebuild**: operators can choose a clean rebuild that starts
+  with an empty output tree and does not carry forward prior stage evidence.
+  This remains distinct from retry/resume.
+- **Output manifest hash** (sha256 over path, type, mode, and content records) recorded in
   `input/manifest.json` under `output_manifest_hash` for later audit.
-- **Bounded retention**: on successful publish, runner clears the
-  `./output/` and `./logs/` staging immediately; failed staging is kept under
-  `work/executions/<workspace_id>/quarantine/.../` per the policy
+- **Bounded retention**: only after validation reaches terminal success, the
+  runner clears `./output/` and `./logs/`; failed output/log staging stays in
+  its workspace for diagnosis and is swept per the policy
   (default: last 20 failures across all workspaces OR 7 days, whichever is
   stricter).
 - **Modify** `hermes-execution-protocol`: REMOVE the
@@ -67,14 +80,17 @@ APIs — those land in subsequent proposals.
 
 - **Code**: a new `services/build_publisher.py` (or extension of
   `hermes/workspace.py::promote_claimed_outputs`) owning the boundary. The
-  runner calls publisher instead of the narrow promotion path.
+  runner calls publisher instead of the narrow promotion path. Workspace
+  materialization, prompt rendering, build orchestration, API, and build-list
+  UI also distinguish retry/resume from clean rebuild.
 - **Database**: no schema change (execution rows are deferred to the next
   proposal). `output_manifest_hash` is stored in workspace
   `input/manifest.json` for now; persistence moves to DB rows in
   `add-execution-lease-and-fencing` (proposal 3).
 - **Filesystem**: success path stays the same (`work/challenges/<cat>/<id>-<slug>/`);
-  failure path goes to existing per-workspace `quarantine/<cat>/<dirname>/`
-  with a new top-level retention sweep.
+  replaced canonical versions use per-workspace
+  `quarantine/<cat>/<dirname>/`; failed output/log staging remains in its
+  workspace with a new top-level retention sweep.
 - **Compatibility**: the previous proposal's tests for promotion semantics
   remain valid (the new publisher implements a superset). The narrow regex
   remediation already in place (`_match_claimed_id`) keeps working.
@@ -82,4 +98,6 @@ APIs — those land in subsequent proposals.
   alongside the existing manual-workspace GC.
 - **Out of scope**: lease/fencing, agent registry, supervisor, feedback API,
   change-policy materialization (which depends on revision execution kind
-  from proposal 3).
+  from proposal 3). Automatic selection or merging of duplicate output
+  directories is explicitly out of scope; duplicate publication remains a
+  fail-closed publisher error.
