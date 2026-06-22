@@ -347,6 +347,22 @@ function renderList(root) {
   `;
 }
 
+function renderProgressCell(attempt) {
+  // percent 来自 Hermes 自报的 document/build/... passed 事件，不代表磁盘证据校验
+  // 通过；在 failed/lost 终态下若仍只渲染 96% / 99% 会让人误以为"接近完成"。
+  // 这里把"事件进度"与"终态结果"分开展示。
+  const value = attempt.percent ?? "-";
+  if (attempt.status === "failed" || attempt.status === "lost") {
+    return `
+      <div>${value}</div>
+      <div style="margin-top: 2px; color: var(--accent-red); font-size: var(--font-xs);">
+        · 校验失败
+      </div>
+    `;
+  }
+  return `${value}`;
+}
+
 function pruneSelection(rows) {
   if (!state.selection.size) return;
   const eligible = new Set(rows.filter((r) => r.status === "queued").map((r) => r.id));
@@ -431,7 +447,7 @@ function renderTable(rows) {
               <td>${escapeHtml(attempt.difficulty || "-")}</td>
               <td>${buildStatusIndicator(attempt.status)}</td>
               <td>${artifactPill(attempt.artifact_status)}</td>
-              <td>${attempt.percent ?? "-"}</td>
+              <td>${renderProgressCell(attempt)}</td>
               <td>${escapeHtml(attempt.worker || "-")}</td>
               <td>${attempt.attempt_no}</td>
               <td class="table-cell-time">${escapeHtml(formatDateTime(attempt.created_at))}</td>

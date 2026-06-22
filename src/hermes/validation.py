@@ -215,8 +215,9 @@ def validate_gate(
         return "design evidence incomplete"
     if not implement_evidence(plan.directory, category):
         return "implement evidence incomplete"
-    if not build_evidence(plan.directory, category, image_exists):
-        return "build evidence incomplete"
+    build_ok, build_reason = build_evidence(plan.directory, category, image_exists)
+    if not build_ok:
+        return f"build evidence incomplete: {build_reason}"
     if not document_evidence(plan.directory):
         return "document evidence incomplete"
 

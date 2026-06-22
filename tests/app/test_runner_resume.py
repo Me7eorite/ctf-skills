@@ -576,6 +576,13 @@ class RunnerRealRunTests(unittest.TestCase):
                 prompts.append(prompt)
                 log.parent.mkdir(parents=True, exist_ok=True)
                 log.write_text("fake invoke\n", encoding="utf-8")
+                # 模拟 Hermes 真实修改了 workspace.output（runner 在 repair attempt
+                # 前后会对此目录采样签名，无变更即终止后续重试）
+                workspace = _kwargs.get("workspace")
+                if workspace is not None:
+                    marker = workspace.output / f"repair-marker-{len(prompts)}.txt"
+                    marker.parent.mkdir(parents=True, exist_ok=True)
+                    marker.write_text("touched\n", encoding="utf-8")
                 return 0
 
             runner._invoke = invoke  # type: ignore[assignment]

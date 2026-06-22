@@ -14,7 +14,9 @@ def test_build_attempt_actions_use_constrained_endpoints():
 
     assert "/worker/start`" in source
     assert "/api/build-attempts/queue/start" in source
-    assert "启动当前队列" in source
+    assert "启动全部待运行" in source
+    assert "启动选中" in source
+    assert "/api/build-attempts/worker/start-sequential" in source
     assert "/revalidate`" in source
     assert 'runAction("worker")' not in source
     assert 'runAction("validate")' not in source

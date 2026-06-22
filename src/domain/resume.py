@@ -243,46 +243,50 @@ def build_evidence(
     challenge_dir: Path,
     category: str,
     image_exists: Callable[[str], bool],
-) -> bool:
+) -> tuple[bool, str | None]:
     """检查 build 阶段是否完成。
+
+    返回 ``(ok, reason)``。``ok=True`` 时 ``reason`` 为 ``None``；否则 ``reason`` 是面向
+    repair prompt / 错误摘要的具体诊断（例如 ``"metadata.docker_image missing"``）。
 
     web/pwn: Docker 镜像必须存在且可访问
     re: 产物文件必须存在，且 SHA-256 哈希与 metadata 一致
     """
     metadata = _read_metadata(challenge_dir)
     if metadata is None:
-        return False
+        return False, "metadata.json missing or unreadable"
     if metadata.get("build_status") != "passed":
-        return False
+        return False, "metadata.build_status is not 'passed'"
     build_command = metadata.get("build_command")
     if not isinstance(build_command, str) or not build_command.strip():
-        return False
+        return False, "metadata.build_command missing"
 
     if category in {"web", "pwn"}:
-        # 容器化题目：检查 Docker 镜像
         docker_image = metadata.get("docker_image")
         if not isinstance(docker_image, str) or not docker_image.strip():
-            return False
-        return image_exists(docker_image)
+            return False, "metadata.docker_image missing"
+        if not image_exists(docker_image):
+            return False, f"docker image {docker_image!r} not present on host"
+        return True, None
 
     if category == "re":
-        # 非容器化题目：检查产物文件哈希
         artifact = metadata.get("artifact")
         expected_sha = metadata.get("artifact_sha256")
-        if (
-            not isinstance(artifact, str)
-            or not artifact.strip()
-            or not isinstance(expected_sha, str)
-            or not expected_sha.strip()
-        ):
-            return False
+        if not isinstance(artifact, str) or not artifact.strip():
+            return False, "metadata.artifact missing"
+        if not isinstance(expected_sha, str) or not expected_sha.strip():
+            return False, "metadata.artifact_sha256 missing"
         resolved = _safe_artifact_path(challenge_dir, artifact.strip())
         if resolved is None or not resolved.is_file():
-            return False
+            return False, f"artifact file {artifact!r} missing under dist/"
         actual = _sha256_of_file(resolved)
-        return actual is not None and actual == expected_sha.strip()
+        if actual is None:
+            return False, f"artifact file {artifact!r} unreadable"
+        if actual != expected_sha.strip():
+            return False, "metadata.artifact_sha256 does not match artifact contents"
+        return True, None
 
-    return False
+    return False, f"unsupported category {category!r}"
 
 
 def validate_resume_evidence(
@@ -366,7 +370,8 @@ def _stage_evidence_ok(
     if stage == "implement":
         return implement_evidence(challenge_dir, category)
     if stage == "build":
-        return build_evidence(challenge_dir, category, image_exists)
+        ok, _ = build_evidence(challenge_dir, category, image_exists)
+        return ok
     if stage == "validate":
         return validate_resume_evidence(challenge_dir, events)
     if stage == "document":

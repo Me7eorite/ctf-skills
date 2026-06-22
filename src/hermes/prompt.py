@@ -55,10 +55,23 @@ Host validation diagnostics:
 {rendered}
 ```
 
-Find and fix the root cause. For Web/Pwn, rebuild the exact image named by
-`metadata.docker_image` whenever deploy source, Dockerfile, binary, or runtime dependencies
-change. The Compose service must contain the literal list entry
-`- FLAG=flag{{...}}`, equal to `metadata.flag`, and service code must read `FLAG`.
+How to read `validation_error`:
+- `"contract_failed"` + `validation_error` starting with `"build evidence incomplete: metadata.<FIELD> missing"`
+  means the named field is absent from `metadata.json`. You MUST edit `metadata.json`
+  directly to add or correct that field. Do NOT create or modify
+  `build-evidence.json`, `evidence.json`, or any other side-car file — the host validator
+  only reads `metadata.json` and the on-disk artifacts.
+- `"build evidence incomplete: docker image '<NAME>' not present on host"` means the
+  image is missing or differs from `metadata.docker_image`. Rebuild that exact image tag
+  (`docker build -t <NAME> ...`) and do not rename the tag.
+- `"build evidence incomplete: metadata.artifact_sha256 does not match artifact contents"`
+  means the file at `metadata.artifact` was rebuilt without updating its `artifact_sha256`.
+  Recompute the SHA-256 and write it back to `metadata.json`.
+
+For Web/Pwn, rebuild the exact image named by `metadata.docker_image` whenever deploy
+source, Dockerfile, binary, or runtime dependencies change. The Compose service must
+contain the literal list entry `- FLAG=flag{{...}}`, equal to `metadata.flag`, and service
+code must read `FLAG`.
 
 Run `validate.sh` yourself and iterate until it exits 0 and its last recovered flag equals
 `metadata.flag`. Do not hardcode or merely echo the expected flag in the exploit. The exploit

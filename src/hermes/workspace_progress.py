@@ -65,7 +65,13 @@ class WorkspaceProgressTailer:
         self._path = workspace.logs / "progress-events.jsonl"
         self._record = record
         self._poll_interval = poll_interval
-        self._offset = 0
+        # 从文件当前末尾开始读，避免 repair 等二次启动 tailer 时重放上一轮已发布的事件
+        # （之前 _offset=0 + flush() 会把整个 jsonl 重新导入 ProgressStore，
+        #  造成 UI 上 design/build/document 进度瞬间被复读一遍）。
+        try:
+            self._offset = self._path.stat().st_size
+        except FileNotFoundError:
+            self._offset = 0
         self._buffer = b""
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None

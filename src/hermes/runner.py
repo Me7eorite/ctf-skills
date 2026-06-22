@@ -693,6 +693,7 @@ class HermesRunner:
                 validation_results=per_results,
             )
             repair_log = workspace.logs / f"hermes-validation-repair-{repair_attempt}.log"
+            pre_signature = _output_signature(workspace.output)
             repair_tailer = WorkspaceProgressTailer(workspace, self._progress.record)
             repair_tailer.start()
             try:
@@ -712,6 +713,24 @@ class HermesRunner:
                     "validation repair attempt %s exited with %s",
                     repair_attempt,
                     repair_returncode,
+                )
+                break
+            post_signature = _output_signature(workspace.output)
+            if pre_signature == post_signature:
+                _LOGGER.warning(
+                    "validation repair attempt %s made no changes under output/; "
+                    "aborting further repair attempts",
+                    repair_attempt,
+                )
+                self._progress.record(
+                    shard=original_shard_name,
+                    worker=worker,
+                    stage="validate",
+                    status="running",
+                    message=(
+                        f"validation repair attempt {repair_attempt}: "
+                        "no changes detected, aborting further attempts"
+                    ),
                 )
                 break
             try:
@@ -825,9 +844,10 @@ class HermesRunner:
                 return False
             if not implement_evidence(cp.directory, category):
                 return False
-            if not build_evidence(
+            build_ok, _ = build_evidence(
                 cp.directory, category, self._image_exists
-            ):
+            )
+            if not build_ok:
                 return False
             if not document_evidence(cp.directory):
                 return False
@@ -961,6 +981,31 @@ class HermesRunner:
     @staticmethod
     def _hermes_arguments() -> list[str]:
         return hermes_process.hermes_arguments()
+
+
+def _output_signature(output_dir: Path) -> tuple[int, int, int]:
+    """对 workspace.output 下所有文件采样的轻量指纹，用于检测 repair 是否真正改了产物。
+
+    返回 ``(file_count, total_size, max_mtime_ns)``。任何一项变化即视为有改动；
+    采样在文件粒度而非内容级，足够 detect 上层文件的写入/新建/删除而不付出哈希成本。
+    """
+    if not output_dir.exists():
+        return (0, 0, 0)
+    file_count = 0
+    total_size = 0
+    max_mtime = 0
+    for path in output_dir.rglob("*"):
+        try:
+            if not path.is_file():
+                continue
+            stat = path.stat()
+        except OSError:
+            continue
+        file_count += 1
+        total_size += stat.st_size
+        if stat.st_mtime_ns > max_mtime:
+            max_mtime = stat.st_mtime_ns
+    return (file_count, total_size, max_mtime)
 
 
 def _resume_source_shard_name(shard: Path, current_original_name: str) -> str:
