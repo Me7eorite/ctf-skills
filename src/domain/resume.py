@@ -220,7 +220,7 @@ def _safe_artifact_path(challenge_dir: Path, artifact: str) -> Path | None:
     安全检查:
       - 拒绝绝对路径
       - 拒绝包含 .. 的路径（防止目录遍历）
-      - 解析后必须在 dist/ 子目录下
+      - 解析后必须在 attchments/ 子目录下
     """
     candidate = Path(artifact)
     if candidate.is_absolute():
@@ -233,8 +233,8 @@ def _safe_artifact_path(challenge_dir: Path, artifact: str) -> Path | None:
         relative = resolved.relative_to(base)
     except ValueError:
         return None
-    # 必须位于 dist/ 子目录下
-    if not relative.parts or relative.parts[0] != "dist":
+    # 必须位于 attachments/ 子目录下
+    if not relative.parts or relative.parts[0] != "attachments":
         return None
     return resolved
 

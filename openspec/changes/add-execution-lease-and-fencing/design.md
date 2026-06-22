@@ -128,13 +128,24 @@ retaining `latest_execution_id`. Therefore current and latest are identical only
 while an execution is claimed/running; a queued or terminal latest execution has
 no current pointer.
 
-### D8: Shard file stays `{build_attempt_id}.json`, re-rendered per iteration
+### D8: Shard basename is per-iteration to isolate progress and resume
 
-The shard basename is kept stable and overwritten each iteration (carrying the
-new resume / base-artifact / feedback context) so `work/shards` scanning and
-queue claiming are unchanged. The immutable per-iteration snapshot is the
+Each iteration's shard is named `{build_attempt_id}.iter-NNN.json` rather than a
+single reused `{build_attempt_id}.json`. This was changed from the first draft
+(stable reused basename) because progress events and resume cursors are keyed on
+the shard string: `progress_events.shard` (TEXT) and `ProgressCursor`'s
+`(shard, challenge_id)` primary key. A reused basename would let iteration 1's
+progress events bleed into iteration 2's `compute_resume_plan`, making the model
+treat already-attempted challenges as done — re-introducing the cross-run
+contamination this whole split exists to kill, just *inside* one container.
+
+A per-iteration basename keeps each iteration's progress events, resume cursor,
+and live-tailer stream naturally scoped. Queue scanning and attribution are
+unaffected because attribution is by the shard payload's top-level
+`build_attempt_id`, not by basename. The immutable per-iteration snapshot is the
 workspace's `attempts/iter-NNN/input/shard.json`, which is also the audit
-source.
+source. The container id (the workspace folder) stays stable across iterations;
+only the shard file name carries the iteration discriminator.
 
 ## Risks / Trade-offs
 

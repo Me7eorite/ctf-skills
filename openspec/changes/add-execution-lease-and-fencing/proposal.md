@@ -103,9 +103,16 @@ publishing even while its Hermes process is still running.
   the container/iteration model, the heartbeat lease-renewal path, the
   reconciler-as-reaper behavior, and revision-materialization-from-prior-iter.
 - `build-orchestration`: build attempt becomes a per-build-session container;
-  retry/clean-rebuild append executions rather than minting build attempts; add
-  `current/latest/successful_execution_id` references and the feedback intake
-  endpoint.
+  retry/clean-rebuild append executions rather than minting build attempts; the
+  five-state machine, the single-active guarantee, and the reconciler shift from
+  filesystem-mirrored terminal status to execution-claim + worker token-write +
+  lease-reaper; add `current/latest/successful_execution_id` references and the
+  feedback intake endpoint.
+- `hermes-execution-protocol`: the execution workspace becomes two-layer
+  (`current/` + `attempts/iter-NNN/`); a new iteration atomically renames the
+  prior `current/` into `attempts/` instead of wholesale recreation; cwd points
+  at `current/`; the per-iteration running shard basename carries the iteration
+  so progress/resume cannot bleed across iterations.
 
 ## Impact
 

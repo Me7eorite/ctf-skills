@@ -98,10 +98,16 @@ default to the existing build-lost grace value (300 seconds).
 ### Requirement: Heartbeat renews the lease under a valid token
 
 The system SHALL expose a dedicated `POST /api/executions/{id}/heartbeat`
-endpoint that, given an execution id and a `claim_token`, renews the active
-execution's lease (`lease_expires_at = now() + LEASE_TTL`, `heartbeat_at =
-now()`) only when the supplied token matches the row's current `claim_token`.
-A heartbeat with a stale token SHALL be rejected without renewing the lease.
+endpoint that, given an execution id and a `claim_token`, renews the lease
+(`lease_expires_at = now() + LEASE_TTL`, `heartbeat_at = now()`) only when ALL of
+the following hold: the supplied token equals the row's `claim_token`, the
+execution's `status` is `claimed` or `running`, AND the execution is the
+container's `current_execution_id`. Because tokens are immutable and never
+rotated (a reaped execution keeps its own token), token equality alone is
+insufficient — a heartbeat for a `lost` or superseded execution SHALL be
+rejected even though that execution's own token still matches itself. A heartbeat
+failing any of the three conditions SHALL be rejected without renewing the
+lease.
 
 #### Scenario: Valid heartbeat extends the lease
 
@@ -198,6 +204,24 @@ unrelated shard.
   `../../attempts/iter-001/manifest.json`
 - **AND** `E2` materializes the feedback snapshot and does not claim any
   unrelated shard
+
+### Requirement: Per-iteration shard naming isolates progress and resume
+
+Each scheduled iteration SHALL render its running shard with a per-iteration
+basename of the form `{build_attempt_id}.iter-NNN.json`. Because progress events
+and resume cursors are keyed on the shard string (`progress_events.shard` and
+`ProgressCursor (shard, challenge_id)`), this naming SHALL prevent an earlier
+iteration's progress events from being consumed by a later iteration's resume
+plan. Shard attribution to a container SHALL continue to use the payload's
+top-level `build_attempt_id`, not the basename.
+
+#### Scenario: Iteration 2 resume ignores iteration 1 progress
+
+- **GIVEN** iteration 1 of container `B` recorded progress events under shard
+  `B.iter-001.json`
+- **WHEN** iteration 2 is scheduled as `B.iter-002.json` and claimed
+- **THEN** `compute_resume_plan` for iteration 2 sees no iteration-1 events and
+  treats every challenge as a fresh build
 
 ### Requirement: Revalidate appends an event without creating an execution
 

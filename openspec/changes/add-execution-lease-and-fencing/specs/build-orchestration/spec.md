@@ -66,35 +66,141 @@ The unique compound key `(design_task_id, attempt_no)` SHALL hold.
 - **WHEN** the publisher commits the canonical rename
 - **THEN** the container's `successful_execution_id` is set to that execution
 
-### Requirement: Container status follows the latest execution deterministically
+### Requirement: build_attempts five-state machine
 
-The system SHALL derive `build_attempts.status` from the container's latest
-execution using the following precedence: `queued` => `queued`; `claimed` or
-`running` => `running`;
-`succeeded` => `succeeded`; `failed` => `failed`; `lost` => `lost`. If no
-execution exists yet, the container remains `queued`. When a new execution is
-claimed, the container SHALL immediately move to `running`. A terminal write
-from an older execution SHALL NOT overwrite the status of a newer latest
-execution.
+`build_attempts.status` SHALL be a **derived container aggregate** over its
+`executions` rows and SHALL NOT be driven by filesystem observation. The
+aggregate SHALL follow the latest execution using this precedence: latest `queued` =>
+container `queued`; latest `claimed` or `running` => container `running`; latest
+`succeeded` => `succeeded`; latest `failed` => `failed`; latest `lost` =>
+`lost`. With no execution yet, the container remains `queued`.
 
-When a retry or revision is scheduled after a terminal iteration, the
-container's `finished_at` and compatibility `error` aggregate SHALL be cleared
-as it returns to `queued`; `started_at` SHALL retain the timestamp at which the
-session's first execution entered running.
+The driving transitions live on the execution row (capability
+`worker-pool-execution`), not on the reconciler's queue scan:
+
+- `queued -> running`: a worker **claims** the queued latest execution
+  (mints token + lease, sets `current_execution_id`); the container is moved to
+  `running` in that same claim transaction.
+- `running -> succeeded` / `running -> failed`: the worker performs a
+  **token-gated** terminal write on its current execution; a successful publish
+  yields `succeeded`, otherwise `failed`. The reconciler no longer derives
+  terminal status from `done/` / `failed/` queue movement.
+- `* -> lost`: the reconciler lease reaper terminally marks an expired current
+  execution `lost` (see `worker-pool-execution`); recovery is a NEW queued
+  `retry` execution, never an in-place revival of the lost row.
+
+Terminal statuses (`succeeded`, `failed`, `lost`) SHALL be terminal for that
+execution: there is no transition out of a terminal execution. A new run for the
+same challenge SHALL be a new `executions` row under the **same** container
+(`iteration_no + 1`); it SHALL NOT create a new `build_attempts` row and SHALL
+NOT increment `attempt_no`. A terminal write from an execution that is no longer
+the container's current execution SHALL be rejected and SHALL NOT overwrite the
+aggregate.
+
+`started_at` SHALL be set when the container's first execution enters `running`;
+`finished_at` SHALL be set when the container reaches a terminal status and
+SHALL be cleared when a new iteration returns the container to `queued`.
+
+#### Scenario: Claim transitions the container to running
+
+- **GIVEN** a container `B` whose latest execution is `queued`
+- **WHEN** a worker claims that execution (mints token + lease)
+- **THEN** the execution becomes `claimed`, `current_execution_id` is set, and
+  the container `status` becomes `running` in the same transaction
+
+#### Scenario: Worker token-write drives terminal status
+
+- **GIVEN** a `running` current execution `E`
+- **WHEN** the worker performs a token-gated terminal write after a successful
+  publish
+- **THEN** `E` becomes `succeeded`, `current_execution_id` is cleared, and the
+  container aggregate becomes `succeeded`
+- **AND** the reconciler does not separately derive this from queue movement
+
+#### Scenario: Retry stays in the same container
+
+- **GIVEN** a container whose latest execution is `failed` with `iteration_no = 3`
+- **WHEN** the operator retries
+- **THEN** no new `build_attempts` row is created, `attempt_no` is unchanged,
+  and a new `executions` row with `iteration_no = 4` is scheduled
 
 #### Scenario: Older terminal write does not win over a newer execution
 
 - **GIVEN** execution `E1` has already been superseded by newer execution `E2`
 - **WHEN** `E1` later attempts a terminal write
-- **THEN** the write is rejected or ignored and the container status remains
-  governed by `E2`
+- **THEN** the write is rejected and the container status remains governed by
+  `E2`
 
-#### Scenario: Fresh submit after an abandoned session allocates the next attempt_no
+### Requirement: Only one build attempt per design task may be active
 
-- **GIVEN** the latest container for a design task has reached a terminal
-  status and the operator starts a brand-new build session for it
-- **WHEN** the new submit is committed
-- **THEN** a new container row is inserted with the next monotonic `attempt_no`
+The system SHALL enforce that no design task has more than one `build_attempts`
+container whose aggregate `status` is `queued` or `running` at any moment,
+implemented as a PostgreSQL partial unique index on
+`build_attempts (design_task_id)` filtered by `status IN ('queued', 'running')`.
+Because the container status is now derived from executions, the single-active
+guarantee at the execution layer is the partial unique index
+`one_nonterminal_execution_per_attempt` (capability `worker-pool-execution`);
+the container index remains so that two build sessions for the same design task
+cannot be active at once. During the migration cutover window both the legacy
+behavior and the execution-derived behavior MAY be present, but only one SHALL
+be treated as authoritative for a given container (see Migration).
+
+#### Scenario: Concurrent submit for the same design task is rejected
+
+- **GIVEN** a `build_attempts` container exists with
+  `(design_task_id = T, status = 'queued')`
+- **WHEN** a second container `INSERT` is attempted for the same `design_task_id`
+  while the first is still non-terminal
+- **THEN** PostgreSQL raises a unique-violation error and the orchestration
+  service surfaces it as a validation error
+
+#### Scenario: Terminal container frees the design-task slot
+
+- **GIVEN** the only active container for `design_task_id = T` reaches a
+  terminal aggregate status
+- **WHEN** the operator submits a brand-new build session for `T`
+- **THEN** the new container is accepted with the next `attempt_no`
+
+### Requirement: BuildReconciler mirrors filesystem state to PostgreSQL
+
+`services.BuildReconciler` SHALL continue to run as a daemon thread launched by
+`web.server.serve(...)`, polling on `BUILD_RECONCILER_POLL_SECONDS` (default 5,
+invalid values fall back with a warning), resilient to PostgreSQL hiccups
+(skip-and-warn, never crash), and SHALL still run staging recovery and trigger a
+synchronous tick on `/api/state`. Its **status-determination role changes**:
+
+- For containers created **after** the execution cutover, the reconciler SHALL
+  NOT derive `running` / `succeeded` / `failed` from queue-directory movement.
+  Those transitions are owned by the claim path and the worker's token-gated
+  terminal writes (capability `worker-pool-execution`). The reconciler's only
+  status write for these is the **lease reaper**: an expired current execution
+  is terminally marked `lost` via a conditional update fenced by current
+  execution id + active status + expired lease.
+- For **pre-cutover** in-flight `build_attempts` rows that have no `executions`
+  row, the reconciler SHALL retain the legacy filesystem-mirroring behavior to
+  carry them to a terminal status; these rows are not backfilled with
+  executions.
+- It SHALL still roll the parent `design_tasks.status` forward from the
+  container aggregate and recheck `resulting_challenge_dir` /
+  `artifact_status` for succeeded containers.
+
+#### Scenario: Reaper marks an expired current execution lost
+
+- **GIVEN** a container's current execution is `running` with an expired lease
+  and no recent heartbeat
+- **WHEN** the reconciler tick runs
+- **THEN** that execution is terminally marked `lost`, the container's current
+  pointer is cleared, and the container aggregate becomes `lost`
+- **AND** the reconciler does not mint a new token or auto-schedule recovery
+
+#### Scenario: Legacy in-flight row still mirrors filesystem state
+
+- **GIVEN** a pre-cutover `build_attempts` row with no `executions` row that is
+  still `queued`
+- **WHEN** the reconciler observes its attributed shard reach `done/` with a
+  passed artifact
+- **THEN** the reconciler applies the legacy transition to `succeeded` for that
+  row
 
 ## ADDED Requirements
 

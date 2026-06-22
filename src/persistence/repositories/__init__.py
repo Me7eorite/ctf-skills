@@ -9,6 +9,10 @@ from persistence.repositories.challenge_designs import (
     ChallengeDesignRepository,
 )
 from persistence.repositories.design_tasks import DesignTaskRepository
+from persistence.repositories.executions import (
+    ExecutionPersistenceError,
+    ExecutionsRepository,
+)
 from persistence.repositories.progress import PostgresProgressStore
 from persistence.repositories.research import ResearchRepository
 
@@ -18,6 +22,8 @@ __all__ = [
     "BuildAttemptPersistenceError",
     "BuildAttemptsRepository",
     "DesignTaskRepository",
+    "ExecutionPersistenceError",
+    "ExecutionsRepository",
     "PostgresProgressStore",
     "ResearchRepository",
 ]

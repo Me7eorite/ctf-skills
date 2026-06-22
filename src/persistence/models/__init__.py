@@ -4,6 +4,11 @@ from persistence.models.base import Base
 from persistence.models.build_attempts import BuildAttempt
 from persistence.models.challenge_designs import ChallengeDesign, DesignAttempt
 from persistence.models.design_tasks import DesignTask
+from persistence.models.executions import (
+    BuildFeedbackSnapshot,
+    Execution,
+    RevalidationEvent,
+)
 from persistence.models.progress import ProgressEvent, ProgressSnapshot
 from persistence.models.research import (
     AgentRole,
@@ -20,13 +25,16 @@ __all__ = [
     "AgentRole",
     "Base",
     "BuildAttempt",
+    "BuildFeedbackSnapshot",
     "ChallengeCategory",
     "ChallengeDesign",
     "DesignAttempt",
     "DesignTask",
+    "Execution",
     "GenerationRequest",
     "HermesProfileBinding",
     "ProgressEvent",
+    "RevalidationEvent",
     "ProgressSnapshot",
     "ResearchFinding",
     "ResearchFindingSource",

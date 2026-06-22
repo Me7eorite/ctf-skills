@@ -47,6 +47,27 @@ class BuildAttempt(Base):
             unique=True,
             postgresql_where=sa.text("idempotency_key IS NOT NULL"),
         ),
+        # Execution pointers (add-execution-lease-and-fencing). Composite FKs
+        # enforce that a referenced execution belongs to this container; created
+        # via use_alter because executions.build_attempt_id references back here.
+        sa.ForeignKeyConstraint(
+            ["current_execution_id", "id"],
+            ["executions.id", "executions.build_attempt_id"],
+            name="fk_build_attempts_current_execution",
+            use_alter=True,
+        ),
+        sa.ForeignKeyConstraint(
+            ["latest_execution_id", "id"],
+            ["executions.id", "executions.build_attempt_id"],
+            name="fk_build_attempts_latest_execution",
+            use_alter=True,
+        ),
+        sa.ForeignKeyConstraint(
+            ["successful_execution_id", "id"],
+            ["executions.id", "executions.build_attempt_id"],
+            name="fk_build_attempts_successful_execution",
+            use_alter=True,
+        ),
     )
 
     id: Mapped[UuidPk]
@@ -67,6 +88,9 @@ class BuildAttempt(Base):
     )
     error: Mapped[str | None] = mapped_column(sa.Text())
     idempotency_key: Mapped[str | None] = mapped_column(sa.Text())
+    current_execution_id: Mapped[UUID | None] = mapped_column(sa.Uuid())
+    latest_execution_id: Mapped[UUID | None] = mapped_column(sa.Uuid())
+    successful_execution_id: Mapped[UUID | None] = mapped_column(sa.Uuid())
     created_at: Mapped[CreatedAt]
     started_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
