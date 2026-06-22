@@ -210,6 +210,17 @@ def test_prompt_includes_previous_validation_error_on_retry(tmp_path):
     assert "Re-check the complete Output Contract" in prompt
 
 
+def test_re_prompt_calls_out_strings_and_no_hardcoded_flag(tmp_path):
+    context = load_design_prompt_context(_paths(tmp_path))
+
+    prompt = build_design_prompt(context, _task("re"), _request("re"), [], [])
+
+    assert "strings on the binary" in prompt
+    assert "validate.sh" in prompt
+    assert "writenup/exp.py" in prompt
+    assert "metadata.flag" in prompt
+
+
 def test_prompt_renders_build_budget_for_difficulty(tmp_path):
     # Phase 2.5: the prompt MUST quote the per-tier buildability caps so
     # the agent self-constrains to what build can actually finish.

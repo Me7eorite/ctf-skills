@@ -243,6 +243,11 @@ def _render_output_contract(task: DesignTask) -> str:
         "(`http://127.0.0.1:<port>`, `http://localhost:<port>`) but MUST "
         "NOT require external HTTP/HTTPS URLs, and MUST NOT contain code "
         "or file bodies."
+        + "\n4. For `category = re`, do not make the delivered artifact "
+        "trivially reveal `metadata.flag` via `strings` unless "
+        "`primary_technique` explicitly says the intended solve is "
+        "`strings on the binary`; likewise, `validate.sh` and "
+        "`writenup/exp.py` MUST NOT embed the literal `metadata.flag`."
     )
     return f"{invariants}\n\n```json\n{schema_text}\n```"
 

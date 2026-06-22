@@ -127,6 +127,12 @@ attempt if any of the following hold:
   the parent `design_tasks.port`
 - `artifacts` or `validation` contains any `http://` or `https://`
   URL string
+- For `category = re`, the delivered artifact SHALL NOT expose the
+  plaintext flag via `strings` unless the design's
+  `primary_technique` explicitly states that `strings on the binary` is
+  the intended solve path
+- `validate.sh` and `writenup/exp.py` SHALL NOT embed the literal
+  `metadata.flag`
 
 When `event.flag_format` is missing from the JSON, the validator SHALL
 insert the default value `flag{...}` rather than reject.
@@ -341,4 +347,3 @@ button that is enabled only when the parent task status is `queued`.
 - **GIVEN** a task whose status is `designing`
 - **WHEN** the dashboard renders the task row
 - **THEN** the "Design now" button is rendered disabled
-
