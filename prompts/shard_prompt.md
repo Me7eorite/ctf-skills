@@ -282,6 +282,45 @@ violates any of them fails validation regardless of what `validate.sh` prints:
 Write an organizer README and a reproducible WP that match the built artifact
 and exploit. Include build, run, solve, and expected-result commands.
 
+The writeup in `writenup/wp.md` MUST follow this exact Markdown structure and
+section order, using Chinese prose and the same heading hierarchy:
+
+```text
+# {题目名称} - 解题报告
+## 一、题目分析
+### 1.1 题目信息
+### 1.2 题目描述
+### 1.3 文件 / 环境分析
+## 二、解题过程
+### 2.1 初步检测 / 信息收集
+### 2.2 关键分析
+### 2.3 解题验证 / 手动复现
+## 三、技术原理
+### 3.1 核心原理说明
+### 3.2 本题实现方式
+### 3.3 干扰项 / 其他尝试分析
+## 四、工具使用总结
+### 4.1 本题使用的关键命令
+### 4.2 相关工具补充
+## 五、Flag
+## 六、总结
+### 6.1 解题要点总结
+### 6.2 学习要点
+```
+
+Hard requirements for `writenup/wp.md`:
+
+- Use Markdown only.
+- Keep the six top-level sections in the exact order above.
+- Keep the subsection numbering and titles unchanged.
+- Include real commands and key outputs in fenced code blocks.
+- Include at least one reproducible script, payload, or validation procedure.
+- Explain why each step is done and what conclusion it supports.
+- Do not invent outputs, flags, or commands that were not actually observed.
+- If evidence is incomplete, explicitly mark it as `推测` or `需要进一步验证`.
+- Write the flag as a standalone section; do not bury it in the narrative.
+- Make the writeup fully reproducible for a beginner following the document.
+
 # Required Files
 
 ```text
