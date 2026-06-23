@@ -201,6 +201,11 @@ class DesignTaskRepository:
                 constraints=dict(candidate.get("constraints") or {}),
                 evidence_summary=str(candidate.get("evidence_summary", "")),
                 finding_ids=[str(fid) for fid in candidate.get("finding_ids") or ()],
+                diversity_flags=(
+                    dict(candidate["diversity_flags"])
+                    if candidate.get("diversity_flags") is not None
+                    else None
+                ),
                 status="draft",
                 updated_at=now,
             )
@@ -252,6 +257,9 @@ def _design_task(row: model.DesignTask) -> dto.DesignTask:
         constraints=dict(row.constraints),
         evidence_summary=row.evidence_summary,
         finding_ids=tuple(UUID(str(fid)) for fid in row.finding_ids),
+        diversity_flags=(
+            dict(row.diversity_flags) if row.diversity_flags is not None else None
+        ),
         status=row.status,
         created_at=row.created_at,
         updated_at=row.updated_at,

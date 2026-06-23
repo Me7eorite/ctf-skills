@@ -325,6 +325,7 @@ def _fake_finding(label: str) -> model.ResearchFinding:
 
 def _fake_request(difficulty_distribution):
     from types import MappingProxyType
+
     from domain.research import GenerationRequest
 
     return GenerationRequest(
@@ -431,6 +432,9 @@ def test_plan_candidates_applies_hermes_planner_enrichment_for_hard():
     # Only the hard task triggered the Hermes call.
     assert len(planner.calls) == 1
     assert planner.calls[0]["difficulty"] == "hard"
+    assert set(planner.calls[0]["avoid_techniques"]) == {
+        candidates[0]["diversity_flags"]["sub_technique"]
+    }
 
     hard = next(c for c in candidates if c["difficulty"] == "hard")
     assert hard["scenario"] == "Internal supervisor approval portal."
@@ -472,6 +476,87 @@ def test_plan_candidates_reuses_findings_when_pool_too_small_for_expert():
 
     assert len(candidates[0]["finding_ids"]) == 3
     assert len(set(candidates[0]["finding_ids"])) <= 2  # wrap-around expected
+
+
+def test_plan_candidates_flags_monocultural_pool_but_preserves_count():
+    findings = [_fake_finding(label) for label in ("xor", "XOR", "xor-decrypt")]
+    request = _fake_request({"easy": 3})
+    run = _fake_run()
+
+    candidates = planning_module._plan_candidates(request, run, findings)
+
+    assert len(candidates) == 3
+    assert all(
+        c["diversity_flags"]["sub_technique"] == "xor"
+        for c in candidates
+    )
+    assert all(
+        "subtechnique_duplicate" in c["diversity_flags"]["warnings"]
+        for c in candidates
+    )
+
+
+def test_plan_candidates_diverse_pool_has_no_diversity_warnings():
+    findings = [
+        _fake_finding("blind SQLi"),
+        _fake_finding("DOM XSS"),
+        _fake_finding("JWT confusion"),
+    ]
+    request = _fake_request({"easy": 3})
+    run = _fake_run()
+
+    candidates = planning_module._plan_candidates(request, run, findings)
+
+    assert [c["diversity_flags"]["warnings"] for c in candidates] == [[], [], []]
+    assert [c["diversity_flags"]["sub_technique"] for c in candidates] == [
+        "blind sqli",
+        "dom xss",
+        "jwt confusion",
+    ]
+
+
+def test_plan_candidates_same_family_distinct_subtechniques_only_flags_family_quota():
+    findings = [
+        _fake_finding("blind SQLi"),
+        _fake_finding("second-order SQLi"),
+        _fake_finding("SQLi login bypass"),
+    ]
+    request = _fake_request({"easy": 3})
+    run = _fake_run()
+
+    candidates = planning_module._plan_candidates(request, run, findings)
+
+    assert all(c["diversity_flags"]["family"] == "injection" for c in candidates)
+    assert all(
+        "subtechnique_duplicate" not in c["diversity_flags"]["warnings"]
+        for c in candidates
+    )
+    assert any(
+        "family_quota_exceeded" in c["diversity_flags"]["warnings"]
+        for c in candidates
+    )
+
+
+def test_plan_candidates_is_deterministic_for_diversity_flags():
+    findings = [
+        _fake_finding("blind SQLi"),
+        _fake_finding("DOM XSS"),
+        _fake_finding("JWT confusion"),
+        _fake_finding("SSRF"),
+    ]
+    request = _fake_request({"easy": 2, "medium": 2})
+    run = _fake_run()
+
+    first = planning_module._plan_candidates(request, run, findings)
+    second = planning_module._plan_candidates(request, run, findings)
+
+    assert [
+        (c["task_no"], c["primary_technique"], c["diversity_flags"])
+        for c in first
+    ] == [
+        (c["task_no"], c["primary_technique"], c["diversity_flags"])
+        for c in second
+    ]
 
 
 def test_generate_replaces_archived_tasks(session_factory: SessionFactory):

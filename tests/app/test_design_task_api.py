@@ -33,6 +33,7 @@ def _make_design_task(
     run_id: UUID | None = None,
     task_no: int = 1,
     status: str = "draft",
+    diversity_flags=None,
 ) -> DesignTask:
     now = datetime(2026, 6, 1, tzinfo=timezone.utc)
     return DesignTask(
@@ -55,6 +56,7 @@ def _make_design_task(
         status=status,
         created_at=now,
         updated_at=now,
+        diversity_flags=diversity_flags,
     )
 
 
@@ -380,7 +382,15 @@ class RequestDetailDesignTaskSummaryTests(unittest.TestCase):
 class DesignTaskReadEndpointTests(unittest.TestCase):
     def test_list_filters_and_returns_lightweight_rows(self):
         request_id = uuid4()
-        task = _make_design_task(request_id=request_id, status="queued")
+        task = _make_design_task(
+            request_id=request_id,
+            status="queued",
+            diversity_flags={
+                "family": "injection",
+                "sub_technique": "blind sqli",
+                "warnings": [],
+            },
+        )
         calls = []
 
         def _list_tasks(**kwargs):
@@ -403,6 +413,14 @@ class DesignTaskReadEndpointTests(unittest.TestCase):
             payload = resp.json()
             self.assertEqual(len(payload), 1)
             self.assertEqual(payload[0]["id"], str(task.id))
+            self.assertEqual(
+                payload[0]["diversity_flags"],
+                {
+                    "family": "injection",
+                    "sub_technique": "blind sqli",
+                    "warnings": [],
+                },
+            )
             self.assertNotIn("attempts", payload[0])
             self.assertNotIn("latest_design", payload[0])
             self.assertEqual(calls[0]["generation_request_id"], request_id)

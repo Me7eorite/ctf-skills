@@ -50,7 +50,7 @@
 
 ## 3. Greedy allocation: family governs, sub-technique diagnoses
 
-- [ ] 3.1 Rewrite `_findings_for_task` (`design_task_planning_service.py`) as a single
+- [x] 3.1 Rewrite `_findings_for_task` (`design_task_planning_service.py`) as a single
       greedy pass: track `Counter[family]` and the set of sibling `sub_technique`s.
       **Family is the governance axis** — prefer candidates within the family quota +
       cooldown, relax (record `family_quota_exceeded`) when none fit.
@@ -58,20 +58,20 @@
       additionally prefer an unused sub-technique (best-effort), record
       `subtechnique_duplicate` when none remain. Sub-technique has NO quota knob and NO
       separate fallback ladder. Final fallback is round-robin. Always preserve count.
-- [ ] 3.2 Compute per-task `diversity_flags`
+- [x] 3.2 Compute per-task `diversity_flags`
       (`{"family","sub_technique","warnings":[...]}`, warnings enum
       `family_quota_exceeded|subtechnique_duplicate|family_other`) during `_plan_candidates`
       and store on the candidate row.
-- [ ] 3.3 Pass `avoid_techniques` (sibling sub-technique keys) into
+- [x] 3.3 Pass `avoid_techniques` (sibling sub-technique keys) into
       `HermesPlannerService.plan`; add the `SHOULD avoid reusing: {used}` clause to
       `prompts/design_planner_prompt.md`.
-- [ ] 3.4 Add `technique_quota` / `cooldown_window` knobs (family-governance only) to
+- [x] 3.4 Add `technique_quota` / `cooldown_window` knobs (family-governance only) to
       `generation-profiles.json` and read them in the planner (sane defaults when absent).
       Do NOT add a sub-technique knob.
-- [ ] 3.5 Tests: monocultural pool (all one sub-technique) still yields `target_count`
+- [x] 3.5 Tests: monocultural pool (all one sub-technique) still yields `target_count`
       tasks, each flagged `subtechnique_duplicate`; a diverse pool yields no warnings;
       same-family-different-sub-technique yields only `family_quota_exceeded`.
-- [ ] 3.6 Determinism: allocation + `diversity_flags` are a pure function of (ordered
+- [x] 3.6 Determinism: allocation + `diversity_flags` are a pure function of (ordered
       findings, difficulty distribution, profile knobs); no randomness / wall-clock; ties
       broken by a stable key (finding index/id). Test: generating twice on identical inputs
       yields identical family/sub_technique per task_no and identical flags. Ensure the
@@ -80,9 +80,9 @@
 
 ## 4. `diversity_flags` persistence
 
-- [ ] 4.1 Add `diversity_flags` (JSON) to `DesignTask` and the design_tasks schema; Alembic
+- [x] 4.1 Add `diversity_flags` (JSON) to `DesignTask` and the design_tasks schema; Alembic
       revision (nullable). Reconciler/serialization tolerate the new key.
-- [ ] 4.2 Expose `diversity_flags` on the design-task API resource and request-detail view.
+- [x] 4.2 Expose `diversity_flags` on the design-task API resource and request-detail view.
 
 ## 5. Plan-review checkpoint
 

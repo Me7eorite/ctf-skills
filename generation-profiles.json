@@ -10,6 +10,8 @@
         {"runtime": "java", "frameworks": ["Spring Boot", "Jakarta Servlet"]},
         {"runtime": "go", "frameworks": ["net/http", "Gin", "Fiber"]}
       ],
+      "technique_quota": 1,
+      "cooldown_window": 1,
       "policy": [
         "A shard should use at least two runtimes when it contains three or more Web challenges.",
         "Do not select Python when the matrix row names another runtime.",
@@ -21,6 +23,8 @@
       "required_artifact": "Linux ELF plus single-service Docker image",
       "toolchains": ["gcc", "clang"],
       "architectures": ["x86_64"],
+      "technique_quota": 1,
+      "cooldown_window": 1,
       "policy": [
         "Record PIE, NX, RELRO, canary, and stripped status.",
         "Compile the distributed ELF during generation.",
@@ -36,6 +40,8 @@
       ],
       "default_format": "elf",
       "default_platform": "linux/amd64",
+      "technique_quota": 1,
+      "cooldown_window": 1,
       "policy": [
         "Unless the matrix explicitly requests another format, compile a Linux amd64 ELF.",
         "Source code alone or a README placeholder in attachments/ is not a deliverable.",

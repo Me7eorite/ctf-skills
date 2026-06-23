@@ -1179,6 +1179,7 @@ def _design_task_dict(
         "constraints": dict(task.constraints),
         "evidence_summary": task.evidence_summary,
         "finding_ids": [str(fid) for fid in task.finding_ids],
+        "diversity_flags": dict(task.diversity_flags) if task.diversity_flags else None,
         "status": task.status,
         "created_at": _isofmt(task.created_at),
         "updated_at": _isofmt(task.updated_at),

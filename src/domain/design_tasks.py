@@ -58,3 +58,4 @@ class DesignTask:
     status: str                           # 任务状态
     created_at: datetime
     updated_at: datetime
+    diversity_flags: Mapping[str, Any] | None = None  # 技术多样性标记

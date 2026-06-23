@@ -95,6 +95,7 @@ class DesignTask(Base):
         nullable=False,
         server_default=sa.text("'[]'::jsonb"),
     )
+    diversity_flags: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     next_build_attempt_no: Mapped[int] = mapped_column(
         sa.Integer(),
         nullable=False,

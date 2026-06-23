@@ -13,6 +13,8 @@ task, not to enumerate every implementation detail.
 - primary_finding: `[{primary_kind}] {primary_label}` — {primary_summary}
 - secondary_findings:
 {secondary_block}
+- SHOULD avoid reusing these sibling sub-techniques:
+{avoid_techniques}
 
 ## Rubric Reminder
 
@@ -49,3 +51,5 @@ Rules:
   set it to `null`.
 - Do NOT include code, Dockerfiles, exploit details, or per-file specs.
 - Do NOT echo the inputs verbatim.
+- SHOULD avoid reusing the listed sibling sub-techniques when a coherent
+  alternative chain exists.

@@ -93,6 +93,7 @@ class HermesPlannerService:
         topic: str,
         primary: ResearchFinding,
         secondaries: Sequence[ResearchFinding] = (),
+        avoid_techniques: Sequence[str] = (),
         log_path: Path | None = None,
     ) -> PlannerEnrichment | None:
         """Return planner enrichment, or ``None`` on any failure."""
@@ -107,6 +108,7 @@ class HermesPlannerService:
             primary_label=primary.label,
             primary_summary=primary.summary,
             secondary_block=_render_secondary_block(secondaries),
+            avoid_techniques=_render_avoid_techniques(avoid_techniques),
         )
 
         actual_log = log_path or (
@@ -178,6 +180,13 @@ def _render_secondary_block(secondaries: Sequence[ResearchFinding]) -> str:
             f"  - [{finding.kind}] {finding.label}: {finding.summary}"
         )
     return "\n".join(lines)
+
+
+def _render_avoid_techniques(avoid_techniques: Sequence[str]) -> str:
+    unique = [item for item in dict.fromkeys(str(t).strip() for t in avoid_techniques if str(t).strip())]
+    if not unique:
+        return "  - (none)"
+    return "\n".join(f"  - {item}" for item in unique)
 
 
 def _safe_parse(stdout: str) -> dict[str, Any] | None:

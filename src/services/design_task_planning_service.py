@@ -20,12 +20,17 @@ from __future__ import annotations
 
 import logging
 import math
+from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
+from core.jsonio import read_json
+from core.paths import ProjectPaths
 from domain import design_tasks as dto
 from domain import research as research_dto
+from domain.design.technique_taxonomy import resolve_family, resolve_sub_technique
 from domain.design_task_validators import DesignTaskValidationError
 from domain.research_validators import (
     _quality_ratio,
@@ -47,6 +52,11 @@ DEFAULT_POINTS: Mapping[str, int] = {
     "expert": 500,
 }
 DEFAULT_PORT_BASE = 9000
+DEFAULT_COOLDOWN_WINDOW = 1
+
+DIVERSITY_WARNING_FAMILY_QUOTA = "family_quota_exceeded"
+DIVERSITY_WARNING_SUBTECHNIQUE_DUPLICATE = "subtechnique_duplicate"
+DIVERSITY_WARNING_FAMILY_OTHER = "family_other"
 
 
 class DesignTaskPlanningService:
@@ -231,9 +241,18 @@ def _plan_candidates(
     candidates: list[dict[str, Any]] = []
     category = request.category
     runtime_constraints = dict(request.runtime_constraints or {})
+    profile = _diversity_profile(category, request.target_count, findings)
+    allocations = _allocate_primary_findings(
+        findings,
+        target_count=request.target_count,
+        category=category,
+        technique_quota=profile.technique_quota,
+        cooldown_window=profile.cooldown_window,
+    )
     for index, difficulty in enumerate(difficulty_slots):
         task_no = index + 1
-        task_findings = _findings_for_task(difficulty, findings, index)
+        allocation = allocations[index]
+        task_findings = _findings_for_task(difficulty, findings, allocation.index)
         primary = task_findings[0]
         secondaries = task_findings[1:]
         candidate: dict[str, Any] = {
@@ -253,6 +272,7 @@ def _plan_candidates(
             "constraints": dict(runtime_constraints),
             "evidence_summary": _evidence_summary(run, request.topic, task_findings),
             "finding_ids": [f.id for f in task_findings],
+            "diversity_flags": allocation.diversity_flags,
         }
         # Phase 2 (D5=b): for hard/expert tasks the optional Hermes
         # planner can replace the template scenario with a Hermes-locked
@@ -265,6 +285,7 @@ def _plan_candidates(
                 topic=request.topic,
                 primary=primary,
                 secondaries=secondaries,
+                avoid_techniques=sorted(allocation.avoid_techniques),
             )
             if enrichment is not None:
                 _apply_planner_enrichment(candidate, enrichment)
@@ -295,7 +316,7 @@ def _apply_planner_enrichment(
 def _findings_for_task(
     difficulty: str,
     findings: Sequence[research_dto.ResearchFinding],
-    index: int,
+    primary_index: int,
 ) -> list[research_dto.ResearchFinding]:
     """Pick ``n`` findings for this task in stable, deterministic order.
 
@@ -310,7 +331,163 @@ def _findings_for_task(
         raise DesignTaskValidationError(
             "_plan_candidates called with no findings"
         )
-    return [findings[(index + offset) % pool_size] for offset in range(need)]
+    return [findings[(primary_index + offset) % pool_size] for offset in range(need)]
+
+
+@dataclass(frozen=True)
+class _DiversityProfile:
+    technique_quota: int
+    cooldown_window: int
+
+
+@dataclass(frozen=True)
+class _FindingAllocation:
+    index: int
+    diversity_flags: dict[str, Any]
+    avoid_techniques: frozenset[str]
+
+
+def _allocate_primary_findings(
+    findings: Sequence[research_dto.ResearchFinding],
+    *,
+    target_count: int,
+    category: str,
+    technique_quota: int,
+    cooldown_window: int,
+) -> list[_FindingAllocation]:
+    pool_size = len(findings)
+    if pool_size == 0:
+        raise DesignTaskValidationError("_plan_candidates called with no findings")
+
+    metadata = [
+        {
+            "family": resolve_family(finding, category=category),
+            "sub_technique": resolve_sub_technique(finding),
+        }
+        for finding in findings
+    ]
+    distinct_subtechniques = {item["sub_technique"] for item in metadata}
+    duplicate_unavoidable = len(distinct_subtechniques) < target_count
+
+    family_counts: Counter[str] = Counter()
+    used_subtechniques: set[str] = set()
+    recent_families: list[str] = []
+    allocations: list[_FindingAllocation] = []
+
+    for task_index in range(target_count):
+        ordered_indices = [(task_index + offset) % pool_size for offset in range(pool_size)]
+        quota_candidates = [
+            idx
+            for idx in ordered_indices
+            if family_counts[metadata[idx]["family"]] < technique_quota
+        ]
+        family_quota_exceeded = False
+        if not quota_candidates:
+            quota_candidates = ordered_indices
+            family_quota_exceeded = True
+
+        cooldown_candidates = [
+            idx
+            for idx in quota_candidates
+            if metadata[idx]["family"] not in recent_families[-cooldown_window:]
+        ] if cooldown_window > 0 else quota_candidates
+        family_candidates = cooldown_candidates or quota_candidates
+
+        unused_sub_candidates = [
+            idx
+            for idx in family_candidates
+            if metadata[idx]["sub_technique"] not in used_subtechniques
+        ]
+        if unused_sub_candidates:
+            chosen = unused_sub_candidates[0]
+            subtechnique_duplicate = duplicate_unavoidable
+        else:
+            chosen = family_candidates[0]
+            subtechnique_duplicate = True
+
+        family = metadata[chosen]["family"]
+        sub_technique = metadata[chosen]["sub_technique"]
+        warnings: list[str] = []
+        if family_quota_exceeded:
+            warnings.append(DIVERSITY_WARNING_FAMILY_QUOTA)
+        if subtechnique_duplicate:
+            warnings.append(DIVERSITY_WARNING_SUBTECHNIQUE_DUPLICATE)
+        if family == "other":
+            warnings.append(DIVERSITY_WARNING_FAMILY_OTHER)
+
+        allocations.append(
+            _FindingAllocation(
+                index=chosen,
+                diversity_flags={
+                    "family": family,
+                    "sub_technique": sub_technique,
+                    "warnings": warnings,
+                },
+                avoid_techniques=frozenset(used_subtechniques),
+            )
+        )
+        family_counts[family] += 1
+        used_subtechniques.add(sub_technique)
+        recent_families.append(family)
+    return allocations
+
+
+def _diversity_profile(
+    category: str,
+    target_count: int,
+    findings: Sequence[research_dto.ResearchFinding],
+) -> _DiversityProfile:
+    configured = _generation_profile_category(category)
+    distinct_families = {
+        resolve_family(finding, category=category)
+        for finding in findings
+    }
+    default_quota = max(1, math.ceil(target_count / max(1, len(distinct_families))))
+    technique_quota = _positive_int(configured.get("technique_quota"), default_quota)
+    cooldown_window = _nonnegative_int(
+        configured.get("cooldown_window"),
+        DEFAULT_COOLDOWN_WINDOW,
+    )
+    return _DiversityProfile(
+        technique_quota=technique_quota,
+        cooldown_window=cooldown_window,
+    )
+
+
+def _generation_profile_category(category: str) -> Mapping[str, Any]:
+    try:
+        path = ProjectPaths.discover().generation_profile
+        payload = read_json(path, {})
+    except Exception as exc:  # noqa: BLE001 - missing/malformed profile should not block planning
+        _LOGGER.warning("could not read generation profile: %s", exc)
+        return {}
+    if not isinstance(payload, Mapping):
+        return {}
+    categories = payload.get("categories")
+    if not isinstance(categories, Mapping):
+        return {}
+    row = categories.get(category)
+    return row if isinstance(row, Mapping) else {}
+
+
+def _positive_int(value: Any, default: int) -> int:
+    if isinstance(value, bool):
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _nonnegative_int(value: Any, default: int) -> int:
+    if isinstance(value, bool):
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed >= 0 else default
 
 
 def _scenario_for(

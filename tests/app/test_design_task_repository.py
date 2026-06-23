@@ -138,6 +138,11 @@ def _candidate(task_no: int, difficulty: str, finding_id: UUID, **overrides):
         "constraints": {"runtime": "docker"},
         "evidence_summary": "Backed by finding boolean blind.",
         "finding_ids": [finding_id],
+        "diversity_flags": {
+            "family": "injection",
+            "sub_technique": "blind sqli",
+            "warnings": [],
+        },
     }
     base.update(overrides)
     return base
@@ -166,6 +171,11 @@ def test_round_trip_create_list_get(session_factory: SessionFactory):
         assert [t.status for t in listed] == ["draft", "draft"]
         assert [t.challenge_id for t in listed] == ["web-0001", "web-0002"]
         assert listed[0].finding_ids == (finding_id,)
+        assert listed[0].diversity_flags == {
+            "family": "injection",
+            "sub_technique": "blind sqli",
+            "warnings": [],
+        }
         single = repo.get_design_task(created[0].id)
         assert single is not None and single.task_no == 1
     finally:
