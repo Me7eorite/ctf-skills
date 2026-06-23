@@ -243,6 +243,8 @@ class HermesRunner:
         original_shard_name: str | None = None,
         resume_plan: ShardResumePlan | None = None,
         resume_output_targets: Mapping[str, str] | None = None,
+        repair_requested: bool = False,
+        repair_context: Mapping[str, Any] | None = None,
     ) -> str:
         """渲染送给 Hermes 的完整 prompt（含断点恢复计划）。"""
         return render_prompt(
@@ -255,6 +257,8 @@ class HermesRunner:
             original_shard_name=original_shard_name,
             resume_plan=resume_plan,
             resume_output_targets=resume_output_targets,
+            repair_requested=repair_requested,
+            repair_context=repair_context,
         )
 
     def run(
@@ -388,8 +392,10 @@ class HermesRunner:
         不执行 Hermes、不写进度事件。用于预览和调试。
         """
         try:
-            # 计算恢复计划
-            plan = compute_resume_plan(
+            shard_payload = read_json(shard, {})
+            repair_requested = isinstance(shard_payload, dict) and bool(shard_payload.get("repair_requested"))
+            repair_context = shard_payload.get("repair_context") if isinstance(shard_payload, dict) else None
+            plan = None if repair_requested else compute_resume_plan(
                 state=self.state,
                 paths=self.paths,
                 shard=resume_source_shard_name,
@@ -404,6 +410,8 @@ class HermesRunner:
                 workspace_relative=True,
                 original_shard_name=original_shard_name,
                 resume_plan=plan,
+                repair_requested=repair_requested,
+                repair_context=repair_context if isinstance(repair_context, Mapping) else None,
             )
             # 写入日志文件（prompt 内容）
             log.parent.mkdir(parents=True, exist_ok=True)
@@ -733,6 +741,8 @@ class HermesRunner:
                 publisher_phase=publisher_phase,
             )
         log = workspace.hermes_log
+        repair_requested = bool(payload.get("repair_requested"))
+        repair_context = payload.get("repair_context") if isinstance(payload.get("repair_context"), Mapping) else None
         prompt = self.render_prompt(
             workspace.input / "shard.json",
             report,
@@ -740,8 +750,10 @@ class HermesRunner:
             report_runtime_path="./logs/report.json",
             workspace_relative=True,
             original_shard_name=original_shard_name,
-            resume_plan=plan,
+            resume_plan=None if repair_requested else plan,
             resume_output_targets=resume_targets,
+            repair_requested=repair_requested,
+            repair_context=repair_context,
         )
         tailer = WorkspaceProgressTailer(workspace, self._progress.record)
         tailer.start()

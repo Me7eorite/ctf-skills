@@ -649,8 +649,8 @@ def test_repair_reuses_container_and_carries_failure_context(
         service.paths.shards / "pending" / f"{container_id}.iter-002.json",
         {},
     )
-    assert payload["execution_mode"] == "resume"
-    assert payload["resume_from_shard_basename"] == f"{container_id}.iter-001.json"
+    assert payload["execution_mode"] == "clean"
+    assert "resume_from_shard_basename" not in payload
     assert payload["repair_requested"] is True
     assert payload["repair_context"]["source_build_attempt_id"] == str(container_id)
     assert "metadata.json" in payload["repair_context"]["failure_summary"]
@@ -705,7 +705,7 @@ def test_repair_lost_attempt_uses_progress_failure_instead_of_lease_error(
         {},
     )
     summary = payload["repair_context"]["failure_summary"]
-    assert payload["execution_mode"] == "resume"
+    assert payload["execution_mode"] == "clean"
     assert payload["repair_requested"] is True
     assert "implement evidence incomplete" in summary
     assert "lease expired" not in summary

@@ -119,6 +119,46 @@ def _record_execution_outcome(
         )
 
 
+def _finalize_build_attempt(
+    attempt_id: UUID, worker: str, item: dict, *, session_factory=None
+) -> None:
+    """Write the build-attempt terminal state and advance the parent task."""
+    from persistence.repositories import BuildAttemptsRepository, ExecutionsRepository
+    from persistence.session import transaction
+
+    try:
+        with transaction(factory=session_factory) as session:
+            exec_repo = ExecutionsRepository(session)
+            latest = exec_repo.latest_for_attempt(attempt_id)
+            if latest is None or latest.status not in {"claimed", "running"}:
+                return
+            failed = int(item.get("failed", 0))
+            processed = int(item.get("processed", 0))
+            status = "succeeded" if processed > 0 and failed == 0 else "failed"
+            error = None
+            if status == "failed":
+                outcomes = item.get("outcomes") or []
+                last = outcomes[-1] if outcomes else {}
+                error = (last.get("error") or last.get("status") or "build failed")[:2000]
+            BuildAttemptsRepository(session).finalize_attempt(
+                attempt_id,
+                status=status,
+                worker=worker,
+                error=error,
+            )
+            exec_repo.update_to_terminal(
+                latest.id,
+                claim_token=latest.claim_token,
+                status=status,
+                error=error,
+            )
+    except Exception as exc:  # never break the worker loop on bookkeeping
+        print(
+            f"build attempt finalization skipped for {attempt_id}: {exc}",
+            flush=True,
+        )
+
+
 def _mark_attempt_running(
     attempt_id: UUID, worker: str, *, session_factory=None
 ) -> None:
@@ -253,7 +293,7 @@ def _run_build_attempt_sequence(
             ]
             break
 
-        _record_execution_outcome(attempt_id, worker, item)
+        _finalize_build_attempt(attempt_id, worker, item)
 
         item_outcomes = item.get("outcomes", [])
         outcomes.extend(item_outcomes)
@@ -1271,7 +1311,7 @@ def main() -> None:
                     require_build_attempt=args.build_attempts_only,
                 )
             if args.build_attempt and not args.dry_run:
-                _record_execution_outcome(args.build_attempt, args.worker, result)
+                _finalize_build_attempt(args.build_attempt, args.worker, result)
         print(json.dumps(result, indent=2))
         if result.get("abort_reason") is not None:
             sys.exit(1)

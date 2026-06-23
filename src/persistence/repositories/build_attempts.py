@@ -275,6 +275,44 @@ class BuildAttemptsRepository:
         self.session.refresh(row)
         return _attempt(row)
 
+    def finalize_attempt(
+        self,
+        attempt_id: UUID,
+        *,
+        status: str,
+        worker: str | None = None,
+        started_at: datetime | None = None,
+        finished_at: datetime | None = None,
+        resulting_challenge_dir: str | None = None,
+        artifact_status: str | None = None,
+        error: str | None = None,
+    ) -> dto.BuildAttempt:
+        """Terminally mark an attempt and roll its parent task forward.
+
+        This is the canonical post-build write path for execution-backed builds.
+        It updates the attempt first, then advances the owning design task to
+        ``built`` or ``build_failed`` in the same transaction so the CLI does
+        not rely on the background reconciler for normal completion.
+        """
+        attempt = self.update_to_terminal(
+            attempt_id,
+            status=status,
+            worker=worker,
+            started_at=started_at,
+            finished_at=finished_at,
+            resulting_challenge_dir=resulting_challenge_dir,
+            artifact_status=artifact_status,
+            error=error,
+        )
+        task = self.session.get(task_model.DesignTask, attempt.design_task_id)
+        if task is not None:
+            task.status = "built" if status == "succeeded" else "build_failed"
+            task.updated_at = _utcnow()
+        self.session.flush()
+        if task is not None:
+            self.session.refresh(task)
+        return attempt
+
     def update_artifact_status(
         self,
         attempt_id: UUID,

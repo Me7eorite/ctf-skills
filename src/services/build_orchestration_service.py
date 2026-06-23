@@ -112,6 +112,7 @@ class _PreparedSubmission:
     execution_kind: str = "initial"
     repair_requested: bool = False
     repair_context: dict[str, Any] | None = None
+    repair_mode: bool = False
 
 
 class BuildOrchestrationService:
@@ -166,9 +167,9 @@ class BuildOrchestrationService:
     def repair(self, build_attempt_id: UUID) -> UUID:
         """Queue an AI repair pass for the latest failed build attempt.
 
-        Unlike a clean rebuild, repair is explicitly a resume operation: the
-        next worker iteration receives the previous failure diagnostics and
-        starts from the failed attempt's existing evidence.
+        Repair is a current-state fix flow. The next worker iteration should
+        analyze the live workspace and failure diagnostics, without carrying
+        forward historical progress stages.
         """
         with self._session() as session:
             build_repo = BuildAttemptsRepository(session)
@@ -195,7 +196,7 @@ class BuildOrchestrationService:
         return self._submit(
             [source.design_task_id],
             retry_sources={source.design_task_id: source.id},
-            execution_mode="resume",
+            execution_mode="clean",
             repair_sources={source.design_task_id: repair_context},
         )[0]
 
@@ -462,6 +463,7 @@ class BuildOrchestrationService:
                         execution_kind=execution_kind,
                         repair_requested=task_id in (repair_sources or {}),
                         repair_context=dict((repair_sources or {}).get(task_id) or {}),
+                        repair_mode=task_id in (repair_sources or {}),
                     )
                 )
         return prepared

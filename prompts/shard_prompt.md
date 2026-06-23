@@ -86,6 +86,8 @@ repairs, the solver and `validate.sh` must derive the flag from the artifact in
 `attachments/`; do not introduce `dist/`, `metadata.json`, `challenge.yml`, or
 Docker/Compose files as solver inputs.
 
+{repair_section}
+
 # 0. Resume Check
 
 The host has pre-computed a resume plan for every challenge in this shard.

@@ -124,6 +124,26 @@ class RenderPromptTests(unittest.TestCase):
             self.assertIn("edit_exact_path=output/challenges/web/web-0001-old-slug", rendered)
             self.assertIn("do not create or rename another directory", rendered)
 
+    def test_repair_section_appears_when_enabled(self):
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            paths = _seed_paths(tmp_path)
+            running_shard = tmp_path / "running.json"
+            running_shard.write_text("{}", encoding="utf-8")
+            rendered = render_prompt(
+                paths,  # type: ignore[arg-type]
+                running_shard,
+                tmp_path / "repair-report.json",
+                worker="dry-01",
+                original_shard_name="web-0001.json",
+                repair_requested=True,
+                repair_context={"failure_summary": "metadata.json missing field"},
+            )
+
+            self.assertIn("Repair mode is enabled.", rendered)
+            self.assertIn("Do not use carry-forward instructions", rendered)
+            self.assertIn("metadata.json missing field", rendered)
+
     def test_first_run_resume_plan_renders_fallback(self):
         with TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

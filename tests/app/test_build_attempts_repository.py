@@ -189,6 +189,43 @@ def test_running_and_terminal_updates_set_timestamps(
         assert missing.artifact_status == "missing"
 
 
+def test_finalize_attempt_marks_parent_task_terminal(
+    session_factory: SessionFactory,
+):
+    with session_factory() as session:
+        task = _seed_task(session)
+        repo = BuildAttemptsRepository(session)
+        attempt = repo.create_attempt(task.id, "finalize.json")
+        repo.finalize_attempt(
+            attempt.id,
+            status="succeeded",
+            worker="hermes-01",
+        )
+        session.commit()
+
+        assert repo.get(attempt.id).status == "succeeded"
+        assert session.get(task_model.DesignTask, task.id).status == "built"
+
+
+def test_finalize_attempt_marks_parent_task_failed(
+    session_factory: SessionFactory,
+):
+    with session_factory() as session:
+        task = _seed_task(session)
+        repo = BuildAttemptsRepository(session)
+        attempt = repo.create_attempt(task.id, "finalize-failed.json")
+        repo.finalize_attempt(
+            attempt.id,
+            status="failed",
+            worker="hermes-01",
+            error="boom",
+        )
+        session.commit()
+
+        assert repo.get(attempt.id).status == "failed"
+        assert session.get(task_model.DesignTask, task.id).status == "build_failed"
+
+
 def test_folded_list_filters_latest_before_filtering_and_honors_limit(
     session_factory: SessionFactory,
 ):
