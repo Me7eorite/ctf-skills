@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from datetime import datetime, timezone
@@ -28,6 +29,10 @@ from persistence.repositories import (
     BuildAttemptsRepository,
 )
 from services import BuildOrchestrationError, BuildOrchestrationService
+from services.build_attempt_repair_service import (
+    BuildAttemptRepairError,
+    BuildAttemptRepairService,
+)
 from services.build_attempt_revalidation_service import (
     BuildAttemptRevalidationError,
     BuildAttemptRevalidationNotFoundError,
@@ -193,6 +198,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
                 body["timeout_source"] = timeout_manifest.get("timeout_source")
         body["sibling_attempts"] = [_attempt_dict(row) for row in siblings]
         body["progress_events"] = event_payloads
+        body["repair_runs"] = _repair_runs(_project_paths(app), attempt.id)
         return JSONResponse(body)
 
     @app.post("/api/build-attempts/worker/start")
@@ -406,23 +412,36 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
     def repair_build_attempt(attempt_id: str) -> JSONResponse:
         attempt_uuid = _parse_uuid(attempt_id, "build attempt id")
         _require_attempt_build_profile(app, attempt_uuid)
+        progress = getattr(app.state, "progress_store", None)
+        if progress is None:
+            raise HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail="progress store is not configured",
+            )
         try:
-            repair_id = BuildOrchestrationService(paths=_project_paths(app)).repair(
+            result = BuildAttemptRepairService(
+                paths=_project_paths(app),
+                progress=progress,
+                session_factory=getattr(app.state, "session_factory", None),
+            ).repair(
                 attempt_uuid
             )
-        except BuildOrchestrationError as exc:
+        except BuildAttemptRepairError as exc:
             raise HTTPException(
                 status_code=HTTPStatus.CONFLICT,
                 detail=str(exc),
             ) from exc
-        except IntegrityError as exc:
-            raise HTTPException(
-                status_code=HTTPStatus.CONFLICT,
-                detail="a build is already active for this design task",
-            ) from exc
         return JSONResponse(
-            {"build_attempt_id": str(repair_id)},
-            status_code=HTTPStatus.CREATED,
+            {
+                "build_attempt_id": str(result.attempt_id),
+                "repair_id": result.repair_id,
+                "status": result.status,
+                "verification_status": result.verification_status,
+                "log_path": result.log_path,
+                "events_path": result.events_path,
+                "failure_summary": result.failure_summary,
+            },
+            status_code=HTTPStatus.OK,
         )
 
     @app.post("/api/build-attempts/{attempt_id}/clean-rebuild")
@@ -1034,6 +1053,51 @@ def _failure_summaries(
     for event in events:
         grouped.setdefault(event.shard, []).append(_progress_event_dict(event))
     return {shard: summary for shard, rows in grouped.items() if (summary := _derive_failure_summary(rows, None))}
+
+
+def _repair_runs(paths, attempt_id: UUID) -> list[dict[str, Any]]:
+    root = paths.executions / str(attempt_id) / "repairs"
+    if root.is_symlink() or not root.is_dir():
+        return []
+    runs: list[dict[str, Any]] = []
+    for directory in sorted(root.iterdir(), key=lambda item: item.name, reverse=True):
+        if directory.is_symlink() or not directory.is_dir():
+            continue
+        events_path = directory / "repair-events.jsonl"
+        events = _read_repair_events(events_path)
+        last = events[-1] if events else {}
+        runs.append(
+            {
+                "repair_id": directory.name,
+                "status": last.get("status") or "unknown",
+                "phase": last.get("phase") or "unknown",
+                "message": last.get("message") or "",
+                "created_at": events[0].get("created_at") if events else None,
+                "updated_at": last.get("created_at"),
+                "log_path": str(directory / "hermes.log"),
+                "events_path": str(events_path),
+                "events": events,
+            }
+        )
+    return runs
+
+
+def _read_repair_events(path: Path) -> list[dict[str, Any]]:
+    if path.is_symlink() or not path.is_file():
+        return []
+    events: list[dict[str, Any]] = []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    for line in lines:
+        try:
+            parsed = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(parsed, dict):
+            events.append(parsed)
+    return events
 
 
 def _derive_failure_summary(

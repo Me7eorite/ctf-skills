@@ -382,7 +382,7 @@ def test_retry_rejects_stale_sibling(
     assert "latest" in response.json()["detail"]
 
 
-def test_repair_endpoint_queues_ai_repair_iteration(
+def test_repair_endpoint_runs_attempt_scoped_ai_repair(
     client: TestClient,
     session_factory: SessionFactory,
     monkeypatch: pytest.MonkeyPatch,
@@ -409,16 +409,31 @@ def test_repair_endpoint_queues_ai_repair_iteration(
         )
         session.get(task_model.DesignTask, task_id).status = "build_failed"
 
+    class FakeRepairService:
+        def __init__(self, **_kwargs):
+            pass
+
+        def repair(self, value):
+            return SimpleNamespace(
+                attempt_id=value,
+                repair_id="repair-fixture",
+                status="succeeded",
+                verification_status="passed",
+                log_path="work/executions/attempt/repairs/repair-fixture/hermes.log",
+                events_path="work/executions/attempt/repairs/repair-fixture/repair-events.jsonl",
+                failure_summary=None,
+            )
+
+    monkeypatch.setattr(build_attempts_endpoints, "BuildAttemptRepairService", FakeRepairService)
+
     response = client.post(f"/api/build-attempts/{attempt_id}/repair")
 
-    assert response.status_code == 201
+    assert response.status_code == 200
     assert response.json()["build_attempt_id"] == str(attempt_id)
-    payload_path = (
-        client.app.state.project_paths.shards
-        / "pending"
-        / f"{attempt_id}.iter-002.json"
-    )
-    assert payload_path.is_file()
+    assert response.json()["repair_id"] == "repair-fixture"
+    assert response.json()["verification_status"] == "passed"
+    payload_path = client.app.state.project_paths.shards / "pending" / f"{attempt_id}.iter-002.json"
+    assert not payload_path.exists()
 
 
 def test_clean_rebuild_requires_confirmation_and_replays_idempotently(

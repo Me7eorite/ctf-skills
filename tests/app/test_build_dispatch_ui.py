@@ -24,11 +24,13 @@ def test_build_attempt_actions_use_constrained_endpoints():
     assert 'id="ba-validate"' not in source
     assert 'id="ba-worker"' in source
     assert "重新校验" in source
-    assert "AI 修复后校验" in source
-    assert '["failed", "lost"].includes(attempt.status)' in source
+    assert "分析并修复" in source
+    assert 'attempt.status === "failed"' in source
     assert "重试构建" in source
     assert "干净重建" in source
     assert "/clean-rebuild`" in source
+    assert "AI 修复记录" in source
+    assert "renderRepairRuns(attempt.repair_runs || [])" in source
     assert "crypto.randomUUID()" in source
     assert "confirmed: true" in source
     assert '["failed", "lost", "succeeded"].includes(attempt.status)' in source

@@ -274,8 +274,12 @@ async function repairAttempt(attemptId) {
   initIcons();
   try {
     const result = await postJson(`/api/build-attempts/${attemptId}/repair`, {});
-    showToast(`已排队 AI 修复 ${shortId(result.build_attempt_id)}`);
-    state.detailId = result.build_attempt_id;
+    if (result.status === "succeeded") {
+      showToast("AI 修复并重新验收通过");
+    } else {
+      showToast(result.failure_summary || "AI 修复后重新验收未通过", true);
+    }
+    state.detailId = result.build_attempt_id || attemptId;
     state.detail = null;
     state.list = null;
     await ensureDetail(state.detailId);
@@ -640,8 +644,8 @@ function renderDetail(root) {
         ${attempt.status === "failed"
           ? `<button class="btn btn-secondary btn-sm ba-revalidate" data-build-attempt-id="${escapeHtml(attempt.id)}"><i data-lucide="shield-check"></i>重新校验</button>`
           : ""}
-        ${["failed", "lost"].includes(attempt.status) && buildProfileReady(attempt.category)
-          ? `<button class="btn btn-primary btn-sm ba-repair" data-build-attempt-id="${escapeHtml(attempt.id)}"><i data-lucide="wrench"></i>AI 修复后校验</button>`
+        ${attempt.status === "failed" && buildProfileReady(attempt.category)
+          ? `<button class="btn btn-primary btn-sm ba-repair" data-build-attempt-id="${escapeHtml(attempt.id)}"><i data-lucide="wrench"></i>分析并修复</button>`
           : ""}
         ${(attempt.status === "failed" || attempt.status === "lost") && buildProfileReady(attempt.category)
           ? `<button class="btn btn-primary btn-sm ba-retry" data-build-attempt-id="${escapeHtml(attempt.id)}"><i data-lucide="rotate-cw"></i>重试构建</button>`
@@ -696,6 +700,14 @@ function renderDetail(root) {
         <span class="pill">${(attempt.sibling_attempts || []).length}</span>
       </div>
       ${renderSiblingAttempts(attempt)}
+    </section>
+
+    <section class="card ba-section-card">
+      <div class="card-header">
+        <div><div class="card-title">AI 修复记录</div></div>
+        <span class="pill">${(attempt.repair_runs || []).length}</span>
+      </div>
+      ${renderRepairRuns(attempt.repair_runs || [])}
     </section>
 
     <section class="card ba-section-card">
@@ -759,6 +771,22 @@ function renderSiblingAttempts(attempt) {
           `).join("")}
         </tbody>
       </table>
+    </div>
+  `;
+}
+
+function renderRepairRuns(runs) {
+  if (!runs.length) return `<div class="empty card-body">没有 AI 修复记录</div>`;
+  return `
+    <div class="ba-events">
+      ${runs.map((run) => `
+        <div class="ba-event mono">
+          ${escapeHtml(run.repair_id || "-")}
+          ${escapeHtml(run.phase || "unknown")}/${escapeHtml(run.status || "unknown")}
+          ${escapeHtml(run.message || "")}
+          ${run.log_path ? `<div>log: ${escapeHtml(run.log_path)}</div>` : ""}
+        </div>
+      `).join("")}
     </div>
   `;
 }

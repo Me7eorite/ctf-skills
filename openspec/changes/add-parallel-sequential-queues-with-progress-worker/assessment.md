@@ -1,31 +1,31 @@
-## 12-pass proposal assessment
+## Rebuilt Assessment
 
-Each pass follows: analyze proposal -> compare current implementation -> choose solution -> fold back into the proposal.
+This file consolidates the issues found during repeated review and the constraints now folded back into `proposal.md`, `design.md`, `spec.md`, and `tasks.md`.
 
-| Pass | Analysis | Current implementation check | Resolution folded into proposal |
-| ---- | -------- | ---------------------------- | -------------------------------- |
-| 01 | The proposal needs an explicit source of truth for queue identity; otherwise worker labels can collide across batches. | `TaskManager.start_sequential_worker()` currently hardcodes `dashboard-sequential-01` and the CLI runner has no queue-instance concept. | Introduce a queue instance / queue id and derive unique worker names from it. |
-| 02 | A 12-attempt cap must be enforced at the API boundary, not only inside the scheduler, or clients can still submit oversized batches. | `src/web/build_attempts_endpoints.py` currently forwards the full ordered list directly to the sequential worker. | Add validation and chunking at the queue-start endpoint and keep a service-side guard. |
-| 03 | If the same build attempt can be referenced by two queues, the system can create duplicate work and confusing progress states. | The current endpoint only checks duplicate ids inside a single request, not cross-queue ownership. | Require a queue-preparation step that rejects attempts already assigned to another active queue. |
-| 04 | Parallel queues need bounded concurrency or the dashboard can turn into an unbounded process spawner. | `TaskManager` currently tracks a single `_process` and therefore implicitly serializes everything. | Add an outer coordinator with a configurable concurrency limit rather than launching all queues at once. |
-| 05 | Queue-local worker identity must be reflected in progress events, or the UI cannot separate queues reliably. | `ProgressEventInput.worker` already exists, but the current sequential launcher writes a fixed worker name. | Reuse the existing progress schema and make the worker name queue-scoped. |
-| 06 | A single shared result file would race under parallel execution and overwrite neighboring queue status. | `src/web/server.py` reads one latest sequential-worker result file only. | Move to queue-scoped result and log files, and make the UI aggregate them. |
-| 07 | Queue-local fail-fast should not become a batch-level kill switch. | `_run_build_attempt_sequence()` already keeps fail-fast state local to one sequence. | Keep fail-fast inside the queue body and ensure the coordinator never propagates aborts across queues. |
-| 08 | The progress UI may need a richer shape than a single worker blob, otherwise it will still flatten multiple queues into one surface. | The current dashboard UI state only exposes one `sequential_worker_result`. | Return and render a queue list so each queue gets its own card or row. |
-| 09 | Automatic chunking can change UX expectations for existing callers that assume one request maps to one worker launch. | The existing API returns a single accepted response with one `queue_length`. | Preserve a stable response shape while expanding it to include queue metadata and count. |
-| 10 | Retry and resume semantics could become ambiguous if a build attempt is already assigned to a queue. | Build-attempt retry logic currently reasons about the latest attempt, not queue membership. | Make queue assignment an execution-only concern and reject re-queueing of active attempts until the prior queue resolves. |
-| 11 | The queue coordinator could accidentally treat one queue's abort as a global failure and stop scheduling the remaining chunks. | There is no outer coordinator today, so no explicit cross-queue abort policy exists. | Define queue-local terminal states and make the coordinator continue scheduling unaffected queues. |
-| 12 | The proposal should avoid unnecessary schema churn unless the UI needs durable queue history. | Current progress and build attempt storage already support per-worker display without a queue table. | Keep persistence minimal first: use queue-scoped files and existing progress events, and add a queue table only if history becomes necessary. |
+| # | Problem found | Current implementation evidence | Remediation folded into proposal |
+| - | ------------- | ------------------------------- | -------------------------------- |
+| 01 | Worker identity and result files collide under parallel queues. | `TaskManager.start_sequential_worker()` uses a fixed sequential worker name and the CLI writes a fixed sequential result path. | Introduce queue ids, queue-scoped worker names, queue-scoped logs, queue-scoped metadata, and queue-scoped result output paths. |
+| 02 | `TaskManager` is single-process and would reject a second sequential queue. | The local task manager holds one `_process` and returns a busy-style conflict when another task is running. | Replace only sequential queue handling with a queue-id keyed process registry; keep non-sequential task guards intact. |
+| 03 | Queue metadata atomic write is insufficient for duplicate assignment. | Two different queue ids could both create metadata while referencing the same attempt. | Make attempt reservation the atomic unit: exclusive per-attempt reservation files or one locked reservation index. |
+| 04 | Partial reservation can leak ownership. | A queue with attempts `A, B` can reserve `A` and fail on `B`. | Require rollback of already-created reservations before returning an error. |
+| 05 | Stale metadata can block forever or allow unsafe reuse if ignored. | A subprocess can die before writing result JSON. | Treat stale reservations as active until owner exit is proven or recovery marks the queue terminal; task manager writes terminal metadata on process exit. |
+| 06 | The CLI fixed result path remains a race even with unique workers. | `_run_build_attempt_sequence()` result is currently written through a constant path. | Add queue-scoped result output path options and verify two parallel sequence runners write different files. |
+| 07 | Eagerly leasing all attempts recreates the known waiting-attempt lease-expiry race. | The existing sequential loop intentionally claims only the current attempt. | Preserve lazy per-attempt claim/heartbeat; the coordinator must not mark or lease waiting attempts. |
+| 08 | Execution-backed retry can be broken by treating retry as a new attempt. | Execution lease/fencing model reuses `build_attempt` as container and appends executions. | Queue orchestration must not mint build attempts; retry after queued failure appends an execution under the same container. |
+| 09 | Rejecting every non-terminal `latest_execution_id` is too broad. | A normal queued execution is non-terminal before worker claim. | Allow non-terminal latest only when it is the queued execution represented by the matching pending shard; reject `current_execution_id` and active reservations. |
+| 10 | Iteration shard basenames can be missed. | Execution-minted shards use `{build_attempt_id}.iter-NNN.json`. | Eligibility and progress lookup accept legacy and iteration basenames. |
+| 11 | “Progress worker” is ambiguous and could become a second execution actor. | Progress events already carry worker; execution terminal writes are token-fenced by runner/repository. | Define progress worker/card as observational only: aggregate metadata/events, never claim shards or write terminal state. |
+| 12 | Queue failure could accidentally abort other queues. | The existing single sequence fail-fast is local, but an outer coordinator is new. | Fail-fast/cancellation/abort reason remains queue-local; coordinator does not propagate aborts across queues. |
+| 13 | Dashboard could remain tied to a single global result. | Server currently reads one latest sequential-worker result. | Dashboard reads queue metadata list and renders one worker card per queue; global result file is compatibility-only. |
+| 14 | API shape can drift between one and many queues. | Existing response is a flat single queue response. | Always return top-level queue list, queue_count, and applied parallel limit for both single and multi-queue submissions. |
 
-## Assessment Outcome
+## Outcome
 
-The current implementation can support this change without a full rewrite, but only if the proposal explicitly introduces a queue instance concept, queue-scoped worker identity, queue-scoped artifacts, and bounded parallel scheduling.
+The change is implementable without a full worker-pool rewrite if implementation keeps the boundary clear:
 
-The highest-risk areas are:
+- queue coordinator owns chunking, attempt reservation, subprocess launch, queue metadata, and UI aggregation;
+- CLI sequence runner owns ordered execution inside one queue;
+- execution repository/runner owns claim, heartbeat, fencing, and terminal execution state;
+- dashboard progress worker/card observes only.
 
-1. preserving the existing sequential execution semantics inside each queue;
-2. avoiding worker/result-file collisions;
-3. preventing cross-queue abort propagation;
-4. keeping the UI understandable when multiple queue cards are active at once.
-
-If those constraints are kept, the change is a natural extension of the current build orchestration model rather than a new execution system.
+The highest-risk areas are attempt-level reservation, queue process lifecycle convergence, and preserving execution-backed retry semantics.

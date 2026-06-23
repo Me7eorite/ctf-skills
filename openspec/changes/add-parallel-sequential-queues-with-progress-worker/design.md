@@ -1,37 +1,32 @@
 ## Context
 
-The current implementation already has a stable sequential execution primitive: `src/cli.py::_run_build_attempt_sequence()` processes a list of build attempts in order, claiming each attempt only when it is the next one to run. That is the correct inner loop for sequential execution.
+The current implementation already has a stable sequential execution primitive: `src/cli.py::_run_build_attempt_sequence()` processes build attempts in the supplied order and claims each attempt only when it is the next one to run. That is the correct inner loop and must remain unchanged in spirit.
 
-The missing piece is an outer scheduling layer that can create multiple independent sequential queues, attach unique worker identities to them, and surface each queue separately in the dashboard progress view.
+The missing layer is a coordinator that can prepare independent queue instances, reserve their attempts, launch queue-scoped subprocesses, and surface each queue separately in the dashboard.
 
-## Goals
+## Queue Instance
 
-1. Allow one build submission to fan out into multiple sequential queues.
-2. Cap each sequential queue at 12 build attempts.
-3. Preserve strict in-queue ordering.
-4. Keep queues isolated from each other at the worker, result, and UI levels.
-5. Expose queue-local progress in the implementation-progress UI.
-
-## Proposed Model
-
-### Sequential Queue Instance
-
-Introduce the concept of a queue instance that exists for the duration of one ordered batch.
+A sequential queue instance exists for one ordered batch chunk.
 
 Suggested fields:
 
-- `queue_id`: globally unique identifier for the batch instance
-- `worker_name`: unique worker label shown in the UI and progress store
-- `attempt_ids`: ordered list of build attempts in that queue
+- `queue_id`: globally unique queue identifier
+- `worker_name`: queue-scoped worker label visible in progress events and UI
+- `attempt_ids`: ordered build attempt ids in this queue
+- `attempt_shard_basenames`: resolved shard basenames, including `{build_attempt_id}.iter-NNN.json`
 - `status`: `queued | running | done | failed | aborted`
-- `current_attempt_id`: the attempt currently being processed
-- `processed_count`: number of attempts completed by the queue
-- `failed_count`: number of failed attempts in the queue
-- `abort_reason`: optional queue-local abort reason
-- `result_path`: queue-local result JSON path
-- `log_path`: queue-local log path
+- `current_attempt_id`
+- `processed_count`
+- `failed_count`
+- `abort_reason`
+- `result_path`
+- `log_path`
+- `started_at` / `finished_at`
+- `process_id` and `returncode` when available
 
-### Queue Splitting Rule
+The queue instance is not a replacement for `build_attempts` or `executions`; it is an execution-time envelope around existing build-attempt containers.
+
+## Queue Splitting
 
 The split rule is deterministic:
 
@@ -39,74 +34,88 @@ The split rule is deterministic:
 - chunk into groups of at most 12;
 - each group becomes one sequential queue.
 
-This keeps the UI predictable and makes retry behavior easier to reason about.
+The existing `/api/build-attempts/queue/start` filters (`category`, `generation_request_id`, `limit`) still apply before chunking.
 
-### Isolation Rules
+## Attempt Reservation
 
-To prevent interference between queues:
+Queue preparation must reserve attempts before spawning subprocesses. Disk metadata is acceptable for the first implementation, but the atomic unit must be the attempt ownership check, not the queue metadata file.
 
-- each queue must have a unique worker name;
-- each queue must write to a unique result file;
-- each queue must write to a unique log file;
-- queue-local fail-fast only applies within that queue;
-- a build attempt may appear in at most one active queue.
+Use one of these approaches:
 
-### Execution Strategy
+- exclusive per-attempt reservation files, for example `work/logs/sequential-queues/reservations/<attempt_id>.json`;
+- or a single reservation index updated under an exclusive lock.
 
-Keep the existing sequential runner as the queue body.
-Add a coordinator above it that launches multiple queue workers concurrently, with a configurable parallelism limit.
+Rules:
 
-Recommended default: 2–4 parallel queues.
+- create all attempt reservations before writing terminal queue-start success;
+- write queue metadata only after every attempt reservation succeeds;
+- roll back already-created reservations if any later reservation in the same queue fails;
+- reject preparation if any active reservation already references one of the attempts;
+- treat stale metadata as active until the owner process is proven exited or recovery marks the queue terminal.
 
-## API and UI Shape
+Reservation is separate from execution claim. It prevents two queue-start requests from assigning the same queued attempt before the CLI sequence loop reaches that attempt.
 
-### API
+## Execution Strategy
 
-The queue-start endpoints should return the queue breakdown rather than a single flat worker response.
+Keep the existing sequential runner as the queue body. Add a coordinator above it that launches multiple queue workers concurrently with a configurable parallelism limit.
 
-Example response shape:
+Recommended default: 2 to 4 parallel queues.
 
-```json
-{
-  "ok": true,
-  "queue_count": 3,
-  "queues": [
-    {
-      "queue_id": "q1",
-      "worker": "dashboard-seq-q1",
-      "attempt_ids": ["..."],
-      "queue_length": 12
-    }
-  ]
-}
-```
+The coordinator passes queue identity into the CLI runner as:
 
-### Dashboard
+- queue-scoped worker name;
+- queue-scoped result path;
+- queue-scoped log path;
+- optional queue metadata/progress path if needed.
 
-The implementation-progress view should render one card per queue.
+The CLI currently writes sequential results to one constant path. This change must add queue-scoped CLI options for result output path; otherwise parallel queues still collide even with unique worker names.
 
-Each card should show:
+The CLI sequence loop remains responsible for per-attempt claim, heartbeat, fail-fast classification, and terminal execution outcome recording. The coordinator must not eagerly mark or lease waiting attempts.
 
-- worker name
-- queue id
-- queue length
-- completed / total
-- current attempt
-- queue status
-- abort reason if present
+## Task Manager Shape
 
-This is intentionally a queue-level UI, not a task-level UI.
+The current local `TaskManager` tracks one process in one `_process` field. Parallel sequential queues require a queue-process registry:
+
+- non-sequential actions (`worker`, `validate`, single constrained worker) keep the existing single-task guard;
+- sequential queue actions use `queue_id -> process/log/result/metadata` entries;
+- starting a queue is rejected when that queue or one of its attempts is already active, not merely because another sequential queue is running;
+- a global sequential concurrency limit controls how many queue processes are launched at once;
+- process exit updates queue metadata to terminal state even if the CLI never writes result JSON.
 
 ## Storage Boundary
 
-The first implementation SHALL persist queue runtime metadata to disk alongside the queue result and log files. The disk record SHALL be sufficient for the dashboard to refresh active queues and to display recently finished queues within a bounded retention window. PostgreSQL persistence is NOT required for the first release.
+Suggested first-release layout:
 
-## Recommendation
+```text
+work/logs/sequential-queues/
+  queues/<queue_id>.metadata.json
+  results/<queue_id>.result.json
+  logs/<queue_id>.log
+  reservations/<attempt_id>.json
+```
 
-Use a minimal-first implementation:
+The existing `work/logs/dashboard-sequential-worker-result.json` may be retained as a legacy compatibility view for the most recent single queue, but it must not be authoritative once parallel queues are enabled.
 
-1. derive queue instances in the API/service layer;
-2. keep queue runtime state on disk alongside logs;
-3. use globally unique worker names per queue;
-4. make the dashboard read queue metadata from queue-scoped disk state and aggregate it into a queue list;
-5. add PostgreSQL queue history only if a later requirement needs durable audit or cross-restart history beyond the disk retention window.
+Queue metadata must converge to terminal state on subprocess exit. A queue that fails before writing a result record still needs terminal metadata carrying return code and log path so active reservations can be released or recovered deterministically.
+
+## Progress Worker / Card
+
+The progress worker/card is observational only. It aggregates queue metadata plus per-attempt progress events keyed by queue worker identity.
+
+It must not:
+
+- claim shards;
+- move queue files;
+- update `executions` terminal state;
+- mark `build_attempts` terminal.
+
+## Compatibility With Execution Lease And Fencing
+
+This change builds on the execution-backed model:
+
+- retry and clean rebuild append an `executions` row under the same `build_attempt` container;
+- staged shards may be named `{build_attempt_id}.iter-NNN.json`;
+- only the running attempt in a queue is claimed and heartbeated;
+- filesystem status mirroring is not authoritative for execution-backed containers.
+
+Queue eligibility must check both the DB row and matching pending shard basename. The coordinator must not schedule an attempt whose `current_execution_id` is non-null or whose latest execution is non-terminal unless that latest execution is exactly the queued execution represented by the pending shard.
