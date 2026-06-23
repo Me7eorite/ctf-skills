@@ -258,9 +258,11 @@ def test_sources_findings_and_cross_run_validation(session_factory: SessionFacto
             label="union",
             summary="UNION SELECT",
             source_ids=[source1.id],
+            technique_family="injection",
         )
         assert repo.list_sources(run1.id) == [source1]
         assert repo.list_findings(run1.id) == [finding]
+        assert finding.technique_family == "injection"
 
         with pytest.raises(ResearchValidationError, match="at least one source"):
             repo.create_finding(

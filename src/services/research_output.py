@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
 from core.paths import ProjectPaths
+from domain.design.technique_taxonomy import resolve_family
 from domain.research_validators import (
     ResearchValidationError,
     apply_research_quality_gate,
     extract_terminal_json_object,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -25,6 +29,7 @@ def parse_research_output(
     stdout_text: str,
     *,
     target_count: int = 1,
+    category: str | None = None,
 ) -> ParsedResearchOutput:
     """Parse, normalize, and quality-gate Hermes research stdout without I/O."""
     res_data = extract_terminal_json_object(stdout_text)
@@ -46,7 +51,11 @@ def parse_research_output(
         for source_item in source_items
     ]
     finding_payloads = [
-        _normalize_finding_payload(finding_item, source_count=len(source_payloads))
+        _normalize_finding_payload(
+            finding_item,
+            source_count=len(source_payloads),
+            category=category,
+        )
         for finding_item in finding_items
     ]
     return ParsedResearchOutput(sources=source_payloads, findings=finding_payloads)
@@ -89,7 +98,12 @@ def _normalize_source_payload(source_item: Any) -> dict[str, Any]:
     return source_payload
 
 
-def _normalize_finding_payload(finding_item: Any, *, source_count: int) -> dict[str, Any]:
+def _normalize_finding_payload(
+    finding_item: Any,
+    *,
+    source_count: int,
+    category: str | None = None,
+) -> dict[str, Any]:
     if not isinstance(finding_item, Mapping):
         raise ResearchValidationError("each finding must be a JSON object")
     finding_payload = dict(finding_item)
@@ -107,7 +121,26 @@ def _normalize_finding_payload(finding_item: Any, *, source_count: int) -> dict[
             )
         if source_index < 0 or source_index >= source_count:
             raise ResearchValidationError(f"source index {source_index} is out of range")
+    finding_payload["technique_family"] = _normalize_agent_technique_family(
+        finding_payload,
+        category=category,
+    )
     return finding_payload
+
+
+def _normalize_agent_technique_family(
+    finding_payload: Mapping[str, Any],
+    *,
+    category: str | None,
+) -> str:
+    raw_family = finding_payload.get("technique_family")
+    if not isinstance(raw_family, str) or not raw_family.strip():
+        LOGGER.warning(
+            "missing technique_family for finding label %r; using other",
+            finding_payload.get("label"),
+        )
+        return "other"
+    return resolve_family(finding_payload, category=category)
 
 
 def _required_text(payload: Mapping[str, Any], field_name: str, item_name: str) -> str:

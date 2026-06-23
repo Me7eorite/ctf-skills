@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
+from core.clock import utcnow as _utcnow
 from domain import research as dto
 from domain.research_validators import (
     ResearchValidationError,
@@ -17,7 +18,6 @@ from domain.research_validators import (
     validate_distribution,
     validate_finding,
 )
-from core.clock import utcnow as _utcnow
 from persistence.models import research as model
 
 
@@ -361,6 +361,7 @@ class ResearchRepository:
         label: str,
         summary: str,
         source_ids: Sequence[UUID],
+        technique_family: str | None = None,
     ) -> dto.ResearchFinding:
         """创建 finding 及其 source 引用关系。"""
         # 先校验 kind 和 source_ids 非空/不重复，避免写入孤立 finding。
@@ -387,6 +388,7 @@ class ResearchRepository:
             kind=kind,
             label=label,
             summary=summary,
+            technique_family=technique_family,
         )
         self.session.add(finding)
         # finding 和 join rows 在同一 session/事务中写入，调用方失败时整体回滚。
@@ -573,4 +575,5 @@ def _finding(row: model.ResearchFinding) -> dto.ResearchFinding:
         kind=row.kind,
         label=row.label,
         summary=row.summary,
+        technique_family=row.technique_family,
     )

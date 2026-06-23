@@ -29,11 +29,64 @@ from domain.research import (
     ResearchSource,
 )
 from web.dashboard import DashboardService
+from web.research_endpoints import _technique_family_report
 from web.server import create_app
 
 # ---------------------------------------------------------------------------
 # Fixture helpers
 # ---------------------------------------------------------------------------
+
+
+def test_technique_family_report_warns_at_forty_percent_other():
+    run_id = uuid4()
+    findings = [
+        ResearchFinding(
+            id=uuid4(),
+            research_run_id=run_id,
+            kind="technique",
+            label="blind SQLi",
+            summary="s",
+            technique_family="injection",
+        ),
+        ResearchFinding(
+            id=uuid4(),
+            research_run_id=run_id,
+            kind="technique",
+            label="second-order SQLi",
+            summary="s",
+            technique_family="injection",
+        ),
+        ResearchFinding(
+            id=uuid4(),
+            research_run_id=run_id,
+            kind="technique",
+            label="JWT confusion",
+            summary="s",
+            technique_family="auth",
+        ),
+        ResearchFinding(
+            id=uuid4(),
+            research_run_id=run_id,
+            kind="variant",
+            label="unclassified A",
+            summary="s",
+            technique_family="other",
+        ),
+        ResearchFinding(
+            id=uuid4(),
+            research_run_id=run_id,
+            kind="variant",
+            label="unclassified B",
+            summary="s",
+            technique_family="other",
+        ),
+    ]
+
+    report = _technique_family_report(findings, category="web")
+
+    assert report["distribution"] == {"injection": 2, "auth": 1, "other": 2}
+    assert report["other_ratio"] == 0.4
+    assert report["warnings"] == ["classification_miss_rate_high"]
 
 
 def _client(stub_repo, *, scalar=None, scalars=None, design_repo=None) -> TestClient:
@@ -310,15 +363,15 @@ class RequestDetailEndpointTests(unittest.TestCase):
         )
         finding_a = ResearchFinding(
             id=uuid4(), research_run_id=run_new.id, kind="technique",
-            label="LA", summary="SA",
+            label="blind SQLi", summary="SA", technique_family="injection",
         )
         finding_b = ResearchFinding(
             id=uuid4(), research_run_id=run_new.id, kind="variant",
-            label="LB", summary="SB",
+            label="LB", summary="SB", technique_family="other",
         )
         finding_c = ResearchFinding(
             id=uuid4(), research_run_id=run_new.id, kind="technique",
-            label="LC", summary="SC",
+            label="LC", summary="SC", technique_family=None,
         )
 
         repo = SimpleNamespace(
@@ -342,6 +395,19 @@ class RequestDetailEndpointTests(unittest.TestCase):
             # Spec 10.2: findings grouped by kind.
             self.assertEqual(len(payload["findings_by_kind"]["technique"]), 2)
             self.assertEqual(len(payload["findings_by_kind"]["variant"]), 1)
+            self.assertEqual(
+                payload["technique_family_report"]["distribution"],
+                {"injection": 1, "other": 2},
+            )
+            self.assertAlmostEqual(payload["technique_family_report"]["other_ratio"], 2 / 3)
+            self.assertIn(
+                "classification_miss_rate_high",
+                payload["technique_family_report"]["warnings"],
+            )
+            self.assertEqual(
+                payload["findings_by_kind"]["technique"][0]["technique_family"],
+                "injection",
+            )
         finally:
             _close(client)
 

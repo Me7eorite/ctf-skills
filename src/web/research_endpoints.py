@@ -23,6 +23,7 @@ from core.paths import ProjectPaths
 from domain import challenge_designs as challenge_dto
 from domain import design_tasks as design_dto
 from domain import research as dto
+from domain.design.technique_taxonomy import resolve_family
 from domain.design_task_validators import DesignTaskValidationError
 from domain.research import GenerationRequestStatus, ResearchRunStatus
 from domain.research_failure_taxonomy import classify_last_error
@@ -508,6 +509,10 @@ def _register_request_detail(app: FastAPI) -> None:
             )
             sources = repo.list_sources(result_run.id) if result_run else []
             findings = repo.list_findings(result_run.id) if result_run else []
+            technique_family_report = _technique_family_report(
+                findings,
+                category=request.category,
+            )
             design_tasks_summary = DesignTaskRepository(
                 session
             ).summarize_for_request(request_uuid)
@@ -542,6 +547,7 @@ def _register_request_detail(app: FastAPI) -> None:
                 ],
                 "sources": [_source_dict(s) for s in sources],
                 "findings_by_kind": findings_by_kind,
+                "technique_family_report": technique_family_report,
                 "design_tasks_summary": design_tasks_summary,
             }
         )
@@ -928,8 +934,46 @@ def _finding_dict(finding: dto.ResearchFinding) -> dict[str, Any]:
         "id": str(finding.id),
         "kind": finding.kind,
         "label": finding.label,
+        "technique_family": finding.technique_family,
         "summary": finding.summary,
     }
+
+
+def _technique_family_report(
+    findings: list[dto.ResearchFinding],
+    *,
+    category: str,
+) -> dict[str, Any]:
+    distribution: dict[str, int] = {}
+    for finding in findings:
+        family = resolve_family(finding, category=category)
+        distribution[family] = distribution.get(family, 0) + 1
+    total = len(findings)
+    other_count = distribution.get("other", 0)
+    other_ratio = other_count / total if total else 0.0
+    threshold = _research_family_other_warn_ratio()
+    warnings = []
+    if total and other_ratio > threshold:
+        warnings.append("classification_miss_rate_high")
+    return {
+        "distribution": distribution,
+        "other_ratio": other_ratio,
+        "other_warn_ratio": threshold,
+        "warnings": warnings,
+    }
+
+
+def _research_family_other_warn_ratio() -> float:
+    import os
+
+    raw = os.environ.get("RESEARCH_FAMILY_OTHER_WARN_RATIO")
+    if raw is None:
+        return 0.30
+    try:
+        value = float(raw)
+    except ValueError:
+        return 0.30
+    return max(0.0, value)
 
 
 def _binding_dict(

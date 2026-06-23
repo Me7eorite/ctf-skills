@@ -17,6 +17,7 @@ import sqlalchemy as sa
 
 from core.clock import utcnow as _utcnow
 from domain import research as dto
+from domain.design.technique_taxonomy import resolve_family
 from domain.research_validators import ResearchValidationError, validate_runtime_constraints
 from persistence.models import research as model
 from persistence.repositories import ResearchRepository
@@ -327,6 +328,7 @@ class ResearchJobService:
                     label=_required_str(finding, "label"),
                     summary=_required_str(finding, "summary"),
                     source_ids=finding_source_ids,
+                    technique_family=_normalize_technique_family(finding, run.generation_request.category),
                 )
 
             # 成功落库后更新 profile binding 的最近使用记录，并在同一事务内写 completed。
@@ -456,6 +458,7 @@ class ResearchJobService:
                 label=_required_str(finding, "label"),
                 summary=_required_str(finding, "summary"),
                 source_ids=_finding_source_ids(finding, source_ids),
+                technique_family=_normalize_technique_family(finding, run.generation_request.category),
             )
         if binding_role is not None:
             repo.touch_binding(binding_role, last_used_at=_utcnow(), last_used_run_id=run.id)
@@ -732,6 +735,10 @@ def _optional_str(value: Any) -> str | None:
             f"expected string or None, got {type(value).__name__}"
         )
     return value
+
+
+def _normalize_technique_family(finding: Mapping[str, Any], category: str | None) -> str:
+    return resolve_family(finding, category=category)
 
 
 def _required_str(payload: Mapping[str, Any], field: str) -> str:

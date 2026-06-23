@@ -208,6 +208,7 @@ class ResearchFinding(Base):
     kind: Mapped[str] = mapped_column(research_finding_kind, nullable=False)
     label: Mapped[str] = mapped_column(sa.Text(), nullable=False)
     summary: Mapped[str] = mapped_column(sa.Text(), nullable=False)
+    technique_family: Mapped[str | None] = mapped_column(sa.Text())
 
     research_run: Mapped[ResearchRun] = relationship()
 

@@ -484,7 +484,15 @@ function renderDetail(root) {
   }
   state.lastRender = sig;
 
-  const { request, latest_run: latest, runs = [], sources = [], findings_by_kind = {}, design_tasks_summary = null } = state.detail;
+  const {
+    request,
+    latest_run: latest,
+    runs = [],
+    sources = [],
+    findings_by_kind = {},
+    technique_family_report: techniqueFamilyReport = null,
+    design_tasks_summary = null,
+  } = state.detail;
   const worker = state.worker || {};
   const workerRunning = !!worker.running;
   const available = worker.available !== false;
@@ -531,6 +539,7 @@ function renderDetail(root) {
       <div class="rq-detail-main">
         ${renderResearchProgress(request, latest, findingCount, minimumFindings)}
         ${renderRequestConfiguration(request)}
+        ${renderTechniqueFamilyReport(techniqueFamilyReport)}
         ${renderFindings(findings_by_kind, minimumFindings)}
         ${renderSources(sources)}
         ${renderDesignTasksSummary(design_tasks_summary, request, qualityPassed, findingCount, minimumFindings)}
@@ -792,6 +801,7 @@ function renderFindings(findingsByKind, minimumFindings) {
               ${items.map((item) => `
                 <div class="rq-finding-item">
                   <div class="rq-finding-label">${escapeHtml(item.label)}</div>
+                  ${item.technique_family ? `<div class="rq-chip-list"><span>${escapeHtml(techniqueFamilyLabel(item.technique_family))}</span></div>` : ""}
                   <div class="rq-finding-summary">${escapeHtml(item.summary)}</div>
                 </div>
               `).join("")}
@@ -799,6 +809,30 @@ function renderFindings(findingsByKind, minimumFindings) {
           </div>
         `).join("")}
       </div>
+    </section>
+  `;
+}
+
+function renderTechniqueFamilyReport(report) {
+  const distribution = report?.distribution || {};
+  const entries = Object.entries(distribution).filter(([, count]) => Number(count) > 0);
+  if (!entries.length) return "";
+  const otherRatio = Number(report.other_ratio || 0);
+  const warnRatio = Number(report.other_warn_ratio ?? 0.3);
+  const isWarn = Array.isArray(report.warnings) && report.warnings.includes("classification_miss_rate_high");
+  return `
+    <section class="card rq-section-card">
+      <div class="card-header">
+        <div>
+          <div class="card-title">技术族分布</div>
+          <div class="card-subtitle">按后端归一化结果统计 research findings。</div>
+        </div>
+        <span class="pill ${isWarn ? "rq-status-failed" : ""}">Other ${Math.round(otherRatio * 100)}%</span>
+      </div>
+      <div class="rq-chip-list">
+        ${entries.map(([family, count]) => `<span>${escapeHtml(techniqueFamilyLabel(family))} ${escapeHtml(count)}</span>`).join("")}
+      </div>
+      ${isWarn ? `<div class="rq-section-message">分类 miss-rate 偏高（阈值 ${Math.round(warnRatio * 100)}%），请检查 lane vocabulary 或研究范围。</div>` : ""}
     </section>
   `;
 }
@@ -847,6 +881,30 @@ function renderExecutionSummary({ request, latest, worker, findingCount, minimum
 
 function findingKindLabel(kind) {
   return ({ technique: "技术要点", variant: "变化方式", pitfall: "常见陷阱", reference: "参考信息" })[kind] || kind;
+}
+
+function techniqueFamilyLabel(family) {
+  return ({
+    auth: "Auth",
+    injection: "Injection",
+    server_side: "Server-side",
+    client_side: "Client-side",
+    upload: "Upload/export",
+    node_api: "Node/API",
+    stack: "Stack",
+    format_string: "Format string",
+    heap: "Heap",
+    integer_oob: "Integer/OOB",
+    sandbox: "Sandbox",
+    kernel: "Kernel",
+    crackme: "Crackme",
+    vm_bytecode: "VM/bytecode",
+    runtime: "Runtime",
+    language: "Language",
+    platform: "Platform",
+    visual_game: "Visual/game",
+    other: "Other",
+  })[family] || family;
 }
 
 function sourceHost(url) {

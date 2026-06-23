@@ -38,14 +38,14 @@
 
 ## 2. Research finding `technique_family` (weak enforcement)
 
-- [ ] 2.1 Add nullable `technique_family` to `ResearchFinding` (`src/domain/research.py`)
+- [x] 2.1 Add nullable `technique_family` to `ResearchFinding` (`src/domain/research.py`)
       and to the research parser; unknown/missing values coerce to `other` with a
       logged warning, never raising.
-- [ ] 2.2 Alembic revision: nullable `research_findings.technique_family` (text). No backfill.
-- [ ] 2.3 Extend the research run report with a `technique_family` distribution and
+- [x] 2.2 Alembic revision: nullable `research_findings.technique_family` (text). No backfill.
+- [x] 2.3 Extend the research run report with a `technique_family` distribution and
       `other_ratio`; emit a neutral warning when `other_ratio > RESEARCH_FAMILY_OTHER_WARN_RATIO`
       (default `0.30`). Surface the distribution on the run report dashboard view.
-- [ ] 2.4 Test: a run whose findings are 40% `other` produces the warning; a run with NULL
+- [x] 2.4 Test: a run whose findings are 40% `other` produces the warning; a run with NULL
       `technique_family` findings still reports a derived distribution.
 
 ## 3. Greedy allocation: family governs, sub-technique diagnoses

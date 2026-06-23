@@ -97,7 +97,11 @@ class ResearchBackfillService:
         try:
             run, request = self._load_and_check_eligible(session, run_id, lock=False)
             safe_log = self._read_log(run)
-            parsed = self._parse_safe_log(safe_log.text, request.target_count)
+            parsed = self._parse_safe_log(
+                safe_log.text,
+                request.target_count,
+                category=request.category,
+            )
             return BackfillPreview(
                 run_id=run.id,
                 generation_request_id=run.generation_request_id,
@@ -129,7 +133,11 @@ class ResearchBackfillService:
                 if log_sha256 != expected_log_sha256:
                     raise ResearchBackfillError("preview_stale", "Hermes log changed after preview")
 
-                parsed = self._parse_safe_log(safe_log.text, request.target_count)
+                parsed = self._parse_safe_log(
+                    safe_log.text,
+                    request.target_count,
+                    category=request.category,
+                )
                 source_payloads, finding_payloads = materialize_research_raw_text(
                     parsed,
                     paths=self.paths,
@@ -242,12 +250,12 @@ class ResearchBackfillService:
         except SafeResearchLogError as exc:
             raise ResearchBackfillError(exc.code, exc.detail) from exc
 
-    def _parse_safe_log(self, log_text: str, target_count: int):
+    def _parse_safe_log(self, log_text: str, target_count: int, *, category: str | None = None):
         stdout = _extract_stdout_block(log_text)
         if not stdout:
             raise ResearchBackfillError("parse_failed", "Hermes log does not contain a complete stdout block")
         try:
-            return parse_research_output(stdout, target_count=target_count)
+            return parse_research_output(stdout, target_count=target_count, category=category)
         except ResearchValidationError as exc:
             detail = str(exc)
             raise ResearchBackfillError(_parse_error_code(detail), detail) from exc

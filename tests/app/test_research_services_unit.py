@@ -67,6 +67,45 @@ def test_parse_research_output_is_pure_until_materialize(tmp_path):
     assert "raw_text" not in source_payloads[0]
     assert source_payloads[0]["raw_text_path"] == str(final_path)
     assert finding_payloads[0]["source_indices"] == [0]
+    assert finding_payloads[0]["technique_family"] == "other"
+
+
+def test_parse_research_output_preserves_valid_family_and_coerces_unknown(caplog):
+    stdout_text = json.dumps(
+        {
+            "sources": [
+                {
+                    "url": "https://example.com/a",
+                    "title": "A",
+                    "summary": "Summary",
+                    "content_hash": "a" * 64,
+                }
+            ],
+            "findings": [
+                {
+                    "kind": "technique",
+                    "label": "blind SQLi",
+                    "technique_family": "injection",
+                    "summary": "Finding summary",
+                    "source_indices": [0],
+                },
+                {
+                    "kind": "technique",
+                    "label": "JWT confusion",
+                    "technique_family": "made-up",
+                    "summary": "Finding summary",
+                    "source_indices": [0],
+                },
+            ],
+        }
+    )
+
+    with caplog.at_level("WARNING"):
+        parsed = parse_research_output(stdout_text, target_count=1, category="web")
+
+    assert parsed.findings[0]["technique_family"] == "injection"
+    assert parsed.findings[1]["technique_family"] == "other"
+    assert "unknown technique_family" in caplog.text
 
 
 def test_legacy_parse_wrapper_still_materializes_raw_text(tmp_path):

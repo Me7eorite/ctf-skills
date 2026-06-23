@@ -135,6 +135,7 @@ class ResearchAgentExecutor:
             parsed = parse_research_output(
                 res_data.stdout,
                 target_count=generation_request.target_count,
+                category=generation_request.category,
             )
             source_payloads, finding_payloads = materialize_research_raw_text(
                 parsed,

@@ -145,6 +145,7 @@ class ResearchFinding:
     kind: str                             # 种类（technique/variant/scenario/prerequisite）
     label: str                            # 标签
     summary: str                          # 摘要
+    technique_family: str | None = None   # 技术族（弱约束；缺失时由 label 推导）
 
 
 @dataclass(frozen=True)
