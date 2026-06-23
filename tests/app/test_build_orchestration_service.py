@@ -23,6 +23,7 @@ from persistence.models import challenge_designs as design_model
 from persistence.models import design_tasks as task_model
 from persistence.models import executions as exec_model
 from persistence.models import research as research_model
+from persistence.models.progress import ProgressEvent
 from persistence.repositories import BuildAttemptsRepository, ExecutionsRepository
 from persistence.session import SessionFactory, transaction
 from services import BuildOrchestrationError, BuildOrchestrationService
@@ -205,9 +206,12 @@ def test_submit_batch_preserves_order_commits_and_publishes(
         attempts = [BuildAttemptsRepository(session).get(item) for item in attempt_ids]
         assert [item.design_task_id for item in attempts if item] == [task_b, task_a]
         assert all(session.get(task_model.DesignTask, task).status == "building" for task in [task_a, task_b])
+        shard_by_attempt = {
+            item.id: item.shard_basename for item in attempts if item is not None
+        }
     for attempt_id, task_id in zip(attempt_ids, [task_b, task_a], strict=True):
         payload = read_json(
-            service.paths.shards / "pending" / f"{attempt_id}.json",
+            service.paths.shards / "pending" / shard_by_attempt[attempt_id],
             {},
         )
         assert payload["build_attempt_id"] == str(attempt_id)
@@ -335,7 +339,10 @@ def test_postcommit_publication_failure_recovers_idempotently(
 
     monkeypatch.setattr(service, "_publish", original_publish)
     assert service.recover_staging() == {attempt_id}
-    pending = service.paths.shards / "pending" / f"{attempt_id}.json"
+    with session_factory() as session:
+        attempt = BuildAttemptsRepository(session).get(attempt_id)
+        assert attempt is not None
+        pending = service.paths.shards / "pending" / attempt.shard_basename
     assert pending.exists()
     assert not staged.exists()
     assert service.recover_staging() == set()
@@ -404,11 +411,16 @@ def test_build_failed_submit_links_resume_and_stale_retry_is_rejected(
         session.get(task_model.DesignTask, task_id).status = "build_failed"
 
     second_id = service.submit_single(task_id)
+    with session_factory() as session:
+        first = BuildAttemptsRepository(session).get(first_id)
+        second = BuildAttemptsRepository(session).get(second_id)
+        assert first is not None
+        assert second is not None
     second_payload = read_json(
-        service.paths.shards / "pending" / f"{second_id}.json",
+        service.paths.shards / "pending" / second.shard_basename,
         {},
     )
-    assert second_payload["resume_from_shard_basename"] == f"{first_id}.json"
+    assert second_payload["resume_from_shard_basename"] == first.shard_basename
 
     with transaction(factory=session_factory) as session:
         BuildAttemptsRepository(session).update_to_terminal(
@@ -416,15 +428,24 @@ def test_build_failed_submit_links_resume_and_stale_retry_is_rejected(
             status="lost",
         )
         session.get(task_model.DesignTask, task_id).status = "build_failed"
+    with session_factory() as session:
+        source_second = BuildAttemptsRepository(session).get(second_id)
+        assert source_second is not None
+        source_second_shard = source_second.shard_basename
 
     with pytest.raises(BuildOrchestrationError, match="latest"):
         service.retry(first_id)
     third_id = service.retry(second_id)
+    with session_factory() as session:
+        second = BuildAttemptsRepository(session).get(second_id)
+        third = BuildAttemptsRepository(session).get(third_id)
+        assert second is not None
+        assert third is not None
     third_payload = read_json(
-        service.paths.shards / "pending" / f"{third_id}.json",
+        service.paths.shards / "pending" / third.shard_basename,
         {},
     )
-    assert third_payload["resume_from_shard_basename"] == f"{second_id}.json"
+    assert third_payload["resume_from_shard_basename"] == source_second_shard
     assert third_payload["execution_mode"] == "resume"
 
 
@@ -466,10 +487,22 @@ def test_clean_rebuild_is_confirmed_idempotent_and_omits_resume_source(
         service.clean_rebuild(source_id, idempotency_key="clean-key", confirmed=False)
 
     clean_id = service.clean_rebuild(source_id, idempotency_key="clean-key", confirmed=True)
+    assert clean_id != source_id
     assert service.clean_rebuild(source_id, idempotency_key="clean-key", confirmed=True) == clean_id
-    payload = read_json(service.paths.shards / "pending" / f"{clean_id}.json", {})
+    payload = read_json(
+        service.paths.shards / "pending" / f"{clean_id}.iter-001.json",
+        {},
+    )
     assert payload["execution_mode"] == "clean"
     assert "resume_from_shard_basename" not in payload
+    with session_factory() as session:
+        clean_row = session.get(build_model.BuildAttempt, clean_id)
+        assert clean_row is not None
+        assert clean_row.shard_basename == f"{clean_id}.iter-001.json"
+        assert clean_row.idempotency_key == "clean-key"
+        assert session.scalar(
+            sa.select(sa.func.count()).select_from(build_model.BuildAttempt)
+        ) == 2
     with pytest.raises(BuildOrchestrationError) as different_key:
         service.clean_rebuild(source_id, idempotency_key="different-key", confirmed=True)
     assert different_key.value.code == "stale_source_attempt"
@@ -518,7 +551,15 @@ def test_concurrent_same_key_clean_rebuild_collapses_to_one_attempt(
             .select_from(build_model.BuildAttempt)
             .where(build_model.BuildAttempt.idempotency_key == key)
         )
+        row = session.scalar(
+            sa.select(build_model.BuildAttempt).where(
+                build_model.BuildAttempt.idempotency_key == key
+            )
+        )
     assert count == 1
+    assert row is not None
+    assert row.id != source_id
+    assert row.shard_basename == f"{row.id}.iter-001.json"
 
 
 def test_default_retry_reuses_container_and_appends_execution(
@@ -618,6 +659,56 @@ def test_repair_reuses_container_and_carries_failure_context(
         assert [item.iteration_no for item in execs] == [1, 2]
         assert execs[1].execution_kind == "retry"
         assert execs[1].parent_execution_id == execs[0].id
+
+
+def test_repair_lost_attempt_uses_progress_failure_instead_of_lease_error(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+    monkeypatch,
+):
+    monkeypatch.delenv("EXECUTION_MINTING", raising=False)
+    task = _seed_designed_task(session_factory)
+    service = _service(tmp_path, session_factory)
+
+    [container_id] = service.submit_batch([task])
+    with session_factory() as session:
+        repo = ExecutionsRepository(session)
+        [initial] = repo.list_for_attempt(container_id)
+        _, token = repo.claim_queued(
+            container_id, worker_id="w", lease_ttl_seconds=300
+        )
+        repo.update_to_terminal(
+            initial.id,
+            claim_token=token,
+            status="lost",
+            error="lease expired",
+        )
+        session.add(
+            ProgressEvent(
+                shard=f"{container_id}.iter-001.json",
+                challenge_id="re-3ce05a7b-0013",
+                worker="dashboard-01",
+                stage="complete",
+                status="failed",
+                percent=99,
+                message="contract_failed (implement evidence incomplete)",
+            )
+        )
+        session.get(task_model.DesignTask, task).status = "build_failed"
+        session.commit()
+
+    repair_id = service.repair(container_id)
+
+    assert repair_id == container_id
+    payload = read_json(
+        service.paths.shards / "pending" / f"{container_id}.iter-002.json",
+        {},
+    )
+    summary = payload["repair_context"]["failure_summary"]
+    assert payload["execution_mode"] == "resume"
+    assert payload["repair_requested"] is True
+    assert "implement evidence incomplete" in summary
+    assert "lease expired" not in summary
 
 
 def test_legacy_retry_still_mints_new_attempt_when_explicitly_disabled(

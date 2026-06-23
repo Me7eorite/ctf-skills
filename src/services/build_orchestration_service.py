@@ -22,6 +22,7 @@ from domain import design_tasks as task_dto
 from persistence.models import build_attempts as build_model
 from persistence.models import design_tasks as task_model
 from persistence.models import executions as exec_model
+from persistence.models.progress import ProgressEvent
 from persistence.repositories import (
     BuildAttemptsRepository,
     ChallengeDesignRepository,
@@ -183,12 +184,13 @@ class BuildOrchestrationService:
             latest = build_repo.latest_for_design_task(source.design_task_id)
             if latest is None or latest.id != source.id:
                 raise BuildOrchestrationError("only the latest build attempt can be repaired")
-            if source.status != "failed":
-                raise BuildOrchestrationError("only failed attempts can be repaired")
+            if source.status not in {"failed", "lost"}:
+                raise BuildOrchestrationError("only failed or lost attempts can be repaired")
+            failure_summary = self._repair_failure_summary(session, source) or source.error
             repair_context = {
                 "source_build_attempt_id": str(source.id),
                 "source_shard_basename": source.shard_basename,
-                "failure_summary": source.error,
+                "failure_summary": failure_summary,
             }
         return self._submit(
             [source.design_task_id],
@@ -413,9 +415,14 @@ class BuildOrchestrationService:
                         and source_container is not None
                         and source_container.latest_execution_id is not None
                     )
-                # Option A: a retry reuses the existing build-attempt container and
-                # appends an execution; legacy (or fresh) mints a new container.
-                is_retry = minting and source_attempt_id is not None
+                # Retry/repair resume existing evidence by appending a new
+                # execution to the source container. Clean rebuild intentionally
+                # starts a new container even when execution minting is enabled.
+                is_retry = (
+                    minting
+                    and source_attempt_id is not None
+                    and execution_mode != "clean"
+                )
                 if is_retry:
                     container_id = source_attempt_id
                     iteration_no = self._next_iteration_no(session, container_id)
@@ -507,9 +514,14 @@ class BuildOrchestrationService:
                 if submission.minting:
                     exec_repo = ExecutionsRepository(session)
                     parent_execution_id = None
-                    mode = "clean" if submission.execution_mode == "clean" else "standard"
+                    mode = (
+                        "clean"
+                        if submission.execution_mode == "clean" and not submission.is_fresh
+                        else "standard"
+                    )
                     container = session.get(build_model.BuildAttempt, submission.attempt_id)
                     if container is not None:
+                        self._normalize_terminal_execution(session, container)
                         parent_execution_id = container.latest_execution_id
                         # Keep the legacy shard_basename in sync so reconciler and
                         # runner attribute the reused container's current iteration.
@@ -592,6 +604,44 @@ class BuildOrchestrationService:
 
     def _session(self) -> Session:
         return self.session_factory()
+
+    @staticmethod
+    def _normalize_terminal_execution(
+        session: Session,
+        container: build_model.BuildAttempt,
+    ) -> None:
+        if (
+            container.status not in {"succeeded", "failed", "lost"}
+            or container.latest_execution_id is None
+        ):
+            return
+        latest = session.get(exec_model.Execution, container.latest_execution_id)
+        if latest is None or latest.status not in exec_model.NON_TERMINAL_STATUSES:
+            return
+        moment = container.finished_at or datetime.now(timezone.utc)
+        latest.status = container.status
+        latest.error = latest.error or container.error
+        latest.finished_at = moment
+        if container.current_execution_id == latest.id:
+            container.current_execution_id = None
+
+    @staticmethod
+    def _repair_failure_summary(session: Session, source) -> str | None:
+        events = session.scalars(
+            sa.select(ProgressEvent)
+            .where(
+                ProgressEvent.shard == source.shard_basename,
+                ProgressEvent.status == "failed",
+                ProgressEvent.stage.in_(("validate", "complete")),
+            )
+            .order_by(ProgressEvent.id.desc())
+        ).all()
+        for event in events:
+            message = (event.message or "").strip()
+            if message and "lease expired" not in message.lower():
+                prefix = f"{event.challenge_id}: " if event.challenge_id else ""
+                return f"{prefix}{message}"[:2000]
+        return None
 
 
 def _design_challenge(payload: Mapping[str, Any]) -> Mapping[str, Any]:

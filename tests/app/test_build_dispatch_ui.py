@@ -24,6 +24,8 @@ def test_build_attempt_actions_use_constrained_endpoints():
     assert 'id="ba-validate"' not in source
     assert 'id="ba-worker"' in source
     assert "重新校验" in source
+    assert "AI 修复后校验" in source
+    assert '["failed", "lost"].includes(attempt.status)' in source
     assert "重试构建" in source
     assert "干净重建" in source
     assert "/clean-rebuild`" in source
@@ -67,7 +69,7 @@ def test_worker_start_and_detail_expose_effective_timeout():
 def test_sequential_aborted_result_is_rendered_as_not_failed():
     source = BUILD_ATTEMPTS_JS.read_text(encoding="utf-8")
 
-    assert 'api("/api/state")' in source
+    assert 'api("/api/ui-state")' in source
     assert "sequential_worker_result" in source
     assert "status === \"aborted\"" in source
     assert "已中止" in source

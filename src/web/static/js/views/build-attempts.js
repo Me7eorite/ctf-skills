@@ -640,7 +640,7 @@ function renderDetail(root) {
         ${attempt.status === "failed"
           ? `<button class="btn btn-secondary btn-sm ba-revalidate" data-build-attempt-id="${escapeHtml(attempt.id)}"><i data-lucide="shield-check"></i>重新校验</button>`
           : ""}
-        ${attempt.status === "failed" && buildProfileReady(attempt.category)
+        ${["failed", "lost"].includes(attempt.status) && buildProfileReady(attempt.category)
           ? `<button class="btn btn-primary btn-sm ba-repair" data-build-attempt-id="${escapeHtml(attempt.id)}"><i data-lucide="wrench"></i>AI 修复后校验</button>`
           : ""}
         ${(attempt.status === "failed" || attempt.status === "lost") && buildProfileReady(attempt.category)
