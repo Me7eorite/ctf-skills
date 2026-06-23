@@ -576,6 +576,50 @@ def test_default_retry_reuses_container_and_appends_execution(
         assert claimed.status == "claimed"
 
 
+def test_repair_reuses_container_and_carries_failure_context(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+    monkeypatch,
+):
+    monkeypatch.delenv("EXECUTION_MINTING", raising=False)
+    task = _seed_designed_task(session_factory)
+    service = _service(tmp_path, session_factory)
+
+    [container_id] = service.submit_batch([task])
+    with session_factory() as session:
+        repo = ExecutionsRepository(session)
+        [initial] = repo.list_for_attempt(container_id)
+        _, token = repo.claim_queued(
+            container_id, worker_id="w", lease_ttl_seconds=300
+        )
+        repo.update_to_terminal(
+            initial.id,
+            claim_token=token,
+            status="failed",
+            error="contract_failed: solver references metadata.json",
+        )
+        session.get(task_model.DesignTask, task).status = "build_failed"
+        session.commit()
+
+    repair_id = service.repair(container_id)
+
+    assert repair_id == container_id
+    payload = read_json(
+        service.paths.shards / "pending" / f"{container_id}.iter-002.json",
+        {},
+    )
+    assert payload["execution_mode"] == "resume"
+    assert payload["resume_from_shard_basename"] == f"{container_id}.iter-001.json"
+    assert payload["repair_requested"] is True
+    assert payload["repair_context"]["source_build_attempt_id"] == str(container_id)
+    assert "metadata.json" in payload["repair_context"]["failure_summary"]
+    with session_factory() as session:
+        execs = ExecutionsRepository(session).list_for_attempt(container_id)
+        assert [item.iteration_no for item in execs] == [1, 2]
+        assert execs[1].execution_kind == "retry"
+        assert execs[1].parent_execution_id == execs[0].id
+
+
 def test_legacy_retry_still_mints_new_attempt_when_explicitly_disabled(
     tmp_path: Path,
     session_factory: SessionFactory,

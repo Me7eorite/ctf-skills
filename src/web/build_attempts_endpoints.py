@@ -400,6 +400,29 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
             status_code=HTTPStatus.CREATED,
         )
 
+    @app.post("/api/build-attempts/{attempt_id}/repair")
+    def repair_build_attempt(attempt_id: str) -> JSONResponse:
+        attempt_uuid = _parse_uuid(attempt_id, "build attempt id")
+        _require_attempt_build_profile(app, attempt_uuid)
+        try:
+            repair_id = BuildOrchestrationService(paths=_project_paths(app)).repair(
+                attempt_uuid
+            )
+        except BuildOrchestrationError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail=str(exc),
+            ) from exc
+        except IntegrityError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail="a build is already active for this design task",
+            ) from exc
+        return JSONResponse(
+            {"build_attempt_id": str(repair_id)},
+            status_code=HTTPStatus.CREATED,
+        )
+
     @app.post("/api/build-attempts/{attempt_id}/clean-rebuild")
     async def clean_rebuild_attempt(attempt_id: str, request: Request) -> JSONResponse:
         attempt_uuid = _parse_uuid(attempt_id, "build attempt id")
@@ -855,10 +878,16 @@ def _start_constrained_worker(
     from persistence.session import transaction
 
     with transaction() as session:
-        repo = BuildAttemptsRepository(session)
-        attempt = repo.get(attempt_id)
-        if attempt is not None and attempt.status == "queued":
-            repo.update_to_running(attempt_id, worker="dashboard-01")
+        attempt = session.get(build_model.BuildAttempt, attempt_id)
+        if (
+            attempt is not None
+            and attempt.status == "queued"
+            and attempt.latest_execution_id is None
+        ):
+            BuildAttemptsRepository(session).update_to_running(
+                attempt_id,
+                worker="dashboard-01",
+            )
     return JSONResponse(
         {
             "ok": True,

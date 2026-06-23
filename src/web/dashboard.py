@@ -9,14 +9,11 @@ import time
 from pathlib import Path
 from uuid import UUID
 
-from core.execution_config import execution_minting_enabled, lease_ttl_seconds
 from core.jsonio import read_json
 from core.paths import ProjectPaths
 from core.queue import ShardQueue
 from core.state import InMemoryProgressStore, ProgressStore
 from domain.seeds import SeedStore
-from persistence.repositories import ExecutionsRepository
-from persistence.session import transaction
 
 
 def relative_time(timestamp: float) -> str:
@@ -72,7 +69,6 @@ class TaskManager:
         category: str,
         build_attempt_id: UUID,
     ) -> tuple[bool, str]:
-        self._mark_execution_running(build_attempt_id, worker="dashboard-01")
         cli_script = Path(__file__).resolve().parents[1] / "cli.py"
         return self._start(
             "worker",
@@ -88,10 +84,6 @@ class TaskManager:
                 str(build_attempt_id),
             ],
             require_pending=False,
-            on_started=lambda: self._mark_execution_running(
-                build_attempt_id,
-                worker="dashboard-01",
-            ),
         )
 
     def start_sequential_worker(
@@ -179,26 +171,6 @@ class TaskManager:
                 message = f"{message}: {detail}"
             return False, message
         return True, f"{kind} 已启动"
-
-    @staticmethod
-    def _mark_execution_running(attempt_id: UUID, *, worker: str) -> None:
-        if not execution_minting_enabled():
-            return
-        try:
-            with transaction() as session:
-                repo = ExecutionsRepository(session)
-                latest = repo.latest_for_attempt(attempt_id)
-                if latest is None:
-                    return
-                if latest.status == "queued":
-                    _, token = repo.claim_queued(
-                        attempt_id,
-                        worker_id=worker,
-                        lease_ttl_seconds=lease_ttl_seconds(),
-                    )
-                    repo.update_to_running(latest.id, claim_token=token)
-        except Exception:
-            return
 
     def state(self) -> dict:
         with self._lock:

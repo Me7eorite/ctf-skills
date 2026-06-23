@@ -19,9 +19,10 @@ from core.paths import ProjectPaths
 from persistence.models import build_attempts as build_model
 from persistence.models import challenge_designs as design_model
 from persistence.models import design_tasks as task_model
+from persistence.models import executions as exec_model
 from persistence.models import research as research_model
 from persistence.models.progress import ProgressEvent, ProgressSnapshot
-from persistence.repositories import BuildAttemptsRepository
+from persistence.repositories import BuildAttemptsRepository, ExecutionsRepository
 from persistence.session import SessionFactory, transaction
 from web import build_attempts_endpoints
 from web.dashboard import DashboardService
@@ -96,6 +97,16 @@ def client(tmp_path: Path) -> TestClient:
 
 def _clean_database(session_factory: SessionFactory) -> None:
     with session_factory() as session:
+        session.execute(sa.delete(exec_model.RevalidationEvent))
+        session.execute(
+            sa.update(build_model.BuildAttempt).values(
+                current_execution_id=None,
+                latest_execution_id=None,
+                successful_execution_id=None,
+            )
+        )
+        session.execute(sa.delete(exec_model.Execution))
+        session.execute(sa.delete(exec_model.BuildFeedbackSnapshot))
         session.execute(sa.delete(ProgressSnapshot))
         session.execute(sa.delete(ProgressEvent))
         session.execute(sa.delete(build_model.BuildAttempt))
@@ -369,6 +380,45 @@ def test_retry_rejects_stale_sibling(
 
     assert response.status_code == 409
     assert "latest" in response.json()["detail"]
+
+
+def test_repair_endpoint_queues_ai_repair_iteration(
+    client: TestClient,
+    session_factory: SessionFactory,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.delenv("EXECUTION_MINTING", raising=False)
+    task_id = _seed_designed_task(session_factory)
+    service = build_attempts_endpoints.BuildOrchestrationService(
+        paths=client.app.state.project_paths
+    )
+    attempt_id = service.submit_single(task_id)
+    with transaction(factory=session_factory) as session:
+        repo = ExecutionsRepository(session)
+        [initial] = repo.list_for_attempt(attempt_id)
+        _, token = repo.claim_queued(
+            attempt_id,
+            worker_id="worker-01",
+            lease_ttl_seconds=300,
+        )
+        repo.update_to_terminal(
+            initial.id,
+            claim_token=token,
+            status="failed",
+            error="contract_failed: solver references metadata.json",
+        )
+        session.get(task_model.DesignTask, task_id).status = "build_failed"
+
+    response = client.post(f"/api/build-attempts/{attempt_id}/repair")
+
+    assert response.status_code == 201
+    assert response.json()["build_attempt_id"] == str(attempt_id)
+    payload_path = (
+        client.app.state.project_paths.shards
+        / "pending"
+        / f"{attempt_id}.iter-002.json"
+    )
+    assert payload_path.is_file()
 
 
 def test_clean_rebuild_requires_confirmation_and_replays_idempotently(
@@ -686,7 +736,7 @@ def test_exact_worker_recovers_staging_and_respects_busy_guard(
     assert tasks.calls == [("web", attempt.id)]
 
 
-def test_exact_worker_start_marks_execution_backed_attempt_running(
+def test_exact_worker_start_marks_legacy_attempt_running(
     client: TestClient,
     session_factory: SessionFactory,
 ):
@@ -703,6 +753,36 @@ def test_exact_worker_start_marks_execution_backed_attempt_running(
     with session_factory() as session:
         row = session.get(build_model.BuildAttempt, attempt.id)
         assert row.status == "running"
+    assert tasks.calls == [("web", attempt.id)]
+
+
+def test_exact_worker_start_leaves_execution_backed_attempt_queued_until_cli_claim(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory)
+    with transaction(factory=session_factory) as session:
+        repo = BuildAttemptsRepository(session)
+        attempt = _create_canonical_attempt(repo, task_id)
+        execution = ExecutionsRepository(session).schedule_execution(
+            attempt.id,
+            execution_kind="initial",
+        )
+    _write_pending_attempt(client, attempt)
+    tasks = _StubBuildTaskManager()
+    client.app.state.dashboard_tasks = tasks
+
+    response = client.post(f"/api/build-attempts/{attempt.id}/worker/start")
+
+    assert response.status_code == 202
+    with session_factory() as session:
+        attempt_row = session.get(build_model.BuildAttempt, attempt.id)
+        execution_row = session.get(exec_model.Execution, execution.id)
+        assert attempt_row.status == "queued"
+        assert attempt_row.latest_execution_id == execution.id
+        assert execution_row.status == "queued"
+        assert execution_row.worker_id is None
+        assert execution_row.lease_expires_at is None
     assert tasks.calls == [("web", attempt.id)]
 
 

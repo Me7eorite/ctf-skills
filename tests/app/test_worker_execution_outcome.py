@@ -108,6 +108,11 @@ def test_records_succeeded_outcome(session_factory, monkeypatch):
         attempt_id, execution_id = _seed_scheduled(session)
         session.commit()
 
+    cli._mark_attempt_running(
+        attempt_id,
+        "worker-1",
+        session_factory=session_factory,
+    )
     cli._record_execution_outcome(
         attempt_id,
         "worker-1",
@@ -124,12 +129,41 @@ def test_records_succeeded_outcome(session_factory, monkeypatch):
         assert container.current_execution_id is None
 
 
+def test_mark_attempt_running_claims_queued_execution(session_factory, monkeypatch):
+    monkeypatch.setenv("EXECUTION_MINTING", "1")
+    with session_factory() as session:
+        attempt_id, execution_id = _seed_scheduled(session)
+        session.commit()
+
+    cli._mark_attempt_running(
+        attempt_id,
+        "worker-1",
+        session_factory=session_factory,
+    )
+
+    with session_factory() as session:
+        row = session.get(exec_model.Execution, execution_id)
+        assert row.status == "running"
+        assert row.worker_id == "worker-1"
+        assert row.claim_token is not None
+        assert row.lease_expires_at is not None
+        container = session.get(build_model.BuildAttempt, attempt_id)
+        assert container.status == "running"
+        assert container.current_execution_id == execution_id
+        assert container.latest_execution_id == execution_id
+
+
 def test_records_failed_outcome_with_error(session_factory, monkeypatch):
     monkeypatch.setenv("EXECUTION_MINTING", "1")
     with session_factory() as session:
         attempt_id, execution_id = _seed_scheduled(session)
         session.commit()
 
+    cli._mark_attempt_running(
+        attempt_id,
+        "worker-1",
+        session_factory=session_factory,
+    )
     cli._record_execution_outcome(
         attempt_id,
         "worker-1",

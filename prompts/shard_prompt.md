@@ -77,6 +77,15 @@ Write challenge directories under:
 {challenge_dir}/<category>/<id>-<slug>/
 ```
 
+If the shard contains `repair_requested: true`, treat it as a focused repair
+run. Read `repair_context.failure_summary` and fix the existing artifact,
+solver, metadata, and validation files instead of redesigning the challenge.
+Preserve the challenge ID, category, flag, intended technique, and delivery
+layout unless the failure explicitly requires a local correction. For Re
+repairs, the solver and `validate.sh` must derive the flag from the artifact in
+`attachments/`; do not introduce `dist/`, `metadata.json`, `challenge.yml`, or
+Docker/Compose files as solver inputs.
+
 # 0. Resume Check
 
 The host has pre-computed a resume plan for every challenge in this shard.

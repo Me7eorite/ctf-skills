@@ -260,6 +260,27 @@ async function retryAttempt(attemptId) {
   }
 }
 
+async function repairAttempt(attemptId) {
+  if (!attemptId) return;
+  state.flags.repairing = { ...(state.flags.repairing || {}), [attemptId]: true };
+  render(appState.data);
+  initIcons();
+  try {
+    const result = await postJson(`/api/build-attempts/${attemptId}/repair`, {});
+    showToast(`已排队 AI 修复 ${shortId(result.build_attempt_id)}`);
+    state.detailId = result.build_attempt_id;
+    state.detail = null;
+    state.list = null;
+    await ensureDetail(state.detailId);
+  } catch (err) {
+    showToast(err.message, true);
+  } finally {
+    state.flags.repairing = { ...(state.flags.repairing || {}), [attemptId]: false };
+    render(appState.data);
+    initIcons();
+  }
+}
+
 async function cleanRebuildAttempt(attemptId) {
   if (!attemptId) return;
   const confirmed = window.confirm("干净重建不会复用上次输出或进度，确定继续？");
@@ -612,6 +633,9 @@ function renderDetail(root) {
         ${attempt.status === "failed"
           ? `<button class="btn btn-secondary btn-sm ba-revalidate" data-build-attempt-id="${escapeHtml(attempt.id)}"><i data-lucide="shield-check"></i>重新校验</button>`
           : ""}
+        ${attempt.status === "failed" && buildProfileReady(attempt.category)
+          ? `<button class="btn btn-primary btn-sm ba-repair" data-build-attempt-id="${escapeHtml(attempt.id)}"><i data-lucide="wrench"></i>AI 修复后校验</button>`
+          : ""}
         ${(attempt.status === "failed" || attempt.status === "lost") && buildProfileReady(attempt.category)
           ? `<button class="btn btn-primary btn-sm ba-retry" data-build-attempt-id="${escapeHtml(attempt.id)}"><i data-lucide="rotate-cw"></i>重试构建</button>`
           : ""}
@@ -948,6 +972,10 @@ export function bind() {
     }
     if (event.target.closest(".ba-retry") && attemptId) {
       retryAttempt(attemptId);
+      return;
+    }
+    if (event.target.closest(".ba-repair") && attemptId) {
+      repairAttempt(attemptId);
       return;
     }
     if (event.target.closest(".ba-clean-rebuild") && attemptId) {

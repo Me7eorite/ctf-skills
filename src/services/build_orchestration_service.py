@@ -109,6 +109,8 @@ class _PreparedSubmission:
     is_fresh: bool = True
     iteration_no: int = 1
     execution_kind: str = "initial"
+    repair_requested: bool = False
+    repair_context: dict[str, Any] | None = None
 
 
 class BuildOrchestrationService:
@@ -158,6 +160,41 @@ class BuildOrchestrationService:
             [source.design_task_id],
             retry_sources={source.design_task_id: source.id},
             execution_mode="resume",
+        )[0]
+
+    def repair(self, build_attempt_id: UUID) -> UUID:
+        """Queue an AI repair pass for the latest failed build attempt.
+
+        Unlike a clean rebuild, repair is explicitly a resume operation: the
+        next worker iteration receives the previous failure diagnostics and
+        starts from the failed attempt's existing evidence.
+        """
+        with self._session() as session:
+            build_repo = BuildAttemptsRepository(session)
+            source = build_repo.get(build_attempt_id)
+            if source is None:
+                raise BuildOrchestrationError(f"build attempt {build_attempt_id} does not exist")
+            task = DesignTaskRepository(session).get_design_task(source.design_task_id)
+            if task is None or task.status != "build_failed":
+                raise BuildOrchestrationError("repair requires a parent task in build_failed status")
+            active = build_repo.active_for_design_task(source.design_task_id)
+            if active is not None:
+                return active.id
+            latest = build_repo.latest_for_design_task(source.design_task_id)
+            if latest is None or latest.id != source.id:
+                raise BuildOrchestrationError("only the latest build attempt can be repaired")
+            if source.status != "failed":
+                raise BuildOrchestrationError("only failed attempts can be repaired")
+            repair_context = {
+                "source_build_attempt_id": str(source.id),
+                "source_shard_basename": source.shard_basename,
+                "failure_summary": source.error,
+            }
+        return self._submit(
+            [source.design_task_id],
+            retry_sources={source.design_task_id: source.id},
+            execution_mode="resume",
+            repair_sources={source.design_task_id: repair_context},
         )[0]
 
     def clean_rebuild(
@@ -222,6 +259,8 @@ class BuildOrchestrationService:
         build_attempt_id: UUID,
         resume_from_shard_basename: str | None = None,
         execution_mode: str = "resume",
+        repair_requested: bool = False,
+        repair_context: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Render one attributed shard without filesystem or database effects."""
         challenge = _design_challenge(latest_design.payload)
@@ -244,6 +283,10 @@ class BuildOrchestrationService:
             if resume_from_shard_basename is not None:
                 payload["execution_mode"] = "resume"
                 payload["resume_from_shard_basename"] = resume_from_shard_basename
+        if repair_requested:
+            payload["repair_requested"] = True
+            if repair_context:
+                payload["repair_context"] = dict(repair_context)
         return payload
 
     def recover_staging(self, *, now: float | None = None) -> set[UUID]:
@@ -296,12 +339,14 @@ class BuildOrchestrationService:
         retry_sources: Mapping[UUID, UUID],
         execution_mode: str = "resume",
         idempotency_key: str | None = None,
+        repair_sources: Mapping[UUID, Mapping[str, Any]] | None = None,
     ) -> list[UUID]:
         prepared = self._prepare(
             design_task_ids,
             retry_sources=retry_sources,
             execution_mode=execution_mode,
             idempotency_key=idempotency_key,
+            repair_sources=repair_sources or {},
         )
         self.paths.initialize()
         staged_paths: list[Path] = []
@@ -333,6 +378,7 @@ class BuildOrchestrationService:
         retry_sources: Mapping[UUID, UUID],
         execution_mode: str = "resume",
         idempotency_key: str | None = None,
+        repair_sources: Mapping[UUID, Mapping[str, Any]] | None = None,
     ) -> list[_PreparedSubmission]:
         if execution_mode not in {"resume", "clean"}:
             raise BuildOrchestrationError(f"unsupported execution_mode {execution_mode!r}")
@@ -362,7 +408,11 @@ class BuildOrchestrationService:
                 minting = execution_minting_enabled()
                 if source_attempt_id is not None:
                     source_container = session.get(build_model.BuildAttempt, source_attempt_id)
-                    minting = bool(minting and source_container is not None and source_container.latest_execution_id is not None)
+                    minting = bool(
+                        minting
+                        and source_container is not None
+                        and source_container.latest_execution_id is not None
+                    )
                 # Option A: a retry reuses the existing build-attempt container and
                 # appends an execution; legacy (or fresh) mints a new container.
                 is_retry = minting and source_attempt_id is not None
@@ -386,6 +436,8 @@ class BuildOrchestrationService:
                     build_attempt_id=container_id,
                     resume_from_shard_basename=payload_resume_from,
                     execution_mode=execution_mode,
+                    repair_requested=task_id in (repair_sources or {}),
+                    repair_context=(repair_sources or {}).get(task_id),
                 )
                 prepared.append(
                     _PreparedSubmission(
@@ -401,6 +453,8 @@ class BuildOrchestrationService:
                         is_fresh=not is_retry,
                         iteration_no=iteration_no,
                         execution_kind=execution_kind,
+                        repair_requested=task_id in (repair_sources or {}),
+                        repair_context=dict((repair_sources or {}).get(task_id) or {}),
                     )
                 )
         return prepared

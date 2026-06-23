@@ -1254,6 +1254,8 @@ def main() -> None:
             )
             write_json(paths.root / _SEQ_RESULT_PATH, result)
         else:
+            if args.build_attempt and not args.dry_run:
+                _mark_attempt_running(args.build_attempt, args.worker)
             with _execution_heartbeat(
                 args.build_attempt if not args.dry_run else None
             ):
