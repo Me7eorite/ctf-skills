@@ -22,6 +22,7 @@ from domain.build_attempts import BuildAttempt, BuildAttemptListItem, BuildAttem
 from hermes.process import hermes_profile_health
 from persistence.models import build_attempts as build_model
 from persistence.models import design_tasks as task_model
+from persistence.models import executions as exec_model
 from persistence.models.progress import ProgressEvent
 from persistence.repositories import (
     BuildAttemptsRepository,
@@ -454,18 +455,46 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
         from persistence.session import SessionFactory as _SF
         from persistence.session import transaction as _txn
 
-        with _txn(factory=_SF()) as session:
+        session_factory = getattr(app.state, "session_factory", None) or _SF()
+
+        with _txn(factory=session_factory) as session:
             row = session.get(build_model.BuildAttempt, attempt_uuid)
             if row is None:
                 raise HTTPException(
                     status_code=HTTPStatus.NOT_FOUND,
                     detail=f"build attempt {attempt_uuid} not found",
                 )
-            if row.status != "lost":
+            if row.status not in {"lost", "running"}:
                 raise HTTPException(
                     status_code=HTTPStatus.CONFLICT,
-                    detail=f"only lost attempts can be restored; current status: {row.status}",
+                    detail=(
+                        "only lost or stale running attempts can be restored; "
+                        f"current status: {row.status}"
+                    ),
                 )
+            if row.status == "running":
+                latest = session.get(exec_model.Execution, row.latest_execution_id)
+                current = session.get(exec_model.Execution, row.current_execution_id)
+                if latest is None or current is None or latest.id != current.id:
+                    raise HTTPException(
+                        status_code=HTTPStatus.CONFLICT,
+                        detail="running attempt is not eligible for restoration",
+                    )
+                if latest.status not in {"claimed", "running"}:
+                    raise HTTPException(
+                        status_code=HTTPStatus.CONFLICT,
+                        detail="running attempt no longer has an active execution",
+                    )
+                if latest.lease_expires_at is not None and latest.lease_expires_at >= datetime.now(timezone.utc):
+                    raise HTTPException(
+                        status_code=HTTPStatus.CONFLICT,
+                        detail="running attempt lease has not expired yet",
+                    )
+                if latest.worker_id is None:
+                    raise HTTPException(
+                        status_code=HTTPStatus.CONFLICT,
+                        detail="running attempt has no owning worker",
+                    )
             # 物理存在性校验：避免恢复一个真没了的 shard。
             shard_basename = row.shard_basename
             located: Path | None = None
@@ -477,11 +506,18 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
             if located is None:
                 # running/ 下文件名带 worker 后缀
                 expected = Path(shard_basename)
-                for candidate in (paths.shards / "running").glob(f"{expected.stem}.*{expected.suffix}"):
-                    if candidate.name.endswith(".claim.json"):
-                        continue
-                    located = candidate
-                    break
+                exact_running = paths.shards / "running" / shard_basename
+                if exact_running.is_file():
+                    located = exact_running
+                else:
+                    # 兼容 worker 后缀形式：basename.worker.json
+                    for candidate in (paths.shards / "running").glob(
+                        f"{expected.stem}.*{expected.suffix}"
+                    ):
+                        if candidate.name.endswith(".claim.json"):
+                            continue
+                        located = candidate
+                        break
             if located is None:
                 raise HTTPException(
                     status_code=HTTPStatus.CONFLICT,
@@ -494,6 +530,9 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
             row.finished_at = None
             row.error = None
             row.artifact_status = "unknown"
+            row.worker = None
+            row.started_at = None
+            row.resulting_challenge_dir = None
             task = session.get(task_model.DesignTask, row.design_task_id)
             if task is not None and task.status == "build_failed":
                 task.status = "building"
@@ -993,7 +1032,7 @@ _FAILURE_REASON_TRANSLATIONS: dict[str, str] = {
     "no_shell": "校验所需的 shell 不可用（默认 bash）",
     "skipped_resume": "断点恢复跳过本次校验",
     # 基础设施类（来自 hermes/workspace + runner 的早期失败）
-    "no compiled ELF artifact found in attachments/ or dist/": "未找到编译后的 ELF 产物（请放到 attachments/ 下）",
+    "no compiled ELF artifact found in attachments/": "未找到编译后的 ELF 产物（请放到 attachments/ 下）",
     "shard execution failed": "Hermes 执行阶段失败",
     "Workspace preflight failed": "执行 workspace 预检失败",
     "Workspace materialization failed": "执行 workspace 物化失败",

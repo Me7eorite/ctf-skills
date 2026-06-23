@@ -246,7 +246,6 @@ def test_validate_design_payload_rejects_prose_artifacts():
     "artifact",
     [
         "attachments/crackme",
-        "dist/crackme",
         "deploy/Makefile",
         "src/crackme.c",
     ],
@@ -264,6 +263,7 @@ def test_validate_design_payload_accepts_safe_artifacts_without_extensions(
     "artifact",
     [
         "attachments/../flag.txt",
+        "dist/crackme",
         "dist/../../etc/passwd",
         "deploy/",
         "src//crackme.c",

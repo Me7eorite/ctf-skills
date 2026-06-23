@@ -19,6 +19,7 @@ from core.jsonio import read_json
 from core.paths import ProjectPaths
 from persistence.models import build_attempts as build_model
 from persistence.models import design_tasks as task_model
+from persistence.models import executions as exec_model
 from persistence.models.progress import ProgressEvent
 from persistence.repositories import ExecutionsRepository
 from persistence.session import SessionFactory, transaction
@@ -145,6 +146,9 @@ class BuildReconciler:
                 or not self._basename_matches(row.shard_basename, observed)
             ):
                 observed = None
+            if observed is None and row.latest_execution_id is not None:
+                if self._reap_stale_execution_row(session, row, now):
+                    continue
             if observed is None:
                 if (
                     str(row.id) not in staged_id_texts
@@ -225,6 +229,43 @@ class BuildReconciler:
 
         self._roll_forward_execution_tasks(session, now)
         session.flush()
+
+    def _reap_stale_execution_row(
+        self,
+        session: Session,
+        row: build_model.BuildAttempt,
+        now: datetime,
+    ) -> bool:
+        """Convert an orphaned execution-backed running row to lost.
+
+        This is a narrow recovery path for hard process death:
+        - the build attempt is still active in PostgreSQL,
+        - no filesystem observation exists,
+        - the execution container is no longer current/claimable.
+
+        Returning True means the row was terminalized (or at least recovered)
+        and should not continue through the filesystem mirroring branch.
+        """
+        latest = session.get(exec_model.Execution, row.latest_execution_id)
+        if latest is None or latest.status not in {"claimed", "running"}:
+            return False
+        if latest.lease_expires_at is not None and latest.lease_expires_at >= now:
+            return False
+
+        container = session.get(build_model.BuildAttempt, row.id)
+        if container is None or container.current_execution_id != latest.id:
+            return False
+
+        latest.status = "lost"
+        latest.exit_class = latest.exit_class or "lease_expired"
+        latest.error = latest.error or "lease expired"
+        latest.finished_at = now
+        container.current_execution_id = None
+        if container.latest_execution_id == latest.id:
+            container.status = "lost"
+            container.finished_at = now
+            container.error = latest.error
+        return True
 
     def _roll_forward_execution_tasks(self, session: Session, now: datetime) -> None:
         """Advance design_task status for execution-backed terminal attempts.

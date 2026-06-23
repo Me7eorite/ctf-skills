@@ -22,6 +22,7 @@ from persistence.models import executions as exec_model
 from persistence.models import research as research_model
 from persistence.models.progress import ProgressEvent, ProgressSnapshot
 from persistence.repositories import ExecutionsRepository
+from persistence.session import transaction
 from persistence.session import SessionFactory
 from services.build_reconciler import (
     DEFAULT_POLL_INTERVAL_SECONDS,
@@ -258,6 +259,119 @@ def test_aborted_sequential_result_json_does_not_mark_attempt_failed(
     row = _row(session_factory, attempt_id)
     assert row.status == "queued"
     assert row.error is None
+
+
+def test_orphaned_running_execution_is_reaped_to_lost(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    task_id, attempt_id, basename = _seed_attempt(session_factory)
+    reconciler = _reconciler(tmp_path, session_factory)
+    with transaction(factory=session_factory) as session:
+        repo = ExecutionsRepository(session)
+        repo.schedule_execution(
+            attempt_id,
+            execution_kind="initial",
+            execution_mode="standard",
+        )
+        queued, token = repo.claim_queued(
+            attempt_id,
+            worker_id="worker-1",
+            lease_ttl_seconds=1,
+            now=datetime(2026, 6, 18, 12, 0, tzinfo=timezone.utc),
+        )
+        repo.update_to_running(
+            queued.id,
+            claim_token=token,
+            now=datetime(2026, 6, 18, 12, 0, tzinfo=timezone.utc),
+        )
+        row = session.get(build_model.BuildAttempt, attempt_id)
+        row.latest_execution_id = queued.id
+        row.current_execution_id = queued.id
+        row.status = "running"
+        row.worker = "worker-1"
+        row.started_at = datetime(2026, 6, 18, 12, 0, tzinfo=timezone.utc)
+        row.error = None
+        row.finished_at = None
+        session.flush()
+
+    reconciler.tick_once_sync()
+
+    row = _row(session_factory, attempt_id)
+    assert row.status == "lost"
+    assert row.error in {"lease expired", None}
+
+
+def test_restore_accepts_stale_running_attempt(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    task_id, attempt_id, basename = _seed_attempt(session_factory)
+    paths = ProjectPaths(root=tmp_path, repository=tmp_path)
+    paths.initialize()
+    running_path = paths.shards / "running" / f"{basename}"
+    write_json(
+        running_path,
+        _payload(task_id, attempt_id, _challenge_id(session_factory, task_id)),
+    )
+    write_json(
+        running_path.with_suffix(".json.claim.json"),
+        {
+            "source_name": basename,
+            "worker": "worker-1",
+            "claimed_at": "2026-06-18T12:00:00Z",
+        },
+    )
+    with transaction(factory=session_factory) as session:
+        repo = ExecutionsRepository(session)
+        repo.schedule_execution(
+            attempt_id,
+            execution_kind="initial",
+            execution_mode="standard",
+        )
+        queued, token = repo.claim_queued(
+            attempt_id,
+            worker_id="worker-1",
+            lease_ttl_seconds=1,
+            now=datetime(2026, 6, 18, 12, 0, tzinfo=timezone.utc),
+        )
+        repo.update_to_running(
+            queued.id,
+            claim_token=token,
+            now=datetime(2026, 6, 18, 12, 0, tzinfo=timezone.utc),
+        )
+        row = session.get(build_model.BuildAttempt, attempt_id)
+        row.latest_execution_id = queued.id
+        row.current_execution_id = queued.id
+        row.status = "running"
+        row.worker = "worker-1"
+        row.started_at = datetime(2026, 6, 18, 12, 0, tzinfo=timezone.utc)
+        latest = session.get(exec_model.Execution, queued.id)
+        latest.lease_expires_at = datetime(2026, 6, 18, 11, 59, 59, tzinfo=timezone.utc)
+        latest.worker_id = "worker-1"
+        session.get(task_model.DesignTask, task_id).status = "building"
+        session.flush()
+
+    from web.build_attempts_endpoints import register_build_attempts_endpoints
+    from fastapi import FastAPI
+
+    app = FastAPI()
+    app.state.project_paths = paths
+    app.state.session_factory = session_factory
+    app.state.dashboard_tasks = None
+    app.state.progress_store = None
+    register_build_attempts_endpoints(app)
+
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
+    response = client.post(f"/api/build-attempts/{attempt_id}/restore")
+
+    assert response.status_code == 200
+    with session_factory() as session:
+        row = session.get(build_model.BuildAttempt, attempt_id)
+        assert row.status == "queued"
+        assert row.worker is None
+        assert row.started_at is None
 
 
 def test_fast_success_and_artifact_availability_do_not_rewrite_status(

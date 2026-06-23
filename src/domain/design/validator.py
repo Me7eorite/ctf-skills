@@ -179,7 +179,7 @@ def _validate_artifacts(challenge: dict[str, Any]) -> None:
                 "artifacts must be local challenge-relative file paths; "
                 f"invalid entry: {entry!r}. Use README.md, metadata.json, "
                 "validate.sh, or a path under deploy/, writenup/, "
-                "attachments/, dist/, or src/"
+                "attachments/, or src/"
             )
 
 

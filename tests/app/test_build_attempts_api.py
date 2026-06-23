@@ -856,7 +856,7 @@ def test_failure_message_reason_extracts_error_marker_then_translates():
     from web.build_attempts_endpoints import _failure_message_reason
 
     # 命中翻译表的 error 值
-    msg = "validator: status=contract_failed error=no compiled ELF artifact found in attachments/ or dist/"
+    msg = "validator: status=contract_failed error=no compiled ELF artifact found in attachments/"
     translated = _failure_message_reason(msg)
     assert "未找到编译后的 ELF 产物" in translated
 

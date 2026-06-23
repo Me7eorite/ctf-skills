@@ -166,9 +166,8 @@ Reverse rules:
 - Default to a Linux amd64 ELF when `target_platform` is absent. Valid
   declared values are `linux/amd64`, `linux/arm64`, and `linux/arm`; the
   produced ELF MUST match the matrix-declared `target_platform`.
-- Compile the player-facing artifact into `attachments/`. The legacy `dist/`
-  location is still accepted by validation, but new challenges MUST use
-  `attachments/` because that is the unified delivery directory the packer
+- Compile the player-facing artifact into `attachments/`. New challenges MUST
+  use `attachments/` because that is the unified delivery directory the packer
   ships to players.
 - A source file or README placeholder in `attachments/` is a failure.
 - The distributed binary must not expose the plaintext flag through ordinary
@@ -178,8 +177,7 @@ Pwn rules:
 
 - Compile the ELF with the requested mitigation profile and place it in
   `attachments/` along with any pinned `libc.so.6` / `ld-linux-*.so.2` the
-  exploit needs. (Legacy `dist/` location remains accepted but is no longer
-  the preferred form.)
+  exploit needs.
 - Record the actual mitigation state and distribute the relevant binary.
 - Pin the libc/toolchain where exploit stability depends on it.
 
@@ -195,8 +193,8 @@ Pwn rules:
 - Record build commands, compiler/runtime versions, and artifact SHA-256 in
   `metadata.json`.
 - Re builds must verify the artifact architecture against the matrix
-  `target_platform`. `file attachments/<artifact>` (or legacy
-  `dist/<artifact>`) must report a Linux ELF whose machine matches the
+  `target_platform`. `file attachments/<artifact>` must report a Linux ELF
+  whose machine matches the
   declared platform: `linux/amd64` → x86-64, `linux/arm64` → aarch64,
   `linux/arm` → ARM. A host-native macOS binary or any ELF of the wrong
   architecture is a failed build, not an acceptable fallback.
@@ -221,8 +219,7 @@ flag, and write the authoritative `validate/passed` or `validate/failed` event.
 - Web/Pwn exploits must connect to the running service using `CHAL_HOST` and
   `CHAL_PORT`; no offline flag fallback is allowed.
 - Re solvers must derive the flag from the distributed artifact under
-  `attachments/` (or legacy `dist/`), never from `src/`, `metadata.json`,
-  or `challenge.yml`.
+  `attachments/`, never from `src/`, `metadata.json`, or `challenge.yml`.
 
 For Web/Pwn, `validate.sh` MUST consume an already-built image and MUST NOT
 attempt to build it. The Docker image is part of Stage 3's deliverable: by
@@ -251,8 +248,8 @@ same-name container with
 Forced rebuilds are an operator concern (`docker rmi` outside the script);
 `validate.sh` itself does not need a force flag. For Re, `validate.sh` must
 build the artifact when needed and run the solver against the player-facing
-artifact in `attachments/` (or legacy `dist/`). Its last non-empty stdout
-line must be the recovered flag.
+artifact in `attachments/`. Its last non-empty stdout line must be the
+recovered flag.
 
 Do not print a hardcoded known flag merely to satisfy validation. These rules
 are now **host-enforced** as deterministic contract checks — a build that
@@ -266,8 +263,8 @@ violates any of them fails validation regardless of what `validate.sh` prints:
   recover the flag from the live service via `CHAL_HOST`/`CHAL_PORT`; the
   compose file merely injects it and is off-limits to the exploit.
 - A `re` `validate.sh`/`writenup/exp.py` MUST reference the distributed artifact
-  (`attachments/` or `dist/`) and MUST NOT reference `metadata.json` or
-  `challenge.yml` — derive the flag from the binary, never from organizer files.
+  under `attachments/` and MUST NOT reference `metadata.json` or `challenge.yml`
+  — derive the flag from the binary, never from organizer files.
 
 ## 5. Document
 
@@ -298,8 +295,7 @@ Reverse challenge:
 
 ```text
 src/
-attachments/<compiled-player-artifact>   # preferred (delivery directory)
-# dist/<compiled-player-artifact>        # legacy, still accepted
+attachments/<compiled-player-artifact>
 ```
 
 Pwn challenge (in addition to Web's deploy/ tree):
@@ -308,7 +304,6 @@ Pwn challenge (in addition to Web's deploy/ tree):
 attachments/<binary>           # the pwn ELF the player downloads
 attachments/libc.so.6          # optional, pinned for exploit stability
 attachments/ld-linux-*.so.2    # optional, pinned loader
-# dist/<binary>                # legacy location, still accepted
 ```
 
 # Metadata Contract

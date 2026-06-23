@@ -146,9 +146,8 @@ class ValidationTests(unittest.TestCase):
         )
         self.assertEqual(self.validator.contract_errors(challenge, metadata), [])
 
-    def test_reverse_contract_missing_elf_reports_attachments_and_dist(self):
-        """Error message should mention both directories so authors know
-        where to put the artifact."""
+    def test_reverse_contract_missing_elf_reports_attachments(self):
+        """Error message should direct authors to the current delivery directory."""
         challenge = self.paths.challenges / "re" / "re-0001-nowhere"
         (challenge / "src").mkdir(parents=True)
         metadata = {
@@ -164,8 +163,10 @@ class ValidationTests(unittest.TestCase):
 
         errors = self.validator.contract_errors(challenge, metadata)
 
-        self.assertTrue(any("attachments" in e and "dist" in e for e in errors),
-                        f"expected error to mention attachments and dist; got {errors}")
+        self.assertTrue(any("attachments" in e for e in errors),
+                        f"expected error to mention attachments; got {errors}")
+        self.assertFalse(any("dist" in e for e in errors),
+                         f"new-authoring error should not mention dist; got {errors}")
 
     def test_reverse_contract_rejects_wrong_elf_architecture(self):
         challenge = self.paths.challenges / "re" / "re-0001-demo"
@@ -266,10 +267,10 @@ class SolverIntegrityTests(unittest.TestCase):
 
     def _re_challenge(self, *, validate_sh: str, exp_py: str | None = None) -> tuple:
         challenge = self.paths.challenges / "re" / "re-0001-demo"
-        (challenge / "dist").mkdir(parents=True)
+        (challenge / "attachments").mkdir(parents=True)
         header = bytearray(b"\x7fELF" + b"\x00" * 16)
         header[18:20] = (0x3E).to_bytes(2, "little")
-        (challenge / "dist" / "checker").write_bytes(header)
+        (challenge / "attachments" / "checker").write_bytes(header)
         (challenge / "validate.sh").write_text(validate_sh, encoding="utf-8")
         if exp_py is not None:
             (challenge / "writenup").mkdir(parents=True, exist_ok=True)
@@ -311,7 +312,7 @@ class SolverIntegrityTests(unittest.TestCase):
 
     def test_genuine_re_solver_passes_integrity(self):
         challenge, metadata = self._re_challenge(
-            validate_sh="#!/bin/sh\npython3 writenup/exp.py ./dist/checker\n",
+            validate_sh="#!/bin/sh\npython3 writenup/exp.py ./attachments/checker\n",
             exp_py="import sys\nbinary=open(sys.argv[1],'rb').read()\nprint(recover(binary))\n",
         )
         errors = self.validator.contract_errors(challenge, metadata)

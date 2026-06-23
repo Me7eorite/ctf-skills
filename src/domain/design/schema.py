@@ -45,7 +45,6 @@ KNOWN_ARTIFACT_PREFIXES: tuple[str, ...] = (
     "deploy/",
     "writenup/",
     "attachments/",
-    "dist/",
     "src/",
 )
 

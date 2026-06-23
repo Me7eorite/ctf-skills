@@ -117,13 +117,13 @@ Web / Pwn:
 - Web additionally requires `metadata.runtime` and `metadata.framework`.
 
 Re / Pwn (ELF target):
-- The compiled player-facing ELF lives in `attachments/` (legacy `dist/` still accepted;
-  pwn may also ship it under `deploy/`), and its architecture MUST match
+- The compiled player-facing ELF lives in `attachments/` (pwn may also ship it
+  under `deploy/`), and its architecture MUST match
   `metadata.architecture` / `metadata.target_platform`.
 
 Re:
 - `validate.sh` / `writenup/exp.py` MUST reference the distributed artifact under
-  `attachments/` (or legacy `dist/`) and derive the flag from that binary — never from
+  `attachments/` and derive the flag from that binary — never from
   `metadata.json` or `challenge.yml`.
 - The delivered artifact MUST NOT expose the plaintext flag through ordinary `strings`
   unless `primary_technique` declares strings as the intended solve; otherwise embed or

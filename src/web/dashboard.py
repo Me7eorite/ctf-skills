@@ -184,18 +184,21 @@ class TaskManager:
     def _mark_execution_running(attempt_id: UUID, *, worker: str) -> None:
         if not execution_minting_enabled():
             return
-        with transaction() as session:
-            repo = ExecutionsRepository(session)
-            latest = repo.latest_for_attempt(attempt_id)
-            if latest is None:
-                return
-            if latest.status == "queued":
-                _, token = repo.claim_queued(
-                    attempt_id,
-                    worker_id=worker,
-                    lease_ttl_seconds=lease_ttl_seconds(),
-                )
-                repo.update_to_running(latest.id, claim_token=token)
+        try:
+            with transaction() as session:
+                repo = ExecutionsRepository(session)
+                latest = repo.latest_for_attempt(attempt_id)
+                if latest is None:
+                    return
+                if latest.status == "queued":
+                    _, token = repo.claim_queued(
+                        attempt_id,
+                        worker_id=worker,
+                        lease_ttl_seconds=lease_ttl_seconds(),
+                    )
+                    repo.update_to_running(latest.id, claim_token=token)
+        except Exception:
+            return
 
     def state(self) -> dict:
         with self._lock:
