@@ -21,6 +21,14 @@
   font-size: var(--font-sm);
 }
 
+.dt-page-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+}
+
 .dt-context-banner {
   display: flex;
   align-items: center;
@@ -340,8 +348,16 @@
 
 /* === 题目设计详情 === */
 
+.dt-detail-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  margin-bottom: var(--space-md);
+}
+
 .dt-back {
-  margin: -6px 0 var(--space-md) -10px;
+  margin-left: -10px;
   color: var(--ink-500);
 }
 
@@ -608,6 +624,7 @@
 @media (max-width: 767px) {
   .dt-page-header,
   .dt-context-banner,
+  .dt-detail-toolbar,
   .dt-hero,
   .dt-bulk-bar {
     align-items: stretch;
@@ -626,8 +643,14 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .dt-page-actions,
   .dt-hero-actions .btn,
   .dt-bulk-bar {
+    width: 100%;
+  }
+
+  .dt-page-actions .btn,
+  .dt-detail-toolbar .btn {
     width: 100%;
   }
 

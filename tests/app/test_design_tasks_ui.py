@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 STATIC = Path(__file__).parents[2] / "src" / "web" / "static"
 
 
@@ -70,10 +69,30 @@ def test_list_exposes_context_and_state_driven_primary_actions() -> None:
     )
 
     assert "dt-context-banner" in source
+    assert 'id="dt-refresh"' in source
+    assert "refreshCurrentView()" in source
     assert "renderTaskProgress(task)" in source
     assert "renderDetailPrimaryAction" in source
     assert "dt-bulk-bar" in source
     assert "开发者数据 · 原始 Payload" in source
+
+
+def test_design_task_view_has_list_and_detail_refresh_actions() -> None:
+    source = (STATIC / "js" / "views" / "design-tasks.js").read_text(
+        encoding="utf-8"
+    )
+    styles = (STATIC / "css" / "views" / "design-tasks.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert source.count('id="dt-refresh"') >= 2
+    assert "async function refreshCurrentView()" in source
+    assert "if (state.detailId) {" in source
+    assert "await reloadDetail()" in source
+    assert "await reloadList()" in source
+    assert "dt-detail-toolbar" in source
+    assert ".dt-page-actions" in styles
+    assert ".dt-detail-toolbar" in styles
 
 
 def test_bulk_build_exposes_enqueue_and_ordered_execution_modes() -> None:

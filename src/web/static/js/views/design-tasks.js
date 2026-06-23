@@ -166,6 +166,26 @@ async function reloadDetail() {
   if (state.detailId) await ensureDetail(state.detailId);
 }
 
+async function refreshCurrentView() {
+  if (state.flags.refreshing) return;
+  state.flags.refreshing = true;
+  render(state.data);
+  initIcons();
+  try {
+    if (state.detailId) {
+      await reloadDetail();
+    } else {
+      await reloadList();
+    }
+  } catch (err) {
+    showToast(designErrorMessage(err.message), true);
+  } finally {
+    state.flags.refreshing = false;
+    render(state.data);
+    initIcons();
+  }
+}
+
 function scopedRequestId() {
   return state.filters.generation_request_id?.trim() || "";
 }
@@ -406,7 +426,12 @@ function renderList(root) {
         <h2 class="dt-page-title">题目设计</h2>
         <p class="dt-page-desc">根据研究结论生成题目方案，并推进至构建阶段。</p>
       </div>
-      <span class="pill">共 ${rows.length} 项</span>
+      <div class="dt-page-actions">
+        <button class="btn btn-secondary btn-sm${state.flags.refreshing ? " btn-loading" : ""}" id="dt-refresh"${state.flags.refreshing ? " disabled" : ""}>
+          <i data-lucide="refresh-cw"></i>刷新
+        </button>
+        <span class="pill">共 ${rows.length} 项</span>
+      </div>
     </div>
 
     ${renderBuildReadinessWarning()}
@@ -680,7 +705,12 @@ function renderDetail(root) {
   const isDesigning = !!state.flags.designing?.[task.id];
   const isBuilding = !!state.flags.building?.[task.id];
   root.innerHTML = `
-    <button class="btn btn-ghost dt-back" id="dt-back"><i data-lucide="arrow-left"></i>返回题目设计</button>
+    <div class="dt-detail-toolbar">
+      <button class="btn btn-ghost dt-back" id="dt-back"><i data-lucide="arrow-left"></i>返回题目设计</button>
+      <button class="btn btn-secondary btn-sm${state.flags.refreshing ? " btn-loading" : ""}" id="dt-refresh"${state.flags.refreshing ? " disabled" : ""}>
+        <i data-lucide="refresh-cw"></i>刷新
+      </button>
+    </div>
 
     ${renderBuildReadinessWarning(task.category)}
 
@@ -961,6 +991,10 @@ export function bind() {
 
     if (event.target.closest("#dt-apply-filter")) {
       applyFiltersFromInputs();
+      return;
+    }
+    if (event.target.closest("#dt-refresh")) {
+      refreshCurrentView();
       return;
     }
     if (event.target.closest("#dt-clear-filter")) {

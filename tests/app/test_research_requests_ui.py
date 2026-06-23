@@ -118,8 +118,20 @@ def test_research_run_history_shows_failure_reason_column() -> None:
 def test_api_error_object_preserves_machine_readable_code() -> None:
     source = (STATIC / "js" / "api.js").read_text(encoding="utf-8")
 
+    assert "inflightGetRequests" in source
+    assert "inflightGetRequests.has(dedupeKey)" in source
+    assert "inflightGetRequests.delete(dedupeKey)" in source
     assert 'typeof detail === "object"' in source
     assert "detail.code" in source
+
+
+def test_shell_uses_local_system_fonts_without_external_font_requests() -> None:
+    index = (STATIC / "index.html").read_text(encoding="utf-8")
+    tokens = (STATIC / "css" / "tokens.css").read_text(encoding="utf-8")
+
+    assert "fonts.googleapis.com" not in index
+    assert "fonts.gstatic.com" not in index
+    assert "--font-sans: ui-sans-serif" in tokens
 
 
 def test_research_backfill_ui_contract() -> None:

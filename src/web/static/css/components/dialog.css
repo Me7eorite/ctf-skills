@@ -1,0 +1,131 @@
+.delete-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: var(--space-lg);
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.delete-dialog {
+  width: min(560px, 100%);
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-elevated);
+}
+
+.delete-dialog-header {
+  display: flex;
+  gap: var(--space-md);
+  padding: var(--space-lg);
+}
+
+.delete-dialog-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  color: var(--accent-red);
+  background: var(--accent-red-50);
+  border: 1px solid var(--accent-red-100);
+  border-radius: var(--radius-md);
+}
+
+.delete-dialog-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.delete-dialog-title {
+  color: var(--ink-900);
+  font-size: var(--font-lg);
+  font-weight: 700;
+}
+
+.delete-dialog-message {
+  margin-top: var(--space-xs);
+  color: var(--ink-600);
+  font-size: var(--font-md);
+  line-height: 1.6;
+}
+
+.delete-dialog-impact {
+  margin: 0 var(--space-lg) var(--space-md);
+  padding: var(--space-md);
+  color: var(--ink-700);
+  background: var(--ink-50);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+
+.delete-dialog-impact-title {
+  color: var(--ink-900);
+  font-size: var(--font-sm);
+  font-weight: 700;
+}
+
+.delete-dialog-impact ul {
+  margin: var(--space-xs) 0 0;
+  padding-left: 18px;
+  font-size: var(--font-sm);
+  line-height: 1.6;
+}
+
+.delete-dialog-option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  margin: 0 var(--space-lg) var(--space-lg);
+  padding: var(--space-md);
+  color: var(--ink-700);
+  border: 1px solid var(--accent-red-100);
+  border-radius: var(--radius-md);
+  background: var(--accent-red-50);
+}
+
+.delete-dialog-option input {
+  margin-top: 2px;
+  flex: 0 0 auto;
+}
+
+.delete-dialog-option span {
+  display: grid;
+  gap: 2px;
+}
+
+.delete-dialog-option strong {
+  color: var(--ink-900);
+  font-size: var(--font-sm);
+}
+
+.delete-dialog-option small {
+  color: var(--ink-600);
+  font-size: var(--font-xs);
+  line-height: 1.5;
+}
+
+.delete-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+  padding: var(--space-md) var(--space-lg);
+  background: var(--ink-50);
+  border-top: 1px solid var(--line);
+}
+
+@media (max-width: 560px) {
+  .delete-dialog-header,
+  .delete-dialog-actions {
+    padding: var(--space-md);
+  }
+
+  .delete-dialog-impact,
+  .delete-dialog-option {
+    margin-left: var(--space-md);
+    margin-right: var(--space-md);
+  }
+}

@@ -1,4 +1,5 @@
 import { escapeHtml } from "./format.js";
+import { initIcons } from "./icons.js";
 
 let activeConfirmation = null;
 let dialogSequence = 0;
@@ -9,39 +10,50 @@ export function confirmDeletion({ title, message }) {
   activeConfirmation = new Promise((resolve) => {
     dialogSequence += 1;
     const titleId = `delete-dialog-title-${dialogSequence}`;
+    const descId = `delete-dialog-desc-${dialogSequence}`;
     const previousFocus = document.activeElement;
     const overlay = document.createElement("div");
     overlay.className = "delete-dialog-overlay";
     overlay.dataset.deleteDialog = "true";
-    overlay.style.cssText = [
-      "position: fixed",
-      "inset: 0",
-      "z-index: 1000",
-      "display: grid",
-      "place-items: center",
-      "background: rgba(15, 23, 42, 0.36)",
-      "padding: 20px",
-    ].join(";");
     overlay.innerHTML = `
-      <div role="dialog" aria-modal="true" aria-labelledby="${titleId}" style="width: min(460px, 100%); border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--paper); box-shadow: var(--shadow-lg);">
-        <div style="padding: var(--space-lg); border-bottom: 1px solid var(--line);">
-          <div id="${titleId}" style="font-size: var(--font-lg); font-weight: 600; color: var(--ink-800);">${escapeHtml(title)}</div>
-          <p style="margin-top: var(--space-sm); color: var(--ink-600); font-size: var(--font-md);">${escapeHtml(message)}</p>
+      <div class="delete-dialog" role="dialog" aria-modal="true" aria-labelledby="${titleId}" aria-describedby="${descId}">
+        <div class="delete-dialog-header">
+          <div class="delete-dialog-icon" aria-hidden="true">
+            <i data-lucide="trash-2"></i>
+          </div>
+          <div>
+            <div id="${titleId}" class="delete-dialog-title">${escapeHtml(title)}</div>
+            <p id="${descId}" class="delete-dialog-message">${escapeHtml(message)}</p>
+          </div>
         </div>
-        <label style="display: flex; align-items: center; gap: var(--space-sm); padding: var(--space-md) var(--space-lg); color: var(--ink-700);">
+        <div class="delete-dialog-impact">
+          <div class="delete-dialog-impact-title">默认删除范围</div>
+          <ul>
+            <li>数据库记录和页面状态</li>
+            <li>关联的任务、运行记录和进度记录</li>
+          </ul>
+        </div>
+        <label class="delete-dialog-option">
           <input type="checkbox" id="delete-dialog-artifacts">
-          <span>同时删除产物</span>
+          <span>
+            <strong>同时删除产物文件</strong>
+            <small>会删除本地生成文件，无法从界面恢复。</small>
+          </span>
         </label>
-        <div style="display: flex; justify-content: flex-end; gap: var(--space-sm); padding: var(--space-md) var(--space-lg); border-top: 1px solid var(--line);">
-          <button class="btn btn-ghost btn-sm" id="delete-dialog-cancel">Cancel</button>
-          <button class="btn btn-danger btn-sm" id="delete-dialog-confirm">Delete</button>
+        <div class="delete-dialog-actions">
+          <button class="btn btn-ghost btn-sm" id="delete-dialog-cancel">取消</button>
+          <button class="btn btn-danger btn-sm" id="delete-dialog-confirm">删除记录</button>
         </div>
       </div>
     `;
     document.body.appendChild(overlay);
+    initIcons();
     const cancelButton = overlay.querySelector("#delete-dialog-cancel");
     const confirmButton = overlay.querySelector("#delete-dialog-confirm");
     const artifactCheckbox = overlay.querySelector("#delete-dialog-artifacts");
+    artifactCheckbox.addEventListener("change", () => {
+      confirmButton.textContent = artifactCheckbox.checked ? "删除记录和产物" : "删除记录";
+    });
     const cleanup = (value) => {
       document.removeEventListener("keydown", onKeyDown);
       overlay.remove();

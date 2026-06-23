@@ -11,9 +11,27 @@ def test_confirmation_is_singleton_and_keyboard_accessible() -> None:
     source = (STATIC_JS / "ui" / "delete-dialog.js").read_text(encoding="utf-8")
 
     assert "if (activeConfirmation) return activeConfirmation" in source
+    assert "delete-dialog-overlay" in source
     assert 'event.key === "Escape"' in source
     assert 'event.key !== "Tab"' in source
     assert "previousFocus?.isConnected" in source
+    assert "取消" in source
+    assert "删除记录" in source
+    assert "删除记录和产物" in source
+    assert "同时删除产物文件" in source
+    assert "Cancel" not in source
+    assert "Delete" not in source
+
+
+def test_delete_dialog_uses_shared_component_styles() -> None:
+    root = STATIC_JS.parents[0]
+    index = (root / "index.html").read_text(encoding="utf-8")
+    styles = (root / "css" / "components" / "dialog.css").read_text(encoding="utf-8")
+
+    assert '/css/components/dialog.css' in index
+    assert ".delete-dialog-overlay" in styles
+    assert ".delete-dialog-impact" in styles
+    assert ".delete-dialog-actions" in styles
 
 
 def test_deletion_views_guard_submission_and_polling() -> None:
