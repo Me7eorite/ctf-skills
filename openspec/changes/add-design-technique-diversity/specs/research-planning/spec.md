@@ -3,11 +3,19 @@
 ### Requirement: Research findings carry a weakly-enforced technique family
 
 Every research finding SHALL carry an optional `technique_family` drawn from a
-controlled per-category lane vocabulary (the Technique Lanes defined in
-`skills/design-challenges/references/category-tactics.md`, exposed in code by
-`src/domain/design/technique_taxonomy.py`). The Hermes Research Agent prompt SHALL
-instruct the agent to set `technique_family` for each finding from that
-vocabulary.
+controlled per-category lane vocabulary. The vocabulary SHALL be a **closed set
+of lanes for each supported category** — web, pwn, and re — with every category
+including an `other` catch-all; no category may be left as an unspecified
+"its own lanes" placeholder. The **code module
+`src/domain/design/technique_taxonomy.py` is the single source of truth** for
+that vocabulary and the `label`→lane derivation;
+`skills/design-challenges/references/category-tactics.md` is documentation that
+mirrors it and SHALL NOT be treated as the authority (a documentation edit alone
+SHALL NOT change classification). The documentation lane list SHALL be derived
+from — or checked against — the code constants (e.g. a generated section or a
+test asserting the two match), so the doc cannot silently drift from the code.
+The Hermes Research Agent prompt SHALL be rendered from the code vocabulary and
+SHALL instruct the agent to set `technique_family` for each finding from it.
 
 Enforcement SHALL be weak and derivable:
 
@@ -52,12 +60,19 @@ report SHALL emit a neutral warning indicating the classification miss-rate is
 high and that either the lane vocabulary or the research scope may need review.
 The warning SHALL NOT assert a single cause and SHALL NOT fail the run.
 
+The `other` ratio and the family distribution SHALL be surfaced on the research
+run dashboard view (not only in the generated report payload), and when the
+ratio exceeds `RESEARCH_FAMILY_OTHER_WARN_RATIO` the dashboard SHALL render a
+visible alarm. This observability is a hard requirement: a high `other` ratio
+silently degrades dedup quality, so it MUST be visible rather than only logged.
+
 #### Scenario: High other-ratio raises a neutral warning
 
 - **GIVEN** a completed research run where more than 30% of findings resolve to family `other`
 - **WHEN** the run report is generated
 - **THEN** the report includes the family distribution
 - **AND** the report carries a neutral "classification miss-rate high" warning
+- **AND** the dashboard run view renders the `other` ratio with a visible alarm
 - **AND** the run status is unaffected
 
 #### Scenario: Distribution is reported even for legacy findings

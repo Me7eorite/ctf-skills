@@ -26,9 +26,11 @@ clustering before the tasks enter authoring.
 ## What Changes
 
 - **Modify** `research-planning`: every research finding SHALL carry a
-  `technique_family` drawn from a controlled category-lane vocabulary
-  (reusing the Technique Lanes in
-  `skills/design-challenges/references/category-tactics.md`). The field is a
+  `technique_family` drawn from a controlled category-lane vocabulary. The
+  **code module `technique_taxonomy.py` is the single source of truth** for that
+  vocabulary; `skills/design-challenges/references/category-tactics.md` is
+  documentation that mirrors it, not the authority (so a doc edit cannot silently
+  shift classification). The field is a
   **weakly-enforced, derivable** attribute: persisted when the agent supplies
   it, defaulted to `other` (with a logged warning) when the agent omits or
   emits an unknown value, and resolvable from `label` for legacy findings that
@@ -36,12 +38,16 @@ clustering before the tasks enter authoring.
   `technique_family` distribution and highlight the `other` ratio so a failing
   taxonomy is visible, not silently swallowed.
 - **Modify** `design-task-planning`: design-task generation SHALL allocate
-  findings on **two diversity axes** — coarse `technique_family` (lane) and
-  fine `sub_technique` (normalized label) — using a soft per-axis quota and a
-  cooldown window. When the finding pool cannot satisfy the quota the planner
-  SHALL **fall back to round-robin to preserve count** and record a
-  machine-readable `diversity_flags` warning on each affected task rather than
-  failing the batch.
+  findings with two **unequally-weighted** axes. `technique_family` (lane) is the
+  **governance axis** — it carries the only knobs (`technique_quota`,
+  `cooldown_window`) and its job is to stop the batch collapsing into one lane;
+  when the pool cannot satisfy the family quota the planner relaxes it and
+  records `family_quota_exceeded`. `sub_technique` (normalized label) is the
+  **diagnostic axis** — best-effort avoidance of exact sibling repeats with **no
+  quota knob of its own**, flagging `subtechnique_duplicate` when it cannot
+  avoid. Diversity is a greedy preference, never a hard gate: `target_count` is
+  always produced, low diversity only annotates tasks, and the final fallback is
+  the existing round-robin.
 - **Modify** `design-task-planning`: each generated `design_task` SHALL store a
   machine-readable `diversity_flags` object
   (`{"family": <lane>, "sub_technique": <key>, "warnings": [<enum>...]}`,
@@ -49,20 +55,32 @@ clustering before the tasks enter authoring.
   `family_quota_exceeded | subtechnique_duplicate | family_other`) computed
   once at plan time so the dashboard, API, and logs read it without recomputing.
 - **Modify** `design-task-planning`: introduce a **plan-review checkpoint** on
-  the existing `draft` status without adding a new business status. A
-  `plan_reviewed_at` marker SHALL gate the `draft -> queued` transition: a
-  task whose plan has not been reviewed SHALL NOT be queued. Review, full
-  regeneration, and **single-task regeneration** SHALL all be performed through
-  `DesignTaskPlanningService` (reusing the existing parent-row lock and
-  `replace_draft_or_archived_tasks` rebuild), never by direct DB writes from the
-  dashboard.
-- **Modify** `design-task-planning`: the dashboard design-task view SHALL render
-  a **plan matrix** (task_no / difficulty / family / sub_technique / scenario
-  seed) that colour-codes `family_quota_exceeded` (mild) distinctly from
-  `subtechnique_duplicate` (the real duplicate-考点 signal), and exposes
-  approve / regenerate-all / regenerate-one actions plus a "research diversity
-  insufficient — consider re-running research" hint when duplicates are
-  pervasive.
+  the existing `draft` status. `plan_reviewed_at` is **review metadata, not a new
+  business status or state-machine stage** — the status set is unchanged; the
+  marker only adds a precondition to the existing `draft -> queued` transition,
+  and a task whose plan has not been reviewed SHALL NOT be queued. Because
+  approval does not change status, regeneration stays available throughout
+  review. Review, full regeneration, and **single-task regeneration** SHALL all
+  be performed through `DesignTaskPlanningService` (reusing the existing
+  parent-row lock and `replace_draft_or_archived_tasks` rebuild), never by direct
+  DB writes from the dashboard. Single-task regeneration returns a **three-state
+  outcome** (`regenerated | regenerated_with_warning | no_alternative`): unlike
+  batch generation it has no count obligation, so when only equivalent or
+  sibling-duplicate candidates remain it declines as a no-op with a
+  machine-readable reason (`research_diversity_insufficient |
+  subtechnique_exhausted`) rather than forcing a duplicate. Family is soft (no
+  `family_exhausted` refusal); family saturation surfaces as
+  `regenerated_with_warning`.
+- **Modify** `design-task-planning`: the dashboard design-task view SHALL be a
+  **read-only review surface plus exactly three service-backed actions**
+  (approve, regenerate-all, regenerate-one). It renders a **plan matrix**
+  (task_no / difficulty / family / sub_technique / scenario seed) by reading
+  stored `diversity_flags` — colour-coding `family_quota_exceeded` (mild
+  governance signal) distinctly from `subtechnique_duplicate` (finer diagnostic
+  hint) — and shows a "research diversity insufficient — consider re-running
+  research" hint when duplicates are pervasive. The dashboard SHALL NOT compute
+  diversity or policy itself; this three-action cap keeps it from drifting into a
+  planning console.
 - **Add** a classification-only foundation module
   `src/domain/design/technique_taxonomy.py` (Layer 1) holding the lane enum, the
   `label`→lane keyword map, `resolve_family()` and `resolve_sub_technique()`.
