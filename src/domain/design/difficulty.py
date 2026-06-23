@@ -5,19 +5,22 @@ Phase 2 of the design-skill rework: the structural validator (see
 alignment is checked here so the rules stay readable and so the per-tier
 table is the single source of truth.
 
-The tier table mirrors ``skills/design-challenges/references/difficulty-rubric.md``
-verbatim; change one and update the other.
+The tier table is the validator source of truth. Keep
+``skills/design-challenges/references/difficulty-rubric.md`` and the rendered
+build-budget prompt synchronized with it when updating prose guidance.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from domain.design.mechanical_transforms import is_mechanical_transform
 from domain.design.schema import ChallengeDesignValidationError
+from domain.design.technique_taxonomy import resolve_sub_technique
 from domain.design_tasks import DesignTask
 
 _LOGGER = logging.getLogger(__name__)
@@ -91,7 +94,7 @@ RUBRIC: dict[str, DifficultyRubric] = {
     "medium": DifficultyRubric(
         techniques_min=2,
         techniques_max=3,
-        intended_path_min=2,
+        intended_path_min=1,
         intended_path_max=5,
         needs_business_scenario=True,
         needs_implementation_plan=False,
@@ -102,7 +105,7 @@ RUBRIC: dict[str, DifficultyRubric] = {
     "hard": DifficultyRubric(
         techniques_min=3,
         techniques_max=4,
-        intended_path_min=3,
+        intended_path_min=1,
         intended_path_max=7,
         needs_business_scenario=True,
         needs_implementation_plan=True,
@@ -113,7 +116,7 @@ RUBRIC: dict[str, DifficultyRubric] = {
     "expert": DifficultyRubric(
         techniques_min=2,
         techniques_max=99,
-        intended_path_min=4,
+        intended_path_min=1,
         intended_path_max=10,
         needs_business_scenario=True,
         needs_implementation_plan=True,
@@ -172,11 +175,6 @@ def validate_difficulty_alignment(
         )
 
     step_count = _count_intended_path_steps(challenge)
-    if step_count < rubric.intended_path_min:
-        _flag(
-            f"{difficulty} requires at least {rubric.intended_path_min} "
-            f"intended_path steps; design has {step_count}"
-        )
     if step_count > rubric.intended_path_max:
         _flag(
             f"{difficulty} allows at most {rubric.intended_path_max} "
@@ -239,25 +237,40 @@ def validate_difficulty_alignment(
 
 
 def _count_techniques(challenge: Mapping[str, Any]) -> int:
-    """Union ``techniques``, ``primary_technique``, ``secondary_technique``.
+    """Count distinct non-mechanical sub-techniques in a design.
 
-    Comparison is case-insensitive and whitespace-trimmed so that
-    ``["SQLi", "sqli"]`` does not pad the count.
+    Pure mechanical decode/unwrap labels are free alongside a real technique.
+    If every declared technique is mechanical, the chain counts as one
+    ``encoding`` technique.
     """
-    distinct: set[str] = set()
+    distinct_non_mechanical: set[str] = set()
+    saw_mechanical = False
 
+    for label in _iter_declared_technique_labels(challenge):
+        sub_technique = resolve_sub_technique({"label": label})
+        if is_mechanical_transform(sub_technique):
+            saw_mechanical = True
+        else:
+            distinct_non_mechanical.add(sub_technique)
+
+    if distinct_non_mechanical:
+        return len(distinct_non_mechanical)
+    if saw_mechanical:
+        return 1
+    return 0
+
+
+def _iter_declared_technique_labels(challenge: Mapping[str, Any]) -> Iterator[str]:
     raw_list = challenge.get("techniques")
     if isinstance(raw_list, list):
         for entry in raw_list:
             if isinstance(entry, str) and entry.strip():
-                distinct.add(entry.strip().lower())
+                yield entry
 
     for field in ("primary_technique", "secondary_technique"):
         value = challenge.get(field)
         if isinstance(value, str) and value.strip():
-            distinct.add(value.strip().lower())
-
-    return len(distinct)
+            yield value
 
 
 def _count_intended_path_steps(challenge: Mapping[str, Any]) -> int:

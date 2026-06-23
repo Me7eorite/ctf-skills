@@ -285,7 +285,7 @@ def _render_build_budget(difficulty: str) -> str:
             "consumed by the build agent):",
             "",
             f"- techniques: {_range_text(rubric.techniques_min, rubric.techniques_max)}",
-            f"- intended_path steps: {_range_text(rubric.intended_path_min, rubric.intended_path_max)}",
+            f"- intended_path steps: ≤ {rubric.intended_path_max}",
             f"- explicit `implementation_plan.components` entries: ≤ "
             f"{rubric.implementation_component_max}",
             f"- estimated total build LOC (guidance, not enforced): ≤ "

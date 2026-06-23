@@ -231,6 +231,8 @@ def test_prompt_renders_build_budget_for_difficulty(tmp_path):
     assert "## Build Budget" in prompt
     # Medium baseline: techniques 2–3, explicit components ≤ 7, LOC ≤ 400.
     assert "techniques: 2–3" in prompt
+    assert "intended_path steps: ≤ 5" in prompt
+    assert "intended_path steps: 1–5" not in prompt
     assert "explicit `implementation_plan.components` entries: ≤ 7" in prompt
     assert "upgrade the difficulty tier" in prompt
     assert "LOC" in prompt and "400" in prompt

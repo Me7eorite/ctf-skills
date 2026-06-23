@@ -14,6 +14,9 @@ from domain.challenge_design_validators import (
     run_quality_gate,
     validate_design_payload,
 )
+from domain.design.difficulty import _count_techniques
+from domain.design.mechanical_transforms import MECHANICAL_TRANSFORMS
+from domain.design.technique_taxonomy import resolve_sub_technique
 from domain.design_tasks import DesignTask
 
 
@@ -66,7 +69,7 @@ def _payload(**challenge_overrides):
             "Customer-support agents share notes through this internal portal; "
             "recover the admin's pinned note."
         ),
-        # Phase 2 rubric: medium requires 2–5 intended_path steps.
+        # Phase 2 rubric: medium caps intended_path at 5 steps.
         "intended_path": [
             "Inspect the JWT in the support portal session cookie",
             "Notice the kid claim is reflected into a key-lookup path",
@@ -449,7 +452,7 @@ def _easy_payload(**overrides):
     payload = _payload(
         difficulty="easy",
         points=100,
-        # easy = exactly 1 technique, 1–3 intended_path steps,
+        # easy = exactly 1 technique, at most 4 intended_path steps,
         # short prompt is fine, no implementation_plan required.
         primary_technique="DOM XSS",
         secondary_technique=None,
@@ -482,6 +485,79 @@ def test_difficulty_easy_rejects_two_techniques():
         match=r"easy allows at most 1 distinct techniques",
     ):
         validate_design_payload(payload, _easy_task())
+
+
+def test_difficulty_counts_all_mechanical_transforms_as_one_technique():
+    challenge = {
+        "techniques": ["xor", "base64"],
+        "primary_technique": "xor-decrypt",
+        "secondary_technique": "base64-decode",
+    }
+
+    assert _count_techniques(challenge) == 1
+
+
+def test_difficulty_mechanical_transform_is_free_with_real_technique():
+    challenge = {
+        "techniques": ["sqli", "base64"],
+        "primary_technique": "SQL injection",
+    }
+
+    assert _count_techniques(challenge) == 1
+
+
+def test_difficulty_counts_distinct_non_mechanical_techniques():
+    challenge = {"techniques": ["sqli", "xss"]}
+
+    assert _count_techniques(challenge) == 2
+
+
+def test_difficulty_mechanical_fold_is_order_free():
+    left = {"techniques": ["base64", "sqli", "xor"]}
+    right = {"techniques": ["xor", "sqli", "base64"]}
+
+    assert _count_techniques(left) == _count_techniques(right) == 1
+
+
+def test_difficulty_counts_analysis_labels_that_resemble_transforms():
+    challenge = {"techniques": ["xor key recovery", "logic flaw"]}
+
+    assert _count_techniques(challenge) == 2
+
+
+def test_difficulty_counts_primary_technique_when_techniques_list_is_empty():
+    challenge = {"techniques": [], "primary_technique": "sqli"}
+
+    assert _count_techniques(challenge) == 1
+
+
+def test_mechanical_transform_boundary_matches_taxonomy_normalization():
+    assert (
+        resolve_sub_technique({"label": "xor key recovery"})
+        not in MECHANICAL_TRANSFORMS
+    )
+    assert resolve_sub_technique({"label": "xor-decrypt"}) in MECHANICAL_TRANSFORMS
+
+
+def test_difficulty_easy_accepts_layered_decode_chain_as_one_technique():
+    parent = _parent_task(category="re", difficulty="easy", points=100, port=None)
+    payload = _easy_payload(
+        category="re",
+        deployment="static",
+        port=None,
+        primary_technique="strings",
+        techniques=["strings", "base64"],
+        intended_path=[
+            "Run strings on the binary",
+            "Decode the extracted base64 blob",
+            "Submit the flag",
+        ],
+    )
+
+    result = validate_design_payload(payload, parent)
+
+    assert result.challenge["difficulty"] == "easy"
+    assert _count_techniques(result.challenge) == 1
 
 
 def test_difficulty_medium_rejects_short_prompt():
@@ -656,6 +732,65 @@ def test_difficulty_easy_rejects_five_intended_path_steps():
         match=r"easy allows at most 4 intended_path steps",
     ):
         validate_design_payload(_easy_re_payload(5), parent)
+
+
+def test_difficulty_hard_accepts_one_intended_path_step_with_enough_techniques():
+    parent = _parent_task(difficulty="hard")
+    payload = _payload(
+        difficulty="hard",
+        techniques=[
+            "JWT kid path traversal",
+            "Key confusion via kid override",
+            "Token replay across services",
+        ],
+        primary_technique="JWT kid path traversal",
+        secondary_technique="Key confusion via kid override",
+        intended_path=["Chain the three declared techniques to reach the flag."],
+    )
+
+    result = validate_design_payload(payload, parent)
+
+    assert result.challenge["difficulty"] == "hard"
+
+
+def test_difficulty_hard_single_technique_still_fails_technique_min():
+    parent = _parent_task(difficulty="hard")
+    payload = _payload(
+        difficulty="hard",
+        techniques=["JWT kid path traversal"],
+        primary_technique="JWT kid path traversal",
+        secondary_technique=None,
+        intended_path=["Exploit the single technique."],
+    )
+    payload["challenges"][0].pop("secondary_technique")
+
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match=r"hard requires at least 3 distinct techniques",
+    ):
+        validate_design_payload(payload, parent)
+
+
+def test_difficulty_expert_single_technique_still_fails_technique_min():
+    parent = _parent_task(difficulty="expert")
+    payload = _payload(
+        difficulty="expert",
+        techniques=["JWT kid path traversal"],
+        primary_technique="JWT kid path traversal",
+        secondary_technique=None,
+        intended_path=["Exploit the single technique."],
+        novelty=(
+            "A verifier state desynchronization trick specific to this custom "
+            "challenge implementation."
+        ),
+    )
+    payload["challenges"][0].pop("secondary_technique")
+
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match=r"expert requires at least 2 distinct techniques",
+    ):
+        validate_design_payload(payload, parent)
 
 
 def test_difficulty_legacy_grandfather_skips_alignment():
