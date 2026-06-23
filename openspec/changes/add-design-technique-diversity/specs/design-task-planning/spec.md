@@ -62,43 +62,41 @@ step.
 
 ### Requirement: Sub-technique normalization is canonical and synonym-folded
 
-`resolve_sub_technique` SHALL reduce a finding label to a canonical key by, in
-order: (1) lowercasing; (2) trimming and collapsing internal separators
+`resolve_sub_technique(label) -> str` SHALL reduce a label to a canonical key by,
+in order: (1) lowercasing; (2) trimming and collapsing internal separators
 (whitespace, hyphens, underscores) to a single space; (3) stripping a closed
-list of generic qualifier tokens that do not change technique identity
-(`decode`, `decoding`, `decrypt`, `decryption`, `encrypt`, `encryption`,
-`cipher`, `attack`, `technique`, `vuln`, `bug`); and (4) applying a preset
-alias/synonym map to a canonical term. As a result `xor`, `XOR`, `xor-decrypt`,
-and `xor decrypt` SHALL all map to the same key, so they cannot masquerade as
-distinct sub-techniques and dilute the `subtechnique_duplicate` signal.
+list of generic qualifier tokens that do not change technique identity (`decode`,
+`decoding`, `decrypt`, `decryption`, `encrypt`, `encryption`, `cipher`, `attack`,
+`technique`, `vuln`, `bug`); and (4) applying a preset alias/synonym map to a
+canonical term. As a result `xor`, `XOR`, `xor-decrypt`, and `xor decrypt` SHALL
+all map to the same key, so they cannot masquerade as distinct sub-techniques and
+dilute the `subtechnique_duplicate` signal. Normalization SHALL be deterministic
+(pure string operations plus fixed maps).
 
 Normalization SHALL be **conservative**: it canonicalizes surface spellings and
-generic qualifiers of the *same* technique and SHALL NOT merge genuinely
-distinct techniques — `base64` and `base32` SHALL remain distinct keys, and
-`xor` and `rc4` SHALL remain distinct. The qualifier list and the alias map
-SHALL live in the authoritative `technique_taxonomy.py` (single source of truth).
-Mechanical-chain collapse for difficulty (the Layer 2 concern in
-`fix-difficulty-step-inflation`) is separate and SHALL NOT be applied here.
-
-The alias map SHALL only fold genuine synonyms of one technique (spelling and
-qualifier variants), never two techniques that a solver would treat as different
-considerations. Because over-broad aliases silently erode the
-`subtechnique_duplicate` signal, the conservatism rule SHALL be guarded by a
+generic qualifiers of the *same* technique and SHALL NOT merge genuinely distinct
+techniques — `base64` and `base32` SHALL remain distinct keys, `xor` and `rc4`
+SHALL remain distinct, and `xor key recovery` SHALL NOT normalize to `xor` (the
+qualifier list deliberately excludes `key`/`recovery`). The qualifier list and
+alias map SHALL live in `technique_taxonomy.py` as the single source of truth and
+are consumed both by this change's diversity dedup and by
+`fix-difficulty-step-inflation`'s mechanical fold. Because over-broad aliases
+silently erode both signals, the conservatism rule SHALL be guarded by a
 regression test pinning a list of must-stay-distinct technique pairs; adding an
 alias that collapses any pinned pair SHALL fail that test.
 
 #### Scenario: xor surface variants collapse to one key
 
-- **GIVEN** findings labelled `xor`, `XOR`, `xor-decrypt`, and `xor decrypt`
+- **GIVEN** labels `xor`, `XOR`, `xor-decrypt`, and `xor decrypt`
 - **WHEN** `resolve_sub_technique` is applied to each
 - **THEN** all four yield the same canonical key
-- **AND** a batch using two of them flags `subtechnique_duplicate`
 
-#### Scenario: Distinct techniques stay distinct
+#### Scenario: Distinct techniques and analysis steps stay distinct
 
-- **GIVEN** findings labelled `base64` and `base32`
+- **GIVEN** labels `base64`, `base32`, and `xor key recovery`
 - **WHEN** `resolve_sub_technique` is applied
-- **THEN** they yield different canonical keys
+- **THEN** `base64` and `base32` yield different keys
+- **AND** `xor key recovery` does NOT normalize to `xor`
 
 ### Requirement: Diversity allocation is deterministic
 

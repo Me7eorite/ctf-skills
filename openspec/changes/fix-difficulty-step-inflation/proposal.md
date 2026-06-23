@@ -26,19 +26,27 @@ length should at most be an upper sanity bound, never a promotion signal.
 ## What Changes
 
 - **Modify** the difficulty-alignment behaviour (capability
-  `structured-challenge-designs`) so a **linear mechanical decode/unwrap chain
-  collapses to a single technique**. Consecutive purely-mechanical
-  transformations (`base64`, `hex`, `xor` with an already-recovered key,
-  `strings`, single-format unwrap, etc.) SHALL count as one technique of family
-  `encoding`, regardless of how many layers are stacked. The collapse logic
-  lives in a dedicated **Layer 2** module
-  `src/domain/design/mechanical_transforms.py` (mechanical-transform set +
-  `is_mechanical_transform()` + `collapse_mechanical_chain()`) that depends on
-  the sibling change's classification-only Layer 1
-  `src/domain/design/technique_taxonomy.py` (`resolve_family` /
-  `resolve_sub_technique`). Classification, mechanical-transform judgement, and
-  the difficulty rubric stay in three separate layers — no single file carries
-  分类 + 难度 + 折叠规则.
+  `structured-challenge-designs`) so **mechanical decode/unwrap transforms fold
+  order-free**. A technique is mechanical iff its normalized `sub_technique` is
+  in a mechanical-transform set of canonical sub-technique keys (`base64`,
+  `base32`, `hex`, `url`, `rot`, `caesar`, `xor`, `gzip`, `zlib`, `strings`,
+  …) — judged purely from the label, with **no
+  ordering source and no runtime key-state inference** (decision A). The counted
+  total is the number of distinct **non-mechanical** sub_techniques; when every
+  technique is mechanical the total is exactly `1` (a pure decode chain is one
+  `encoding` 考点), and mechanical transforms add nothing when a non-mechanical
+  technique is present. The folded class is named **`mechanical_class`** (value
+  `encoding`), **deliberately not `family`** — `family` is the research lane /
+  governance axis in `add-design-technique-diversity`, an unrelated taxonomy.
+  This change **consumes the existing `resolve_sub_technique`** from
+  `src/domain/design/technique_taxonomy.py`, which is already built (with its
+  normalization + conservatism guard) and shipped by `add-design-technique-diversity`;
+  it does **not** introduce or modify that module. The new fold logic lives in a
+  dedicated **Layer 2** module `src/domain/design/mechanical_transforms.py`
+  (mechanical-transform set + `is_mechanical_transform()`) that consumes Layer 1's
+  `resolve_sub_technique`. Classification (existing L1), mechanical judgement
+  (new L2), and the difficulty rubric (L3) stay in three separate layers — no
+  single file carries 分类 + 难度 + 折叠规则.
 - **Modify** the difficulty rubric so `intended_path` length is **demoted from a
   difficulty driver to an upper-bound sanity check only**. The per-tier
   `intended_path_min` floors SHALL be removed (or set to `1` for every tier) so
@@ -58,9 +66,10 @@ This proposal does **not**:
 - change technique-diversity allocation, `diversity_flags`, the plan checkpoint,
   or the dashboard matrix — those live in the sibling change
   `add-design-technique-diversity`;
-- introduce the Layer 1 `technique_taxonomy.py` module itself — that is the
-  sibling change's foundation and must land first; this change only adds the
-  Layer 2 `mechanical_transforms.py` on top of it;
+- introduce or modify `technique_taxonomy.py` — that module (including
+  `resolve_sub_technique` + normalization) is already built and owned by
+  `add-design-technique-diversity`; this change only consumes
+  `resolve_sub_technique` and adds the Layer 2 `mechanical_transforms.py`;
 - touch the shard prompt split (deferred).
 
 ## Capabilities
@@ -68,8 +77,9 @@ This proposal does **not**:
 ### Modified Capabilities
 
 - `structured-challenge-designs`: ADD a difficulty-alignment rule set that makes
-  distinct 考点 + novelty the difficulty driver, collapses linear decode chains
-  to one technique, and demotes `intended_path` length to an upper bound.
+  distinct 考点 + novelty the difficulty driver, folds mechanical transforms
+  order-free into one `encoding` `mechanical_class`, and demotes `intended_path`
+  length to an upper bound.
 
 ### New Capabilities
 
@@ -78,18 +88,31 @@ This proposal does **not**:
 ## Impact
 
 - **Code**: new `src/domain/design/mechanical_transforms.py` (Layer 2:
-  mechanical-transform set + `is_mechanical_transform` + `collapse_mechanical_chain`);
+  mechanical-transform set + `is_mechanical_transform`, plus the `mechanical_class`
+  constant `encoding`; order-free, no chain/ordering API);
   `src/domain/design/difficulty.py` (rubric `intended_path_min` removal;
-  `_count_techniques` delegates collapse to the Layer 2 module),
+  `_count_techniques` gathers `techniques[]`+`primary_technique`+`secondary_technique`,
+  wraps each string label as `{"label": value}` before routing it through the
+  existing `resolve_sub_technique`, then counts distinct non-mechanical
+  sub_techniques, folding all mechanical ones to one `encoding` only when no
+  non-mechanical technique exists),
+  `src/services/design_prompt.py` (render `intended_path` as an upper-bound
+  budget, not a min-max difficulty range),
   `prompts/design_planner_prompt.md`,
   `skills/design-challenges/references/category-tactics.md`,
   `skills/design-challenges/references/difficulty-rubric.md`.
+  This change does **not** create or modify `technique_taxonomy.py`.
 - **Database**: none.
-- **Dependency**: depends on the Layer 1 `src/domain/design/technique_taxonomy.py`
-  introduced by `add-design-technique-diversity`; land that change's foundation
-  first.
-- **Compatibility**: existing designs validated under the old floors are
-  unaffected (the change only relaxes a lower bound and refines technique
-  counting; nothing that previously passed becomes invalid). The
-  `legacy_grandfather` path in `validate_difficulty_alignment` is retained.
+- **Dependency**: requires `src/domain/design/technique_taxonomy.py`
+  (`resolve_sub_technique` + normalization), which is **already shipped** by
+  `add-design-technique-diversity`. Since that module already exists in the
+  codebase, this change is effectively ready to implement now.
+- **Compatibility**: the `intended_path_min` relaxation only loosens, so it
+  never invalidates a prior pass. The order-free mechanical fold, however, counts
+  more strictly than before (a design that previously met a technique floor by
+  padding with mechanical transforms now counts fewer 考点 and may fail that
+  floor) — this is intentional, since such designs were mis-graded. Historical
+  stored designs are unaffected because `validate_difficulty_alignment` only runs
+  on new design attempts and the `legacy_grandfather` path is retained; no stored
+  row is re-validated.
 - **Out of scope**: diversity allocation, plan checkpoint, shard-prompt split.

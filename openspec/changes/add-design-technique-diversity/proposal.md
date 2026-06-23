@@ -81,15 +81,15 @@ clustering before the tasks enter authoring.
   research" hint when duplicates are pervasive. The dashboard SHALL NOT compute
   diversity or policy itself; this three-action cap keeps it from drifting into a
   planning console.
-- **Add** a classification-only foundation module
-  `src/domain/design/technique_taxonomy.py` (Layer 1) holding the lane enum, the
-  `label`→lane keyword map, `resolve_family()` and `resolve_sub_technique()`.
-  This module is **pure classification — it knows nothing about difficulty,
-  mechanical transforms, or chain folding** (those are a separate Layer 2 owned
-  by the sibling change `fix-difficulty-step-inflation`). It is the **single
-  source of truth for family/sub-technique normalization**, consumed by the
-  research prompt rendering, the Python dedup path, the dashboard, and (read-only)
-  the difficulty layer.
+- **Extend** the classification-only module
+  `src/domain/design/technique_taxonomy.py` — **introduced by the sibling change
+  `fix-difficulty-step-inflation`** (which owns `resolve_sub_technique` +
+  normalization) — with the per-category lane enum, the `label`→lane keyword map,
+  and `resolve_family()`. This change does **not** create the module or touch
+  `resolve_sub_technique`; it adds the family/lane half on top. The module stays
+  pure classification (no difficulty / mechanical / chain-folding logic). Because
+  of this, **`fix-difficulty-step-inflation` lands first** and this change depends
+  on it.
 
 This proposal does **not**:
 
@@ -111,14 +111,16 @@ This proposal does **not**:
 
 ### New Capabilities
 
-- None. (The new `technique_taxonomy.py` module is a shared classification
-  helper, not a separately-specced capability.)
+- None. (The `technique_taxonomy.py` module is a shared classification helper,
+  introduced by `fix-difficulty-step-inflation` and extended here, not a
+  separately-specced capability.)
 
 ## Impact
 
 - **Code**: `prompts/research_prompt.md`, `src/domain/research.py`
-  (+`technique_family`), research parser/validator, new
-  `src/domain/design/technique_taxonomy.py`,
+  (+`technique_family`), research parser/validator,
+  `src/domain/design/technique_taxonomy.py` (**extend** with lanes +
+  `resolve_family`; module introduced by `fix-difficulty-step-inflation`),
   `src/services/design_task_planning_service.py`,
   `src/services/design_planner_hermes.py`, `prompts/design_planner_prompt.md`,
   `src/domain/design_tasks.py` (+`diversity_flags`, `plan_reviewed_at`),
@@ -130,6 +132,9 @@ This proposal does **not**:
   (timestamp). All nullable; legacy rows are grandfathered (NULL `technique_family`
   resolves from `label`; NULL `plan_reviewed_at` rows generated before this
   change are treated as review-exempt to avoid backfill).
+- **Dependency**: depends on `fix-difficulty-step-inflation`, which introduces
+  the `technique_taxonomy.py` module (`resolve_sub_technique` + normalization).
+  Land that change first; this one extends the module with lanes + `resolve_family`.
 - **Compatibility**: `technique_family` weak enforcement means an existing
   research run never breaks; `diversity_flags` is additive to the task JSON the
   reconciler already tolerates; the queue gate only rejects *new* unreviewed

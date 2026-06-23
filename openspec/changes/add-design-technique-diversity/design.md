@@ -83,13 +83,11 @@ else derives from `label`, else `other`. Consequences:
 
 ### D2 — Greedy allocation: family governs, sub-technique diagnoses
 
-`technique_taxonomy.py` (Layer 1, classification-only) exposes
-`resolve_family(finding)` (coarse, lane) and
-`resolve_sub_technique(finding)` (fine, canonicalized `label`: lowercase →
-collapse separators → strip a closed qualifier list → preset alias map, so
-`xor`/`XOR`/`xor-decrypt`/`xor decrypt` fold to one key while `base64`≠`base32`;
-see the "Sub-technique normalization is canonical" spec requirement). Allocation
-is a single greedy pass (not a global
+`technique_taxonomy.py` exposes `resolve_family(finding)` (coarse, lane — **added
+by this change**) and `resolve_sub_technique(finding)` (fine, canonical key —
+**introduced and specified by `fix-difficulty-step-inflation`**, which owns the
+normalization rules and the conservatism guard; this change only consumes it).
+Allocation is a single greedy pass (not a global
 optimizer) that, when picking each task's primary finding, applies the two axes
 with **different weight**:
 

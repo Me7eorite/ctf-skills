@@ -1,40 +1,32 @@
-## 1. Shared classification foundation (Layer 1)
+## 1. Classification foundation: `technique_taxonomy.py`
+
+> As built, this change created the full `src/domain/design/technique_taxonomy.py`
+> (lanes + `resolve_family` + `resolve_sub_technique` + normalization). The
+> sibling change `fix-difficulty-step-inflation` consumes the existing
+> `resolve_sub_technique` and adds `mechanical_transforms.py` + difficulty on top
+> — it does not need to re-introduce the module.
 
 - [x] 1.1 Create `src/domain/design/technique_taxonomy.py` with a **closed `TechniqueFamily`
-      lane set per category** (mirroring `category-tactics.md`), enumerated in full — not
-      "their own lanes":
+      lane set per category** (mirroring `category-tactics.md`):
       - web: `auth | injection | server_side | client_side | upload | node_api | other`
       - pwn: `stack | format_string | heap | integer_oob | sandbox | kernel | other`
       - re:  `crackme | vm_bytecode | runtime | language | platform | visual_game | other`
-      Every category includes `other` as the catch-all. Add a `label`→lane keyword map,
-      `resolve_family(finding) -> str`
-      (stored value → keyword derivation → `other`), and
-      `resolve_sub_technique(finding) -> str`. `resolve_sub_technique` canonicalizes the
-      label: lowercase → trim/collapse separators (space/hyphen/underscore) → strip a closed
-      qualifier list (`decode|decoding|decrypt|decryption|encrypt|encryption|cipher|attack|technique|vuln|bug`)
-      → apply a preset alias/synonym map. It MUST be conservative — collapse surface
-      variants of the *same* technique (`xor`/`XOR`/`xor-decrypt`/`xor decrypt` → one key)
-      but NOT merge distinct techniques (`base64`≠`base32`). The qualifier list and alias
-      map live here as the single source of truth.
-      The module is **classification-only**: it MUST NOT contain difficulty,
-      mechanical-transform, or chain-folding logic, and MUST NOT import from
-      services, web, or `difficulty.py`. It is the single source of truth for
-      family/sub-technique normalization.
-- [x] 1.2 Unit-test `resolve_family`/`resolve_sub_technique`: stored valid value wins;
-      unknown stored value → `other` + warning; NULL value derives from `label`;
-      `blind SQLi`/`second-order SQLi`/`SQLi login bypass` all resolve to family `injection`
-      with distinct sub-techniques; `xor`/`XOR`/`xor-decrypt`/`xor decrypt` resolve to one
-      sub-technique key; `base64` ≠ `base32`; layered-encoding labels resolve to a stable family.
-- [x] 1.2a Alias-map conservatism guard: a regression test pins a list of must-stay-distinct
-      technique pairs (e.g. `base64`/`base32`, `xor`/`rc4`, `sqli`/`ssti`, `ret2win`/`ret2libc`,
-      `tcache poisoning`/`UAF`) and asserts `resolve_sub_technique` never folds any pinned pair
-      to one key. Adding an over-broad alias that collapses a pinned pair MUST fail this test.
+      Every category includes `other`. Add a `label`→lane keyword map, `resolve_family`
+      (stored value → keyword derivation → `other`), and `resolve_sub_technique`
+      (lowercase → collapse separators → strip closed qualifier list → preset alias map;
+      conservative — `xor`/`XOR`/`xor-decrypt` → one key, `base64`≠`base32`,
+      `xor key recovery`≠`xor`). Classification-only: no difficulty/mechanical logic, no
+      import from services/web/`difficulty.py`.
+- [x] 1.2 Unit-test `resolve_family` (valid/unknown/derive/layered) and `resolve_sub_technique`
+      (xor surface variants collapse; sqli variants stay distinct).
+- [x] 1.2a Alias-map conservatism guard: parametrized test pins must-stay-distinct pairs
+      (`base64`/`base32`, `xor`/`rc4`, `sqli`/`ssti`, `ret2win`/`ret2libc`,
+      `tcache poisoning`/`UAF`) and asserts they never fold to one key.
 - [x] 1.3 Render the lane vocabulary into `prompts/research_prompt.md` from
-      `technique_taxonomy.py` (injection point analogous to `{worked_example}`), so the
-      prompt and the derivation share one definition.
-- [x] 1.4 Make `category-tactics.md` a checked mirror of the code constants: either a
-      generated lane section or a test asserting the doc lane list matches the
-      `TechniqueFamily` enum, so the doc cannot silently drift from the authoritative code.
+      `technique_taxonomy.py` (`{technique_family_vocabulary}` injection), so prompt and
+      derivation share one definition.
+- [x] 1.4 Test that `category-tactics.md`'s lane list matches the `TechniqueFamily` enum so
+      the doc cannot silently drift from the authoritative code.
 
 ## 2. Research finding `technique_family` (weak enforcement)
 
