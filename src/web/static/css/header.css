@@ -27,6 +27,60 @@
   font-weight: 600;
   line-height: 1.25;
   color: var(--ink-900);
-  margin-top: 1px;
+  margin-top: 2px;
+}
+
+/* === Header 右侧（Worker 运行状态常驻） === */
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-shrink: 0;
+}
+
+.header-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  height: 34px;
+  padding: 0 6px 0 12px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  font-size: var(--font-sm);
+  font-weight: 500;
+  color: var(--ink-600);
+  cursor: pointer;
+  transition: border-color var(--transition-fast) ease,
+              background-color var(--transition-fast) ease,
+              box-shadow var(--transition-fast) ease;
+}
+
+.header-status:hover {
+  border-color: var(--line-strong);
+  background: var(--ink-50);
+  box-shadow: var(--shadow-card);
+}
+
+.header-status .sidebar-worker-count {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.header-status-arrow {
+  width: 14px;
+  height: 14px;
+  color: var(--ink-400);
+}
+
+/* 移动端：状态胶囊隐藏（JS 会移除 .hidden，这里强制隐藏避免与标题挤压），
+   面包屑收起只留标题，保持顶栏简洁 */
+@media (max-width: 1023px) {
+  .header-status {
+    display: none !important;
+  }
+  .header-breadcrumb {
+    display: none;
+  }
 }
 

@@ -22,27 +22,28 @@
 }
 
 .sidebar-logo {
-  width: 42px;
-  height: 42px;
+  width: 36px;
+  height: 36px;
   display: grid;
   place-items: center;
   background: linear-gradient(135deg, var(--brand-600), var(--brand-500));
   color: white;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   flex-shrink: 0;
   box-shadow: 0 2px 8px rgba(37, 99, 235, 0.25);
 }
 
 .sidebar-logo svg {
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
 }
 
 .sidebar-title {
-  font-size: var(--font-lg);
+  font-size: var(--font-md);
   font-weight: 600;
   line-height: 1.25;
   color: var(--ink-900);
+  white-space: nowrap;
 }
 
 .sidebar-subtitle {
@@ -148,38 +149,7 @@
   flex-shrink: 0;
 }
 
-/* === Worker Status Card === */
-.sidebar-worker-status {
-  padding: 0 var(--space-md) var(--space-md);
-  display: none;
-}
-
-@media (min-width: 1024px) {
-  .sidebar-worker-status {
-    display: block;
-  }
-}
-
-.sidebar-worker-card {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  background: var(--ink-50);
-  padding: var(--space-md);
-}
-
-.sidebar-worker-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--space-sm);
-}
-
-.sidebar-worker-header-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
+/* === Worker 状态点（Header 状态胶囊 + Worker 池页面复用） === */
 .sidebar-worker-dot {
   width: 8px;
   height: 8px;
@@ -194,35 +164,6 @@
 
 .sidebar-worker-dot.idle {
   background: var(--accent-green);
-}
-
-.sidebar-worker-name {
-  font-size: var(--font-sm);
-  font-weight: 600;
-  color: var(--ink-700);
-}
-
-.sidebar-worker-state {
-  font-size: var(--font-xs);
-  font-weight: 500;
-  color: var(--ink-500);
-  text-transform: capitalize;
-  padding: 2px 8px;
-  border-radius: var(--radius-full);
-  background: var(--surface);
-  border: 1px solid var(--line);
-}
-
-.sidebar-worker-state.running {
-  color: var(--accent-amber);
-  border-color: var(--accent-amber-border);
-  background: var(--accent-amber-light);
-}
-
-.sidebar-worker-state.idle {
-  color: var(--accent-green);
-  border-color: var(--accent-green-100);
-  background: var(--accent-green-light);
 }
 
 .sidebar-worker-bar {
@@ -248,17 +189,6 @@
 .sidebar-worker-bar-fill.idle {
   width: 0;
   background: var(--accent-green);
-}
-
-/* keep for backward compat */
-.sidebar-worker-status-inner {
-  /* deprecated - replaced by .sidebar-worker-card */
-}
-
-.sidebar-worker-label,
-.sidebar-worker-label-text,
-.sidebar-worker-label-status {
-  /* deprecated */
 }
 
 /* === 操作入口标识（仅改 color，其余继承 .sidebar-nav-item） === */

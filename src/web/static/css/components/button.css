@@ -22,6 +22,11 @@
   flex-shrink: 0;
 }
 
+.btn:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
 .btn-sm {
   height: var(--button-sm-h);
   padding: 0 var(--space-md);

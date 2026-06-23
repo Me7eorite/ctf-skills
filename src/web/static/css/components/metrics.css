@@ -19,9 +19,16 @@
 .metrics-card {
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-card);
   padding: var(--space-lg);
+  transition: box-shadow var(--transition-normal) ease,
+              border-color var(--transition-normal) ease;
+}
+
+.metrics-card:hover {
+  box-shadow: var(--shadow-elevated);
+  border-color: var(--line-strong);
 }
 
 .metrics-header {
@@ -34,16 +41,27 @@
 }
 
 .metrics-icon {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-md);
+  background: var(--brand-50);
+  color: var(--brand-600);
+  flex-shrink: 0;
+}
+
+.metrics-icon svg {
   width: 16px;
   height: 16px;
-  color: var(--ink-400);
 }
 
 .metrics-value {
   font-size: var(--font-xl);
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: -0.02em;
-  margin-top: var(--space-lg);
+  margin-top: var(--space-md);
+  font-variant-numeric: tabular-nums;
 }
 
 .metrics-note {

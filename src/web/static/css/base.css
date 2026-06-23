@@ -199,7 +199,8 @@ pre {
 }
 
 @media (max-width: 1023px) {
-  .lg\:hidden { display: none !important; }
+  /* lg:hidden 仅应在 ≥1024px 隐藏（见下方 min-width 块）；
+     此处不再隐藏，否则移动端汉堡菜单 #mobileMenu 永远不可见 */
 }
 
 @media (min-width: 1024px) {

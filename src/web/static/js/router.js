@@ -29,11 +29,10 @@ export function setView(view) {
     if (groupEl.previousElementSibling) groupEl.previousElementSibling.style.display = "none";
   }
 
-  const sidebarNav = document.querySelector("#sidebarNav");
-  if (window.innerWidth < 1024) {
-    sidebarNav?.classList.add("hidden");
-  } else {
-    sidebarNav?.classList.remove("hidden");
+  // 桌面端始终展开导航；移动端的展开/收起由汉堡按钮与导航点击控制，
+  // 不在此处强制收起，否则每次轮询刷新都会把已展开的菜单弹回去。
+  if (window.innerWidth >= 1024) {
+    document.querySelector("#sidebarNav")?.classList.remove("hidden");
   }
 
   const renderer = viewRenderers[view];

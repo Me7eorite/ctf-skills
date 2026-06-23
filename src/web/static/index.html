@@ -45,10 +45,6 @@
           </div>
         </div>
         <div class="sidebar-brand-right">
-          <div id="sidebarWorkerPoolEntry" class="sidebar-worker-pool-entry hidden lg:flex" data-target="worker-pool" title="Worker 池">
-            <span id="sidebarWorkerDot" class="sidebar-worker-dot idle"></span>
-            <span id="sidebarWorkerCount" class="sidebar-worker-count">—</span>
-          </div>
           <button id="mobileMenu" class="sidebar-menu-toggle lg:hidden" title="导航">
             <i data-lucide="menu" class="size-4"></i>
           </button>
@@ -114,6 +110,13 @@
             <span id="breadcrumb" class="header-breadcrumb-current">概览</span>
           </div>
           <h1 id="pageTitle" class="header-title">生产概览</h1>
+        </div>
+        <div class="header-right">
+          <div id="sidebarWorkerPoolEntry" class="header-status sidebar-worker-pool-entry hidden lg:flex" data-target="worker-pool" title="Worker 池">
+            <span id="sidebarWorkerDot" class="sidebar-worker-dot idle"></span>
+            <span id="sidebarWorkerCount" class="sidebar-worker-count">—</span>
+            <i data-lucide="chevron-right" class="header-status-arrow"></i>
+          </div>
         </div>
       </header>
 

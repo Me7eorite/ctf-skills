@@ -25,7 +25,7 @@ function metricsHtml(summary) {
     <article class="metrics-card">
       <div class="metrics-header">
         <span>${escapeHtml(m.label)}</span>
-        <i data-lucide="${m.icon}" class="metrics-icon"></i>
+        <span class="metrics-icon"><i data-lucide="${m.icon}"></i></span>
       </div>
       <div class="metrics-value">${m.value}</div>
       <div class="metrics-note">${escapeHtml(m.note)}</div>

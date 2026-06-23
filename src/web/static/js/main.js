@@ -108,6 +108,10 @@ document.addEventListener("click", (event) => {
   if (nav) {
     const target = nav.dataset.target;
     if (!target) return;
+    // 移动端：选择导航项后收起菜单
+    if (window.innerWidth < 1024) {
+      document.querySelector("#sidebarNav")?.classList.add("hidden");
+    }
     if (target === "build-attempts") {
       if (window.location.hash === "#/build-attempts") routeFromHash();
       else window.location.hash = "#/build-attempts";
