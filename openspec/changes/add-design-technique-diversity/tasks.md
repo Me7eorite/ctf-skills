@@ -1,6 +1,6 @@
 ## 1. Shared classification foundation (Layer 1)
 
-- [ ] 1.1 Create `src/domain/design/technique_taxonomy.py` with a **closed `TechniqueFamily`
+- [x] 1.1 Create `src/domain/design/technique_taxonomy.py` with a **closed `TechniqueFamily`
       lane set per category** (mirroring `category-tactics.md`), enumerated in full — not
       "their own lanes":
       - web: `auth | injection | server_side | client_side | upload | node_api | other`
@@ -20,19 +20,19 @@
       mechanical-transform, or chain-folding logic, and MUST NOT import from
       services, web, or `difficulty.py`. It is the single source of truth for
       family/sub-technique normalization.
-- [ ] 1.2 Unit-test `resolve_family`/`resolve_sub_technique`: stored valid value wins;
+- [x] 1.2 Unit-test `resolve_family`/`resolve_sub_technique`: stored valid value wins;
       unknown stored value → `other` + warning; NULL value derives from `label`;
       `blind SQLi`/`second-order SQLi`/`SQLi login bypass` all resolve to family `injection`
       with distinct sub-techniques; `xor`/`XOR`/`xor-decrypt`/`xor decrypt` resolve to one
       sub-technique key; `base64` ≠ `base32`; layered-encoding labels resolve to a stable family.
-- [ ] 1.2a Alias-map conservatism guard: a regression test pins a list of must-stay-distinct
+- [x] 1.2a Alias-map conservatism guard: a regression test pins a list of must-stay-distinct
       technique pairs (e.g. `base64`/`base32`, `xor`/`rc4`, `sqli`/`ssti`, `ret2win`/`ret2libc`,
       `tcache poisoning`/`UAF`) and asserts `resolve_sub_technique` never folds any pinned pair
       to one key. Adding an over-broad alias that collapses a pinned pair MUST fail this test.
-- [ ] 1.3 Render the lane vocabulary into `prompts/research_prompt.md` from
+- [x] 1.3 Render the lane vocabulary into `prompts/research_prompt.md` from
       `technique_taxonomy.py` (injection point analogous to `{worked_example}`), so the
       prompt and the derivation share one definition.
-- [ ] 1.4 Make `category-tactics.md` a checked mirror of the code constants: either a
+- [x] 1.4 Make `category-tactics.md` a checked mirror of the code constants: either a
       generated lane section or a test asserting the doc lane list matches the
       `TechniqueFamily` enum, so the doc cannot silently drift from the authoritative code.
 

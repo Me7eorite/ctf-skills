@@ -26,6 +26,7 @@ Category-specific design seeds, technique lanes, anti-patterns, and container co
 | Client-side | DOM XSS | CSP bypass, postMessage bug | Browser bot chain, XS-leak, cache poisoning | Novel browser side-channel + bot chain + state oracle |
 | Upload/export | Extension bypass | Polyglot upload, PDF renderer file read | Multi-parser upload to RCE | Exotic format chain (archive → template → RCE) requiring stage-wise unwrap |
 | Node/API | Prototype pollution | Sandbox escape in toy evaluator | Pollution to SSRF/RCE chain | Nested pollution through unusual library + delayed gadget |
+| Other | Category-scoped fallback | Category-scoped fallback | Category-scoped fallback | Category-scoped fallback |
 
 ### Design Seeds
 - Customer-support portal where admin review turns stored HTML into a browser-bot challenge.
@@ -67,6 +68,7 @@ Category-specific design seeds, technique lanes, anti-patterns, and container co
 | Integer/OOB | signedness check | OOB read/write primitive | parser-driven object corruption | parser corruption + race-stabilized exploit |
 | Sandbox | restricted shell | syscall filter bypass | VM escape, multi-stage sandbox | nested sandbox + side-channel exfil |
 | Kernel | simple module bug | KASLR leak + kROP | race, cross-cache, namespace constraints | unpatched kernel-style bug with custom mitigations |
+| Other | Category-scoped fallback | Category-scoped fallback | Category-scoped fallback | Category-scoped fallback |
 
 ### Design Seeds
 - Menu service with a clear UAF and deliberate libc leak path.
@@ -109,6 +111,7 @@ Category-specific design seeds, technique lanes, anti-patterns, and container co
 | Language | Python bytecode, .NET | Go/Rust/Swift patterns | packed, obfuscated, mixed runtime | hand-rolled packer + custom loader stub |
 | Platform | WASM, APK basics | JNI, firmware config | embedded, drivers, unusual architecture | undocumented architecture or custom bus |
 | Visual/game | asset extraction | shader/game-state logic | custom format plus solver | game-state machine requiring constraint solver |
+| Other | Category-scoped fallback | Category-scoped fallback | Category-scoped fallback | Category-scoped fallback |
 
 ### Design Seeds
 - Validator that transforms input through reversible position-dependent operations.

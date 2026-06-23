@@ -9,6 +9,7 @@ from pathlib import Path
 
 from core.jsonio import read_json
 from core.paths import ProjectPaths
+from domain.design.technique_taxonomy import render_family_vocabulary
 from domain.research import GenerationRequest
 from domain.resume import ShardResumePlan
 
@@ -316,6 +317,7 @@ def _render_worked_example(category: str) -> str:
             {
                 "kind": "technique",
                 "label": f"Sample technique within {category}",
+                "technique_family": "other",
                 "summary": "Brief 1-3 sentence summary of the technique itself.",
                 "source_indices": [0],
             }
@@ -340,6 +342,7 @@ def render_research_prompt(generation_request: GenerationRequest) -> str:
         "{difficulty_distribution}": _render_difficulty_distribution(generation_request.difficulty_distribution),
         "{runtime_constraints}": _render_runtime_constraints(generation_request.runtime_constraints),
         "{seed_urls}": _render_seed_urls(generation_request.seed_urls),
+        "{technique_family_vocabulary}": render_family_vocabulary(category_code),
         "{worked_example}": _render_worked_example(category_code),
     }
     for placeholder, rendered_value in replacement_map.items():

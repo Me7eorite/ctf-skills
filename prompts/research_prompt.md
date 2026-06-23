@@ -39,7 +39,15 @@ and locate authoritative references via your normal browsing/search tools.
 4. Distill the material into finding entries (`technique`, `variant`,
    `scenario`, `prerequisite`). Every finding MUST cite at least one source
    via `source_indices`.
-5. Do not invent references. If you cannot substantiate a finding, drop it.
+5. For each finding, set `technique_family` to one of the category lanes below.
+   If none fits, use `other`.
+6. Do not invent references. If you cannot substantiate a finding, drop it.
+
+## Technique family vocabulary
+
+Use exactly one of these values for `findings[i].technique_family`:
+
+{technique_family_vocabulary}
 
 ## Output contract
 
@@ -61,6 +69,8 @@ following per-entry schema:
   - `kind` (string, one of `technique`, `variant`, `scenario`,
     `prerequisite`)
   - `label` (string, short noun phrase identifying the finding)
+  - `technique_family` (string, one of the category lanes listed above;
+    use `other` when no lane fits)
   - `summary` (string, 1–3 sentences explaining the finding)
   - `source_indices` (list of integers, length ≥ 1; each integer is a
     0-based index into `sources[]`; the list MUST be non-empty)

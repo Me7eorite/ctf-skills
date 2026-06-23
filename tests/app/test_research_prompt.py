@@ -52,6 +52,7 @@ class RenderResearchPromptTests(unittest.TestCase):
         # 中文注释：确认提示词包含 JSON 输出合同的核心字段。
         self.assertIn("sources", prompt)
         self.assertIn("findings", prompt)
+        self.assertIn("technique_family", prompt)
         self.assertIn("source_indices", prompt)
 
         # 中文注释：确认 source_indices 明确要求非空，并且使用 0-based 索引。
@@ -63,6 +64,7 @@ class RenderResearchPromptTests(unittest.TestCase):
 
         # 中文注释：确认示例使用当前 category，并给出非空 source_indices。
         self.assertIn(f"Sample technique within {category}", prompt)
+        self.assertRegex(prompt, r'"technique_family":\s*"other"')
         self.assertRegex(prompt, r'"source_indices":\s*\[\s*0\s*\]')
 
     def test_renders_seeded_web_category(self):
@@ -79,6 +81,8 @@ class RenderResearchPromptTests(unittest.TestCase):
         self.assertIn("easy=2", prompt)
         self.assertIn("medium=2", prompt)
         self.assertIn("hard=1", prompt)
+        self.assertIn("`injection`", prompt)
+        self.assertIn("`server_side`", prompt)
 
     def test_renders_seeded_re_category(self):
         request = _make_request("re", topic="GLIBC ROP gadget chains")
@@ -86,6 +90,7 @@ class RenderResearchPromptTests(unittest.TestCase):
 
         self._common_assertions(prompt, "re")
         self.assertIn("GLIBC ROP gadget chains", prompt)
+        self.assertIn("`vm_bytecode`", prompt)
 
     def test_renders_dynamic_category_not_hardcoded(self):
         # 中文注释：crypto 不在初始三类中，用它验证提示词不会硬编码 web/pwn/re。
@@ -104,6 +109,7 @@ class RenderResearchPromptTests(unittest.TestCase):
         self.assertNotIn("`web`", prompt)
         self.assertNotIn("`pwn`", prompt)
         self.assertNotIn("`re`", prompt)
+        self.assertIn("`other`", prompt)
 
     def test_empty_seed_urls_renders_placeholder(self):
         request = _make_request("web", seed_urls=())
