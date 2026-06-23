@@ -1270,6 +1270,8 @@ def main() -> None:
                     build_attempt_id=args.build_attempt,
                     require_build_attempt=args.build_attempts_only,
                 )
+            if args.build_attempt and not args.dry_run:
+                _record_execution_outcome(args.build_attempt, args.worker, result)
         print(json.dumps(result, indent=2))
         if result.get("abort_reason") is not None:
             sys.exit(1)

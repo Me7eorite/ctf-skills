@@ -309,6 +309,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
         )
         if not ok:
             raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=message)
+        _assign_queued_attempt_worker(attempt_ids, worker="dashboard-sequential-01")
         return JSONResponse(
             {
                 "ok": True,
@@ -369,6 +370,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
         ok, message = tasks.start_sequential_worker(build_attempt_ids=attempt_ids)
         if not ok:
             raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=message)
+        _assign_queued_attempt_worker(attempt_ids, worker="dashboard-sequential-01")
         return JSONResponse(
             {
                 "ok": True,
@@ -888,6 +890,8 @@ def _start_constrained_worker(
                 attempt_id,
                 worker="dashboard-01",
             )
+        elif attempt is not None and attempt.status == "queued":
+            attempt.worker = "dashboard-01"
     return JSONResponse(
         {
             "ok": True,
@@ -898,6 +902,20 @@ def _start_constrained_worker(
         },
         status_code=HTTPStatus.ACCEPTED,
     )
+
+
+def _assign_queued_attempt_worker(attempt_ids: list[UUID], *, worker: str) -> None:
+    from persistence.session import transaction
+
+    with transaction() as session:
+        rows = session.scalars(
+            sa.select(build_model.BuildAttempt)
+            .where(build_model.BuildAttempt.id.in_(attempt_ids))
+            .with_for_update()
+        ).all()
+        for row in rows:
+            if row.status == "queued":
+                row.worker = worker
 
 
 def _effective_timeout_for_attempt(paths, attempt_id: UUID) -> tuple[int, str]:

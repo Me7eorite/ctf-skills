@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -149,6 +150,7 @@ def test_mark_attempt_running_claims_queued_execution(session_factory, monkeypat
         assert row.lease_expires_at is not None
         container = session.get(build_model.BuildAttempt, attempt_id)
         assert container.status == "running"
+        assert container.worker == "worker-1"
         assert container.current_execution_id == execution_id
         assert container.latest_execution_id == execution_id
 
@@ -177,6 +179,46 @@ def test_records_failed_outcome_with_error(session_factory, monkeypatch):
         assert row.error == "docker build failed"
         container = session.get(build_model.BuildAttempt, attempt_id)
         assert container.status == "failed"
+
+
+def test_recorded_failed_outcome_is_not_reaped_to_lost(session_factory, monkeypatch):
+    monkeypatch.setenv("EXECUTION_MINTING", "1")
+    with session_factory() as session:
+        attempt_id, execution_id = _seed_scheduled(session)
+        session.commit()
+
+    cli._mark_attempt_running(
+        attempt_id,
+        "worker-1",
+        session_factory=session_factory,
+    )
+    cli._record_execution_outcome(
+        attempt_id,
+        "worker-1",
+        {
+            "processed": 1,
+            "failed": 1,
+            "outcomes": [
+                {"error": "re-3ce05a7b-0013: contract_failed (implement evidence incomplete)"}
+            ],
+        },
+        session_factory=session_factory,
+    )
+
+    with session_factory() as session:
+        reaped = ExecutionsRepository(session).reap_expired(
+            now=datetime.now(timezone.utc) + timedelta(hours=1)
+        )
+        session.commit()
+
+    assert reaped == []
+    with session_factory() as session:
+        row = session.get(exec_model.Execution, execution_id)
+        container = session.get(build_model.BuildAttempt, attempt_id)
+        assert row.status == "failed"
+        assert row.error == "re-3ce05a7b-0013: contract_failed (implement evidence incomplete)"
+        assert container.status == "failed"
+        assert container.current_execution_id is None
 
 
 def test_noop_when_flag_disabled(session_factory, monkeypatch):

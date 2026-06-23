@@ -136,6 +136,7 @@ def test_schedule_claim_and_terminal_lifecycle(session_factory: SessionFactory):
         session.refresh(container)
         assert container.current_execution_id == e1.id
         assert container.status == "running"
+        assert container.worker == "w1"
         assert container.started_at is not None
 
         repo.update_to_running(e1.id, claim_token=token)
@@ -185,6 +186,7 @@ def test_retry_appends_iteration_under_same_container(
         session.refresh(container)
         assert container.latest_execution_id == e2.id
         assert container.status == "queued"
+        assert container.worker is None
         assert container.finished_at is None
 
 

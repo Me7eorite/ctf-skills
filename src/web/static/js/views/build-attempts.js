@@ -10,7 +10,8 @@ import {
   softPill,
 } from "../ui/format.js";
 
-const ACTIVE_POLL_MS = 2500;
+const ACTIVE_POLL_MS = 1000;
+const START_REFRESH_MS = 300;
 const SETTLED_POLL_MS = 12000;
 const STATUSES = ["queued", "running", "succeeded", "failed", "lost"];
 const CATEGORIES = ["web", "pwn", "re"];
@@ -152,6 +153,10 @@ async function startBuildWorker() {
         last_message: result.message,
       },
     };
+    state.detail = null;
+    state.list = null;
+    await ensureDetail(state.detailId);
+    schedulePoll(START_REFRESH_MS);
   } catch (err) {
     showToast(err.message, true);
   }
@@ -169,6 +174,7 @@ async function startCurrentQueue() {
     state.selection.clear();
     state.list = null;
     await ensureList();
+    schedulePoll(START_REFRESH_MS);
   } catch (err) {
     showToast(err.message, true);
   }
@@ -193,6 +199,7 @@ async function startSelectedQueue() {
     state.selection.clear();
     state.list = null;
     await ensureList();
+    schedulePoll(START_REFRESH_MS);
   } catch (err) {
     showToast(err.message, true);
   }

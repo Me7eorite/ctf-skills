@@ -545,6 +545,13 @@ def test_sequential_worker_preserves_requested_attempt_order(
     assert response.json()["build_attempt_ids"] == [str(second.id), str(first.id)]
     assert response.json()["queue_length"] == 2
     assert tasks.calls == [("sequence", second.id), ("sequence", first.id)]
+    with session_factory() as session:
+        first_row = session.get(build_model.BuildAttempt, first.id)
+        second_row = session.get(build_model.BuildAttempt, second.id)
+        assert first_row.status == "queued"
+        assert second_row.status == "queued"
+        assert first_row.worker == "dashboard-sequential-01"
+        assert second_row.worker == "dashboard-sequential-01"
 
 
 def test_queue_start_runs_all_eligible_attempts_in_created_order(
@@ -779,6 +786,7 @@ def test_exact_worker_start_leaves_execution_backed_attempt_queued_until_cli_cla
         attempt_row = session.get(build_model.BuildAttempt, attempt.id)
         execution_row = session.get(exec_model.Execution, execution.id)
         assert attempt_row.status == "queued"
+        assert attempt_row.worker == "dashboard-01"
         assert attempt_row.latest_execution_id == execution.id
         assert execution_row.status == "queued"
         assert execution_row.worker_id is None

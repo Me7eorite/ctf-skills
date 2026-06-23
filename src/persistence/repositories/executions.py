@@ -98,6 +98,7 @@ class ExecutionsRepository:
         # Scheduling only advances `latest`; current stays null until claim.
         container.latest_execution_id = row.id
         container.status = "queued"
+        container.worker = None
         container.finished_at = None
         container.error = None
         self.session.flush()
@@ -140,6 +141,7 @@ class ExecutionsRepository:
         row.status = "claimed"
         if container.started_at is None:
             container.started_at = moment
+        container.worker = worker_id
         container.current_execution_id = row.id
         container.latest_execution_id = row.id
         container.status = "running"
