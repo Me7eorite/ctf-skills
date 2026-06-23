@@ -121,6 +121,15 @@ live under `tests/skills/`. `pyproject.toml` configures pytest with
   `GET /api/build-attempts` when the request omits `limit`.
 - `BUILD_ATTEMPTS_LIST_MAX_LIMIT=500`: maximum accepted build-attempt list
   limit; larger requests are capped and return `X-Limit-Capped`.
+- `RESEARCH_FAMILY_OTHER_WARN_RATIO=0.30`: research report threshold for a
+  neutral warning when derived/stored `technique_family=other` exceeds the
+  ratio.
+- `generation-profiles.json` per-category `technique_quota`: soft cap for how
+  many generated design tasks should use the same technique family before the
+  planner records `family_quota_exceeded`.
+- `generation-profiles.json` per-category `cooldown_window`: family cooldown
+  window used by the greedy design-task planner before it relaxes to the next
+  stable fallback.
 
 ## Areas with known churn (good change-proposal candidates)
 

@@ -59,3 +59,4 @@ class DesignTask:
     created_at: datetime
     updated_at: datetime
     diversity_flags: Mapping[str, Any] | None = None  # 技术多样性标记
+    plan_reviewed_at: datetime | None = None  # 规划审核时间；None 表示未审核或旧数据

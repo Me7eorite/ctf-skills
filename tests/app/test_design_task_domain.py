@@ -136,10 +136,20 @@ def test_validate_candidate_set_rejects_non_consecutive_task_no():
 
 @pytest.mark.parametrize(
     "current,target",
-    [("draft", "queued"), ("draft", "archived"), ("queued", "archived")],
+    [("draft", "archived"), ("queued", "archived")],
 )
 def test_validate_status_transition_allows_planning_paths(current, target):
     validate_status_transition(current, target)
+
+
+def test_validate_status_transition_allows_reviewed_or_exempt_queue():
+    validate_status_transition("draft", "queued", plan_reviewed_at=object())
+    validate_status_transition("draft", "queued", review_exempt=True)
+
+
+def test_validate_status_transition_rejects_unreviewed_queue():
+    with pytest.raises(DesignTaskValidationError, match="plan_not_reviewed"):
+        validate_status_transition("draft", "queued")
 
 
 @pytest.mark.parametrize(

@@ -1032,6 +1032,55 @@ def _register_design_task_endpoints(app: FastAPI) -> None:
             status_code=HTTPStatus.CREATED,
         )
 
+    @app.post("/api/research/requests/{request_id}/design-tasks/approve")
+    def approve_design_plan(request_id: str) -> JSONResponse:
+        from services import DesignTaskPlanningService
+
+        request_uuid = _request_uuid_or_404(request_id)
+        try:
+            tasks = DesignTaskPlanningService().approve_plan(request_uuid)
+        except DesignTaskValidationError as exc:
+            raise HTTPException(status_code=_design_task_error_status(exc), detail=str(exc)) from exc
+        return JSONResponse(
+            {
+                "request_id": str(request_uuid),
+                "approved_task_ids": [str(task.id) for task in tasks],
+                "total": len(tasks),
+            }
+        )
+
+    @app.post("/api/research/requests/{request_id}/design-tasks/regenerate")
+    def regenerate_design_plan(request_id: str) -> JSONResponse:
+        from services import DesignTaskPlanningService
+
+        request_uuid = _request_uuid_or_404(request_id)
+        try:
+            tasks = DesignTaskPlanningService().regenerate_plan(request_uuid)
+        except DesignTaskValidationError as exc:
+            raise HTTPException(status_code=_design_task_error_status(exc), detail=str(exc)) from exc
+        return JSONResponse(
+            {
+                "request_id": str(request_uuid),
+                "design_task_ids": [str(task.id) for task in tasks],
+                "total": len(tasks),
+            }
+        )
+
+    @app.post("/api/research/requests/{request_id}/design-tasks/{task_no}/regenerate")
+    def regenerate_one_design_task(request_id: str, task_no: int) -> JSONResponse:
+        from services import DesignTaskPlanningService
+
+        request_uuid = _request_uuid_or_404(request_id)
+        try:
+            result = DesignTaskPlanningService().regenerate_task(request_uuid, task_no)
+        except DesignTaskValidationError as exc:
+            raise HTTPException(status_code=_design_task_error_status(exc), detail=str(exc)) from exc
+        body = dict(result)
+        task = body.get("task")
+        if isinstance(task, design_dto.DesignTask):
+            body["task"] = _design_task_dict(task)
+        return JSONResponse(body)
+
     @app.post("/api/design-tasks/{task_id}/queue")
     def queue_design_task(task_id: str) -> JSONResponse:
         return _transition_design_task(task_id, "queued")
@@ -1150,6 +1199,20 @@ def _transition_design_task(task_id: str, target_status: str) -> JSONResponse:
     return JSONResponse(_design_task_dict(updated))
 
 
+def _request_uuid_or_404(request_id: str) -> UUID:
+    try:
+        return UUID(request_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail="request not found",
+        ) from exc
+
+
+def _design_task_error_status(exc: DesignTaskValidationError) -> HTTPStatus:
+    return HTTPStatus.NOT_FOUND if "does not exist" in str(exc) else HTTPStatus.CONFLICT
+
+
 def _project_paths(app: FastAPI):
     from core.paths import ProjectPaths
 
@@ -1180,6 +1243,7 @@ def _design_task_dict(
         "evidence_summary": task.evidence_summary,
         "finding_ids": [str(fid) for fid in task.finding_ids],
         "diversity_flags": dict(task.diversity_flags) if task.diversity_flags else None,
+        "plan_reviewed_at": _isofmt(task.plan_reviewed_at),
         "status": task.status,
         "created_at": _isofmt(task.created_at),
         "updated_at": _isofmt(task.updated_at),

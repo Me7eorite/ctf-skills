@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -96,6 +97,7 @@ class DesignTask(Base):
         server_default=sa.text("'[]'::jsonb"),
     )
     diversity_flags: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    plan_reviewed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     next_build_attempt_no: Mapped[int] = mapped_column(
         sa.Integer(),
         nullable=False,

@@ -23,8 +23,11 @@ import math
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, Literal
 from uuid import UUID
+
+import sqlalchemy as sa
 
 from core.jsonio import read_json
 from core.paths import ProjectPaths
@@ -36,6 +39,7 @@ from domain.research_validators import (
     _quality_ratio,
     _quality_soft_pass_slack,
 )
+from persistence.models import design_tasks as design_model
 from persistence.repositories import DesignTaskRepository, ResearchRepository
 from persistence.session import SessionFactory, transaction
 from services.design_planner_hermes import HermesPlannerService, PlannerEnrichment
@@ -137,6 +141,145 @@ class DesignTaskPlanningService:
                 difficulty_distribution=request.difficulty_distribution,
                 candidates=candidates,
             )
+
+    def approve_plan(self, request_id: UUID) -> list[dto.DesignTask]:
+        """Stamp all current draft tasks as reviewed under the parent request lock."""
+        with transaction(factory=self.session_factory) as session:
+            research_repo = ResearchRepository(session)
+            request = research_repo.get_generation_request(request_id)
+            if request is None:
+                raise DesignTaskValidationError(f"generation_request {request_id} does not exist")
+            research_repo.lock_generation_request(request_id)
+            rows = _locked_task_rows(session, request_id)
+            if not rows:
+                raise DesignTaskValidationError("no design tasks to approve")
+            for row in rows:
+                if row.status != "draft":
+                    raise DesignTaskValidationError("plan approval requires all tasks to be draft")
+            now = _utcnow()
+            for row in rows:
+                row.plan_reviewed_at = now
+                row.updated_at = now
+            session.flush()
+            return [_row_to_dto(row) for row in rows]
+
+    def regenerate_plan(self, request_id: UUID) -> list[dto.DesignTask]:
+        """Regenerate the whole draft plan and clear review markers on new rows."""
+        return self.generate_for_request(request_id)
+
+    def regenerate_task(self, request_id: UUID, task_no: int) -> dict[str, Any]:
+        """Regenerate one draft task slot, or return a typed no-op outcome."""
+        if task_no <= 0:
+            raise DesignTaskValidationError("task_no must be positive")
+        with transaction(factory=self.session_factory) as session:
+            research_repo = ResearchRepository(session)
+            request = research_repo.get_generation_request(request_id)
+            if request is None:
+                raise DesignTaskValidationError(f"generation_request {request_id} does not exist")
+            research_repo.lock_generation_request(request_id)
+            rows = _locked_task_rows(session, request_id)
+            if not rows:
+                raise DesignTaskValidationError("no design tasks to regenerate")
+            if any(row.status not in {"draft", "archived"} for row in rows):
+                raise DesignTaskValidationError("cannot regenerate after queue release")
+            current = next((row for row in rows if row.task_no == task_no), None)
+            if current is None:
+                raise DesignTaskValidationError(f"task_no {task_no} does not exist")
+
+            latest = research_repo.get_latest_completed_run_for_request(request_id)
+            if latest is None:
+                raise DesignTaskValidationError("latest_run_not_completed")
+            findings = research_repo.list_findings(latest.id)
+            if not findings:
+                raise DesignTaskValidationError("insufficient_findings")
+
+            profile = _diversity_profile(request.category, request.target_count, findings)
+            sibling_flags = [
+                row.diversity_flags or {}
+                for row in rows
+                if row.task_no != task_no and row.status in {"draft", "archived"}
+            ]
+            sibling_subtechniques = {
+                str(flags.get("sub_technique"))
+                for flags in sibling_flags
+                if flags.get("sub_technique")
+            }
+            sibling_family_counts: Counter[str] = Counter(
+                str(flags.get("family"))
+                for flags in sibling_flags
+                if flags.get("family")
+            )
+            current_flags = current.diversity_flags or {}
+            current_pair = (
+                str(
+                    current_flags.get("family")
+                    or resolve_family({"label": current.primary_technique}, category=request.category)
+                ),
+                str(
+                    current_flags.get("sub_technique")
+                    or resolve_sub_technique({"label": current.primary_technique})
+                ),
+            )
+
+            metadata = [
+                (
+                    idx,
+                    resolve_family(finding, category=request.category),
+                    resolve_sub_technique(finding),
+                )
+                for idx, finding in enumerate(findings)
+            ]
+            distinct_other_than_current = [
+                item for item in metadata if (item[1], item[2]) != current_pair
+            ]
+            if not distinct_other_than_current:
+                return {
+                    "outcome": "no_alternative",
+                    "reason": "research_diversity_insufficient",
+                    "task": _row_to_dto(current),
+                }
+            sibling_avoiding = [
+                item for item in distinct_other_than_current if item[2] not in sibling_subtechniques
+            ]
+            if not sibling_avoiding:
+                return {
+                    "outcome": "no_alternative",
+                    "reason": "subtechnique_exhausted",
+                    "task": _row_to_dto(current),
+                }
+
+            within_family = [
+                item for item in sibling_avoiding if sibling_family_counts[item[1]] < profile.technique_quota
+            ]
+            chosen_idx, family, sub_technique = (within_family or sibling_avoiding)[0]
+            warnings: list[str] = []
+            outcome: Literal["regenerated", "regenerated_with_warning"] = "regenerated"
+            if not within_family:
+                warnings.append(DIVERSITY_WARNING_FAMILY_QUOTA)
+                outcome = "regenerated_with_warning"
+            if family == "other":
+                warnings.append(DIVERSITY_WARNING_FAMILY_OTHER)
+            candidate = _candidate_for_slot(
+                request=request,
+                run=latest,
+                task_no=current.task_no,
+                difficulty=current.difficulty,
+                primary_index=chosen_idx,
+                findings=findings,
+                diversity_flags={
+                    "family": family,
+                    "sub_technique": sub_technique,
+                    "warnings": warnings,
+                },
+                avoid_techniques=sibling_subtechniques,
+                hermes_planner=self.hermes_planner,
+            )
+            _apply_candidate_to_row(current, candidate)
+            current.plan_reviewed_at = None
+            current.updated_at = _utcnow()
+            session.flush()
+            session.refresh(current)
+            return {"outcome": outcome, "task": _row_to_dto(current)}
 
 
 def validate_finding_provenance(
@@ -311,6 +454,118 @@ def _apply_planner_enrichment(
     )
     if enrichment.novelty_seed:
         candidate["constraints"]["_novelty_seed"] = enrichment.novelty_seed
+
+
+def _candidate_for_slot(
+    *,
+    request: research_dto.GenerationRequest,
+    run: research_dto.ResearchRun,
+    task_no: int,
+    difficulty: str,
+    primary_index: int,
+    findings: Sequence[research_dto.ResearchFinding],
+    diversity_flags: Mapping[str, Any],
+    avoid_techniques: Iterable[str] = (),
+    hermes_planner: HermesPlannerService | None = None,
+) -> dict[str, Any]:
+    category = request.category
+    task_findings = _findings_for_task(difficulty, findings, primary_index)
+    primary = task_findings[0]
+    secondaries = task_findings[1:]
+    candidate: dict[str, Any] = {
+        "task_no": task_no,
+        "challenge_id": _challenge_id(category, request.id, task_no),
+        "title": _title(request.topic, primary, task_no),
+        "category": category,
+        "difficulty": difficulty,
+        "primary_technique": primary.label,
+        "learning_objective": (
+            f"Reproduce {primary.label} on a {category} target "
+            f"derived from research run {run.attempt}."
+        ),
+        "points": DEFAULT_POINTS.get(difficulty, 100),
+        "port": _port_for(category, task_no),
+        "scenario": _scenario_for(category, difficulty, task_findings),
+        "constraints": dict(request.runtime_constraints or {}),
+        "evidence_summary": _evidence_summary(run, request.topic, task_findings),
+        "finding_ids": [f.id for f in task_findings],
+        "diversity_flags": dict(diversity_flags),
+    }
+    if hermes_planner is not None and difficulty in {"hard", "expert"}:
+        enrichment = hermes_planner.plan(
+            category=category,
+            difficulty=difficulty,
+            topic=request.topic,
+            primary=primary,
+            secondaries=secondaries,
+            avoid_techniques=sorted(str(item) for item in avoid_techniques),
+        )
+        if enrichment is not None:
+            _apply_planner_enrichment(candidate, enrichment)
+        else:
+            candidate["constraints"]["_planner_source"] = "template_fallback"
+    return candidate
+
+
+def _apply_candidate_to_row(row: design_model.DesignTask, candidate: Mapping[str, Any]) -> None:
+    row.challenge_id = str(candidate["challenge_id"])
+    row.title = str(candidate["title"])
+    row.category = str(candidate["category"])
+    row.difficulty = str(candidate["difficulty"])
+    row.primary_technique = str(candidate["primary_technique"])
+    row.learning_objective = str(candidate["learning_objective"])
+    row.points = int(candidate["points"])
+    row.port = candidate.get("port")
+    row.scenario = str(candidate.get("scenario", ""))
+    row.constraints = dict(candidate.get("constraints") or {})
+    row.evidence_summary = str(candidate.get("evidence_summary", ""))
+    row.finding_ids = [str(fid) for fid in candidate.get("finding_ids") or ()]
+    row.diversity_flags = (
+        dict(candidate["diversity_flags"])
+        if candidate.get("diversity_flags") is not None
+        else None
+    )
+
+
+def _locked_task_rows(session, request_id: UUID) -> list[design_model.DesignTask]:
+    return list(
+        session.scalars(
+            sa.select(design_model.DesignTask)
+            .where(design_model.DesignTask.generation_request_id == request_id)
+            .order_by(design_model.DesignTask.task_no)
+            .with_for_update()
+        ).all()
+    )
+
+
+def _row_to_dto(row: design_model.DesignTask) -> dto.DesignTask:
+    return dto.DesignTask(
+        id=row.id,
+        generation_request_id=row.generation_request_id,
+        research_run_id=row.research_run_id,
+        task_no=row.task_no,
+        challenge_id=row.challenge_id,
+        title=row.title,
+        category=row.category,
+        difficulty=row.difficulty,
+        primary_technique=row.primary_technique,
+        learning_objective=row.learning_objective,
+        points=row.points,
+        port=row.port,
+        scenario=row.scenario,
+        constraints=dict(row.constraints),
+        evidence_summary=row.evidence_summary,
+        finding_ids=tuple(UUID(str(fid)) for fid in row.finding_ids),
+        status=row.status,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        diversity_flags=(dict(row.diversity_flags) if row.diversity_flags is not None else None),
+        plan_reviewed_at=row.plan_reviewed_at,
+    )
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def _findings_for_task(

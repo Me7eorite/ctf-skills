@@ -159,7 +159,13 @@ def validate_candidate_set(
         )
 
 
-def validate_status_transition(current: str, target: str) -> None:
+def validate_status_transition(
+    current: str,
+    target: str,
+    *,
+    plan_reviewed_at=None,
+    review_exempt: bool = False,
+) -> None:
     """校验设计任务的状态转换是否合法。
 
     当前版本只允许操作者（operator）的状态转换:
@@ -190,3 +196,5 @@ def validate_status_transition(current: str, target: str) -> None:
             f"transition {current!r} -> {target!r} is not allowed by the "
             "planning endpoint"
         )
+    if current == "draft" and target == "queued" and plan_reviewed_at is None and not review_exempt:
+        raise DesignTaskValidationError("plan_not_reviewed")

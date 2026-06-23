@@ -166,6 +166,82 @@ async function reloadDetail() {
   if (state.detailId) await ensureDetail(state.detailId);
 }
 
+function scopedRequestId() {
+  return state.filters.generation_request_id?.trim() || "";
+}
+
+async function approvePlan() {
+  const requestId = scopedRequestId();
+  if (!requestId) return;
+  state.flags.planAction = "approve";
+  render(state.data);
+  initIcons();
+  try {
+    const result = await postJson(`/api/research/requests/${requestId}/design-tasks/approve`, {});
+    state.flags.researchDiversityInsufficient = false;
+    showToast(`方案已确认 · ${result.total} 个任务`);
+    await reloadList();
+  } catch (err) {
+    showToast(designErrorMessage(err.message), true);
+  } finally {
+    state.flags.planAction = null;
+    render(state.data);
+    initIcons();
+  }
+}
+
+async function regeneratePlan() {
+  const requestId = scopedRequestId();
+  if (!requestId) return;
+  state.flags.planAction = "regenerate-all";
+  render(state.data);
+  initIcons();
+  try {
+    const result = await postJson(`/api/research/requests/${requestId}/design-tasks/regenerate`, {});
+    state.selected.clear();
+    state.flags.researchDiversityInsufficient = false;
+    showToast(`已重新生成方案 · ${result.total} 个任务`);
+    await reloadList();
+  } catch (err) {
+    showToast(designErrorMessage(err.message), true);
+  } finally {
+    state.flags.planAction = null;
+    render(state.data);
+    initIcons();
+  }
+}
+
+async function regenerateOneTask(taskNo) {
+  const requestId = scopedRequestId();
+  if (!requestId || !taskNo) return;
+  state.flags.regeneratingTask = { ...(state.flags.regeneratingTask || {}), [taskNo]: true };
+  render(state.data);
+  initIcons();
+  try {
+    const result = await postJson(`/api/research/requests/${requestId}/design-tasks/${taskNo}/regenerate`, {});
+    if (result.outcome === "no_alternative") {
+      state.flags.researchDiversityInsufficient = result.reason === "research_diversity_insufficient";
+      const message = result.reason === "research_diversity_insufficient"
+        ? "研究多样性不足，建议重新运行研究"
+        : "该槽位暂无可避开兄弟技术的替代方案";
+      showToast(message, true);
+    } else {
+      state.flags.researchDiversityInsufficient = false;
+      const warning = result.outcome === "regenerated_with_warning"
+        ? "，但已触达 family 配额"
+        : "";
+      showToast(`任务 ${taskNo} 已重新生成${warning}`);
+    }
+    await reloadList();
+  } catch (err) {
+    showToast(designErrorMessage(err.message), true);
+  } finally {
+    state.flags.regeneratingTask = { ...(state.flags.regeneratingTask || {}), [taskNo]: false };
+    render(state.data);
+    initIcons();
+  }
+}
+
 async function transitionTask(taskId, action) {
   try {
     await postJson(`/api/design-tasks/${taskId}/${action}`, {});
@@ -334,6 +410,7 @@ function renderList(root) {
     </div>
 
     ${renderBuildReadinessWarning()}
+    ${renderResearchDiversityHint()}
 
     ${state.filters.generation_request_id ? `
       <div class="dt-context-banner">
@@ -351,6 +428,8 @@ function renderList(root) {
       ${renderStageMetric("可构建", counts.readyBuild, "hammer", "success")}
       ${renderStageMetric("失败", counts.failed, "triangle-alert", "danger")}
     </div>
+
+    ${renderPlanMatrix(rows)}
 
     <section class="card dt-list-card">
       <div class="filter-bar filter-bar-vertical-sm dt-filters">
@@ -392,6 +471,99 @@ function renderList(root) {
         </div>
       </div>
     ` : ""}
+  `;
+}
+
+function renderPlanMatrix(rows) {
+  const requestId = scopedRequestId();
+  if (!requestId || !rows.length) return "";
+  const canMutatePlan = rows.every((task) => ["draft", "archived"].includes(task.status));
+  const canApprove = rows.length && rows.every((task) => task.status === "draft");
+  const planAction = state.flags.planAction;
+  return `
+    <section class="card dt-plan-card">
+      <div class="dt-plan-header">
+        <div>
+          <h3>计划矩阵</h3>
+          <p>按后端计算的 family 与 sub_technique 检查题型分布。</p>
+        </div>
+        <div class="btn-group">
+          <button class="btn btn-secondary btn-sm dt-approve-plan${planAction === "approve" ? " btn-loading" : ""}"${!canApprove || planAction ? " disabled" : ""}>
+            <i data-lucide="check-circle-2"></i>确认方案
+          </button>
+          <button class="btn btn-ghost btn-sm dt-regenerate-plan${planAction === "regenerate-all" ? " btn-loading" : ""}"${!canMutatePlan || planAction ? " disabled" : ""}>
+            <i data-lucide="refresh-cw"></i>重新生成
+          </button>
+        </div>
+      </div>
+      <div class="table-container dt-plan-table-wrap">
+        <table class="table dt-plan-table">
+          <thead>
+            <tr>
+              <th>任务</th>
+              <th>难度</th>
+              <th>Family</th>
+              <th>Sub technique</th>
+              <th>Scenario seed</th>
+              <th><span class="sr-only">操作</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((task) => renderPlanMatrixRow(task, canMutatePlan)).join("")}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
+function renderPlanMatrixRow(task, canMutatePlan) {
+  const flags = task.diversity_flags || {};
+  const warnings = new Set(flags.warnings || []);
+  const warningClass = warnings.has("subtechnique_duplicate")
+    ? "dt-plan-error"
+    : warnings.has("family_quota_exceeded")
+      ? "dt-plan-warning"
+      : "";
+  const warningText = [...warnings].map(diversityWarningLabel).filter(Boolean).join(" / ");
+  const taskNo = Number(task.task_no);
+  const regenerating = !!state.flags.regeneratingTask?.[taskNo];
+  return `
+    <tr class="${warningClass}" data-design-task-id="${escapeHtml(task.id)}" data-task-no="${escapeHtml(task.task_no)}">
+      <td><button class="dt-task-link dt-open-detail">任务 ${escapeHtml(task.task_no)}</button></td>
+      <td>${escapeHtml(difficultyLabel(task.difficulty))}</td>
+      <td>${escapeHtml(flags.family || "未计算")}</td>
+      <td>
+        <div class="dt-plan-subtech">${escapeHtml(flags.sub_technique || "未计算")}</div>
+        ${warningText ? `<div class="dt-plan-warning-text">${escapeHtml(warningText)}</div>` : ""}
+      </td>
+      <td><div class="dt-plan-scenario" title="${escapeHtml(task.scenario || "")}">${escapeHtml(task.scenario || "未设置")}</div></td>
+      <td class="dt-row-actions">
+        <button class="btn btn-ghost btn-xs dt-regenerate-task${regenerating ? " btn-loading" : ""}"${!canMutatePlan || regenerating ? " disabled" : ""}>
+          <i data-lucide="shuffle"></i>换一个
+        </button>
+      </td>
+    </tr>
+  `;
+}
+
+function diversityWarningLabel(warning) {
+  if (warning === "family_quota_exceeded") return "family 配额超出";
+  if (warning === "subtechnique_duplicate") return "sub-technique 重复";
+  if (warning === "family_other") return "family=other";
+  return warning;
+}
+
+function renderResearchDiversityHint() {
+  if (!state.flags.researchDiversityInsufficient) return "";
+  return `
+    <div class="dt-readiness-banner dt-diversity-hint">
+      <i data-lucide="search-x"></i>
+      <div>
+        <strong>研究多样性不足</strong>
+        <span>单任务重新生成没有找到不同技术线索，建议回到研究需求重新运行研究。</span>
+      </div>
+    </div>
   `;
 }
 
@@ -828,9 +1000,21 @@ export function bind() {
       render(state.data);
       return;
     }
+    if (event.target.closest(".dt-approve-plan")) {
+      approvePlan();
+      return;
+    }
+    if (event.target.closest(".dt-regenerate-plan")) {
+      regeneratePlan();
+      return;
+    }
 
     const row = event.target.closest("[data-design-task-id]");
     const taskId = row?.dataset.designTaskId || state.detailId;
+    if (event.target.closest(".dt-regenerate-task")) {
+      regenerateOneTask(Number(row?.dataset.taskNo));
+      return;
+    }
     if (event.target.closest(".dt-open-request")) {
       const task = state.detail || (state.list || []).find((item) => item.id === taskId);
       if (task?.generation_request_id) openRequest(task.generation_request_id);

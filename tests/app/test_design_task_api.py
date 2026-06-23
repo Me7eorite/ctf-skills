@@ -245,6 +245,77 @@ class GenerateDesignTasksTests(unittest.TestCase):
             self.assertEqual(resp.status_code, 404)
 
 
+class PlanReviewEndpointTests(unittest.TestCase):
+    def test_approve_returns_approved_ids(self):
+        request_id = uuid4()
+        task = _make_design_task(request_id=request_id)
+        planner = SimpleNamespace(approve_plan=lambda _id: [task])
+
+        with _app_client(planning_service=planner) as client:
+            resp = client.post(f"/api/research/requests/{request_id}/design-tasks/approve")
+
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        self.assertEqual(payload["request_id"], str(request_id))
+        self.assertEqual(payload["approved_task_ids"], [str(task.id)])
+        self.assertEqual(payload["total"], 1)
+
+    def test_regenerate_all_returns_new_ids(self):
+        request_id = uuid4()
+        task = _make_design_task(request_id=request_id)
+        planner = SimpleNamespace(regenerate_plan=lambda _id: [task])
+
+        with _app_client(planning_service=planner) as client:
+            resp = client.post(f"/api/research/requests/{request_id}/design-tasks/regenerate")
+
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        self.assertEqual(payload["design_task_ids"], [str(task.id)])
+        self.assertEqual(payload["total"], 1)
+
+    def test_regenerate_one_returns_outcome_and_task(self):
+        request_id = uuid4()
+        task = _make_design_task(
+            request_id=request_id,
+            diversity_flags={
+                "family": "injection",
+                "sub_technique": "blind sqli",
+                "warnings": ["family_quota_exceeded"],
+            },
+        )
+        planner = SimpleNamespace(
+            regenerate_task=lambda _id, _task_no: {
+                "outcome": "regenerated_with_warning",
+                "task": task,
+            }
+        )
+
+        with _app_client(planning_service=planner) as client:
+            resp = client.post(
+                f"/api/research/requests/{request_id}/design-tasks/1/regenerate"
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        self.assertEqual(payload["outcome"], "regenerated_with_warning")
+        self.assertEqual(payload["task"]["id"], str(task.id))
+        self.assertEqual(payload["task"]["diversity_flags"]["family"], "injection")
+
+    def test_plan_endpoint_validation_conflict(self):
+        request_id = uuid4()
+
+        def _blocked(_id):
+            raise DesignTaskValidationError("plan approval requires all tasks to be draft")
+
+        planner = SimpleNamespace(approve_plan=_blocked)
+
+        with _app_client(planning_service=planner) as client:
+            resp = client.post(f"/api/research/requests/{request_id}/design-tasks/approve")
+
+        self.assertEqual(resp.status_code, 409)
+        self.assertIn("requires all tasks", resp.json()["detail"])
+
+
 class QueueAndArchiveTests(unittest.TestCase):
     def test_queue_transitions_status(self):
         task_id = uuid4()

@@ -206,6 +206,7 @@ class DesignTaskRepository:
                     if candidate.get("diversity_flags") is not None
                     else None
                 ),
+                plan_reviewed_at=None,
                 status="draft",
                 updated_at=now,
             )
@@ -227,7 +228,12 @@ class DesignTaskRepository:
         row = self.session.get(model.DesignTask, task_id)
         if row is None:
             raise DesignTaskValidationError(f"design task {task_id} does not exist")
-        validate_status_transition(row.status, status)
+        validate_status_transition(
+            row.status,
+            status,
+            plan_reviewed_at=row.plan_reviewed_at,
+            review_exempt=(row.diversity_flags is None),
+        )
         row.status = status
         row.updated_at = _utcnow()
         self.session.flush()
@@ -263,6 +269,7 @@ def _design_task(row: model.DesignTask) -> dto.DesignTask:
         status=row.status,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        plan_reviewed_at=row.plan_reviewed_at,
     )
 
 

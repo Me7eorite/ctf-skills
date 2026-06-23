@@ -81,8 +81,12 @@ def _seed(
     distribution=None,
     category: str = "web",
     finished: bool = True,
+    finding_labels: list[str] | None = None,
+    technique_families: list[str | None] | None = None,
 ):
     distribution = distribution or {"easy": 1, "medium": 2}
+    finding_labels = finding_labels or ["technique-0", "technique-1"]
+    technique_families = technique_families or [None] * len(finding_labels)
     service = ResearchJobService(session_factory)
     request, run = service.submit_request(
         category=category,
@@ -104,14 +108,17 @@ def _seed(
                     fetched_at=datetime.now(timezone.utc),
                 )
             )
-        for index in range(2):
+        for index, label in enumerate(finding_labels):
             session.add(
                 model.ResearchFinding(
                     id=uuid4(),
                     research_run_id=run.id,
                     kind="technique",
-                    label=f"technique-{index}",
+                    label=label,
                     summary=f"summary {index}",
+                    technique_family=technique_families[index]
+                    if index < len(technique_families)
+                    else None,
                 )
             )
         if finished:
@@ -207,7 +214,8 @@ def test_generate_can_replace_draft_tasks(session_factory: SessionFactory):
 def test_generate_blocked_when_any_task_queued(session_factory: SessionFactory):
     request, _ = _seed(session_factory, target_count=2, distribution={"easy": 1, "medium": 1})
     service = DesignTaskPlanningService(session_factory)
-    initial = service.generate_for_request(request.id)
+    service.generate_for_request(request.id)
+    initial = service.approve_plan(request.id)
 
     session = session_factory()
     try:
@@ -218,6 +226,189 @@ def test_generate_blocked_when_any_task_queued(session_factory: SessionFactory):
 
     with pytest.raises(DesignTaskValidationError, match="cannot regenerate"):
         service.generate_for_request(request.id)
+
+
+def test_unreviewed_draft_cannot_queue_then_approve_allows_queue(
+    session_factory: SessionFactory,
+):
+    request, _ = _seed(
+        session_factory,
+        target_count=2,
+        distribution={"easy": 1, "medium": 1},
+        finding_labels=["blind SQLi", "DOM XSS"],
+    )
+    service = DesignTaskPlanningService(session_factory)
+    tasks = service.generate_for_request(request.id)
+
+    session = session_factory()
+    try:
+        with pytest.raises(DesignTaskValidationError, match="plan_not_reviewed"):
+            DesignTaskRepository(session).set_design_task_status(tasks[0].id, "queued")
+        session.rollback()
+    finally:
+        session.close()
+
+    approved = service.approve_plan(request.id)
+    assert all(task.plan_reviewed_at is not None for task in approved)
+
+    session = session_factory()
+    try:
+        queued = DesignTaskRepository(session).set_design_task_status(approved[0].id, "queued")
+        session.commit()
+    finally:
+        session.close()
+
+    assert queued.status == "queued"
+
+
+def test_regenerate_plan_clears_prior_approval(session_factory: SessionFactory):
+    request, _ = _seed(
+        session_factory,
+        target_count=2,
+        distribution={"easy": 1, "medium": 1},
+        finding_labels=["blind SQLi", "DOM XSS"],
+    )
+    service = DesignTaskPlanningService(session_factory)
+    service.generate_for_request(request.id)
+    approved = service.approve_plan(request.id)
+    assert all(task.plan_reviewed_at is not None for task in approved)
+
+    regenerated = service.regenerate_plan(request.id)
+
+    assert all(task.plan_reviewed_at is None for task in regenerated)
+    assert {task.id for task in approved}.isdisjoint({task.id for task in regenerated})
+
+
+def test_approve_plan_is_idempotent_refresh(session_factory: SessionFactory):
+    request, _ = _seed(session_factory, target_count=1, distribution={"easy": 1})
+    service = DesignTaskPlanningService(session_factory)
+    service.generate_for_request(request.id)
+
+    first = service.approve_plan(request.id)
+    second = service.approve_plan(request.id)
+
+    assert [task.id for task in second] == [task.id for task in first]
+    assert all(task.plan_reviewed_at is not None for task in second)
+
+
+def test_legacy_draft_without_diversity_flags_is_queue_exempt(
+    session_factory: SessionFactory,
+):
+    request, _ = _seed(session_factory, target_count=1, distribution={"easy": 1})
+    service = DesignTaskPlanningService(session_factory)
+    [task] = service.generate_for_request(request.id)
+
+    session = session_factory()
+    try:
+        row = session.get(dt_model.DesignTask, task.id)
+        row.diversity_flags = None
+        row.plan_reviewed_at = None
+        session.flush()
+        queued = DesignTaskRepository(session).set_design_task_status(task.id, "queued")
+        session.commit()
+    finally:
+        session.close()
+
+    assert queued.status == "queued"
+    assert queued.diversity_flags is None
+
+
+def test_regenerate_task_clean_pool_replaces_slot(session_factory: SessionFactory):
+    request, _ = _seed(
+        session_factory,
+        target_count=1,
+        distribution={"easy": 1},
+        finding_labels=["blind SQLi", "DOM XSS"],
+    )
+    service = DesignTaskPlanningService(session_factory)
+    [initial] = service.generate_for_request(request.id)
+
+    result = service.regenerate_task(request.id, 1)
+
+    assert result["outcome"] == "regenerated"
+    assert result["task"].primary_technique != initial.primary_technique
+    assert result["task"].plan_reviewed_at is None
+
+
+def test_regenerate_task_family_saturation_warns_not_noops(
+    session_factory: SessionFactory,
+):
+    request, _ = _seed(
+        session_factory,
+        target_count=2,
+        distribution={"easy": 2},
+        finding_labels=["blind SQLi", "DOM XSS", "second-order SQLi"],
+    )
+    service = DesignTaskPlanningService(session_factory)
+    tasks = service.generate_for_request(request.id)
+    assert [task.primary_technique for task in tasks[:2]] == ["blind SQLi", "DOM XSS"]
+
+    result = service.regenerate_task(request.id, 2)
+
+    assert result["outcome"] == "regenerated_with_warning"
+    assert "family_quota_exceeded" in result["task"].diversity_flags["warnings"]
+    assert result["task"].primary_technique == "second-order SQLi"
+
+
+def test_regenerate_task_only_sibling_duplicates_noops(
+    session_factory: SessionFactory,
+):
+    request, _ = _seed(
+        session_factory,
+        target_count=2,
+        distribution={"easy": 2},
+        finding_labels=["blind SQLi", "DOM XSS"],
+    )
+    service = DesignTaskPlanningService(session_factory)
+    tasks = service.generate_for_request(request.id)
+
+    result = service.regenerate_task(request.id, 1)
+
+    assert result["outcome"] == "no_alternative"
+    assert result["reason"] == "subtechnique_exhausted"
+    assert result["task"].id == tasks[0].id
+    assert result["task"].primary_technique == tasks[0].primary_technique
+
+
+def test_regenerate_task_without_distinct_finding_noops(
+    session_factory: SessionFactory,
+):
+    request, _ = _seed(
+        session_factory,
+        target_count=1,
+        distribution={"easy": 1},
+        finding_labels=["blind SQLi"],
+    )
+    service = DesignTaskPlanningService(session_factory)
+    [task] = service.generate_for_request(request.id)
+
+    result = service.regenerate_task(request.id, 1)
+
+    assert result["outcome"] == "no_alternative"
+    assert result["reason"] == "research_diversity_insufficient"
+    assert result["task"].id == task.id
+
+
+def test_regenerate_task_blocked_once_any_task_queued(session_factory: SessionFactory):
+    request, _ = _seed(
+        session_factory,
+        target_count=2,
+        distribution={"easy": 2},
+        finding_labels=["blind SQLi", "DOM XSS"],
+    )
+    service = DesignTaskPlanningService(session_factory)
+    service.generate_for_request(request.id)
+    tasks = service.approve_plan(request.id)
+
+    session = session_factory()
+    try:
+        DesignTaskRepository(session).set_design_task_status(tasks[0].id, "queued")
+        session.commit()
+    finally:
+        session.close()
+
+    with pytest.raises(DesignTaskValidationError, match="cannot regenerate"):
+        service.regenerate_task(request.id, 2)
 
 
 def test_validate_finding_provenance_rejects_empty_finding_ids():

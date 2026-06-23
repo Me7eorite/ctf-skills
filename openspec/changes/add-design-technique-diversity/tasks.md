@@ -86,18 +86,18 @@
 
 ## 5. Plan-review checkpoint
 
-- [ ] 5.1 Add nullable `plan_reviewed_at` (timestamptz) to `DesignTask` and schema; Alembic
+- [x] 5.1 Add nullable `plan_reviewed_at` (timestamptz) to `DesignTask` and schema; Alembic
       revision; legacy/in-flight drafts marked review-exempt to avoid backfill.
-- [ ] 5.2 Add the `draft -> queued` guard in `design_task_validators.py`: NULL
+- [x] 5.2 Add the `draft -> queued` guard in `design_task_validators.py`: NULL
       `plan_reviewed_at` (non-exempt) blocks queueing with a machine-readable reason
       (`plan_not_reviewed`).
-- [ ] 5.3 Add `DesignTaskPlanningService.approve_plan(request_id)` (stamps
+- [x] 5.3 Add `DesignTaskPlanningService.approve_plan(request_id)` (stamps
       `plan_reviewed_at` under the parent-row lock, idempotent — re-approve is a no-op /
       timestamp refresh) and `regenerate_plan(request_id)` (reuses
       `replace_draft_or_archived_tasks`, and SHALL clear `plan_reviewed_at` on regenerated
       rows so a stale approval can't leak an unreviewed plan into `queued`). Approve and
       both regenerate paths serialize under the same parent-request lock.
-- [ ] 5.4 Add `DesignTaskPlanningService.regenerate_task(request_id, task_no)` returning a
+- [x] 5.4 Add `DesignTaskPlanningService.regenerate_task(request_id, task_no)` returning a
       three-state outcome `regenerated | regenerated_with_warning | no_alternative`
       (with reason `research_diversity_insufficient | subtechnique_exhausted` for the last).
       Candidate set = slot hard constraints minus sibling sub-techniques, preferring within
@@ -108,12 +108,12 @@
       SHALL be cleared (approval is per draft version; siblings keep theirs). Same parent
       lock; reject if any sibling has left `draft`/`archived`. MUST NOT share a
       fill-forcing path with batch/regenerate-all.
-- [ ] 5.5 Tests: unreviewed draft cannot be queued; approve then queue succeeds; clean pool
+- [x] 5.5 Tests: unreviewed draft cannot be queued; approve then queue succeeds; clean pool
       → `regenerated`; sibling-avoiding but family-saturated → `regenerated_with_warning`
       + `family_quota_exceeded`; only sibling duplicates → `no_alternative` +
       `subtechnique_exhausted` (slot unchanged); no distinct finding → `no_alternative` +
       `research_diversity_insufficient`; regenerate blocked once any task is `queued`.
-- [ ] 5.6 Concurrency + grandfather tests: concurrent approve + regenerate-all serialize and
+- [x] 5.6 Concurrency + grandfather tests: concurrent approve + regenerate-all serialize and
       the regenerated rows end with NULL `plan_reviewed_at`; re-approving is idempotent;
       legacy `draft` (NULL `plan_reviewed_at`, pre-revision) queues review-exempt; legacy
       `design_task` with NULL `diversity_flags` reads/renders cleanly; legacy finding with
@@ -121,22 +121,22 @@
 
 ## 6. Dashboard plan matrix
 
-- [ ] 6.1 Add a plan-matrix view to the design-task dashboard (task_no / difficulty /
+- [x] 6.1 Add a plan-matrix view to the design-task dashboard (task_no / difficulty /
       family / sub_technique / scenario seed) reading `diversity_flags`; colour
       `family_quota_exceeded` (warn) vs `subtechnique_duplicate` (error) distinctly. The UI
       renders only server-computed `family`/`sub_technique`; it MUST NOT re-derive them from
       `label` client-side.
-- [ ] 6.2 Wire approve / regenerate-all / regenerate-one buttons to the service-backed HTTP
+- [x] 6.2 Wire approve / regenerate-all / regenerate-one buttons to the service-backed HTTP
       endpoints (no direct DB writes from the dashboard). Diversity warnings are display
       signals only — neither the buttons nor any backend check may gate queueing/approval on
       a warning; the sole queue precondition stays `plan_reviewed_at`.
-- [ ] 6.3 Show the "research diversity insufficient — consider re-running research" hint when
+- [x] 6.3 Show the "research diversity insufficient — consider re-running research" hint when
       a regenerate-one action returns `no_alternative` with reason
       `research_diversity_insufficient` (authoritative trigger, not a warning-count
       threshold).
 
 ## 7. Docs
 
-- [ ] 7.1 Note the new `technique_quota`/`cooldown_window` and
+- [x] 7.1 Note the new `technique_quota`/`cooldown_window` and
       `RESEARCH_FAMILY_OTHER_WARN_RATIO` knobs in `openspec/project.md`
       configuration section.

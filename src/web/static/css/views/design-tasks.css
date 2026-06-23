@@ -129,6 +129,79 @@
 .dt-metric-success > svg { background: var(--accent-green-50); color: var(--accent-green); }
 .dt-metric-danger > svg { background: var(--accent-red-50); color: var(--accent-red); }
 
+.dt-diversity-hint {
+  border-color: var(--accent-red-100);
+  background: var(--accent-red-50);
+}
+
+.dt-plan-card {
+  margin-bottom: var(--space-lg);
+  overflow: hidden;
+}
+
+.dt-plan-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: 1px solid var(--line);
+}
+
+.dt-plan-header h3 {
+  color: var(--ink-900);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.dt-plan-header p {
+  margin-top: 3px;
+  color: var(--ink-500);
+  font-size: var(--font-xs);
+}
+
+.dt-plan-table-wrap {
+  border: 0;
+  border-radius: 0;
+}
+
+.dt-plan-table {
+  min-width: 880px;
+}
+
+.dt-plan-table tr.dt-plan-warning {
+  background: var(--accent-amber-50);
+}
+
+.dt-plan-table tr.dt-plan-error {
+  background: var(--accent-red-50);
+}
+
+.dt-plan-subtech {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dt-plan-warning-text {
+  margin-top: 3px;
+  color: var(--accent-red);
+  font-size: var(--font-xs);
+}
+
+.dt-plan-warning .dt-plan-warning-text {
+  color: var(--accent-amber);
+}
+
+.dt-plan-scenario {
+  max-width: 360px;
+  color: var(--ink-600);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .dt-list-card .filter-bar {
   border-bottom: 1px solid var(--line);
 }
