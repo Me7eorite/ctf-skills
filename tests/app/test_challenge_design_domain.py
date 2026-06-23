@@ -560,6 +560,55 @@ def test_difficulty_easy_accepts_layered_decode_chain_as_one_technique():
     assert _count_techniques(result.challenge) == 1
 
 
+def test_difficulty_reporter_decode_chains_both_validate_as_easy():
+    cases = [
+        (
+            "re-strings-0001",
+            "strings",
+            ["strings", "base64"],
+            [
+                "Run strings on the binary",
+                "Decode the extracted base64 blob",
+                "Submit the flag",
+            ],
+        ),
+        (
+            "re-ida-0002",
+            "xor",
+            ["xor-decrypt", "base64-decode"],
+            [
+                "Open the binary in IDA",
+                "Apply the visible xor transform",
+                "Decode the resulting base64 blob",
+                "Submit the flag",
+            ],
+        ),
+    ]
+
+    for challenge_id, primary, techniques, intended_path in cases:
+        parent = _parent_task(
+            category="re",
+            difficulty="easy",
+            points=100,
+            port=None,
+            challenge_id=challenge_id,
+        )
+        payload = _easy_payload(
+            id=challenge_id,
+            category="re",
+            deployment="static",
+            port=None,
+            primary_technique=primary,
+            techniques=techniques,
+            intended_path=intended_path,
+        )
+
+        result = validate_design_payload(payload, parent)
+
+        assert result.challenge["difficulty"] == "easy"
+        assert _count_techniques(result.challenge) == 1
+
+
 def test_difficulty_medium_rejects_short_prompt():
     payload = _payload(prompt="Find the bug.")
     with pytest.raises(

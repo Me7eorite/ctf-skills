@@ -1,10 +1,12 @@
 # Category Tactics
 
-Category-specific design seeds, technique lanes, anti-patterns, and container conventions. The Easy/Medium/Hard/Expert columns map to the difficulty rubric defined elsewhere; Phase 2 will add a dedicated `difficulty-rubric.md`. Until then:
+Category-specific design seeds, technique lanes, anti-patterns, and container conventions. The Easy/Medium/Hard/Expert columns map to the dedicated difficulty rubric.
 
-- **easy** = 1 考点, basic knowledge, single-step solve.
+- **考点 (distinct technique) ≠ 解题步骤 (mechanical step)**. Difficulty is the count of distinct 考点 plus, for expert, novelty; it is not the number of solve steps.
+- A linear decode/unwrap chain is one technique regardless of length: `strings→base64→flag` and `IDA→xor→base64→flag` are both easy when the declared techniques are only mechanical transforms.
+- **easy** = 1 考点, basic knowledge, small solver burden.
 - **medium** = 2–3 考点 chained inside a believable business scenario.
-- **hard** = 3–4 考点 chained, multi-step, requires cross-domain reasoning.
+- **hard** = 3–4 考点 chained, requires cross-domain reasoning or mitigation bypass; extra mechanical unwrap steps alone do not raise difficulty.
 - **expert** = 0day-style trick / novel chain / unusual constraints. MUST be summarized in a `novelty` field.
 
 ---

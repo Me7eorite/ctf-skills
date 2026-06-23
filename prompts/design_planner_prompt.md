@@ -18,6 +18,10 @@ task, not to enumerate every implementation detail.
 
 ## Rubric Reminder
 
+Difficulty is driven by the count of distinct 考点 + novelty, NOT by the
+number of solve steps. A linear decode/unwrap chain is ONE technique regardless
+of length.
+
 | Difficulty | Techniques | Notes |
 | --- | --- | --- |
 | hard | exactly 3 or 4 | Chain across business steps, not just stack two basics |

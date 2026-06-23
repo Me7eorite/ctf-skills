@@ -46,19 +46,19 @@
 
 ## 3. De-couple steps from difficulty in prose
 
-- [ ] 3.1 Update `skills/design-challenges/references/difficulty-rubric.md` and
+- [x] 3.1 Update `skills/design-challenges/references/difficulty-rubric.md` and
       `skills/design-challenges/references/category-tactics.md` to define
       "考点 (distinct technique) ≠ 解题步骤 (mechanical step)" and add the worked
       counter-example (`strings→base64→flag` and `IDA→xor→base64→flag` are both easy).
-- [ ] 3.2 Add to `prompts/design_planner_prompt.md`: "Difficulty is driven by the count of
+- [x] 3.2 Add to `prompts/design_planner_prompt.md`: "Difficulty is driven by the count of
       distinct 考点 + novelty, NOT by the number of solve steps. A linear decode/unwrap
       chain is ONE technique regardless of length."
-- [ ] 3.3 Verify the difficulty-rubric reference, the `difficulty.py` RUBRIC table, and the
+- [x] 3.3 Verify the difficulty-rubric reference, the `difficulty.py` RUBRIC table, and the
       rendered Build Budget prompt stay in sync (the module docstring already asserts the
       reference and table mirror each other).
 
 ## 4. Regression guard
 
-- [ ] 4.1 Add a regression test pinning the reporter's exact case: two `re` designs, one
+- [x] 4.1 Add a regression test pinning the reporter's exact case: two `re` designs, one
       `strings→base64` and one `IDA→xor→base64`, both slotted `easy`, both validate, and
       `_count_techniques` returns 1 for each.

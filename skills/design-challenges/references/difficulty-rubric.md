@@ -1,19 +1,21 @@
 # Difficulty Rubric
 
-Machine-checked rubric for the four difficulty tiers. The validator enforces the counts in this table on every accepted design. Use the qualitative notes when drafting the `prompt`, `scenario`, `intended_path`, and `novelty` fields.
+Machine-checked rubric for the four difficulty tiers. The validator enforces the technique counts, `intended_path` upper bounds, buildability caps, business-scenario requirement, and expert novelty requirement on every accepted design. Use the qualitative notes when drafting the `prompt`, `scenario`, `intended_path`, and `novelty` fields.
 
 ## Tiers
 
-| Tier | Techniques (考点) | Intended path steps | implementation_plan | max explicit components | LOC budget (build) | Business scenario | Novelty field |
+| Tier | Techniques (考点) | Intended path step cap | implementation_plan | max explicit components | LOC budget (build) | Business scenario | Novelty field |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| easy   | exactly **1** | 1–4 | optional | ≤ 5  | ≤ 200  | optional (toy service OK) | not required |
-| medium | **2 or 3** | 2–5 | optional | ≤ 7  | ≤ 400  | **required** | not required |
-| hard   | **3 or 4** | 3–7 | **required** | ≤ 10 | ≤ 700  | **required** | not required |
-| expert | **≥ 2** | 4–10 | **required** | ≤ 15 | ≤ 1200 | **required** | **required** — describe the 0day-style trick |
+| easy   | exactly **1** | ≤ 4 | optional | ≤ 5  | ≤ 200  | optional (toy service OK) | not required |
+| medium | **2 or 3** | ≤ 5 | optional | ≤ 7  | ≤ 400  | **required** | not required |
+| hard   | **3 or 4** | ≤ 7 | **required** | ≤ 10 | ≤ 700  | **required** | not required |
+| expert | **≥ 2** | ≤ 10 | **required** | ≤ 15 | ≤ 1200 | **required** | **required** — describe the 0day-style trick |
 
-**Counting technique slots:** the validator unions `techniques`, `primary_technique`, and `secondary_technique`, strips whitespace, deduplicates case-insensitively, and counts the distinct strings.
+**Counting technique slots:** the validator gathers `techniques`, `primary_technique`, and `secondary_technique`, normalizes each label to a canonical sub-technique, folds mechanical decode/unwrap transforms order-free, and counts distinct non-mechanical 考点. If every declared technique is mechanical, the whole decode/unwrap chain counts as exactly one `encoding` 考点. Mechanical transforms add nothing when a real non-mechanical technique is present.
 
-**Counting intended_path steps:** the validator counts non-empty string entries in `intended_path`.
+**考点 (distinct technique) ≠ 解题步骤 (mechanical step):** difficulty is driven by the count of distinct 考点 plus, for expert, novelty. It is NOT driven by the number of solve steps. A linear decode/unwrap chain is one technique regardless of length: `strings→base64→flag` and `IDA→xor→base64→flag` are both easy when the declared techniques are only mechanical transforms.
+
+**Counting intended_path steps:** the validator counts non-empty string entries in `intended_path` only as an upper-bound sanity check. Do not pad `intended_path` to meet a tier; there is no per-tier minimum.
 
 **Business scenario heuristic:** for medium and harder, the `prompt` field must be at least 60 characters and the parent task `scenario` field must be non-empty. A one-line prompt like "find the SQLi and read the flag" is rejected as too thin to carry business context.
 
@@ -25,9 +27,9 @@ Machine-checked rubric for the four difficulty tiers. The validator enforces the
 
 ### easy
 
-- One observable bug, one well-known primitive.
+- One observable bug, one well-known primitive, or one mechanical decode/unwrap chain.
 - Player finds the bug from the surface of the app within the first few minutes.
-- Solve is mechanical once the primitive is identified.
+- Solve is mechanical once the primitive is identified; extra decode layers do not raise the tier by themselves.
 - Typical 5–20 min solve.
 
 ### medium
@@ -57,7 +59,7 @@ When generating a design, populate these fields with the rubric in mind:
 - `techniques` — list every 考点 you count toward the tier minimum.
 - `primary_technique` — the headline technique (one of the entries in `techniques`).
 - `secondary_technique` — present iff your count is ≥ 2.
-- `intended_path` — one step per significant observation/action; do not pad with filler.
+- `intended_path` — one step per significant observation/action; do not pad with filler and do not use step count to justify a higher tier.
 - `implementation_plan` — required for hard/expert; describe vulnerability location, flag handling, and what forces the intended chain. When useful, add `components` as an array naming only independently buildable or deployable units.
 - `novelty` — required for expert; describe what is non-trivial in 1–3 sentences.
 

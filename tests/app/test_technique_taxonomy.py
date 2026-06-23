@@ -83,6 +83,36 @@ def test_category_tactics_lane_list_matches_taxonomy_constants():
         assert _doc_lanes(doc, heading) == expected_lanes
 
 
+def test_category_tactics_decouples_steps_from_difficulty():
+    doc = _category_tactics_text()
+
+    assert "考点 (distinct technique) ≠ 解题步骤 (mechanical step)" in doc
+    assert "strings→base64→flag" in doc
+    assert "IDA→xor→base64→flag" in doc
+    assert "single-step solve" not in doc
+    assert "Phase 2 will add" not in doc
+
+
+def test_difficulty_rubric_uses_upper_bound_path_steps():
+    doc = _difficulty_rubric_text()
+
+    assert "| medium | **2 or 3** | ≤ 5 |" in doc
+    assert "| hard   | **3 or 4** | ≤ 7 |" in doc
+    assert "there is no per-tier minimum" in doc
+    assert "strings→base64→flag" in doc
+    assert "IDA→xor→base64→flag" in doc
+    assert "2–5" not in doc
+    assert "3–7" not in doc
+
+
+def test_design_planner_prompt_decouples_steps_from_difficulty():
+    doc = _design_planner_prompt_text()
+
+    assert "Difficulty is driven by the count of distinct 考点 + novelty" in doc
+    assert "NOT by the\nnumber of solve steps" in doc
+    assert "linear decode/unwrap chain is ONE technique" in doc
+
+
 def _display_lanes(category: str) -> list[str]:
     display_names = FAMILY_DISPLAY_NAMES[category]
     return [display_names[family] for family in CATEGORY_TECHNIQUE_FAMILIES[category]]
@@ -97,6 +127,28 @@ def _category_tactics_text() -> str:
         / "design-challenges"
         / "references"
         / "category-tactics.md"
+    ).read_text(encoding="utf-8")
+
+
+def _difficulty_rubric_text() -> str:
+    from pathlib import Path
+
+    return (
+        Path(__file__).resolve().parents[2]
+        / "skills"
+        / "design-challenges"
+        / "references"
+        / "difficulty-rubric.md"
+    ).read_text(encoding="utf-8")
+
+
+def _design_planner_prompt_text() -> str:
+    from pathlib import Path
+
+    return (
+        Path(__file__).resolve().parents[2]
+        / "prompts"
+        / "design_planner_prompt.md"
     ).read_text(encoding="utf-8")
 
 

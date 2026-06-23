@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from types import MappingProxyType
 from uuid import uuid4
 
 from core.paths import ProjectPaths
+from domain.design.difficulty import RUBRIC
 from domain.design_tasks import DesignTask
 from domain.research import GenerationRequest, ResearchFinding, ResearchSource
 from services.design_prompt import (
@@ -236,6 +238,23 @@ def test_prompt_renders_build_budget_for_difficulty(tmp_path):
     assert "explicit `implementation_plan.components` entries: ≤ 7" in prompt
     assert "upgrade the difficulty tier" in prompt
     assert "LOC" in prompt and "400" in prompt
+
+
+def test_prompt_and_reference_use_rubric_intended_path_cap(tmp_path):
+    context = load_design_prompt_context(_paths(tmp_path))
+    cap = RUBRIC["medium"].intended_path_max
+
+    prompt = build_design_prompt(context, _task(), _request(), [], [])
+    reference = (
+        Path(__file__).resolve().parents[2]
+        / "skills"
+        / "design-challenges"
+        / "references"
+        / "difficulty-rubric.md"
+    ).read_text(encoding="utf-8")
+
+    assert f"intended_path steps: ≤ {cap}" in prompt
+    assert f"| medium | **2 or 3** | ≤ {cap} |" in reference
 
 
 def test_prompt_pins_parent_values_verbatim(tmp_path):
