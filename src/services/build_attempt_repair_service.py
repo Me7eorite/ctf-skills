@@ -72,12 +72,14 @@ class BuildAttemptRepairService:
         prompt = _repair_prompt(context)
         prompt_path.write_text(prompt, encoding="utf-8")
         self._record_event(events_path, "solve", "running", "AI repair running")
+        arguments = _hermes_arguments(context["category"])
+        environment = _hermes_environment(self.paths, arguments)
         returncode = hermes_process.invoke(
             prompt,
-            arguments=_hermes_arguments(context["category"]),
+            arguments=arguments,
             log_path=log_path,
             cwd=self.paths.root,
-            environment=_hermes_environment(self.paths),
+            environment=environment,
             timeout=self.timeout_seconds,
         )
         if returncode != 0:
@@ -296,9 +298,12 @@ def _hermes_arguments(category: str) -> list[str]:
     return hermes_process.inject_profile_argument(profile_name)
 
 
-def _hermes_environment(paths: ProjectPaths) -> dict[str, str]:
+def _hermes_environment(paths: ProjectPaths, arguments: list[str]) -> dict[str, str]:
     environment = os.environ.copy()
     if paths.hermes_home.exists() and not environment.get("HERMES_HOME"):
         environment["HERMES_HOME"] = str(paths.hermes_home)
-    hermes_process.apply_legacy_custom_provider(paths.hermes_home, environment)
+    if hermes_process.apply_legacy_custom_provider(paths.hermes_home, environment):
+        hermes_process.remove_conflicting_custom_pool(paths.hermes_home)
+        query_index = arguments.index("-q") if "-q" in arguments else len(arguments)
+        arguments[query_index:query_index] = ["--provider", "custom"]
     return environment
