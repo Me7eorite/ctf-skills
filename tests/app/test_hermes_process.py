@@ -242,32 +242,37 @@ class HermesProfileHealthTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(code, "hermes_profile_missing")
 
-    def test_missing_env_file(self):
+    def test_ok_without_env_file_when_cli_can_show_profile(self):
         with tempfile.TemporaryDirectory() as tmp:
             profile = Path(tmp) / ".hermes" / "profiles" / "cf-web"
             profile.mkdir(parents=True)
-            with patch.dict(os.environ, {"USERPROFILE": tmp, "HOME": tmp}):
+            with patch.dict(os.environ, {"USERPROFILE": tmp, "HOME": tmp}), patch(
+                "hermes.process.profile_exists",
+                return_value=True,
+            ):
                 ok, code, _message = hermes_profile_health("cf-web")
 
-        self.assertFalse(ok)
-        self.assertEqual(code, "hermes_profile_env_missing")
+        self.assertTrue(ok)
+        self.assertEqual(code, "")
 
-    def test_missing_key(self):
+    def test_empty_env_file_does_not_override_cli_profile_health(self):
         with tempfile.TemporaryDirectory() as tmp:
             profile = Path(tmp) / ".hermes" / "profiles" / "cf-web"
             profile.mkdir(parents=True)
             (profile / ".env").write_text("ANTHROPIC_API_KEY=''\nANTHROPIC_TOKEN=   \n", encoding="utf-8")
-            with patch.dict(os.environ, {"USERPROFILE": tmp, "HOME": tmp}):
+            with patch.dict(os.environ, {"USERPROFILE": tmp, "HOME": tmp}), patch(
+                "hermes.process.profile_exists",
+                return_value=True,
+            ):
                 ok, code, _message = hermes_profile_health("cf-web")
 
-        self.assertFalse(ok)
-        self.assertEqual(code, "hermes_profile_key_missing")
+        self.assertTrue(ok)
+        self.assertEqual(code, "")
 
     def test_cli_unavailable(self):
         with tempfile.TemporaryDirectory() as tmp:
             profile = Path(tmp) / ".hermes" / "profiles" / "cf-web"
             profile.mkdir(parents=True)
-            (profile / ".env").write_text("ANTHROPIC_API_KEY='secret'\n", encoding="utf-8")
             with patch.dict(os.environ, {"USERPROFILE": tmp, "HOME": tmp}), patch(
                 "hermes.process.profile_exists",
                 return_value=False,

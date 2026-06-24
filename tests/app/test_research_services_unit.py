@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
@@ -106,6 +107,36 @@ def test_parse_research_output_preserves_valid_family_and_coerces_unknown(caplog
     assert parsed.findings[0]["technique_family"] == "injection"
     assert parsed.findings[1]["technique_family"] == "other"
     assert "unknown technique_family" in caplog.text
+
+
+def test_parse_research_output_replaces_invalid_content_hash(caplog):
+    stdout_text = json.dumps(
+        {
+            "sources": [
+                {
+                    "url": "https://example.com/a",
+                    "title": "A",
+                    "summary": "Summary",
+                    "content_hash": "not-a-sha256",
+                }
+            ],
+            "findings": [
+                {
+                    "kind": "technique",
+                    "label": "Technique",
+                    "summary": "Finding summary",
+                    "source_indices": [0],
+                }
+            ],
+        }
+    )
+
+    with caplog.at_level("WARNING"):
+        parsed = parse_research_output(stdout_text)
+
+    assert re.fullmatch(r"[0-9a-f]{64}", parsed.sources[0]["content_hash"])
+    assert parsed.sources[0]["content_hash"] != "not-a-sha256"
+    assert "replaced invalid research source content_hash at index 0" in caplog.text
 
 
 def test_legacy_parse_wrapper_still_materializes_raw_text(tmp_path):

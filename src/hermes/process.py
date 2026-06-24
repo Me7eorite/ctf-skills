@@ -49,6 +49,10 @@ def hermes_arguments() -> list[str]:
     if hermes:
         return [hermes, "chat", "-Q", "--yolo", "-q"]
 
+    for candidate in _hermes_executable_candidates():
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return [str(candidate), "chat", "-Q", "--yolo", "-q"]
+
     uvx = shutil.which("uvx")
     python311 = Path.home() / ".local" / "bin" / "python3.11.exe"
     if uvx:
@@ -60,6 +64,46 @@ def hermes_arguments() -> list[str]:
         )
         return arguments
     return shlex.split(DEFAULT_HERMES_COMMAND)
+
+
+def _hermes_executable_candidates() -> list[Path]:
+    """Common non-login-shell locations for the Hermes CLI.
+
+    Dashboard services often run with a minimal PATH, so user shell managers
+    such as pyenv/asdf/mise are invisible unless we probe their standard shim
+    directories. Operators can extend this without code changes via
+    HERMES_BIN_DIR or HERMES_EXTRA_PATHS.
+    """
+    home = Path.home()
+    candidates: list[Path] = []
+    bin_dir = os.environ.get("HERMES_BIN_DIR")
+    if bin_dir:
+        candidates.append(Path(bin_dir).expanduser() / "hermes")
+    extra_paths = os.environ.get("HERMES_EXTRA_PATHS", "")
+    for raw_path in extra_paths.split(os.pathsep):
+        if raw_path:
+            candidates.append(Path(raw_path).expanduser() / "hermes")
+    candidates.extend(
+        [
+            home / ".pyenv" / "shims" / "hermes",
+            home / ".local" / "bin" / "hermes",
+            home / ".asdf" / "shims" / "hermes",
+            home / ".nix-profile" / "bin" / "hermes",
+            home / ".cargo" / "bin" / "hermes",
+            home / ".npm-global" / "bin" / "hermes",
+            home / ".bun" / "bin" / "hermes",
+            home / ".local" / "share" / "mise" / "shims" / "hermes",
+        ]
+    )
+    seen: set[str] = set()
+    unique = []
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(candidate)
+    return unique
 
 
 def inject_profile_argument(profile_name: str) -> list[str]:
@@ -469,29 +513,6 @@ def hermes_profile_health(profile_name: str) -> tuple[bool, str, str]:
             False,
             "hermes_profile_missing",
             f"Hermes Profile {profile_name} 不存在，请先创建或绑定该构建 Profile",
-        )
-    env_path = profile_dir / ".env"
-    if not env_path.is_file():
-        return (
-            False,
-            "hermes_profile_env_missing",
-            f"Hermes Profile {profile_name} 缺少 .env 配置文件",
-        )
-    try:
-        values = _read_profile_env(env_path)
-    except OSError:
-        return (
-            False,
-            "hermes_profile_env_missing",
-            f"Hermes Profile {profile_name} 的 .env 无法读取",
-        )
-    if not (
-        values.get("ANTHROPIC_API_KEY") or values.get("ANTHROPIC_TOKEN")
-    ):
-        return (
-            False,
-            "hermes_profile_key_missing",
-            f"Hermes Profile {profile_name} 缺少可用的 Anthropic 密钥",
         )
     if not profile_exists(profile_name):
         return (

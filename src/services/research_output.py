@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -11,6 +13,7 @@ from uuid import UUID
 from core.paths import ProjectPaths
 from domain.design.technique_taxonomy import resolve_family
 from domain.research_validators import (
+    CONTENT_HASH_RE,
     ResearchValidationError,
     apply_research_quality_gate,
     extract_terminal_json_object,
@@ -35,6 +38,7 @@ def parse_research_output(
     res_data = extract_terminal_json_object(stdout_text)
     if res_data is None:
         raise ResearchValidationError("unparseable_output:no_terminal_json_object")
+    res_data = _normalize_source_content_hashes(res_data)
     ok, error = apply_research_quality_gate(res_data, target_count)
     if not ok:
         raise ResearchValidationError(error or "unparseable_output:quality_gate_failed")
@@ -59,6 +63,47 @@ def parse_research_output(
         for finding_item in finding_items
     ]
     return ParsedResearchOutput(sources=source_payloads, findings=finding_payloads)
+
+
+def _normalize_source_content_hashes(parsed: Mapping[str, Any]) -> dict[str, Any]:
+    """Replace model-invented hashes with stable sha256 values.
+
+    The prompt asks for a lower-case sha256, but model-only research runs often
+    emit mnemonic or truncated placeholders. The database only needs a stable
+    deduplication key here, so derive one from the source fields instead of
+    rejecting an otherwise usable run.
+    """
+    normalized = dict(parsed)
+    sources = normalized.get("sources")
+    if not isinstance(sources, list):
+        return normalized
+    normalized_sources: list[Any] = []
+    for index, source in enumerate(sources):
+        if not isinstance(source, Mapping):
+            normalized_sources.append(source)
+            continue
+        source_payload = dict(source)
+        content_hash = source_payload.get("content_hash")
+        if not isinstance(content_hash, str) or not CONTENT_HASH_RE.match(content_hash):
+            source_payload["content_hash"] = _derived_source_hash(source_payload)
+            LOGGER.warning(
+                "replaced invalid research source content_hash at index %s",
+                index,
+            )
+        normalized_sources.append(source_payload)
+    normalized["sources"] = normalized_sources
+    return normalized
+
+
+def _derived_source_hash(source: Mapping[str, Any]) -> str:
+    payload = {
+        "url": source.get("url"),
+        "title": source.get("title"),
+        "summary": source.get("summary"),
+        "raw_text": source.get("raw_text"),
+    }
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def materialize_research_raw_text(

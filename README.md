@@ -298,7 +298,9 @@ with transaction(factory=session_factory) as session:
 模块级的子进程工具，**不依赖 ProjectPaths**，所有路径由调用方传入：
 
 - **`hermes_arguments()`** — 解析 Hermes CLI 的可执行文件路径和参数
-  - 优先级：`HERMES_CMD` 环境变量 > `which hermes` > `uvx` 安装 > 默认值
+  - 优先级：`HERMES_CMD` 环境变量 > `which hermes` > `HERMES_BIN_DIR` /
+    `HERMES_EXTRA_PATHS` > 常见用户 shim 目录（pyenv/asdf/mise 等）>
+    `uvx` 安装 > 默认值
 - **`invoke(arguments, cwd, env, log_path)`** — 简单执行（不捕获输出）
 - **`invoke_capture(...)`** — 执行并捕获 stdout/stderr，支持超时和取消
   - 使用双线程分别读取 stdout 和 stderr（`_drain` 函数）

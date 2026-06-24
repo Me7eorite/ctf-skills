@@ -84,6 +84,51 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertNotIn("--python", arguments)
         self.assertEqual(arguments[-5:], ["hermes", "chat", "-Q", "--yolo", "-q"])
 
+    def test_uses_pyenv_shim_when_hermes_is_not_on_path(self):
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch("hermes.process.shutil.which", return_value=None),
+            patch("hermes.process.Path.home", return_value=Path("/root")),
+            patch("hermes.process.Path.is_file", return_value=True),
+            patch("hermes.process.os.access", return_value=True),
+        ):
+            arguments = HermesRunner._hermes_arguments()
+
+        self.assertEqual(arguments[0], "/root/.pyenv/shims/hermes")
+        self.assertEqual(arguments[1:], ["chat", "-Q", "--yolo", "-q"])
+
+    def test_uses_configured_bin_dir_before_default_shims(self):
+        def exists(path):
+            return str(path) == "/opt/hermes/bin/hermes"
+
+        with (
+            patch.dict("os.environ", {"HERMES_BIN_DIR": "/opt/hermes/bin"}, clear=True),
+            patch("hermes.process.shutil.which", return_value=None),
+            patch("hermes.process.Path.home", return_value=Path("/root")),
+            patch("hermes.process.Path.is_file", autospec=True, side_effect=exists),
+            patch("hermes.process.os.access", return_value=True),
+        ):
+            arguments = HermesRunner._hermes_arguments()
+
+        self.assertEqual(arguments[0], "/opt/hermes/bin/hermes")
+        self.assertEqual(arguments[1:], ["chat", "-Q", "--yolo", "-q"])
+
+    def test_uses_extra_paths_when_hermes_is_not_on_path(self):
+        def exists(path):
+            return str(path) == "/srv/tools/hermes"
+
+        with (
+            patch.dict("os.environ", {"HERMES_EXTRA_PATHS": "/srv/tools"}, clear=True),
+            patch("hermes.process.shutil.which", return_value=None),
+            patch("hermes.process.Path.home", return_value=Path("/root")),
+            patch("hermes.process.Path.is_file", autospec=True, side_effect=exists),
+            patch("hermes.process.os.access", return_value=True),
+        ):
+            arguments = HermesRunner._hermes_arguments()
+
+        self.assertEqual(arguments[0], "/srv/tools/hermes")
+        self.assertEqual(arguments[1:], ["chat", "-Q", "--yolo", "-q"])
+
     def test_maps_legacy_custom_provider_to_environment(self):
         self.paths.hermes_home.mkdir(parents=True, exist_ok=True)
         (self.paths.hermes_home / "config.yaml").write_text(
