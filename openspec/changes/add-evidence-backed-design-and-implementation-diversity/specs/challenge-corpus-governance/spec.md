@@ -1,0 +1,125 @@
+## ADDED Requirements
+
+### Requirement: Corpus fingerprints compare batch and historical challenges
+
+The system SHALL generate and persist canonical fingerprints for each observed
+challenge:
+
+- semantic profile;
+- solve profile;
+- implementation profile;
+- combined governed profile;
+- normalized source tokens;
+- normalized solver tokens;
+- intended path.
+
+The corpus service SHALL compare candidates with all other challenges in the
+candidate production batch and with a bounded indexed shortlist from committed
+history. It SHALL store each material match's challenge IDs, fingerprint type,
+score, threshold, and decision reason.
+
+Corpus persistence SHALL include:
+
+- `corpus_batches` with mode, category scope, policy version, status, creator,
+  and timestamps;
+- immutable `corpus_batch_members` binding BuildAttempt, DesignEvidence,
+  ArtifactObservation, and fingerprint versions;
+- member and aggregate `corpus_decisions`;
+- pairwise `corpus_matches`;
+- separate `observation_review_decisions` and `corpus_review_decisions`.
+- append-only `corpus_history_entries` containing the minimal governed
+  signatures/fingerprints needed to detect recurrence after operational
+  challenge deletion.
+
+Membership SHALL become immutable when evaluation starts. Rebuilt/revised
+challenges require a new membership. Packing SHALL name one batch explicitly;
+there is no implicit current batch.
+
+Published/retired corpus history entries SHALL survive normal resource
+deletion. Removing them requires a separate explicit governance-history purge
+with audit reason. Full source, solver, logs, and artifacts need not be retained
+by that projection.
+
+#### Scenario: Rename-only clone is still detected
+
+- **GIVEN** two challenges differ only in title, flag, identifiers, and numeric
+  constants
+- **WHEN** normalized source/solver fingerprints are compared
+- **THEN** those superficial values do not prevent a high-similarity match
+
+#### Scenario: Published fingerprint survives operational deletion
+
+- **GIVEN** a published challenge has a corpus history entry
+- **WHEN** its mutable task/build rows and artifacts are deleted through normal
+  resource deletion
+- **THEN** the minimal corpus history entry remains available for duplicate
+  comparison
+
+### Requirement: Corpus gate returns passed, review_required, or blocked
+
+The corpus gate SHALL return exactly one decision:
+`passed`, `review_required`, or `blocked`.
+
+Default hard blocks:
+
+- identical combined governed profile in batch or history;
+- repeated sub-technique in one production batch;
+- source token Jaccard at or above `0.65`;
+- solver token Jaccard at or above `0.75`;
+- profile quota violation;
+- failed ArtifactObservation.
+
+Default review thresholds:
+
+- source token Jaccard at or above `0.45`;
+- solver token Jaccard at or above `0.55`;
+- an inconclusive ArtifactObservation with an allowed observation review.
+
+Thresholds and quotas MAY be configured per category. Production publication
+requires `passed`, or an explicit operator approval for `review_required`.
+Corpus approval SHALL record actor, reason, and timestamp. Observation review
+and corpus review SHALL be separate records. Exact combined-profile duplicates,
+failed observations, and hard profile mismatches SHALL not be overrideable.
+
+An inconclusive ArtifactObservation without an allowed observation review SHALL
+block corpus admission.
+
+The service SHALL compute both a decision for each member and one aggregate
+batch decision. A production batch is eligible only when every member is
+passed/allowed-reviewed and the aggregate decision is `passed`. An allowed
+member review does not rewrite the original `review_required` decision; the
+aggregator treats it as effectively accepted and records that provenance when
+computing the aggregate pass.
+
+#### Scenario: Exact governed duplicate is blocked
+
+- **GIVEN** a candidate matches an existing committed challenge on semantic,
+  solve, and implementation profiles
+- **WHEN** corpus admission runs
+- **THEN** the decision is `blocked`
+- **AND** no operator override can publish it
+
+#### Scenario: Borderline source similarity requires review
+
+- **GIVEN** source similarity is `0.52` and no hard rule fails
+- **WHEN** corpus admission runs with default thresholds
+- **THEN** the decision is `review_required`
+- **AND** the matched challenge and score are exposed to the operator
+
+### Requirement: Production and trial modes are explicit
+
+Corpus governance SHALL support `shadow`, `trial`, and `production` modes.
+
+- `shadow`: records decisions but does not block build or publication.
+- `trial`: blocks failed validation and exact duplicates, while other review
+  findings require operator acknowledgment.
+- `production`: enforces every configured block and review rule.
+
+A research run marked trial-only due to diversity soft-pass SHALL never receive
+a production `passed` decision.
+
+#### Scenario: Trial-only evidence cannot be released as production
+
+- **GIVEN** a candidate derived from a research run marked trial-only
+- **WHEN** production corpus admission runs
+- **THEN** it is blocked with a reason identifying research diversity soft-pass
