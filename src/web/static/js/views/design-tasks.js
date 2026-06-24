@@ -39,6 +39,7 @@ const state = {
   detailId: null,
   filters: { generation_request_id: "", status: "", category: "" },
   selected: new Set(),
+  planSelected: new Set(),
   flags: {},
   poll: { timer: null, loading: false },
 };
@@ -49,6 +50,7 @@ export function showDesignTasksForRequest(requestId) {
     generation_request_id: requestId || "",
   };
   state.selected.clear();
+  state.planSelected.clear();
   state.detailId = null;
   state.detail = null;
   state.list = null;
@@ -219,6 +221,7 @@ async function regeneratePlan() {
   try {
     const result = await postJson(`/api/research/requests/${requestId}/design-tasks/regenerate`, {});
     state.selected.clear();
+    state.planSelected.clear();
     state.flags.researchDiversityInsufficient = false;
     showToast(`已重新生成方案 · ${result.total} 个任务`);
     await reloadList();
@@ -389,6 +392,43 @@ async function deleteDesignTask(taskId) {
   }
 }
 
+async function excludeSelectedPlanTasks() {
+  const ids = [...state.planSelected];
+  if (!ids.length || state.flags.excludingPlan) return;
+  const choice = await confirmDeletion({
+    title: `排除 ${ids.length} 个题目设计任务`,
+    message: "将从计划中删除所选任务（含设计历史和关联构建记录）。你可以选择是否一并删除产物文件。",
+  });
+  if (choice === null) return;
+  state.flags.excludingPlan = true;
+  render(state.data);
+  initIcons();
+  const query = choice ? "?delete_artifacts=true" : "?delete_artifacts=false";
+  let failed = 0;
+  for (const taskId of ids) {
+    try {
+      await del(`/api/design-tasks/${taskId}${query}`);
+      state.planSelected.delete(taskId);
+      state.selected.delete(taskId);
+    } catch (err) {
+      failed += 1;
+      showToast(designErrorMessage(err.message), true);
+    }
+  }
+  const removed = ids.length - failed;
+  if (removed > 0) showToast(`已排除 ${removed} 个任务${failed ? `，${failed} 个失败` : ""}`, failed > 0);
+  state.detailId = null;
+  state.detail = null;
+  state.list = null;
+  try {
+    await ensureList();
+  } finally {
+    state.flags.excludingPlan = false;
+    render(state.data);
+    initIcons();
+  }
+}
+
 export function render(data) {
   state.data = data;
   const root = document.querySelector('[data-view="design-tasks"]');
@@ -505,14 +545,26 @@ function renderPlanMatrix(rows) {
   const canMutatePlan = rows.every((task) => ["draft", "archived"].includes(task.status));
   const canApprove = rows.length && rows.every((task) => task.status === "draft");
   const planAction = state.flags.planAction;
+  // 只统计当前矩阵里仍存在、且可变更的已勾选行
+  const selectableIds = rows
+    .filter((task) => canMutatePlan)
+    .map((task) => task.id);
+  const selectedCount = selectableIds.filter((id) => state.planSelected.has(id)).length;
+  const allSelected = selectableIds.length > 0 && selectedCount === selectableIds.length;
+  const excluding = !!state.flags.excludingPlan;
   return `
     <section class="card dt-plan-card">
       <div class="dt-plan-header">
         <div>
           <h3>计划矩阵</h3>
-          <p>按后端计算的 family 与 sub_technique 检查题型分布。</p>
+          <p>按后端计算的 family 与 sub_technique 检查题型分布。勾选重复或不需要的题目可单独排除。</p>
         </div>
         <div class="btn-group">
+          ${selectedCount ? `
+            <button class="btn btn-danger btn-sm dt-plan-exclude${excluding ? " btn-loading" : ""}"${excluding ? " disabled" : ""}>
+              <i data-lucide="trash-2"></i>排除所选 (${selectedCount})
+            </button>
+          ` : ""}
           <button class="btn btn-secondary btn-sm dt-approve-plan${planAction === "approve" ? " btn-loading" : ""}"${!canApprove || planAction ? " disabled" : ""}>
             <i data-lucide="check-circle-2"></i>确认方案
           </button>
@@ -525,6 +577,9 @@ function renderPlanMatrix(rows) {
         <table class="table dt-plan-table">
           <thead>
             <tr>
+              <th class="dt-select-col">
+                <input type="checkbox" class="dt-plan-select-all" title="全选/取消"${allSelected ? " checked" : ""}${canMutatePlan && selectableIds.length ? "" : " disabled"}>
+              </th>
               <th>任务</th>
               <th>难度</th>
               <th>Family</th>
@@ -555,6 +610,9 @@ function renderPlanMatrixRow(task, canMutatePlan) {
   const regenerating = !!state.flags.regeneratingTask?.[taskNo];
   return `
     <tr class="${warningClass}" data-design-task-id="${escapeHtml(task.id)}" data-task-no="${escapeHtml(task.task_no)}">
+      <td class="dt-select-col">
+        <input type="checkbox" class="dt-plan-select" title="选择以排除"${state.planSelected.has(task.id) ? " checked" : ""}${canMutatePlan ? "" : " disabled"}>
+      </td>
       <td><button class="dt-task-link dt-open-detail">任务 ${escapeHtml(task.task_no)}</button></td>
       <td>${escapeHtml(difficultyLabel(task.difficulty))}</td>
       <td>${escapeHtml(flags.family || "未计算")}</td>
@@ -1042,6 +1100,22 @@ export function bind() {
       regeneratePlan();
       return;
     }
+    if (event.target.closest(".dt-plan-exclude")) {
+      excludeSelectedPlanTasks();
+      return;
+    }
+    if (event.target.closest(".dt-plan-select-all")) {
+      const checked = event.target.closest(".dt-plan-select-all").checked;
+      document.querySelectorAll('[data-view="design-tasks"] .dt-plan-table .dt-plan-select:not(:disabled)').forEach((box) => {
+        const id = box.closest("[data-design-task-id]")?.dataset.designTaskId;
+        if (!id) return;
+        if (checked) state.planSelected.add(id);
+        else state.planSelected.delete(id);
+      });
+      render(state.data);
+      initIcons();
+      return;
+    }
 
     const row = event.target.closest("[data-design-task-id]");
     const taskId = row?.dataset.designTaskId || state.detailId;
@@ -1090,6 +1164,15 @@ export function bind() {
     if (!root || !root.contains(event.target)) return;
     if (event.target.id === "dt-filter-status") {
       applyFiltersFromInputs();
+      return;
+    }
+    const planBox = event.target.closest(".dt-plan-select");
+    if (planBox) {
+      const taskId = planBox.closest("[data-design-task-id]")?.dataset.designTaskId;
+      if (taskId && planBox.checked) state.planSelected.add(taskId);
+      if (taskId && !planBox.checked) state.planSelected.delete(taskId);
+      render(state.data);
+      initIcons();
       return;
     }
     const checkbox = event.target.closest(".dt-select-build");

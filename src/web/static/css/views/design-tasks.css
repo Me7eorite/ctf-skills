@@ -229,6 +229,23 @@
 
 .dt-select-col {
   width: 42px;
+  text-align: center;
+}
+
+.dt-plan-select,
+.dt-plan-select-all,
+.dt-select-build {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--brand-600);
+  vertical-align: middle;
+}
+
+.dt-plan-select:disabled,
+.dt-plan-select-all:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .dt-task-link {

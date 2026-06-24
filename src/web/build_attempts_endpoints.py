@@ -70,6 +70,34 @@ BUILD_ATTEMPTS_LIST_MAX_LIMIT = _env_int(
 
 
 def register_build_attempts_endpoints(app: FastAPI) -> None:
+    @app.get("/api/build-attempts/logs")
+    def list_build_logs() -> JSONResponse:
+        paths = _project_paths(app)
+        return JSONResponse(_collect_build_logs(paths))
+
+    @app.get("/api/build-attempts/logs/{name:path}")
+    def get_build_log(name: str) -> JSONResponse:
+        paths = _project_paths(app)
+        safe_name = name.replace("\\", "/").rsplit("/", 1)[-1]
+        path = _build_log_path(paths, safe_name)
+        if path is None:
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND, detail="log not found"
+            )
+        executions_root = paths.executions.resolve()
+        try:
+            path.resolve().relative_to(executions_root)
+            content = path.read_text(encoding="utf-8", errors="replace")[-30000:]
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.FORBIDDEN, detail="forbidden"
+            ) from exc
+        except OSError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND, detail="log not found"
+            ) from exc
+        return JSONResponse({"name": safe_name, "content": content})
+
     @app.post("/api/design-tasks/build")
     async def submit_design_tasks_for_build(request: Request) -> JSONResponse:
         try:
@@ -1206,3 +1234,63 @@ def _project_paths(app: FastAPI):
     from core.paths import ProjectPaths
 
     return getattr(app.state, "project_paths", None) or ProjectPaths.discover()
+
+
+# 构建日志分散在 work/executions/<attempt_id>/logs/hermes.log 与
+# .../repairs/<repair_id>/hermes.log。这里用合成展示名把它们聚合到日志页：
+#   主日志：build-<attempt_id>.log
+#   修复日志：build-<attempt_id>--repair-<repair_id>.log
+_BUILD_REPAIR_SEP = "--repair-"
+
+
+def _collect_build_logs(paths) -> list[dict[str, Any]]:
+    executions = paths.executions
+    if not executions.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for attempt_dir in executions.iterdir():
+        if attempt_dir.is_symlink() or not attempt_dir.is_dir():
+            continue
+        attempt_id = attempt_dir.name
+        main_log = attempt_dir / "logs" / "hermes.log"
+        if main_log.is_file() and not main_log.is_symlink():
+            rows.append(_build_log_row(f"build-{attempt_id}.log", main_log))
+        repairs = attempt_dir / "repairs"
+        if repairs.is_dir() and not repairs.is_symlink():
+            for repair_dir in repairs.iterdir():
+                if repair_dir.is_symlink() or not repair_dir.is_dir():
+                    continue
+                repair_log = repair_dir / "hermes.log"
+                if repair_log.is_file() and not repair_log.is_symlink():
+                    name = (
+                        f"build-{attempt_id}{_BUILD_REPAIR_SEP}{repair_dir.name}.log"
+                    )
+                    rows.append(_build_log_row(name, repair_log))
+    rows.sort(key=lambda row: row["updated_at"], reverse=True)
+    return rows
+
+
+def _build_log_row(name: str, path: Path) -> dict[str, Any]:
+    stat = path.stat()
+    return {
+        "name": name,
+        "size": stat.st_size,
+        "updated_at": datetime.fromtimestamp(
+            stat.st_mtime, tz=timezone.utc
+        ).isoformat(),
+    }
+
+
+def _build_log_path(paths, name: str) -> Path | None:
+    """Resolve a synthetic build-log name back to its real path, or None."""
+    if not name.startswith("build-") or not name.endswith(".log"):
+        return None
+    body = name[len("build-") : -len(".log")]
+    if _BUILD_REPAIR_SEP in body:
+        attempt_id, repair_id = body.split(_BUILD_REPAIR_SEP, 1)
+        if not attempt_id or not repair_id:
+            return None
+        return paths.executions / attempt_id / "repairs" / repair_id / "hermes.log"
+    if not body:
+        return None
+    return paths.executions / body / "logs" / "hermes.log"

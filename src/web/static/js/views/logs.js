@@ -8,12 +8,16 @@ import { escapeHtml, formatDateTime } from "../ui/format.js";
 //   - 研究日志：/api/research/logs 接口（按需懒加载，文件名如 research-run-xxx.log）
 
 let openName = null;
-let openSource = "system"; // "research" | "system"
+let openSource = "system"; // "research" | "build" | "system"
 let researchLogs = [];
 let researchLoaded = false;
 let researchLoading = false;
 let researchError = "";
-let filterSource = "all"; // "all" | "research" | "system"
+let buildLogs = [];
+let buildLoaded = false;
+let buildLoading = false;
+let buildError = "";
+let filterSource = "all"; // "all" | "research" | "build" | "system"
 
 function classifySource(name) {
   if (name.startsWith("research-")) return "research";
@@ -49,6 +53,22 @@ async function ensureResearchLogs() {
   renderLogsList();
 }
 
+async function ensureBuildLogs() {
+  if (buildLoaded || buildLoading) return;
+  buildLoading = true;
+  buildError = "";
+  try {
+    buildLogs = await api("/api/build-attempts/logs");
+    buildLoaded = true;
+  } catch (err) {
+    buildError = err.message;
+    buildLogs = [];
+  } finally {
+    buildLoading = false;
+  }
+  renderLogsList();
+}
+
 function getAllLogItems(systemLogs) {
   const items = [];
   for (const log of researchLogs) {
@@ -56,8 +76,18 @@ function getAllLogItems(systemLogs) {
       name: log.name,
       size: log.size,
       updated: log.updated_at,
-      source: classifySource(log.name),
+      // 来自研究日志接口的记录一律归为 research，不再按文件名前缀误判为「系统」
+      source: "research",
       endpoint: "research",
+    });
+  }
+  for (const log of buildLogs) {
+    items.push({
+      name: log.name,
+      size: log.size,
+      updated: log.updated_at,
+      source: "build",
+      endpoint: "build",
     });
   }
   for (const log of systemLogs) {
@@ -81,11 +111,14 @@ function filterItems(items) {
 }
 
 function logListHtml(systemLogs) {
-  if (researchLoading && !researchLoaded) {
-    return `<div style="padding: var(--space-lg); text-align: center; color: var(--ink-500);">正在加载研究日志…</div>`;
+  if ((researchLoading && !researchLoaded) || (buildLoading && !buildLoaded)) {
+    return `<div style="padding: var(--space-lg); text-align: center; color: var(--ink-500);">正在加载日志…</div>`;
   }
   if (researchError) {
     return `<div style="padding: var(--space-lg); color: var(--accent-red);">研究日志加载失败：${escapeHtml(researchError)}</div>`;
+  }
+  if (buildError) {
+    return `<div style="padding: var(--space-lg); color: var(--accent-red);">构建日志加载失败：${escapeHtml(buildError)}</div>`;
   }
   const allItems = getAllLogItems(systemLogs);
   const filtered = filterItems(allItems);
@@ -120,9 +153,12 @@ export function render(data) {
   window.__lastLogsData = data;
   const systemLogs = data.logs || [];
 
-  // 懒加载研究日志（首次进入页面时）
+  // 懒加载研究日志 / 构建日志（首次进入页面时）
   if (!researchLoaded && !researchLoading) {
     ensureResearchLogs();
+  }
+  if (!buildLoaded && !buildLoading) {
+    ensureBuildLogs();
   }
 
   root.innerHTML = `
@@ -159,7 +195,9 @@ async function loadLog(name, endpoint) {
   try {
     const url = endpoint === "research"
       ? `/api/research/logs/${encodeURIComponent(name)}`
-      : `/api/logs/${encodeURIComponent(name)}`;
+      : endpoint === "build"
+        ? `/api/build-attempts/logs/${encodeURIComponent(name)}`
+        : `/api/logs/${encodeURIComponent(name)}`;
     const result = await api(url);
     document.querySelector("#logTitle").textContent = result.name;
     document.querySelector("#logContent").textContent = result.content || "日志为空";
@@ -171,7 +209,9 @@ async function loadLog(name, endpoint) {
 async function refreshAll() {
   researchLoaded = false;
   researchLogs = [];
-  await ensureResearchLogs();
+  buildLoaded = false;
+  buildLogs = [];
+  await Promise.all([ensureResearchLogs(), ensureBuildLogs()]);
 }
 
 export function bind() {
