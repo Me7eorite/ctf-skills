@@ -167,6 +167,19 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                         ),
                         "items": {"type": "string", "minLength": 1},
                     },
+                    "actual_solution_type": {
+                        "type": "array",
+                        "description": (
+                            "Required for medium/hard/expert. The real solve "
+                            "type(s) — must exercise the nominal technique and "
+                            "MUST NOT be a generic collapse shortcut (e.g. "
+                            "static_xor_decrypt/direct_run_get_flag for re, "
+                            "default_credentials/exposed_flag_route for web, "
+                            "unintended_win_function/direct_shellcode for pwn). "
+                            "easy MAY omit it."
+                        ),
+                        "items": {"type": "string", "minLength": 1},
+                    },
                     "asset_flow": {
                         "type": "array",
                         "description": (
@@ -286,6 +299,15 @@ def _render_output_contract(task: DesignTask) -> str:
         else "\n6. This `easy` challenge MAY omit `asset_flow` or use a direct "
         "observe→exploit→flag flow; no required chain is enforced."
     )
+    solution_type_hint = (
+        "\n7. Declare a non-empty `actual_solution_type` that exercises the "
+        "nominal technique. It MUST NOT be a generic collapse shortcut for this "
+        "category (e.g. static_xor_decrypt / direct_run_get_flag for re, "
+        "default_credentials / exposed_flag_route for web, "
+        "unintended_win_function / direct_shellcode for pwn)."
+        if task.difficulty != "easy"
+        else "\n7. `actual_solution_type` is optional for `easy`."
+    )
     invariants = (
         "Invariants (enforced server-side; violating any of these fails "
         "the attempt):\n"
@@ -309,6 +331,7 @@ def _render_output_contract(task: DesignTask) -> str:
         "`writenup/exp.py` MUST NOT embed the literal `metadata.flag`."
         + uniqueness_hint
         + asset_flow_hint
+        + solution_type_hint
     )
     return f"{invariants}\n\n```json\n{schema_text}\n```"
 

@@ -250,6 +250,7 @@ def _valid_stdout() -> str:
                             "why_next_stage_requires_it": "The pinned note is visible only after admin login.",
                         }
                     ],
+                    "actual_solution_type": ["boolean_blind_sqli"],
                 }
             ],
         }

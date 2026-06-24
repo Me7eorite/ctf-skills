@@ -84,6 +84,9 @@ class DifficultyRubric:
     # 下限——每个有效转移 = 某阶段产出非空资产/能力且被下一阶段明确依赖。
     # easy=0（允许直链），medium=1，hard=2，expert=1（expert 以 novelty 为主）。
     min_asset_transitions: int = 0
+    # 声明的实际解法类型：medium 及以上必须声明 actual_solution_type，且不得是
+    # 该类别的"万能捷径"（否则名义考点沦为装饰，解法已坍缩）。
+    needs_actual_solution_type: bool = False
 
 
 RUBRIC: dict[str, DifficultyRubric] = {
@@ -99,6 +102,7 @@ RUBRIC: dict[str, DifficultyRubric] = {
         estimated_loc_budget=200,
         needs_unique_solution=False,
         min_asset_transitions=0,
+        needs_actual_solution_type=False,
     ),
     "medium": DifficultyRubric(
         techniques_min=2,
@@ -112,6 +116,7 @@ RUBRIC: dict[str, DifficultyRubric] = {
         estimated_loc_budget=400,
         needs_unique_solution=True,
         min_asset_transitions=1,
+        needs_actual_solution_type=True,
     ),
     "hard": DifficultyRubric(
         techniques_min=3,
@@ -125,6 +130,7 @@ RUBRIC: dict[str, DifficultyRubric] = {
         estimated_loc_budget=700,
         needs_unique_solution=True,
         min_asset_transitions=2,
+        needs_actual_solution_type=True,
     ),
     "expert": DifficultyRubric(
         techniques_min=2,
@@ -138,6 +144,7 @@ RUBRIC: dict[str, DifficultyRubric] = {
         estimated_loc_budget=1200,
         needs_unique_solution=True,
         min_asset_transitions=1,
+        needs_actual_solution_type=True,
     ),
 }
 
@@ -253,6 +260,30 @@ def validate_difficulty_alignment(
                 "needs both `produced_asset_or_capability` and "
                 "`why_next_stage_requires_it`). easy may omit asset_flow."
             )
+
+    if rubric.needs_actual_solution_type:
+        from domain.design.shortcuts import is_forbidden_shortcut
+
+        category = str(challenge.get("category") or "")
+        declared = challenge.get("actual_solution_type")
+        types = [s for s in declared if isinstance(s, str) and s.strip()] if (
+            isinstance(declared, list)
+        ) else []
+        if not types:
+            _flag(
+                f"{difficulty} requires a non-empty `actual_solution_type` "
+                "declaring how the challenge is really solved (so the nominal "
+                "concept cannot be decorative). easy may omit it."
+            )
+        else:
+            collapsed = [t for t in types if is_forbidden_shortcut(category, t)]
+            if collapsed:
+                _flag(
+                    "declared actual_solution_type is itself a known collapse "
+                    f"shortcut for {category}: {', '.join(collapsed)}. The real "
+                    "solve must exercise the nominal technique, not a generic "
+                    "shortcut."
+                )
 
     if not violations:
         return
