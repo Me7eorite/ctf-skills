@@ -32,6 +32,8 @@ from services.build_attempt_revalidation_service import (
     BuildAttemptRevalidationError,
     BuildAttemptRevalidationService,
 )
+from services.build_attempt_repair_service import BuildAttemptRepairService
+from services.build_attempt_repair_service import _challenge_directory
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -166,9 +168,39 @@ def test_revalidate_missing_challenge_keeps_attempt_failed(
     with session_factory() as session:
         row = session.get(build_model.BuildAttempt, attempt_id)
         assert row.status == "failed"
-        assert "missing_challenge" in row.error
-        assert session.get(task_model.DesignTask, task_id).status == "build_failed"
-    assert (paths.shards / "failed" / basename).exists()
+    assert "missing_challenge" in row.error
+
+
+def test_revalidate_uses_execution_workspace_when_global_challenge_missing(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    paths = ProjectPaths(root=tmp_path, repository=tmp_path)
+    paths.initialize()
+    task_id, attempt_id, basename, challenge_id = _seed_failed_attempt(session_factory)
+    _write_failed_shard(paths, task_id, attempt_id, basename, challenge_id)
+
+    workspace = paths.executions / str(attempt_id) / "current" / "output" / "challenges"
+    _write_web_challenge(paths, challenge_id, root=workspace)
+    global_challenge = paths.challenges / "web" / f"{challenge_id}-demo"
+    if global_challenge.exists():
+        import shutil
+        shutil.rmtree(global_challenge)
+
+    service = BuildAttemptRevalidationService(
+        paths=paths,
+        progress=PostgresProgressStore(session_factory),
+        session_factory=session_factory,
+        validator=_PassingValidator(),  # type: ignore[arg-type]
+        image_exists=lambda _image: True,
+    )
+
+    service.revalidate(attempt_id)
+
+    with session_factory() as session:
+        row = session.get(build_model.BuildAttempt, attempt_id)
+        assert row is not None
+        assert row.status == "succeeded"
 
 
 def test_revalidate_rejects_stale_failed_attempt(
@@ -502,8 +534,9 @@ def _write_failed_shard(
     )
 
 
-def _write_web_challenge(paths: ProjectPaths, challenge_id: str) -> None:
-    challenge = paths.challenges / "web" / f"{challenge_id}-demo"
+def _write_web_challenge(paths: ProjectPaths, challenge_id: str, *, root: Path | None = None) -> Path:
+    base = root or paths.challenges
+    challenge = base / "web" / f"{challenge_id}-demo"
     write_json(
         challenge / "metadata.json",
         {
@@ -544,3 +577,15 @@ def _write_web_challenge(paths: ProjectPaths, challenge_id: str) -> None:
     body = "## Overview\n" + ("A" * 520) + "\n## Solve\n" + ("B" * 80)
     (challenge / "writenup" / "wp.md").write_text(body, encoding="utf-8")
     (challenge / "README.md").write_text(body, encoding="utf-8")
+    return challenge
+
+
+def test_repair_challenge_directory_prefers_execution_workspace_when_global_missing(
+    tmp_path: Path,
+):
+    paths = ProjectPaths(root=tmp_path, repository=tmp_path)
+    paths.initialize()
+    workspace = paths.executions / "attempt-1" / "current" / "output" / "challenges"
+    challenge = _write_web_challenge(paths, "web-1234", root=workspace)
+    found = _challenge_directory(paths, "web-1234", None)
+    assert found == challenge

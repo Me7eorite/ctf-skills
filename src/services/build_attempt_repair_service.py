@@ -14,7 +14,6 @@ import sqlalchemy as sa
 
 from core.jsonio import read_json
 from core.paths import ProjectPaths
-from domain.resume import find_challenge_directory
 from hermes import process as hermes_process
 from persistence.models import build_attempts as build_model
 from persistence.models import design_tasks as task_model
@@ -237,10 +236,40 @@ def _challenge_directory(
         if not directory.is_dir():
             raise BuildAttemptRepairError("resulting challenge directory is missing")
         return directory
-    lookup = find_challenge_directory(paths, challenge_id)
-    if lookup.directory is None:
-        raise BuildAttemptRepairError(lookup.status)
-    return lookup.directory
+
+    execution_root = _latest_execution_workspace(paths, challenge_id)
+    if execution_root is not None:
+        return execution_root
+
+    raise BuildAttemptRepairError("missing_challenge")
+
+
+def _latest_execution_workspace(paths: ProjectPaths, challenge_id: str) -> Path | None:
+    executions = paths.executions
+    if not executions.exists():
+        return None
+
+    candidate_dirs: list[Path] = []
+    for attempt_dir in executions.iterdir():
+        if not attempt_dir.is_dir():
+            continue
+        output_root = attempt_dir / "current" / "output" / "challenges"
+        if not output_root.is_dir():
+            continue
+        for category_dir in output_root.iterdir():
+            if not category_dir.is_dir():
+                continue
+            for challenge_dir in category_dir.iterdir():
+                if not challenge_dir.is_dir():
+                    continue
+                if challenge_dir.name == challenge_id or challenge_dir.name.startswith(f"{challenge_id}-"):
+                    candidate_dirs.append(challenge_dir)
+
+    if not candidate_dirs:
+        return None
+
+    candidate_dirs.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    return candidate_dirs[0]
 
 
 def _failure_summary(session, source) -> str | None:

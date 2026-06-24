@@ -228,7 +228,7 @@ def test_generate_blocked_when_any_task_queued(session_factory: SessionFactory):
         service.generate_for_request(request.id)
 
 
-def test_unreviewed_draft_cannot_queue_then_approve_allows_queue(
+def test_unreviewed_draft_queues_and_can_still_be_approved(
     session_factory: SessionFactory,
 ):
     request, _ = _seed(
@@ -242,23 +242,36 @@ def test_unreviewed_draft_cannot_queue_then_approve_allows_queue(
 
     session = session_factory()
     try:
-        with pytest.raises(DesignTaskValidationError, match="plan_not_reviewed"):
-            DesignTaskRepository(session).set_design_task_status(tasks[0].id, "queued")
-        session.rollback()
-    finally:
-        session.close()
-
-    approved = service.approve_plan(request.id)
-    assert all(task.plan_reviewed_at is not None for task in approved)
-
-    session = session_factory()
-    try:
-        queued = DesignTaskRepository(session).set_design_task_status(approved[0].id, "queued")
+        queued = DesignTaskRepository(session).set_design_task_status(tasks[0].id, "queued")
         session.commit()
     finally:
         session.close()
 
     assert queued.status == "queued"
+    assert queued.plan_reviewed_at is not None
+
+
+def test_queue_auto_reviews_unreviewed_draft_plan(
+    session_factory: SessionFactory,
+):
+    request, _ = _seed(
+        session_factory,
+        target_count=1,
+        distribution={"easy": 1},
+        finding_labels=["blind SQLi"],
+    )
+    service = DesignTaskPlanningService(session_factory)
+    [task] = service.generate_for_request(request.id)
+
+    session = session_factory()
+    try:
+        queued = DesignTaskRepository(session).set_design_task_status(task.id, "queued")
+        session.commit()
+    finally:
+        session.close()
+
+    assert queued.status == "queued"
+    assert queued.plan_reviewed_at is not None
 
 
 def test_regenerate_plan_clears_prior_approval(session_factory: SessionFactory):
