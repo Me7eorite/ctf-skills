@@ -286,3 +286,63 @@ def test_long_references_are_truncated_for_command_line_safety(tmp_path):
     assert "reference truncated for command-line safety" in prompt
     assert "A" * MAX_REFERENCE_CHARS in prompt
     assert "A" * (MAX_REFERENCE_CHARS + 1) not in prompt
+
+
+def test_prior_designs_section_empty_when_first_in_batch(tmp_path):
+    context = load_design_prompt_context(_paths(tmp_path))
+    prompt = build_design_prompt(context, _task(), _request(), [], [], prior_designs=[])
+    assert "## Prior Batch Designs" in prompt
+    assert "this is the first design in the batch" in prompt
+
+
+def test_prior_designs_section_lists_siblings_and_warns_against_collapse(tmp_path):
+    context = load_design_prompt_context(_paths(tmp_path))
+    prior = [
+        {
+            "id": "re-0001",
+            "category": "re",
+            "difficulty": "easy",
+            "primary_technique": "ptrace anti-debug",
+            "techniques": ["ptrace anti-debug"],
+            "asset_flow_shape": ["debugger-free branch", "xor key"],
+            "unintended_solutions": ["bare run"],
+        }
+    ]
+    prompt = build_design_prompt(
+        context, _task("re"), _request("re"), [], [], prior_designs=prior
+    )
+    assert "do NOT reuse the same primary technique" in prompt
+    assert "re-0001" in prompt
+    assert "ptrace anti-debug" in prompt
+    assert "debugger-free branch -> xor key" in prompt
+
+
+def test_design_digest_extracts_collapse_fields():
+    from types import SimpleNamespace
+
+    from services.challenge_design_service import _design_digest
+
+    sib = SimpleNamespace(
+        challenge_id="re-0002",
+        category="re",
+        difficulty="medium",
+        primary_technique="fallback",
+    )
+    challenge = {
+        "id": "re-0002",
+        "category": "re",
+        "difficulty": "medium",
+        "primary_technique": "RDTSC timing",
+        "techniques": ["RDTSC timing", "key derivation"],
+        "asset_flow": [
+            {"produced_asset_or_capability": "timing key"},
+            {"produced_asset_or_capability": ""},  # filler, ignored
+            {"produced_asset_or_capability": "decrypted flag"},
+        ],
+        "unintended_solutions": ["bare run prints flag"],
+    }
+    digest = _design_digest(challenge, sib)
+    assert digest["id"] == "re-0002"
+    assert digest["primary_technique"] == "RDTSC timing"
+    assert digest["asset_flow_shape"] == ["timing key", "decrypted flag"]
+    assert digest["techniques"] == ["RDTSC timing", "key derivation"]

@@ -52,6 +52,7 @@ def build_design_prompt(
     findings: Sequence[ResearchFinding],
     sources: Sequence[ResearchSource],
     previous_error: str | None = None,
+    prior_designs: Sequence[Mapping[str, Any]] = (),
 ) -> str:
     """Build a deterministic Hermes prompt without filesystem or DB access."""
     reference_names = list(ALWAYS_REFERENCE_FILES)
@@ -66,6 +67,8 @@ def build_design_prompt(
         _render_event_brief(generation_request),
         "## Single Challenge Task",
         _render_design_task(design_task),
+        "## Prior Batch Designs (plan AGAINST these — do not collapse into them)",
+        _render_prior_designs(prior_designs),
         "## Build Budget",
         _render_build_budget(design_task.difficulty),
         "## Research Evidence",
@@ -431,6 +434,33 @@ def _render_design_task(task: DesignTask) -> str:
             f"- constraints: {_stable_json(task.constraints)}",
         ]
     )
+
+
+def _render_prior_designs(prior_designs: Sequence[Mapping[str, Any]]) -> str:
+    """Render digests of already-designed sibling tasks for anti-collapse planning."""
+    if not prior_designs:
+        return (
+            "- (none yet — this is the first design in the batch)\n"
+            "First analyze how a strong batch should spread across distinct "
+            "concepts, mechanisms, and solution shapes, then plan this one."
+        )
+    lines = [
+        "These tasks in the SAME batch are already designed. Your design MUST be "
+        "meaningfully different: do NOT reuse the same primary technique, the "
+        "same flag-protection / core mechanism, or the same asset-flow shape. "
+        "If your natural plan collapses toward one of these, change the "
+        "mechanism or the required path so the batch stays diverse.",
+        "",
+    ]
+    for d in prior_designs:
+        flow = " -> ".join(d.get("asset_flow_shape") or []) or "(direct)"
+        techs = ", ".join(d.get("techniques") or []) or d.get("primary_technique") or "?"
+        lines.append(
+            f"- `{d.get('id')}` [{d.get('category')}/{d.get('difficulty')}] "
+            f"primary={d.get('primary_technique')!r}; techniques={techs}; "
+            f"asset_flow={flow}"
+        )
+    return "\n".join(lines)
 
 
 def _render_findings(findings: Sequence[ResearchFinding]) -> str:
