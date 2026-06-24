@@ -305,7 +305,17 @@ class BuildAttemptRevalidationService:
                 raise BuildAttemptRevalidationError(
                     "challenge metadata id does not match"
                 )
-        return lookup.directory, lookup.status
+            return lookup.directory, lookup.status
+
+        workspace_directory = _latest_execution_workspace(self.paths, challenge_id)
+        if workspace_directory is None:
+            return None, lookup.status
+        metadata = read_json(workspace_directory / "metadata.json", None)
+        if not isinstance(metadata, Mapping) or metadata.get("id") != challenge_id:
+            raise BuildAttemptRevalidationError(
+                "challenge metadata id does not match"
+            )
+        return workspace_directory, "workspace"
 
     def _move_failed_shard_to_done(self, shard_basename: str) -> None:
         source = self.paths.shards / "failed" / shard_basename
@@ -504,3 +514,31 @@ def _lock_task(session, task_id: UUID) -> task_model.DesignTask | None:
         .where(task_model.DesignTask.id == task_id)
         .with_for_update()
     ).one_or_none()
+
+
+def _latest_execution_workspace(paths: ProjectPaths, challenge_id: str) -> Path | None:
+    executions = paths.executions
+    if not executions.exists():
+        return None
+
+    candidates: list[Path] = []
+    for attempt_dir in executions.iterdir():
+        if not attempt_dir.is_dir():
+            continue
+        output_root = attempt_dir / "current" / "output" / "challenges"
+        if not output_root.is_dir():
+            continue
+        for category_dir in output_root.iterdir():
+            if not category_dir.is_dir():
+                continue
+            for challenge_dir in category_dir.iterdir():
+                if not challenge_dir.is_dir():
+                    continue
+                if challenge_dir.name == challenge_id or challenge_dir.name.startswith(f"{challenge_id}-"):
+                    candidates.append(challenge_dir)
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    return candidates[0]

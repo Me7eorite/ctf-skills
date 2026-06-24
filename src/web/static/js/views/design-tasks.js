@@ -40,6 +40,7 @@ const state = {
   filters: { generation_request_id: "", status: "", category: "" },
   selected: new Set(),
   planSelected: new Set(),
+  collapse: null,
   flags: {},
   poll: { timer: null, loading: false },
 };
@@ -73,6 +74,28 @@ async function ensureList() {
     state.flags.list = { loading: false, error: null };
   } catch (err) {
     state.flags.list = { loading: false, error: err.message };
+  }
+  render(state.data);
+  initIcons();
+}
+
+async function ensureCollapseReport() {
+  const requestId = scopedRequestId();
+  const cache = state.collapse;
+  // Only meaningful when scoped to a single request; (re)fetch on scope change.
+  if (!requestId) {
+    if (cache) state.collapse = null;
+    return;
+  }
+  if (cache && (cache.requestId === requestId || cache.loading)) return;
+  state.collapse = { requestId, loading: true, report: null, error: null };
+  try {
+    const report = await api(
+      `/api/design-tasks/collapse?generation_request_id=${encodeURIComponent(requestId)}`,
+    );
+    state.collapse = { requestId, loading: false, report, error: null };
+  } catch (err) {
+    state.collapse = { requestId, loading: false, report: null, error: err.message };
   }
   render(state.data);
   initIcons();
@@ -449,6 +472,7 @@ export function render(data) {
 
 function renderList(root) {
   ensureList();
+  ensureCollapseReport();
   const flag = state.flags.list || {};
   if (flag.loading && !state.list) {
     root.innerHTML = `<div class="empty">正在加载题目设计任务…</div>`;
@@ -494,6 +518,8 @@ function renderList(root) {
       ${renderStageMetric("失败", counts.failed, "triangle-alert", "danger")}
     </div>
 
+    ${renderCollapseBanner()}
+
     ${renderPlanMatrix(rows)}
 
     <section class="card dt-list-card">
@@ -537,6 +563,36 @@ function renderList(root) {
       </div>
     ` : ""}
   `;
+}
+
+function renderCollapseBanner() {
+  if (!scopedRequestId()) return "";
+  const c = state.collapse;
+  if (!c || c.loading) {
+    return `<div class="dt-context-banner"><div><i data-lucide="loader"></i><span>正在分析批次坍缩…</span></div></div>`;
+  }
+  if (c.error || !c.report) return "";
+  const r = c.report;
+  if (r.too_small_to_judge) {
+    return `<div class="dt-context-banner"><div><i data-lucide="info"></i><span>题量不足（${r.total} 题，&lt;4）暂不判断批次坍缩</span></div></div>`;
+  }
+  const axisText = (axis) =>
+    axis && axis.dominant
+      ? `${escapeHtml(String(axis.dominant))} ${Math.round((axis.dominant_share || 0) * 100)}%`
+      : "—";
+  const summary = `主机制 ${axisText(r.mechanism)} · 主考点 ${axisText(r.technique)}`;
+  if (r.collapsed) {
+    const reasons = (r.reasons || [])
+      .map((x) => `<li>${escapeHtml(x)}</li>`)
+      .join("");
+    return `
+      <div class="error-banner" style="flex-direction:column;align-items:stretch;gap:6px;">
+        <div style="display:flex;gap:8px;align-items:center;"><i data-lucide="triangle-alert"></i><strong>批次坍缩风险（共 ${r.total} 题）</strong></div>
+        <ul style="margin:0 0 0 20px;">${reasons}</ul>
+        <div style="font-size:var(--font-xs);opacity:.85;">${summary}</div>
+      </div>`;
+  }
+  return `<div class="success-banner" style="gap:8px;"><i data-lucide="shield-check"></i><span>未检测到批次坍缩（${r.total} 题）· ${summary}</span></div>`;
 }
 
 function renderPlanMatrix(rows) {

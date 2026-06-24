@@ -438,3 +438,77 @@ class StringsExposureTests(unittest.TestCase):
         )
         errors = self.validator.contract_errors(challenge, metadata)
         self.assertEqual(errors, [])
+
+
+class IntendedPathNecessityTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.paths = ProjectPaths(
+            root=Path(self.temp.name) / "factory",
+            repository=Path(self.temp.name),
+        )
+        self.paths.initialize()
+        self.validator = ChallengeValidator(self.paths)
+
+    def _re_challenge(self, *, difficulty="medium"):
+        challenge = self.paths.challenges / "re" / "re-0001-demo"
+        (challenge / "src").mkdir(parents=True)
+        metadata = {
+            "id": "re-0001",
+            "title": "Demo",
+            "category": "re",
+            "difficulty": difficulty,
+            "build_status": "passed",
+            "flag": "flag{the_secret}",
+        }
+        return challenge, metadata
+
+    def test_plaintext_flag_in_source_is_unnecessary(self):
+        challenge, metadata = self._re_challenge()
+        (challenge / "src" / "crackme.c").write_text(
+            'const char *f = "flag{the_secret}";\n', encoding="utf-8"
+        )
+        reason = self.validator._intended_path_unnecessary(
+            challenge, metadata, "flag{the_secret}"
+        )
+        self.assertIsNotNone(reason)
+        self.assertIn("plaintext", reason)
+
+    def test_clean_source_is_not_unnecessary(self):
+        challenge, metadata = self._re_challenge()
+        (challenge / "src" / "crackme.c").write_text(
+            "int main(){return 0;}\n", encoding="utf-8"
+        )
+        reason = self.validator._intended_path_unnecessary(
+            challenge, metadata, "flag{the_secret}"
+        )
+        self.assertIsNone(reason)
+
+    def test_strings_intended_skips_necessity(self):
+        challenge, metadata = self._re_challenge()
+        metadata["primary_technique"] = "strings on the binary"
+        (challenge / "src" / "crackme.c").write_text(
+            'puts("flag{the_secret}");\n', encoding="utf-8"
+        )
+        reason = self.validator._intended_path_unnecessary(
+            challenge, metadata, "flag{the_secret}"
+        )
+        self.assertIsNone(reason)
+
+    def test_bare_run_reveals_flag_true_and_false(self):
+        from domain.validation import _bare_run_reveals_flag
+
+        prints = self.paths.root / "prints"
+        prints.write_text("#!/bin/sh\necho flag{the_secret}\n", encoding="utf-8")
+        prints.chmod(0o755)
+        self.assertTrue(
+            _bare_run_reveals_flag(prints, "flag{the_secret}", timeout=10)
+        )
+
+        silent = self.paths.root / "silent"
+        silent.write_text("#!/bin/sh\necho nothing\n", encoding="utf-8")
+        silent.chmod(0o755)
+        self.assertFalse(
+            _bare_run_reveals_flag(silent, "flag{the_secret}", timeout=10)
+        )

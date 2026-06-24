@@ -392,6 +392,9 @@ def _plan_candidates(
         technique_quota=profile.technique_quota,
         cooldown_window=profile.cooldown_window,
     )
+    mechanisms = _allocate_core_mechanisms(
+        category, len(difficulty_slots), start_offset=_mechanism_offset(category)
+    )
     for index, difficulty in enumerate(difficulty_slots):
         task_no = index + 1
         allocation = allocations[index]
@@ -415,7 +418,10 @@ def _plan_candidates(
             "constraints": dict(runtime_constraints),
             "evidence_summary": _evidence_summary(run, request.topic, task_findings),
             "finding_ids": [f.id for f in task_findings],
-            "diversity_flags": allocation.diversity_flags,
+            "diversity_flags": {
+                **dict(allocation.diversity_flags),
+                "core_mechanism": mechanisms[index],
+            },
         }
         # Phase 2 (D5=b): for hard/expert tasks the optional Hermes
         # planner can replace the template scenario with a Hermes-locked
@@ -685,6 +691,87 @@ def _allocate_primary_findings(
         used_subtechniques.add(sub_technique)
         recent_families.append(family)
     return allocations
+
+
+# Per-category implementation/flag-protection mechanism catalogs. This is the
+# "core mechanism" axis that prevents implementation collapse (e.g. every RE
+# challenge defaulting to XOR). Operators can override via
+# generation-profiles.json -> categories.<cat>.mechanisms.
+_DEFAULT_MECHANISMS: dict[str, tuple[str, ...]] = {
+    "re": (
+        "xor_keystream",
+        "arithmetic_chain",
+        "sbox_substitution",
+        "tea_xtea",
+        "rc4",
+        "aes",
+        "hash_compare",
+        "per_char_permutation",
+        "lcg_prng_keystream",
+        "fsm_or_vm_check",
+    ),
+    "pwn": (
+        "stack_ret2win_disabled",
+        "ret2libc_leak",
+        "format_string_got",
+        "heap_uaf_tcache",
+        "heap_overlap",
+        "integer_oob",
+        "srop",
+        "seccomp_orw",
+    ),
+    "web": (
+        "ssti_to_secret",
+        "ssrf_internal_service",
+        "deserialization_gadget",
+        "jwt_algorithm_confusion",
+        "upload_server_side_parse",
+        "blind_sqli_exfil",
+        "idor_cross_user",
+        "business_logic_state",
+    ),
+}
+
+
+def _mechanisms_for_category(category: str) -> tuple[str, ...]:
+    configured = _generation_profile_category(category).get("mechanisms")
+    if isinstance(configured, list):
+        cleaned = tuple(m for m in configured if isinstance(m, str) and m.strip())
+        if cleaned:
+            return cleaned
+    return _DEFAULT_MECHANISMS.get(category, ("generic_gate",))
+
+
+def _allocate_core_mechanisms(
+    category: str, count: int, *, start_offset: int = 0
+) -> list[str]:
+    """Deterministically rotate a flag-protection / core mechanism per task.
+
+    Round-robin over the category catalog so a batch spreads evenly across
+    mechanisms instead of every task collapsing to the same default (XOR for
+    RE, win-function for PWN, weak-creds for Web). ``start_offset`` continues
+    the rotation across batches (so a second batch does not restart at the same
+    mechanism). Deterministic -> testable; the assigned mechanism is later
+    injected as a binding design constraint.
+    """
+    catalog = _mechanisms_for_category(category)
+    base = max(0, start_offset)
+    return [catalog[(base + i) % len(catalog)] for i in range(max(0, count))]
+
+
+def _mechanism_offset(category: str) -> int:
+    """Cross-batch rotation offset = how many prior designs of this category
+    are recorded in the experience ledger (mod catalog size). Best-effort."""
+    try:
+        from services.design_ledger import recent_entries
+
+        prior = len(
+            recent_entries(ProjectPaths.discover(), category=category, limit=5000)
+        )
+        catalog = _mechanisms_for_category(category)
+        return prior % len(catalog)
+    except Exception:  # noqa: BLE001 — offset is an optimization
+        return 0
 
 
 def _diversity_profile(

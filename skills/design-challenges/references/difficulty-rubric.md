@@ -65,5 +65,7 @@ When generating a design, populate these fields with the rubric in mind:
 - `implementation_plan` — required for hard/expert; describe vulnerability location, flag handling, and what forces the intended chain. When useful, add `components` as an array naming only independently buildable or deployable units.
 - `novelty` — required for expert; describe what is non-trivial in 1–3 sentences.
 - `unintended_solutions` — required for medium/hard/expert; list each considered alternate solution and how the design blocks it. Optional for easy.
+- `asset_flow` — required for medium (≥1 effective transition) and hard (≥2); each stage produces a concrete `produced_asset_or_capability` the next stage needs (`why_next_stage_requires_it`). The flag must not be reachable while skipping the chain. Optional/direct for easy.
+- `actual_solution_type` — required for medium/hard/expert; the real solve type(s), which MUST exercise the nominal technique and MUST NOT be a generic **collapse shortcut** for the category (re: `static_xor_decrypt`, `direct_run_get_flag`, `strings_plaintext_flag`, `hardcoded_license`; web: `default_credentials`, `exposed_flag_route`, `source_code_leak`, `backup_file_leak`, `unrelated_sqli/lfi`; pwn: `unintended_win_function`, `direct_shellcode`, `direct_stack_ret`, `one_gadget_shortcut`). A design whose declared solve IS a shortcut is "collapsed" and rejected.
 
 If the validator rejects with a difficulty-alignment error, revise or split the design to meet the tier, or upgrade it to the appropriate difficulty.

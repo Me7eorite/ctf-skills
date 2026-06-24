@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 from pathlib import Path
 from uuid import UUID
 
@@ -61,6 +62,10 @@ class _AttemptStart:
     sources: Sequence[research_dto.ResearchSource]
     max_attempts: int
     previous_error: str | None
+    # Sequential design memory: digests of already-designed sibling tasks in the
+    # same batch, so this design can plan AGAINST them and avoid collapsing into
+    # the same concept / mechanism / solution shape.
+    prior_designs: Sequence[Mapping[str, Any]] = ()
 
 
 PromptContextLoader = Callable[[ProjectPaths], DesignPromptContext]
@@ -108,6 +113,7 @@ class ChallengeDesignService:
                 started.findings,
                 started.sources,
                 previous_error=started.previous_error,
+                prior_designs=started.prior_designs,
             )
             prompt_path.parent.mkdir(parents=True, exist_ok=True)
             prompt_path.write_text(prompt_text, encoding="utf-8")
@@ -153,6 +159,7 @@ class ChallengeDesignService:
                     raise ChallengeDesignNotFoundError(
                         f"design task {design.design_task_id} does not exist"
                     )
+                self._record_ledger(started.design_task, validated.payload)
                 return ChallengeDesignServiceResult(
                     design_task_id=design.design_task_id,
                     attempt_id=attempt.id,
@@ -218,6 +225,9 @@ class ChallengeDesignService:
                 design_task.finding_ids,
             )
             sources = research_repo.list_sources(design_task.research_run_id)
+            prior_designs = _collect_prior_designs(
+                task_repo, design_repo, design_task
+            )
             return _AttemptStart(
                 attempt=attempt,
                 design_task=design_task,
@@ -228,7 +238,38 @@ class ChallengeDesignService:
                 previous_error=(
                     latest_attempt.last_error if latest_attempt is not None else None
                 ),
+                prior_designs=prior_designs,
             )
+
+    def _record_ledger(
+        self, design_task: task_dto.DesignTask, payload: Mapping[str, Any]
+    ) -> None:
+        """Append this design's digest to the cross-batch experience ledger.
+
+        Best-effort: the ledger is a planning optimization, never a correctness
+        dependency, so any failure here must not fail an otherwise-valid design.
+        """
+        try:
+            from domain.design.collapse import challenge_fingerprint
+            from services.design_ledger import append_design
+
+            challenges = (payload or {}).get("challenges") or []
+            challenge = challenges[0] if challenges else {}
+            flags = design_task.diversity_flags or {}
+            digest = _design_digest(challenge, design_task)
+            append_design(
+                self.paths,
+                {
+                    "generation_request_id": str(design_task.generation_request_id),
+                    "fingerprint": challenge_fingerprint(
+                        {**challenge, "diversity_flags": flags}
+                    ),
+                    "core_mechanism": flags.get("core_mechanism"),
+                    **digest,
+                },
+            )
+        except Exception:  # noqa: BLE001 — ledger is non-critical
+            return
 
     def _fail_attempt(
         self,
@@ -270,6 +311,65 @@ def _resolve_profile_name(repo: ResearchRepository) -> str:
     if binding is None or binding.status != "enabled":
         return DEFAULT_PROFILE_NAME
     return binding.profile_name
+
+
+_PRIOR_STATUSES = ("designed", "building", "built")
+
+
+def _collect_prior_designs(
+    task_repo: DesignTaskRepository,
+    design_repo: ChallengeDesignRepository,
+    design_task: task_dto.DesignTask,
+) -> list[dict[str, Any]]:
+    """Digest already-designed sibling tasks of the same batch (ordered).
+
+    Sequential design memory: when designing task N, summarize tasks that were
+    already designed in the same generation request so the prompt can steer the
+    new design AWAY from their concepts/mechanisms/solution shapes — the core
+    of the anti-collapse "plan stage".
+    """
+    siblings = task_repo.list_design_tasks(design_task.generation_request_id)
+    digests: list[dict[str, Any]] = []
+    for sib in siblings:
+        if sib.id == design_task.id or sib.status not in _PRIOR_STATUSES:
+            continue
+        design = design_repo.latest_design(sib.id)
+        if design is None:
+            continue
+        challenges = (design.payload or {}).get("challenges") or []
+        challenge = challenges[0] if challenges else {}
+        digests.append(_design_digest(challenge, sib))
+    return digests
+
+
+def _design_digest(
+    challenge: Mapping[str, Any], sib: task_dto.DesignTask
+) -> dict[str, Any]:
+    """Compact, collapse-relevant summary of one prior design."""
+    asset_flow = challenge.get("asset_flow")
+    flow_shape = []
+    if isinstance(asset_flow, list):
+        for stage in asset_flow:
+            if isinstance(stage, Mapping):
+                produced = stage.get("produced_asset_or_capability")
+                if isinstance(produced, str) and produced.strip():
+                    flow_shape.append(produced.strip())
+    return {
+        "id": challenge.get("id") or sib.challenge_id,
+        "category": challenge.get("category") or sib.category,
+        "difficulty": challenge.get("difficulty") or sib.difficulty,
+        "primary_technique": challenge.get("primary_technique")
+        or sib.primary_technique,
+        "techniques": [
+            t for t in (challenge.get("techniques") or []) if isinstance(t, str)
+        ],
+        "asset_flow_shape": flow_shape,
+        "unintended_solutions": [
+            s
+            for s in (challenge.get("unintended_solutions") or [])
+            if isinstance(s, str)
+        ],
+    }
 
 
 def _filter_task_findings(

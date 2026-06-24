@@ -133,6 +133,7 @@ def _payload(**challenge_overrides):
                 "why_next_stage_requires_it": "The flag is served only from the signed export URL.",
             },
         ],
+        "actual_solution_type": ["jwt_kid_path_traversal", "key_confusion"],
     }
     challenge.update(challenge_overrides)
     return {"event": {"flag_format": "flag{...}"}, "challenges": [challenge]}
@@ -588,6 +589,39 @@ def test_difficulty_hard_requires_two_transitions():
         match=r"at least 2 effective transition",
     ):
         validate_design_payload(payload, _parent_task(difficulty="hard"))
+
+
+def test_difficulty_medium_requires_actual_solution_type():
+    payload = _payload()
+    payload["challenges"][0].pop("actual_solution_type", None)
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match=r"non-empty `actual_solution_type`",
+    ):
+        validate_design_payload(payload, _parent_task())
+
+
+def test_difficulty_rejects_solution_type_that_is_a_collapse_shortcut():
+    # category re + declared solve "static_xor_decrypt" = collapse by definition.
+    payload = _payload(
+        category="re",
+        port=None,
+        deployment="static elf attachment",
+        actual_solution_type=["static_xor_decrypt"],
+        artifacts=[
+            "README.md",
+            "metadata.json",
+            "validate.sh",
+            "writenup/wp.md",
+            "writenup/exp.py",
+            "attachments/crackme",
+        ],
+    )
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match=r"collapse shortcut",
+    ):
+        validate_design_payload(payload, _parent_task(category="re", port=None))
 
 
 def test_difficulty_easy_allows_omitting_asset_flow():

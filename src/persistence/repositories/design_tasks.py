@@ -228,6 +228,13 @@ class DesignTaskRepository:
         row = self.session.get(model.DesignTask, task_id)
         if row is None:
             raise DesignTaskValidationError(f"design task {task_id} does not exist")
+        if (
+            row.status == "draft"
+            and status == "queued"
+            and row.plan_reviewed_at is None
+            and row.diversity_flags is not None
+        ):
+            row.plan_reviewed_at = _utcnow()
         validate_status_transition(
             row.status,
             status,

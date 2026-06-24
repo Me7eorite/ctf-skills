@@ -228,7 +228,7 @@ def test_generate_blocked_when_any_task_queued(session_factory: SessionFactory):
         service.generate_for_request(request.id)
 
 
-def test_unreviewed_draft_cannot_queue_then_approve_allows_queue(
+def test_unreviewed_draft_queues_and_can_still_be_approved(
     session_factory: SessionFactory,
 ):
     request, _ = _seed(
@@ -242,23 +242,36 @@ def test_unreviewed_draft_cannot_queue_then_approve_allows_queue(
 
     session = session_factory()
     try:
-        with pytest.raises(DesignTaskValidationError, match="plan_not_reviewed"):
-            DesignTaskRepository(session).set_design_task_status(tasks[0].id, "queued")
-        session.rollback()
-    finally:
-        session.close()
-
-    approved = service.approve_plan(request.id)
-    assert all(task.plan_reviewed_at is not None for task in approved)
-
-    session = session_factory()
-    try:
-        queued = DesignTaskRepository(session).set_design_task_status(approved[0].id, "queued")
+        queued = DesignTaskRepository(session).set_design_task_status(tasks[0].id, "queued")
         session.commit()
     finally:
         session.close()
 
     assert queued.status == "queued"
+    assert queued.plan_reviewed_at is not None
+
+
+def test_queue_auto_reviews_unreviewed_draft_plan(
+    session_factory: SessionFactory,
+):
+    request, _ = _seed(
+        session_factory,
+        target_count=1,
+        distribution={"easy": 1},
+        finding_labels=["blind SQLi"],
+    )
+    service = DesignTaskPlanningService(session_factory)
+    [task] = service.generate_for_request(request.id)
+
+    session = session_factory()
+    try:
+        queued = DesignTaskRepository(session).set_design_task_status(task.id, "queued")
+        session.commit()
+    finally:
+        session.close()
+
+    assert queued.status == "queued"
+    assert queued.plan_reviewed_at is not None
 
 
 def test_regenerate_plan_clears_prior_approval(session_factory: SessionFactory):
@@ -767,3 +780,41 @@ def test_generate_replaces_archived_tasks(session_factory: SessionFactory):
     second = service.generate_for_request(request.id)
     assert {t.status for t in second} == {"draft"}
     assert {t.id for t in second}.isdisjoint({t.id for t in first})
+
+
+def test_allocate_core_mechanisms_rotates_round_robin():
+    mechs = planning_module._allocate_core_mechanisms("re", 10)
+    catalog = planning_module._DEFAULT_MECHANISMS["re"]
+    # 10 tasks over a 10-item catalog → every mechanism used exactly once,
+    # so XOR is 1/10, not the whole batch.
+    assert len(mechs) == 10
+    assert set(mechs) == set(catalog)
+    assert mechs.count("xor_keystream") == 1
+    # no adjacent repeats
+    assert all(a != b for a, b in zip(mechs, mechs[1:]))
+
+
+def test_allocate_core_mechanisms_spreads_when_more_tasks_than_catalog():
+    catalog = planning_module._DEFAULT_MECHANISMS["re"]
+    mechs = planning_module._allocate_core_mechanisms("re", len(catalog) + 3)
+    # even spread: max count - min count <= 1
+    counts = {m: mechs.count(m) for m in catalog}
+    assert max(counts.values()) - min(counts.values()) <= 1
+
+
+def test_mechanisms_for_category_honors_profile_override(monkeypatch):
+    monkeypatch.setattr(
+        planning_module,
+        "_generation_profile_category",
+        lambda category: {"mechanisms": ["custom_a", "custom_b"]},
+    )
+    assert planning_module._mechanisms_for_category("re") == ("custom_a", "custom_b")
+
+
+def test_mechanisms_for_category_falls_back_to_default(monkeypatch):
+    monkeypatch.setattr(
+        planning_module, "_generation_profile_category", lambda category: {}
+    )
+    assert planning_module._mechanisms_for_category("re") == (
+        planning_module._DEFAULT_MECHANISMS["re"]
+    )

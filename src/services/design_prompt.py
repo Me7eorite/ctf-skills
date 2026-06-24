@@ -52,6 +52,7 @@ def build_design_prompt(
     findings: Sequence[ResearchFinding],
     sources: Sequence[ResearchSource],
     previous_error: str | None = None,
+    prior_designs: Sequence[Mapping[str, Any]] = (),
 ) -> str:
     """Build a deterministic Hermes prompt without filesystem or DB access."""
     reference_names = list(ALWAYS_REFERENCE_FILES)
@@ -66,6 +67,8 @@ def build_design_prompt(
         _render_event_brief(generation_request),
         "## Single Challenge Task",
         _render_design_task(design_task),
+        "## Prior Batch Designs (plan AGAINST these — do not collapse into them)",
+        _render_prior_designs(prior_designs),
         "## Build Budget",
         _render_build_budget(design_task.difficulty),
         "## Research Evidence",
@@ -161,6 +164,19 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                             "solve path). Each entry names one alternate/unintended "
                             "solution you considered and how the design blocks it. "
                             "easy MAY omit this and allow multiple solve paths."
+                        ),
+                        "items": {"type": "string", "minLength": 1},
+                    },
+                    "actual_solution_type": {
+                        "type": "array",
+                        "description": (
+                            "Required for medium/hard/expert. The real solve "
+                            "type(s) — must exercise the nominal technique and "
+                            "MUST NOT be a generic collapse shortcut (e.g. "
+                            "static_xor_decrypt/direct_run_get_flag for re, "
+                            "default_credentials/exposed_flag_route for web, "
+                            "unintended_win_function/direct_shellcode for pwn). "
+                            "easy MAY omit it."
                         ),
                         "items": {"type": "string", "minLength": 1},
                     },
@@ -283,6 +299,15 @@ def _render_output_contract(task: DesignTask) -> str:
         else "\n6. This `easy` challenge MAY omit `asset_flow` or use a direct "
         "observe→exploit→flag flow; no required chain is enforced."
     )
+    solution_type_hint = (
+        "\n7. Declare a non-empty `actual_solution_type` that exercises the "
+        "nominal technique. It MUST NOT be a generic collapse shortcut for this "
+        "category (e.g. static_xor_decrypt / direct_run_get_flag for re, "
+        "default_credentials / exposed_flag_route for web, "
+        "unintended_win_function / direct_shellcode for pwn)."
+        if task.difficulty != "easy"
+        else "\n7. `actual_solution_type` is optional for `easy`."
+    )
     invariants = (
         "Invariants (enforced server-side; violating any of these fails "
         "the attempt):\n"
@@ -306,6 +331,7 @@ def _render_output_contract(task: DesignTask) -> str:
         "`writenup/exp.py` MUST NOT embed the literal `metadata.flag`."
         + uniqueness_hint
         + asset_flow_hint
+        + solution_type_hint
     )
     return f"{invariants}\n\n```json\n{schema_text}\n```"
 
@@ -417,20 +443,64 @@ def _render_event_brief(request: GenerationRequest) -> str:
 
 
 def _render_design_task(task: DesignTask) -> str:
-    return "\n".join(
-        [
-            f"- challenge_id: {task.challenge_id}",
-            f"- title: {task.title}",
-            f"- category: {task.category}",
-            f"- difficulty: {task.difficulty}",
-            f"- points: {task.points}",
-            f"- port: {task.port if task.port is not None else 'null'}",
-            f"- primary_technique: {task.primary_technique}",
-            f"- learning_objective: {task.learning_objective}",
-            f"- scenario: {task.scenario}",
-            f"- constraints: {_stable_json(task.constraints)}",
-        ]
-    )
+    lines = [
+        f"- challenge_id: {task.challenge_id}",
+        f"- title: {task.title}",
+        f"- category: {task.category}",
+        f"- difficulty: {task.difficulty}",
+        f"- points: {task.points}",
+        f"- port: {task.port if task.port is not None else 'null'}",
+        f"- primary_technique: {task.primary_technique}",
+        f"- learning_objective: {task.learning_objective}",
+        f"- scenario: {task.scenario}",
+        f"- constraints: {_stable_json(task.constraints)}",
+    ]
+    mechanism = _assigned_mechanism(task)
+    if mechanism:
+        lines.append(
+            f"- assigned core_mechanism: `{mechanism}` — the flag/key protection "
+            "(re), exploitation primitive (pwn), or solve shape (web) MUST use "
+            "THIS mechanism. Do NOT default to a generic shortcut (e.g. plain "
+            "XOR for re, win-function for pwn, weak-creds for web); the assigned "
+            "mechanism is what keeps the batch diverse."
+        )
+    return "\n".join(lines)
+
+
+def _assigned_mechanism(task: DesignTask) -> str | None:
+    flags = getattr(task, "diversity_flags", None)
+    if isinstance(flags, Mapping):
+        value = flags.get("core_mechanism")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _render_prior_designs(prior_designs: Sequence[Mapping[str, Any]]) -> str:
+    """Render digests of already-designed sibling tasks for anti-collapse planning."""
+    if not prior_designs:
+        return (
+            "- (none yet — this is the first design in the batch)\n"
+            "First analyze how a strong batch should spread across distinct "
+            "concepts, mechanisms, and solution shapes, then plan this one."
+        )
+    lines = [
+        "These tasks in the SAME batch are already designed. Your design MUST be "
+        "meaningfully different: do NOT reuse the same primary technique, the "
+        "same flag-protection / core mechanism, or the same asset-flow shape. "
+        "If your natural plan collapses toward one of these, change the "
+        "mechanism or the required path so the batch stays diverse.",
+        "",
+    ]
+    for d in prior_designs:
+        flow = " -> ".join(d.get("asset_flow_shape") or []) or "(direct)"
+        techs = ", ".join(d.get("techniques") or []) or d.get("primary_technique") or "?"
+        lines.append(
+            f"- `{d.get('id')}` [{d.get('category')}/{d.get('difficulty')}] "
+            f"primary={d.get('primary_technique')!r}; techniques={techs}; "
+            f"asset_flow={flow}"
+        )
+    return "\n".join(lines)
 
 
 def _render_findings(findings: Sequence[ResearchFinding]) -> str:
