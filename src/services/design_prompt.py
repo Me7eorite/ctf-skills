@@ -420,20 +420,37 @@ def _render_event_brief(request: GenerationRequest) -> str:
 
 
 def _render_design_task(task: DesignTask) -> str:
-    return "\n".join(
-        [
-            f"- challenge_id: {task.challenge_id}",
-            f"- title: {task.title}",
-            f"- category: {task.category}",
-            f"- difficulty: {task.difficulty}",
-            f"- points: {task.points}",
-            f"- port: {task.port if task.port is not None else 'null'}",
-            f"- primary_technique: {task.primary_technique}",
-            f"- learning_objective: {task.learning_objective}",
-            f"- scenario: {task.scenario}",
-            f"- constraints: {_stable_json(task.constraints)}",
-        ]
-    )
+    lines = [
+        f"- challenge_id: {task.challenge_id}",
+        f"- title: {task.title}",
+        f"- category: {task.category}",
+        f"- difficulty: {task.difficulty}",
+        f"- points: {task.points}",
+        f"- port: {task.port if task.port is not None else 'null'}",
+        f"- primary_technique: {task.primary_technique}",
+        f"- learning_objective: {task.learning_objective}",
+        f"- scenario: {task.scenario}",
+        f"- constraints: {_stable_json(task.constraints)}",
+    ]
+    mechanism = _assigned_mechanism(task)
+    if mechanism:
+        lines.append(
+            f"- assigned core_mechanism: `{mechanism}` — the flag/key protection "
+            "(re), exploitation primitive (pwn), or solve shape (web) MUST use "
+            "THIS mechanism. Do NOT default to a generic shortcut (e.g. plain "
+            "XOR for re, win-function for pwn, weak-creds for web); the assigned "
+            "mechanism is what keeps the batch diverse."
+        )
+    return "\n".join(lines)
+
+
+def _assigned_mechanism(task: DesignTask) -> str | None:
+    flags = getattr(task, "diversity_flags", None)
+    if isinstance(flags, Mapping):
+        value = flags.get("core_mechanism")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
 
 
 def _render_prior_designs(prior_designs: Sequence[Mapping[str, Any]]) -> str:

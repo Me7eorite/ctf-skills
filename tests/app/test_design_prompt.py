@@ -346,3 +346,15 @@ def test_design_digest_extracts_collapse_fields():
     assert digest["primary_technique"] == "RDTSC timing"
     assert digest["asset_flow_shape"] == ["timing key", "decrypted flag"]
     assert digest["techniques"] == ["RDTSC timing", "key derivation"]
+
+
+def test_prompt_renders_assigned_core_mechanism_as_binding(tmp_path):
+    import dataclasses
+
+    context = load_design_prompt_context(_paths(tmp_path))
+    task = dataclasses.replace(
+        _task("re"), diversity_flags={"core_mechanism": "tea_xtea"}
+    )
+    prompt = build_design_prompt(context, task, _request("re"), [], [])
+    assert "assigned core_mechanism: `tea_xtea`" in prompt
+    assert "Do NOT default to a generic shortcut" in prompt
