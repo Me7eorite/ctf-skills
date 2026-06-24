@@ -22,8 +22,7 @@ from persistence.models import executions as exec_model
 from persistence.models import research as research_model
 from persistence.models.progress import ProgressEvent, ProgressSnapshot
 from persistence.repositories import ExecutionsRepository
-from persistence.session import transaction
-from persistence.session import SessionFactory
+from persistence.session import SessionFactory, transaction
 from services.build_reconciler import (
     DEFAULT_POLL_INTERVAL_SECONDS,
     BuildReconciler,
@@ -213,6 +212,44 @@ def test_queued_to_running_uses_running_shard_claim_sidecar(
     assert row.started_at == datetime(2026, 6, 18, 10, 0, tzinfo=timezone.utc)
 
 
+def test_stale_running_file_for_queued_attempt_is_restored_to_pending(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    task_id, attempt_id, basename = _seed_attempt(session_factory)
+    reconciler = _reconciler(tmp_path, session_factory)
+    running = reconciler.paths.shards / "running" / f"{attempt_id}.dashboard-sequential-01.json"
+    payload = _payload(task_id, attempt_id, _challenge_id(session_factory, task_id))
+    write_json(running, payload)
+    write_json(
+        running.with_suffix(".json.claim.json"),
+        {
+            "source_name": basename,
+            "worker": "dashboard-sequential-01",
+            "claimed_at": "2026-06-18T10:00:00Z",
+        },
+    )
+    with session_factory() as session:
+        execution = ExecutionsRepository(session).schedule_execution(
+            attempt_id,
+            execution_kind="initial",
+        )
+        row = session.get(build_model.BuildAttempt, attempt_id)
+        row.latest_execution_id = execution.id
+        row.current_execution_id = execution.id
+        session.commit()
+
+    reconciler.tick_once_sync()
+
+    row = _row(session_factory, attempt_id)
+    assert row.status == "queued"
+    assert row.worker is None
+    assert row.started_at is None
+    assert not running.exists()
+    assert not running.with_suffix(".json.claim.json").exists()
+    assert (reconciler.paths.shards / "pending" / basename).exists()
+
+
 def test_dry_run_requeue_stays_queued(
     tmp_path: Path,
     session_factory: SessionFactory,
@@ -352,8 +389,9 @@ def test_restore_accepts_stale_running_attempt(
         session.get(task_model.DesignTask, task_id).status = "building"
         session.flush()
 
-    from web.build_attempts_endpoints import register_build_attempts_endpoints
     from fastapi import FastAPI
+
+    from web.build_attempts_endpoints import register_build_attempts_endpoints
 
     app = FastAPI()
     app.state.project_paths = paths

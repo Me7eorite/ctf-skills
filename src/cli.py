@@ -292,6 +292,23 @@ def _run_build_attempt_sequence(
                 str(tail_id) for tail_id in build_attempt_sequence[index + 1 :]
             ]
             break
+        except Exception as exc:
+            abort_reason = "worker_exception"
+            interrupted_attempt = str(attempt_id)
+            aborted_attempts = [
+                str(tail_id) for tail_id in build_attempt_sequence[index + 1 :]
+            ]
+            failed += 1
+            outcomes.append(
+                {
+                    "status": "failed",
+                    "shard": str(attempt_id),
+                    "hermes_phase": "worker_exception",
+                    "error": str(exc),
+                    "exception_type": type(exc).__name__,
+                }
+            )
+            break
 
         _finalize_build_attempt(attempt_id, worker, item)
 

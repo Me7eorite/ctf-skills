@@ -132,13 +132,6 @@ class BuildReconciler:
         now = datetime.now(timezone.utc)
         staged_id_texts = {str(staged_id) for staged_id in staged_ids}
         for row in active_rows:
-            # Execution-backed containers (add-execution-lease-and-fencing) are
-            # driven by the worker's token-gated terminal write and the lease
-            # reaper, NOT by filesystem mirroring. Skip legacy status mirroring
-            # for them; the design_task roll-forward below still reads the
-            # execution-derived container status.
-            if row.latest_execution_id is not None:
-                continue
             observed = observations.get(row.id)
             if observed is not None and (
                 str(observed.payload.get("design_task_id"))
@@ -146,9 +139,26 @@ class BuildReconciler:
                 or not self._basename_matches(row.shard_basename, observed)
             ):
                 observed = None
-            if observed is None and row.latest_execution_id is not None:
-                if self._reap_stale_execution_row(session, row, now):
+            if (
+                observed is not None
+                and row.status == "queued"
+                and observed.state == "running"
+                and self._restore_stale_running_to_pending(row, observed, now)
+            ):
+                continue
+            # Execution-backed containers (add-execution-lease-and-fencing) are
+            # driven by the worker's token-gated terminal write and the lease
+            # reaper, NOT by filesystem mirroring. Skip legacy status mirroring
+            # for them; the design_task roll-forward below still reads the
+            # execution-derived container status.
+            if row.latest_execution_id is not None:
+                if observed is None and self._reap_stale_execution_row(
+                    session,
+                    row,
+                    now,
+                ):
                     continue
+                continue
             if observed is None:
                 if (
                     str(row.id) not in staged_id_texts
@@ -418,6 +428,63 @@ class BuildReconciler:
             if self._basename_matches(row.shard_basename, observed):
                 return True
         return False
+
+    def _restore_stale_running_to_pending(
+        self,
+        row: build_model.BuildAttempt,
+        observed: _ObservedShard,
+        now: datetime,
+    ) -> bool:
+        """Recover a worker-crash orphan back to pending.
+
+        This only targets the split-brain shape seen in production:
+        PostgreSQL still says the attempt is queued, but the shard file was
+        moved to running by a worker that died before DB claim/finalization.
+        Fresh running files are left alone so an in-flight worker can finish
+        its normal queued -> running reconciliation on the next tick.
+        """
+        if observed.state != "running":
+            return False
+        if not (observed.worker or "").startswith("dashboard-sequential-"):
+            return False
+        claimed_at = observed.claimed_at
+        if claimed_at is None:
+            try:
+                claimed_at = datetime.fromtimestamp(
+                    observed.path.stat().st_mtime,
+                    tz=timezone.utc,
+                )
+            except OSError:
+                return False
+        if _as_utc(claimed_at) > now - timedelta(seconds=LOST_GRACE_SECONDS):
+            return False
+
+        pending = self.paths.shards / "pending" / row.shard_basename
+        if pending.exists():
+            return False
+        if not _payload_matches_row(observed.payload, row):
+            return False
+        pending.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            observed.path.replace(pending)
+            _claim_path(observed.path).unlink(missing_ok=True)
+        except OSError as exc:
+            LOG.warning(
+                "failed to restore stale running shard %s for build attempt %s: %s",
+                observed.path,
+                row.id,
+                exc,
+            )
+            return False
+
+        row.worker = None
+        row.started_at = None
+        LOG.warning(
+            "restored stale running shard %s to pending for queued build attempt %s",
+            observed.path.name,
+            row.id,
+        )
+        return True
 
     def _latest_claim(self, session: Session, shard: str) -> ProgressEvent | None:
         return session.scalars(

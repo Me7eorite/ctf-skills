@@ -118,6 +118,22 @@ def test_keyboard_interrupt_records_in_flight_and_aborts_tail():
     assert result["aborted"] == [str(IDS[2]), str(IDS[3])]
 
 
+def test_worker_exception_records_failed_attempt_and_aborts_tail():
+    result = _run(["success", RuntimeError("postgres unavailable")], ids=IDS[:4])
+
+    assert result["abort_reason"] == "worker_exception"
+    assert result["processed"] == 1
+    assert result["failed"] == 1
+    assert result["interrupted_attempt"] == str(IDS[1])
+    assert result["aborted"] == [str(IDS[2]), str(IDS[3])]
+    failed = result["outcomes"][1]
+    assert failed["status"] == "failed"
+    assert failed["shard"] == str(IDS[1])
+    assert failed["hermes_phase"] == "worker_exception"
+    assert failed["exception_type"] == "RuntimeError"
+    assert "postgres unavailable" in failed["error"]
+
+
 def test_lab_incident_shape_stops_after_second_infra_failure():
     phases = [
         "success",

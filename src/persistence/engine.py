@@ -52,4 +52,10 @@ def create_engine_from_env() -> Engine:
             f"DATABASE_URL scheme {scheme!r} is not supported; "
             f"expected {REQUIRED_SCHEME!r}."
         )
-    return create_engine(url, pool_pre_ping=True)
+    return create_engine(
+        url,
+        pool_pre_ping=True,
+        pool_timeout=5,
+        pool_recycle=300,
+        connect_args={"connect_timeout": 5},
+    )

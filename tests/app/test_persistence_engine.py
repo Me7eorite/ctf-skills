@@ -51,6 +51,8 @@ def test_valid_url_builds_postgres_engine(monkeypatch):
     )
     engine = create_engine_from_env()
     assert engine.dialect.name == "postgresql"
+    assert engine.pool.timeout() == 5
+    assert engine.pool._recycle == 300  # noqa: SLF001
 
 
 def test_progress_store_redacts_database_url_password():
