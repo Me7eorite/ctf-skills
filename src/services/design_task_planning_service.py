@@ -392,7 +392,9 @@ def _plan_candidates(
         technique_quota=profile.technique_quota,
         cooldown_window=profile.cooldown_window,
     )
-    mechanisms = _allocate_core_mechanisms(category, len(difficulty_slots))
+    mechanisms = _allocate_core_mechanisms(
+        category, len(difficulty_slots), start_offset=_mechanism_offset(category)
+    )
     for index, difficulty in enumerate(difficulty_slots):
         task_no = index + 1
         allocation = allocations[index]
@@ -740,17 +742,36 @@ def _mechanisms_for_category(category: str) -> tuple[str, ...]:
     return _DEFAULT_MECHANISMS.get(category, ("generic_gate",))
 
 
-def _allocate_core_mechanisms(category: str, count: int) -> list[str]:
+def _allocate_core_mechanisms(
+    category: str, count: int, *, start_offset: int = 0
+) -> list[str]:
     """Deterministically rotate a flag-protection / core mechanism per task.
 
     Round-robin over the category catalog so a batch spreads evenly across
     mechanisms instead of every task collapsing to the same default (XOR for
-    RE, win-function for PWN, weak-creds for Web). Deterministic -> testable and
-    reproducible; the assigned mechanism is later injected as a binding design
-    constraint.
+    RE, win-function for PWN, weak-creds for Web). ``start_offset`` continues
+    the rotation across batches (so a second batch does not restart at the same
+    mechanism). Deterministic -> testable; the assigned mechanism is later
+    injected as a binding design constraint.
     """
     catalog = _mechanisms_for_category(category)
-    return [catalog[i % len(catalog)] for i in range(max(0, count))]
+    base = max(0, start_offset)
+    return [catalog[(base + i) % len(catalog)] for i in range(max(0, count))]
+
+
+def _mechanism_offset(category: str) -> int:
+    """Cross-batch rotation offset = how many prior designs of this category
+    are recorded in the experience ledger (mod catalog size). Best-effort."""
+    try:
+        from services.design_ledger import recent_entries
+
+        prior = len(
+            recent_entries(ProjectPaths.discover(), category=category, limit=5000)
+        )
+        catalog = _mechanisms_for_category(category)
+        return prior % len(catalog)
+    except Exception:  # noqa: BLE001 — offset is an optimization
+        return 0
 
 
 def _diversity_profile(

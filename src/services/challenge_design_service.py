@@ -159,6 +159,7 @@ class ChallengeDesignService:
                     raise ChallengeDesignNotFoundError(
                         f"design task {design.design_task_id} does not exist"
                     )
+                self._record_ledger(started.design_task, validated.payload)
                 return ChallengeDesignServiceResult(
                     design_task_id=design.design_task_id,
                     attempt_id=attempt.id,
@@ -239,6 +240,36 @@ class ChallengeDesignService:
                 ),
                 prior_designs=prior_designs,
             )
+
+    def _record_ledger(
+        self, design_task: task_dto.DesignTask, payload: Mapping[str, Any]
+    ) -> None:
+        """Append this design's digest to the cross-batch experience ledger.
+
+        Best-effort: the ledger is a planning optimization, never a correctness
+        dependency, so any failure here must not fail an otherwise-valid design.
+        """
+        try:
+            from domain.design.collapse import challenge_fingerprint
+            from services.design_ledger import append_design
+
+            challenges = (payload or {}).get("challenges") or []
+            challenge = challenges[0] if challenges else {}
+            flags = design_task.diversity_flags or {}
+            digest = _design_digest(challenge, design_task)
+            append_design(
+                self.paths,
+                {
+                    "generation_request_id": str(design_task.generation_request_id),
+                    "fingerprint": challenge_fingerprint(
+                        {**challenge, "diversity_flags": flags}
+                    ),
+                    "core_mechanism": flags.get("core_mechanism"),
+                    **digest,
+                },
+            )
+        except Exception:  # noqa: BLE001 — ledger is non-critical
+            return
 
     def _fail_attempt(
         self,
