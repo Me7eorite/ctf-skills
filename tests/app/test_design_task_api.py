@@ -498,6 +498,25 @@ class DesignTaskReadEndpointTests(unittest.TestCase):
             self.assertEqual(calls[0]["status"], "queued")
             self.assertEqual(calls[0]["category"], "web")
 
+    def test_collapse_endpoint_empty_request_reports_zero(self):
+        request_id = uuid4()
+        with _app_client() as client:
+            resp = client.get(
+                f"/api/design-tasks/collapse?generation_request_id={request_id}"
+            )
+            self.assertEqual(resp.status_code, 200)
+            body = resp.json()
+            self.assertEqual(body["total"], 0)
+            self.assertFalse(body["collapsed"])
+            self.assertEqual(body["generation_request_id"], str(request_id))
+
+    def test_collapse_endpoint_rejects_bad_uuid(self):
+        with _app_client() as client:
+            resp = client.get(
+                "/api/design-tasks/collapse?generation_request_id=nope"
+            )
+            self.assertEqual(resp.status_code, 400)
+
     def test_list_rejects_unknown_status(self):
         with _app_client() as client:
             resp = client.get("/api/design-tasks?status=nonsense")

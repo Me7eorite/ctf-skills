@@ -52,6 +52,51 @@ def register_design_task_read_endpoints(app: FastAPI) -> None:
             )
         return JSONResponse([design_task_dict(task) for task in tasks])
 
+    @app.get("/api/design-tasks/collapse")
+    def design_batch_collapse(
+        generation_request_id: str = Query(...),
+    ) -> JSONResponse:
+        """Report design-collapse risk across one request's designed tasks."""
+        from domain.design.collapse import compute_batch_collapse
+        from persistence.repositories import (
+            ChallengeDesignRepository,
+            DesignTaskRepository,
+        )
+        from persistence.session import transaction
+
+        try:
+            request_uuid = UUID(generation_request_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail="generation_request_id must be a uuid",
+            ) from exc
+
+        designed_statuses = {"designed", "building", "built"}
+        challenges: list[dict[str, Any]] = []
+        with transaction() as session:
+            task_repo = DesignTaskRepository(session)
+            design_repo = ChallengeDesignRepository(session)
+            for task in task_repo.list_design_tasks(request_uuid):
+                if task.status not in designed_statuses:
+                    continue
+                design = design_repo.latest_design(task.id)
+                if design is None:
+                    continue
+                payload_challenges = (design.payload or {}).get("challenges") or []
+                challenge = dict(payload_challenges[0]) if payload_challenges else {}
+                # core_mechanism lives on the design task, not the payload —
+                # merge it so the fingerprint/collapse axes can see it.
+                challenge.setdefault("id", task.challenge_id)
+                challenge.setdefault("category", task.category)
+                challenge.setdefault("difficulty", task.difficulty)
+                challenge["diversity_flags"] = task.diversity_flags or {}
+                challenges.append(challenge)
+
+        report = compute_batch_collapse(challenges)
+        report["generation_request_id"] = str(request_uuid)
+        return JSONResponse(report)
+
     @app.get("/api/design-tasks/{task_id}")
     def get_design_task(task_id: str) -> JSONResponse:
         from persistence.repositories import DesignTaskRepository
