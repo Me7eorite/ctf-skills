@@ -8,16 +8,17 @@
 - [ ] 1.3 Add tests proving a failed quality gate cannot emit a staged/pending
       shard or create a build attempt.
 
-## 2. Research designable-finding floor
+## 2. Research designable-mechanism readiness
 
-- [ ] 2.1 Change research diversity counting to include only
-      `kind in {technique, variant}`.
+- [ ] 2.1 Change research readiness counting to use only
+      `kind in {technique, variant}` as primary designable evidence.
 - [ ] 2.2 Make DesignTask primary allocation consume only designable findings;
       keep scenario/prerequisite findings as supporting evidence.
 - [ ] 2.3 Persist/report when `RESEARCH_DIVERSITY_SOFT_PASS_BELOW_BY` was used
       as `research_runs.trial_only`; do not duplicate the marker on the request.
-- [ ] 2.4 Tests: many distinct scenarios cannot satisfy a one-technique pool;
-      distinct technique/variant findings can.
+- [ ] 2.4 Tests: many distinct scenarios cannot satisfy an under-supported
+      design pool; repeated sub-technique findings can still pass when they
+      support distinct solve/implementation profiles.
 
 ## 3. Profile vocabulary and allocator
 

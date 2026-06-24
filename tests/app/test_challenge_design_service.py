@@ -208,6 +208,12 @@ def _valid_stdout() -> str:
                         "session-cookie role flag",
                     ],
                     "learning_objective": "Extract data through conditional responses.",
+                    "difficulty_reason": (
+                        "Medium difficulty is justified because the player must "
+                        "first recover an admin password through boolean "
+                        "conditions, then use that credential to access a "
+                        "separate gated note containing the flag."
+                    ),
                     "prompt": (
                         "Customer-support agents triage tickets in this portal; "
                         "recover the admin's pinned note."
@@ -250,6 +256,16 @@ def _valid_stdout() -> str:
                             "why_next_stage_requires_it": "The pinned note is visible only after admin login.",
                         }
                     ],
+                    "shortcut_closure": [
+                        "The pinned note route checks the authenticated admin session server-side.",
+                        "The FLAG value is injected at runtime and is not stored in public files.",
+                    ],
+                    "fingerprint": {
+                        "entrypoint_type": "login form",
+                        "asset_flow_shape": "blind_sqli -> admin_password -> gated_note -> flag",
+                        "flag_access_model": "admin-session gated note",
+                        "scenario_type": "customer support ticket portal",
+                    },
                     "actual_solution_type": ["boolean_blind_sqli"],
                 }
             ],

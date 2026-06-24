@@ -53,23 +53,26 @@ version creates a fresh build lineage rather than reusing an old attempt.
 
 ### Requirement: Host validation observes and verifies the built implementation
 
-Before a BuildAttempt can succeed, host validation SHALL create one
-ArtifactObservation containing the observed profile, contract comparisons,
-negative-test results, and fingerprints. Existing artifact and reference-solve
-checks remain mandatory.
+Before a BuildAttempt can succeed, host validation SHALL create a current
+ArtifactObservation version containing the observed profile, contract
+comparisons, negative-test results, and fingerprints. Existing artifact and
+reference-solve checks remain mandatory.
 
 Host validation SHALL run the contract's closed host-owned acceptance and
 negative-test harnesses, compare required governed fields with observed facts,
 and verify required asset-flow stages using declared stage checks. Design input
 cannot select arbitrary executables or shell commands. Metadata alone is not
 proof. A required observed field that is unknown SHALL produce an
-ArtifactObservation with `status = inconclusive` and cannot be a production
-pass without a separate allowed observation review.
+ArtifactObservation with `status = inconclusive` and cannot be treated as an
+accepted build result without a separate allowed observation review whose policy
+scope permits build success.
 
 Each observation SHALL bind the exact `build_attempt_id`,
-`design_evidence_id`, canonical `contract_sha256`, and
+`observation_version`, `design_evidence_id`, canonical `contract_sha256`, and
 `artifact_manifest_sha256`. A changed contract or artifact manifest invalidates
-the observation.
+the observation. Revalidation SHALL insert a new observation version and
+supersede the previous current observation instead of overwriting historical
+results.
 
 Failure codes SHALL include `implementation_contract_mismatch`,
 `unintended_solution_succeeded`, `asset_flow_not_required`,
@@ -100,15 +103,15 @@ Failure codes SHALL include `implementation_contract_mismatch`,
 - **GIVEN** a governed fact cannot be established by the category observer
 - **WHEN** validation completes
 - **THEN** ArtifactObservation is persisted with `status = inconclusive`
-- **AND** the BuildAttempt cannot become production-successful without an
-  allowed observation review decision
+- **AND** the BuildAttempt cannot become succeeded or production-successful
+  without an allowed observation review decision whose scope permits that use
 
 ### Requirement: Revalidation repeats contract and observation checks
 
 Per-attempt revalidation SHALL use current disk evidence and the committed
-DesignEvidence/build contract. It SHALL regenerate or replace the attempt's
-ArtifactObservation and SHALL not promote a failed attempt when only the legacy
-flag-match checks pass.
+DesignEvidence/build contract. It SHALL insert a new current
+ArtifactObservation version and SHALL not promote a failed attempt when only the
+legacy flag-match checks pass.
 
 #### Scenario: Legacy flag validation passes but contract mismatch remains
 

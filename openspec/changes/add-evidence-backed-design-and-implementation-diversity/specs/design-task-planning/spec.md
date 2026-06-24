@@ -2,8 +2,8 @@
 
 ### Requirement: Every new DesignTask reserves a governed design profile
 
-Before a new DesignTask can enter Design execution, the planning subsystem
-SHALL persist one `design_profile_reservations` row for it. The reserved
+The planning subsystem SHALL persist one `design_profile_reservations` row
+before a new DesignTask can enter Design execution. The reserved
 profile SHALL contain the four axes `semantic`, `solve`, `implementation`, and
 `presentation`, and SHALL validate against the closed vocabulary and
 compatibility rules for the task category.
@@ -85,7 +85,7 @@ overwriting or violating the prior row.
 
 ### Requirement: Design task status supports planning before execution
 
-The existing DesignTask status values remain unchanged. Existing planning,
+The system SHALL keep the existing DesignTask status values unchanged. Existing planning,
 Design worker, and Build ownership rules remain in force, with one explicit
 service-owned revision path added by this change:
 

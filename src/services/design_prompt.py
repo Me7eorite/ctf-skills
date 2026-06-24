@@ -143,6 +143,14 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                     "secondary_technique": {"type": "string"},
                     "learning_objective": {"type": "string", "minLength": 1},
                     "prompt": {"type": "string", "minLength": 1},
+                    "difficulty_reason": {
+                        "type": "string",
+                        "description": (
+                            "Required for medium/hard/expert. Explain why the "
+                            "declared asset/capability chain truly matches the "
+                            "claimed difficulty."
+                        ),
+                    },
                     "flag_location": {"type": "string", "minLength": 1},
                     "flag_plan": {
                         "type": "object",
@@ -201,6 +209,30 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                                 "produced_asset_or_capability": {"type": "string"},
                                 "why_next_stage_requires_it": {"type": "string"},
                             },
+                        },
+                    },
+                    "shortcut_closure": {
+                        "type": "array",
+                        "description": (
+                            "Required for medium/hard/expert. Each entry names a "
+                            "shortcut class considered and how the design blocks "
+                            "it: direct flag access, client-side gates, guessable "
+                            "tokens/URLs/IDs/seeds, public flag exposure, solver "
+                            "bypass, or similar collapse paths."
+                        ),
+                        "items": {"type": "string", "minLength": 1},
+                    },
+                    "fingerprint": {
+                        "type": "object",
+                        "description": (
+                            "Required for medium/hard/expert. Shape-level "
+                            "fingerprint used for later duplicate analysis."
+                        ),
+                        "properties": {
+                            "entrypoint_type": {"type": "string"},
+                            "asset_flow_shape": {"type": "string"},
+                            "flag_access_model": {"type": "string"},
+                            "scenario_type": {"type": "string"},
                         },
                     },
                     "artifacts": {
@@ -293,8 +325,10 @@ def _render_output_contract(task: DesignTask) -> str:
         "effective transition(s): each such stage produces a concrete "
         "`produced_asset_or_capability` that the next stage cannot proceed "
         "without (`why_next_stage_requires_it`). Techniques that do not feed "
-        "the next stage do not count — the flag must not be reachable while "
-        "skipping the chain."
+        "the next stage do not count; generic assets like `access`, `data`, "
+        "`result`, or `permission` do not count. The flag must not be reachable "
+        "while skipping the chain. Also populate `difficulty_reason`, "
+        "`shortcut_closure`, and `fingerprint`."
         if _asset_min > 0
         else "\n6. This `easy` challenge MAY omit `asset_flow` or use a direct "
         "observe→exploit→flag flow; no required chain is enforced."

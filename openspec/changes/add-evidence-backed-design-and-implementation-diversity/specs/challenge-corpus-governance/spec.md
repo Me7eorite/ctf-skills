@@ -26,7 +26,7 @@ Corpus persistence SHALL include:
   ArtifactObservation, and fingerprint versions;
 - member and aggregate `corpus_decisions`;
 - pairwise `corpus_matches`;
-- separate `observation_review_decisions` and `corpus_review_decisions`.
+- separate `observation_review_decisions` and `corpus_review_decisions`;
 - append-only `corpus_history_entries` containing the minimal governed
   signatures/fingerprints needed to detect recurrence after operational
   challenge deletion.
@@ -63,7 +63,8 @@ The corpus gate SHALL return exactly one decision:
 Default hard blocks:
 
 - identical combined governed profile in batch or history;
-- repeated sub-technique in one production batch;
+- repeated sub-technique only when solve and implementation signatures also
+  match in one production batch;
 - source token Jaccard at or above `0.65`;
 - solver token Jaccard at or above `0.75`;
 - profile quota violation;

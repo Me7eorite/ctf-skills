@@ -31,6 +31,35 @@ MIN_BUSINESS_PROMPT_CHARS = 60
 
 # Expert ``novelty`` must be substantive enough to identify the trick.
 MIN_NOVELTY_CHARS = 40
+MIN_DIFFICULTY_REASON_CHARS = 30
+
+_GENERIC_ASSET_WORDS: frozenset[str] = frozenset(
+    {
+        "access",
+        "data",
+        "info",
+        "information",
+        "knowledge",
+        "permission",
+        "permissions",
+        "privilege",
+        "privileges",
+        "result",
+        "state",
+        "thing",
+        "value",
+    }
+)
+
+_GENERIC_DEPENDENCY_PHRASES: frozenset[str] = frozenset(
+    {
+        "needed for next step",
+        "needed to continue",
+        "required for next step",
+        "required to continue",
+        "used later",
+    }
+)
 
 # Enforcement modes for the difficulty rubric. Default is ``strict`` —
 # any violation raises ChallengeDesignValidationError. ``lenient`` logs
@@ -250,6 +279,36 @@ def validate_difficulty_alignment(
             )
 
     if rubric.min_asset_transitions > 0:
+        reason = challenge.get("difficulty_reason")
+        if (
+            not isinstance(reason, str)
+            or len(reason.strip()) < MIN_DIFFICULTY_REASON_CHARS
+        ):
+            _flag(
+                f"{difficulty} requires a substantive `difficulty_reason` "
+                "explaining why the declared chain matches the claimed tier"
+            )
+
+        closures = challenge.get("shortcut_closure")
+        if not (
+            isinstance(closures, list)
+            and any(isinstance(item, str) and item.strip() for item in closures)
+        ):
+            _flag(
+                f"{difficulty} requires non-empty `shortcut_closure` entries "
+                "covering direct flag access, client-side gates, guessable "
+                "tokens/URLs/IDs/seeds, public flag exposure, or similar "
+                "collapse paths"
+            )
+
+        fingerprint = challenge.get("fingerprint")
+        if not _valid_fingerprint(fingerprint):
+            _flag(
+                f"{difficulty} requires `fingerprint` with non-empty "
+                "entrypoint_type, asset_flow_shape, flag_access_model, and "
+                "scenario_type"
+            )
+
         transitions = _count_asset_transitions(challenge)
         if transitions < rubric.min_asset_transitions:
             _flag(
@@ -370,12 +429,41 @@ def _count_asset_transitions(challenge: Mapping[str, Any]) -> int:
         why = stage.get("why_next_stage_requires_it")
         if (
             isinstance(produced, str)
-            and produced.strip()
+            and _is_concrete_asset(produced)
             and isinstance(why, str)
-            and why.strip()
+            and _is_specific_dependency(why)
         ):
             transitions += 1
     return transitions
+
+
+def _is_concrete_asset(value: str) -> bool:
+    normalized = " ".join(value.strip().lower().split())
+    if not normalized or normalized in _GENERIC_ASSET_WORDS:
+        return False
+    return len(normalized) >= 8 or len(normalized.split()) >= 2
+
+
+def _is_specific_dependency(value: str) -> bool:
+    normalized = " ".join(value.strip().lower().split())
+    if not normalized or normalized in _GENERIC_DEPENDENCY_PHRASES:
+        return False
+    return len(normalized) >= 20 or len(normalized.split()) >= 4
+
+
+def _valid_fingerprint(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    for field in (
+        "entrypoint_type",
+        "asset_flow_shape",
+        "flag_access_model",
+        "scenario_type",
+    ):
+        item = value.get(field)
+        if not isinstance(item, str) or not item.strip():
+            return False
+    return True
 
 
 def _require_business_scenario(

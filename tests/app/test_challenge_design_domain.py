@@ -63,6 +63,11 @@ def _payload(**challenge_overrides):
         "secondary_technique": "Key confusion via kid override",
         "techniques": ["JWT kid path traversal", "Key confusion via kid override"],
         "learning_objective": "Inspect token key selection boundaries",
+        "difficulty_reason": (
+            "Medium difficulty is justified because the player must first "
+            "turn key-id control into a forged admin token, then use that "
+            "token to obtain a separate signed export URL for the flag."
+        ),
         # Phase 2 rubric: medium-and-up requires a >= 60-char player prompt
         # so the business context is visible.
         "prompt": (
@@ -133,6 +138,17 @@ def _payload(**challenge_overrides):
                 "why_next_stage_requires_it": "The flag is served only from the signed export URL.",
             },
         ],
+        "shortcut_closure": [
+            "Direct access to the admin note API is blocked by server-side JWT role verification.",
+            "The export URL contains an unguessable signature and is never listed in public HTML.",
+            "The FLAG value is injected at runtime and is not copied into static files or image layers.",
+        ],
+        "fingerprint": {
+            "entrypoint_type": "support portal session cookie",
+            "asset_flow_shape": "jwt_key_control -> forged_admin_jwt -> signed_export_url -> flag",
+            "flag_access_model": "admin-only signed export resource",
+            "scenario_type": "internal customer support note portal",
+        },
         "actual_solution_type": ["jwt_kid_path_traversal", "key_confusion"],
     }
     challenge.update(challenge_overrides)
@@ -554,6 +570,34 @@ def test_difficulty_medium_requires_asset_flow_transition():
         validate_design_payload(payload, _parent_task())
 
 
+def test_difficulty_medium_requires_difficulty_reason():
+    payload = _payload()
+    payload["challenges"][0].pop("difficulty_reason", None)
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match=r"difficulty_reason",
+    ):
+        validate_design_payload(payload, _parent_task())
+
+
+def test_difficulty_medium_requires_shortcut_closure():
+    payload = _payload(shortcut_closure=[])
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match=r"shortcut_closure",
+    ):
+        validate_design_payload(payload, _parent_task())
+
+
+def test_difficulty_medium_requires_fingerprint():
+    payload = _payload(fingerprint={"entrypoint_type": "cookie"})
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match=r"fingerprint",
+    ):
+        validate_design_payload(payload, _parent_task())
+
+
 def test_difficulty_medium_rejects_filler_only_asset_flow():
     # A stage that produces nothing required is not an effective transition.
     payload = _payload(
@@ -564,6 +608,25 @@ def test_difficulty_medium_rejects_filler_only_asset_flow():
                 "technique": "sqli",
                 "produced_asset_or_capability": "",
                 "why_next_stage_requires_it": "",
+            }
+        ]
+    )
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match=r"at least 1 effective transition",
+    ):
+        validate_design_payload(payload, _parent_task())
+
+
+def test_difficulty_medium_rejects_generic_asset_name():
+    payload = _payload(
+        asset_flow=[
+            {
+                "stage": 1,
+                "player_input_or_capability": "login form",
+                "technique": "sqli",
+                "produced_asset_or_capability": "access",
+                "why_next_stage_requires_it": "needed for next step",
             }
         ]
     )

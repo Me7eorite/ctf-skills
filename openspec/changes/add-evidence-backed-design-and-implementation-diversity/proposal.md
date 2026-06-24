@@ -27,9 +27,10 @@ not for unattended expansion toward hundreds of challenges.
 
 ## What Changes
 
-- **Modify `research-planning`** so the diversity floor counts only designable
-  findings (`kind in {technique, variant}`). Scenario/prerequisite findings
-  remain evidence, but cannot satisfy the sub-technique diversity floor.
+- **Modify `research-planning`** so design readiness is based on designable
+  evidence capacity (`kind in {technique, variant}` plus usable solve/profile
+  variation), not on scenario/prerequisite volume and not on sub-technique names
+  alone.
 - **Modify `design-task-planning`** to reserve a deterministic, structured
   design profile before Design runs. The profile covers four axes:
   `semantic`, `solve`, `implementation`, and `presentation`. Reservation is
@@ -67,6 +68,26 @@ not for unattended expansion toward hundreds of challenges.
   checks, observed profiles, and corpus-gate findings. The UI displays
   authoritative server results and does not recompute fingerprints or policy.
 
+## Sequencing and Relationship to Existing Diversity Work
+
+This change is a governed-production layer. It intentionally supersedes the
+earlier advisory-only diversity behavior for new production work:
+
+- `add-design-technique-diversity` remains useful for coarse research/planning
+  visibility, but its soft warnings are not sufficient for production
+  admission under this change.
+- `add-design-asset-flow-gate` or equivalent asset-flow schema work must land
+  first, because DesignEvidence and build contracts rely on normalized
+  `asset_flow` / `required_asset_flow` concepts.
+- `add-challenge-pattern-library` or equivalent pattern/fingerprint work may
+  feed the ledger and corpus comparison, but this change owns the hard
+  production gates over reservations, evidence, observations, and corpus
+  decisions.
+
+Implementation should land behind shadow/trial/production modes. Shadow mode
+may coexist with advisory diversity; production mode uses this change's hard
+admission and release gates.
+
 ## Capabilities
 
 ### Modified Capabilities
@@ -77,6 +98,7 @@ not for unattended expansion toward hundreds of challenges.
 - `build-orchestration`
 - `hermes-execution-protocol`
 - `delivery-bundle`
+- `postgres-persistence`
 
 ### New Capabilities
 
@@ -92,6 +114,8 @@ not for unattended expansion toward hundreds of challenges.
   - new corpus batch, membership, decision, match, and review tables;
   - new append-only `corpus_history_entries` projection for published/retired
     challenge fingerprints;
+  - `research_runs.trial_only` to mark diversity-soft-passed research that can
+    feed trial/shadow work but cannot pass production corpus admission;
   - nullable references from `design_tasks`, `challenge_designs`, and
     `build_attempts` where required;
   - additive indexes for profile signatures, ledger lookup, and gate status.

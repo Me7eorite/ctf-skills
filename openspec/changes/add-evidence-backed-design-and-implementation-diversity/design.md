@@ -16,6 +16,11 @@ not sufficient:
 4. design claims are not checked against built artifacts;
 5. individually valid challenges can still form a repetitive corpus.
 
+This proposal is therefore a production-governance layer, not another advisory
+warning system. Earlier diversity warnings can still render in the dashboard,
+but new production admission is decided by reservation/evidence/observation and
+corpus gates defined here.
+
 ## Goals
 
 - Move every diversity-defining decision to planning/Design.
@@ -81,21 +86,28 @@ policy in `generation-profiles.json` references those values, selects compatible
 subsets/combinations, and defines quotas; it cannot invent vocabulary values.
 Each reservation stores both taxonomy and policy version.
 
-### D1 - Research diversity counts designable findings only
+### D1 - Research readiness counts designable mechanism capacity
 
 The research quality gate and DesignTask primary-finding allocation SHALL use
-only findings whose `kind` is `technique` or `variant` for the distinct
-sub-technique floor. `scenario` and `prerequisite` remain available as
-supporting evidence and scenario material, but cannot satisfy or consume a
-primary technique slot.
+only findings whose `kind` is `technique` or `variant` as primary designable
+evidence. `scenario` and `prerequisite` remain available as supporting evidence
+and scenario material, but cannot satisfy or consume a primary mechanism slot.
 
-Default production behavior remains strict:
-`distinct_designable_subtechniques >= target_count`. The existing soft-pass
-environment setting may be retained for explicit trial runs, but a soft-passed
-run is marked by `research_runs.trial_only = true` and cannot be released
-through the production corpus gate. The marker is not duplicated on
-GenerationRequest; downstream consumers follow DesignEvidence back to its
-source ResearchRun.
+Default production behavior remains strict, but the gate is no longer
+`distinct_subtechniques >= target_count`. That rule overfits the old
+technique-diversity model and rejects valid batches where one sub-technique can
+support distinct solve/implementation/presentation profiles. Instead, research
+must provide enough designable evidence for the profile allocator to reserve
+`target_count` compatible governed profiles. Sub-technique repetition is a risk
+signal considered by the allocator/corpus gate, not sufficient by itself to
+block research.
+
+The existing soft-pass environment setting may be retained for explicit trial
+runs when profile-capacity checks cannot reserve production-grade governed
+profiles. A soft-passed run is marked by `research_runs.trial_only = true` and
+cannot be released through the production corpus gate. The marker is not
+duplicated on GenerationRequest; downstream consumers follow DesignEvidence
+back to its source ResearchRun.
 
 ### D2 - Profile reservation precedes parallel Design
 
@@ -143,9 +155,12 @@ policy, reduce batch size, or re-run research.
 
 Initial default policy:
 
-- same batch + same sub-technique: hard reject;
 - identical semantic + solve + implementation signature: hard reject against
   active batch reservations/live evidence and published history;
+- same batch + same sub-technique with the same solve and implementation
+  signatures: hard reject;
+- same sub-technique with different solve/implementation signatures: allowed
+  within the quota/risk system and surfaced as a diagnostic, not a hard reject;
 - same `solve.required_action`: maximum 30% of a batch;
 - same `implementation.flag_concealment`: maximum 20%;
 - same implementation language/runtime: maximum 40%;
@@ -352,7 +367,7 @@ production corpus gate.
 
 `artifact_observations` stores:
 
-- `id`, `build_attempt_id` (unique);
+- `id`, `build_attempt_id`, `observation_version`;
 - `design_evidence_id`, `contract_sha256`, `artifact_manifest_sha256`;
 - `observed_profile jsonb`;
 - `contract_checks jsonb`;
@@ -360,6 +375,12 @@ production corpus gate.
 - `fingerprints jsonb`;
 - `status in {passed, failed, inconclusive}`;
 - timestamps.
+
+The database enforces `unique(build_attempt_id, observation_version)` and a
+partial unique constraint allowing at most one current observation per
+BuildAttempt. Revalidation inserts a new observation version and marks the
+previous current observation superseded; it does not mutate historical check
+results in place.
 
 The host extracts category-appropriate facts:
 
@@ -398,9 +419,10 @@ Runner/reconciler authority is:
   observation before writing validate/complete success;
 - resume/all-skipped may carry forward success only when a bound observation
   still matches every hash and is effectively accepted;
-- Reconciler may set BuildAttempt `succeeded` only when the attributed
-  observation is `passed`, or `inconclusive` with a valid allowed observation
-  review, and all existing solve/artifact conditions pass;
+- Reconciler may set BuildAttempt `succeeded` only when all existing
+  solve/artifact conditions pass and the current attributed observation is
+  effectively accepted: either `passed`, or `inconclusive` with a valid allowed
+  observation review whose policy scope permits build success;
 - `metadata.solve_status = passed` without accepted observation is insufficient
   for new governed builds.
 
@@ -433,7 +455,8 @@ Fingerprints:
 Default decisions:
 
 - identical combined governed signature: `blocked`;
-- same sub-technique within one production batch: `blocked`;
+- same sub-technique plus same solve and implementation signatures within one
+  production batch: `blocked`;
 - source token Jaccard >= 0.65: `blocked`;
 - source token Jaccard >= 0.45: `review_required`;
 - solver token Jaccard >= 0.75: `blocked`;
@@ -542,8 +565,11 @@ policy client-side.
 
 ## Migration
 
-Additive migrations create the three tables and nullable references. No
-historical backfill is mandatory.
+Additive migrations create the governance tables and nullable references. No
+historical backfill is mandatory. At minimum this includes profile
+reservations, ledger rows, design evidence, artifact observations, corpus
+batches/members/decisions/matches/reviews/history, and the `research_runs`
+trial-only marker described above.
 
 - historical DesignTasks have no reservation/evidence and are `legacy`;
 - historical successful artifacts may be asynchronously fingerprinted for
