@@ -76,6 +76,77 @@ def _file_contains_bytes(path: Path, needle: str) -> bool:
     return needle.encode("utf-8", "ignore") in data
 
 
+def _artifact_elfs(challenge_dir: Path, category: str | None) -> list[Path]:
+    """Locate delivered ELF artifacts (mirrors the contract-check roots)."""
+    roots = [challenge_dir / "attachments", challenge_dir / "dist"]
+    if category == "pwn":
+        roots.append(challenge_dir / "deploy")
+    return [
+        path
+        for root in roots
+        if root.exists()
+        for path in root.rglob("*")
+        if is_elf(path)
+    ]
+
+
+def _bare_run_reveals_flag(artifact: Path, flag: str, timeout: int) -> bool:
+    """Run the artifact with no input; True if the flag appears in its output.
+
+    A genuine medium+ challenge must NOT print the flag on a plain ``./chal``.
+    The artifact is already trusted enough to run under ``validate.sh``; here we
+    run it directly with empty stdin, no args, and a short timeout. Any failure
+    to execute is treated as "did not reveal" (the normal solve path governs).
+    """
+    if not flag:
+        return False
+    try:
+        import os
+
+        os.chmod(artifact, 0o755)
+    except OSError:
+        pass
+    try:
+        proc = subprocess.run(
+            [str(artifact)],
+            cwd=artifact.parent,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=min(timeout, 20),
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return flag in (proc.stdout or "") or flag in (proc.stderr or "")
+
+
+def _plaintext_flag_locations(challenge_dir: Path, flag: str) -> list[str]:
+    """Return delivered/source files where the flag appears in plaintext.
+
+    Scans the player-delivered artifacts (attachments/dist) and the published
+    source tree (src/, deploy/src/). Organizer-only answer files
+    (metadata.json, challenge.yml, docker-compose) legitimately carry the flag
+    and are excluded.
+    """
+    if not flag:
+        return []
+    hits: list[str] = []
+    scan_roots = [
+        challenge_dir / "attachments",
+        challenge_dir / "dist",
+        challenge_dir / "src",
+        challenge_dir / "deploy" / "src",
+    ]
+    for root in scan_roots:
+        if not root.exists():
+            continue
+        for path in root.rglob("*"):
+            if path.is_file() and _file_contains_bytes(path, flag):
+                hits.append(path.relative_to(challenge_dir).as_posix())
+    return sorted(set(hits))
+
+
 def compose_literal_flag(compose_path: Path) -> str | None:
     """Return a literal FLAG value from an environment list entry.
 
@@ -352,11 +423,63 @@ class ChallengeValidator:
         printed_flag = matches[-1] if matches else ""
         record["printed_flag"] = printed_flag
         if expected_flag and printed_flag == expected_flag:
+            # 预期路径必要性：即使官方解能跑通，如果不经过预期路径也能拿到 flag
+            # （裸跑产物直接吐 flag / flag 明文出现在产物或源码里），这题实际是
+            # easy 甚至无效，必须判失败而不是 passed。
+            necessity = self._intended_path_unnecessary(
+                challenge_dir, metadata, expected_flag
+            )
+            if necessity:
+                record_status("failed", necessity)
+                return {**record, "status": "unnecessary_intended_path",
+                        "necessity_note": necessity}
             record_status("passed")
             return {**record, "status": "passed"}
 
         record_status("failed", "flag did not match metadata")
         return {**record, "status": "flag_mismatch"}
+
+    def _intended_path_unnecessary(
+        self, challenge_dir: Path, metadata: dict, expected_flag: str
+    ) -> str | None:
+        """Return a reason string if the flag is reachable WITHOUT the intended path.
+
+        Two deterministic shortcuts make a claimed challenge trivially solvable:
+
+        A. (re/pwn) Running the delivered artifact with no exploit input prints
+           the flag — the anti-debug / timing / license / flatten mechanism is
+           decorative and the player can ``./chal`` their way to the flag.
+        B. The flag (or a license-like literal that gates it) appears in
+           plaintext inside the delivered artifact or the published source — so
+           ``strings`` / reading source recovers it without the technique.
+
+        Web/pwn service-level necessity (hitting the entrypoint without the
+        exploit) needs the running service and is handled by a separate
+        service-level check; this method covers the file/artifact shortcuts that
+        are deterministic offline.
+        """
+        category = metadata.get("category")
+        if _strings_is_intended(metadata):
+            return None
+
+        # B — static plaintext flag in delivered artifact or published source.
+        plaintext_hits = _plaintext_flag_locations(challenge_dir, expected_flag)
+        if plaintext_hits:
+            return (
+                "flag is recoverable in plaintext without the intended technique "
+                f"({', '.join(plaintext_hits)})"
+            )
+
+        # A — bare run of the artifact reveals the flag (re/pwn only).
+        if category in {"re", "pwn"}:
+            for artifact in _artifact_elfs(challenge_dir, category):
+                if _bare_run_reveals_flag(artifact, expected_flag, self.timeout):
+                    rel = artifact.relative_to(challenge_dir).as_posix()
+                    return (
+                        f"running {rel} with no input prints the flag; the "
+                        "intended path is not required"
+                    )
+        return None
 
     def contract_errors(self, challenge_dir: Path, metadata: dict) -> list[str]:
         """执行 metadata 合约检查。

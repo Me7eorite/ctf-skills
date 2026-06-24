@@ -35,6 +35,7 @@ class PackingTests(unittest.TestCase):
         category: str,
         *,
         build_status: str = "passed",
+        solve_status: str = "passed",
         with_deploy: bool = False,
         with_attachment: bool = True,
     ) -> Path:
@@ -67,6 +68,7 @@ class PackingTests(unittest.TestCase):
             "points": 200,
             "primary_technique": "testing",
             "build_status": build_status,
+            "solve_status": solve_status,
             "flag": "flag{demo}",
             "port": 8080 if category == "web" else 9001,
         }
@@ -194,6 +196,23 @@ class PackingTests(unittest.TestCase):
 
         self.assertFalse(stale.exists())
         self.assertTrue(unrelated.exists())
+
+    def test_unsolved_challenge_is_excluded_from_pack(self):
+        # build_status=passed but solve_status not passed must NOT ship:
+        # a broken/pending/hardcoded solver is a non-publishable challenge.
+        self._challenge("re-0001", "re")
+        self._challenge("re-0002", "re", solve_status="pending")
+        self._challenge("re-0003", "re", solve_status="failed")
+
+        self._pack()
+
+        overview_book = load_workbook(
+            self.output / "题库资源" / "ctf-overview.xlsx", read_only=True
+        )
+        self.addCleanup(overview_book.close)
+        overview = overview_book.active
+        self.assertEqual(overview.max_row, 2)  # header + only re-0001
+        self.assertEqual(overview["A2"].value, "re-0001")
 
     def test_non_chinese_writeup_produces_warning(self):
         challenge = self._challenge("re-0001", "re")
