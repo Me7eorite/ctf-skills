@@ -13,7 +13,7 @@ task, not to enumerate every implementation detail.
 - primary_finding: `[{primary_kind}] {primary_label}` — {primary_summary}
 - secondary_findings:
 {secondary_block}
-- SHOULD avoid reusing these sibling sub-techniques:
+- MUST avoid reusing these sibling sub-techniques (pick a distinct 考点):
 {avoid_techniques}
 
 ## Rubric Reminder
@@ -21,6 +21,10 @@ task, not to enumerate every implementation detail.
 Difficulty is driven by the count of distinct 考点 + novelty, NOT by the
 number of solve steps. A linear decode/unwrap chain is ONE technique regardless
 of length.
+
+For `medium` and harder, the `chain_outline` MUST converge on a SINGLE intended
+solve path — design the chain so obvious alternate shortcuts are closed off.
+`easy` may admit multiple solve paths.
 
 | Difficulty | Techniques | Notes |
 | --- | --- | --- |
@@ -37,6 +41,15 @@ file writes.
 {{
   "considered_techniques": ["string", "string", "string"],
   "chain_outline": "1-3 sentence outline of how the techniques chain together to reach the flag",
+  "asset_flow": [
+    {{
+      "stage": 1,
+      "player_input_or_capability": "what the player can do at this stage",
+      "technique": "the technique applied here",
+      "produced_asset_or_capability": "the concrete asset/state/permission/leak this stage yields",
+      "why_next_stage_requires_it": "why the next stage cannot proceed without it"
+    }}
+  ],
   "scenario_seed": "1-2 sentence business scenario the player encounters — believable, not a toy",
   "novelty_seed": "EXPERT ONLY: 1-2 sentences identifying the non-trivial trick. Use null for hard."
 }}
@@ -48,6 +61,11 @@ Rules:
   and at least 2 for `expert`.
 - `chain_outline` MUST describe how the techniques connect — not a list of
   independent steps.
+- `asset_flow` MUST encode the required chain: `medium` needs ≥1 effective
+  transition, `hard` ≥2. Each effective stage produces a concrete
+  `produced_asset_or_capability` that the next stage depends on
+  (`why_next_stage_requires_it`). `easy` MAY use a single direct stage. The
+  flag MUST NOT be reachable while skipping the chain.
 - `scenario_seed` MUST sound like a real product context (internal admin
   panel, customer-support tool, file-conversion service, ...). Avoid "a toy
   service that has SQL injection."
@@ -55,5 +73,6 @@ Rules:
   set it to `null`.
 - Do NOT include code, Dockerfiles, exploit details, or per-file specs.
 - Do NOT echo the inputs verbatim.
-- SHOULD avoid reusing the listed sibling sub-techniques when a coherent
-  alternative chain exists.
+- MUST avoid reusing the listed sibling sub-techniques whenever a coherent
+  alternative chain exists; only fall back to a reused 考点 if no distinct
+  chain is supported by the findings.

@@ -70,6 +70,7 @@ Field rules:
 - `validation` is a single string. Do not nest it as an object.
 - `hints` MUST contain exactly 3 entries, staged from gentle to direct.
 - `intended_path` MUST be a list of step strings ordered observation → flag.
+- Solution uniqueness is tiered. `easy` MAY admit multiple solve paths. `medium`, `hard`, and `expert` MUST have a **single intended solve path**: enumerate every alternate/unintended solution you considered and how the design closes it in a non-empty `unintended_solutions` array (e.g. "one-gadget RCE — blocked by seccomp denying execve", "flag readable via `strings` — flag is XOR-encoded and reconstructed at runtime"). This replaces the old generic "no unintended shortcut" note with an explicit, author-checkable contract.
 - `artifacts` MUST be relative local paths (no URLs, no absolute paths, no `..` traversal). Use `writenup/wp.md` and `writenup/exp.py` — not `writeup/...` or bare `solve.py`.
 - Native executables and conventional build files do not need extensions. Valid examples include `attachments/crackme` and `deploy/Makefile`. Put challenge source files under `src/` or `deploy/src/`.
 - `implementation_plan` is intent-level only. Never include code, Dockerfile bodies, compose YAML, SQL scripts, or exploit code.
@@ -118,7 +119,7 @@ Use when the user asks for a full organizer-facing spec instead of JSON:
 ### Validation
 - Reference solve: <command or script name>
 - Expected result: <how the flag appears>
-- Regression checks: <solvability, no unintended shortcut>
+- Regression checks: <solvability; for medium+, single intended path with unintended_solutions enumerated and blocked>
 
 ### Hints
 1. <Gentle>

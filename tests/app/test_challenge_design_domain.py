@@ -109,6 +109,30 @@ def _payload(**challenge_overrides):
             "The key id influences verification.",
             "Control the key lookup before signing a token.",
         ],
+        # Phase: medium-and-up requires a single intended path with the
+        # considered alternate solutions enumerated and blocked.
+        "unintended_solutions": [
+            "Brute-forcing the HMAC secret — blocked by a 256-bit random key.",
+            "Reading FLAG from the image layers — flag is injected only via env at runtime.",
+        ],
+        # Phase 0: required asset/capability chain (2 effective transitions so
+        # the baseline satisfies both medium and hard alignment tests).
+        "asset_flow": [
+            {
+                "stage": 1,
+                "player_input_or_capability": "Authenticated support-agent session",
+                "technique": "JWT kid path traversal",
+                "produced_asset_or_capability": "Forged admin JWT",
+                "why_next_stage_requires_it": "The admin note API only accepts admin-signed tokens.",
+            },
+            {
+                "stage": 2,
+                "player_input_or_capability": "Forged admin JWT",
+                "technique": "Key confusion via kid override",
+                "produced_asset_or_capability": "Admin-only signed export URL",
+                "why_next_stage_requires_it": "The flag is served only from the signed export URL.",
+            },
+        ],
     }
     challenge.update(challenge_overrides)
     return {"event": {"flag_format": "flag{...}"}, "challenges": [challenge]}
@@ -485,6 +509,92 @@ def test_difficulty_easy_rejects_two_techniques():
         match=r"easy allows at most 1 distinct techniques",
     ):
         validate_design_payload(payload, _easy_task())
+
+
+def test_difficulty_easy_allows_omitting_unintended_solutions():
+    # easy may have multiple solve paths; the field is optional.
+    payload = _easy_payload()
+    payload["challenges"][0].pop("unintended_solutions", None)
+    result = validate_design_payload(payload, _easy_task())
+    assert result.challenge["difficulty"] == "easy"
+
+
+def test_difficulty_medium_requires_unintended_solutions():
+    payload = _payload()
+    payload["challenges"][0].pop("unintended_solutions", None)
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match=r"single intended solve path",
+    ):
+        validate_design_payload(payload, _parent_task())
+
+
+def test_difficulty_medium_rejects_empty_unintended_solutions():
+    payload = _payload(unintended_solutions=[])
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match=r"unintended_solutions",
+    ):
+        validate_design_payload(payload, _parent_task())
+
+
+def test_difficulty_medium_accepts_enumerated_unintended_solutions():
+    result = validate_design_payload(_payload(), _parent_task())
+    assert result.challenge["difficulty"] == "medium"
+
+
+def test_difficulty_medium_requires_asset_flow_transition():
+    payload = _payload()
+    payload["challenges"][0].pop("asset_flow", None)
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match=r"asset/capability chain",
+    ):
+        validate_design_payload(payload, _parent_task())
+
+
+def test_difficulty_medium_rejects_filler_only_asset_flow():
+    # A stage that produces nothing required is not an effective transition.
+    payload = _payload(
+        asset_flow=[
+            {
+                "stage": 1,
+                "player_input_or_capability": "login form",
+                "technique": "sqli",
+                "produced_asset_or_capability": "",
+                "why_next_stage_requires_it": "",
+            }
+        ]
+    )
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match=r"at least 1 effective transition",
+    ):
+        validate_design_payload(payload, _parent_task())
+
+
+def test_difficulty_hard_requires_two_transitions():
+    # The baseline asset_flow has 2 transitions → hard passes; trimming to 1 fails.
+    one_transition = _payload()["challenges"][0]["asset_flow"][:1]
+    payload = _payload(
+        difficulty="hard",
+        techniques=["a", "b", "c"],
+        primary_technique="a",
+        secondary_technique="b",
+        asset_flow=one_transition,
+    )
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match=r"at least 2 effective transition",
+    ):
+        validate_design_payload(payload, _parent_task(difficulty="hard"))
+
+
+def test_difficulty_easy_allows_omitting_asset_flow():
+    payload = _easy_payload()
+    payload["challenges"][0].pop("asset_flow", None)
+    result = validate_design_payload(payload, _easy_task())
+    assert result.challenge["difficulty"] == "easy"
 
 
 def test_difficulty_counts_all_mechanical_transforms_as_one_technique():

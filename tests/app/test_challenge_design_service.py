@@ -235,6 +235,21 @@ def _valid_stdout() -> str:
                         "Boolean conditions change the response.",
                         "Extract the secret one character at a time.",
                     ],
+                    "unintended_solutions": [
+                        "Dumping the DB via a second injection point — only one "
+                        "parameter is unsanitized.",
+                        "Reading FLAG from the image — it is injected via env at "
+                        "runtime only.",
+                    ],
+                    "asset_flow": [
+                        {
+                            "stage": 1,
+                            "player_input_or_capability": "Anonymous login form",
+                            "technique": "boolean blind sqli",
+                            "produced_asset_or_capability": "Recovered admin password",
+                            "why_next_stage_requires_it": "The pinned note is visible only after admin login.",
+                        }
+                    ],
                 }
             ],
         }

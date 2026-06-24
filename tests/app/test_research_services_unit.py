@@ -302,6 +302,8 @@ def test_quality_gate_ratio_env_var(monkeypatch):
     # Default ratio 0.5 with target_count=10 requires 5 → reject 3.
     monkeypatch.delenv("RESEARCH_QUALITY_RATIO", raising=False)
     monkeypatch.delenv("RESEARCH_QUALITY_SOFT_PASS_BELOW_BY", raising=False)
+    # Isolate the findings-count gate from the orthogonal diversity floor.
+    monkeypatch.setenv("RESEARCH_DIVERSITY_SOFT_PASS_BELOW_BY", "99")
     ok, error = apply_research_quality_gate(payload, 10)
     assert (ok, error) == (False, "insufficient_findings:got=3,need=5")
 
@@ -324,6 +326,8 @@ def test_quality_gate_soft_pass_slack_env_var(monkeypatch, caplog):
 
     monkeypatch.setenv("RESEARCH_QUALITY_RATIO", "0.5")
     monkeypatch.setenv("RESEARCH_QUALITY_SOFT_PASS_BELOW_BY", "1")
+    # Isolate the findings-count gate from the orthogonal diversity floor.
+    monkeypatch.setenv("RESEARCH_DIVERSITY_SOFT_PASS_BELOW_BY", "99")
 
     with caplog.at_level("WARNING", logger="domain.research_validators"):
         ok, error = apply_research_quality_gate(payload, 10)
@@ -350,10 +354,59 @@ def test_quality_gate_invalid_env_falls_back(monkeypatch):
 
     monkeypatch.setenv("RESEARCH_QUALITY_RATIO", "not-a-float")
     monkeypatch.setenv("RESEARCH_QUALITY_SOFT_PASS_BELOW_BY", "-3")
+    # Isolate the findings-count gate from the orthogonal diversity floor.
+    monkeypatch.setenv("RESEARCH_DIVERSITY_SOFT_PASS_BELOW_BY", "99")
 
     # Falls back to ratio=0.5 (needs ceil(2*0.5)=1) and slack=0 → 1 finding passes.
     ok, error = apply_research_quality_gate(payload, 2)
     assert (ok, error) == (True, None)
+
+
+def _diverse_payload(labels):
+    valid_source = {"url": "https://example.com/x", "content_hash": "a" * 64}
+    return {
+        "sources": [valid_source],
+        "findings": [
+            {"label": label, "kind": "technique", "summary": "s"}
+            for label in labels
+        ],
+    }
+
+
+def test_quality_gate_rejects_insufficient_diversity(monkeypatch):
+    # Enough findings by count, but all the same sub-technique → reject so the
+    # planner is not forced into duplicate 考点 downstream.
+    from domain.research_validators import apply_research_quality_gate
+
+    monkeypatch.delenv("RESEARCH_DIVERSITY_SOFT_PASS_BELOW_BY", raising=False)
+    payload = _diverse_payload(["SQL injection", "SQL injection", "SQL injection"])
+    ok, error = apply_research_quality_gate(payload, 3)
+    assert ok is False
+    assert error == "insufficient_diversity:distinct=1,need=3"
+
+
+def test_quality_gate_accepts_distinct_sub_techniques(monkeypatch):
+    from domain.research_validators import apply_research_quality_gate
+
+    monkeypatch.delenv("RESEARCH_DIVERSITY_SOFT_PASS_BELOW_BY", raising=False)
+    payload = _diverse_payload(["SQL injection", "XSS", "SSRF"])
+    assert apply_research_quality_gate(payload, 3) == (True, None)
+
+
+def test_quality_gate_diversity_soft_pass(monkeypatch, caplog):
+    # Slack tolerates one duplicate sub-technique with a warning instead of
+    # failing the whole run.
+    from domain.research_validators import apply_research_quality_gate
+
+    monkeypatch.setenv("RESEARCH_DIVERSITY_SOFT_PASS_BELOW_BY", "1")
+    payload = _diverse_payload(["SQL injection", "XSS", "XSS"])  # distinct=2, need=3
+    with caplog.at_level("WARNING", logger="domain.research_validators"):
+        ok, error = apply_research_quality_gate(payload, 3)
+    assert (ok, error) == (True, None)
+    assert any(
+        "research diversity gate soft-passed" in rec.message
+        for rec in caplog.records
+    )
 
 
 class _FakeBinding:

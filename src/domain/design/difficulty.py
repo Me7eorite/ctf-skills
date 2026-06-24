@@ -77,6 +77,13 @@ class DifficultyRubric:
     needs_novelty: bool
     implementation_component_max: int
     estimated_loc_budget: int
+    # 解题唯一性：easy 允许多解；medium 及以上要求单一预期解，
+    # 并强制作者在 ``unintended_solutions`` 中枚举已堵掉的替代解。
+    needs_unique_solution: bool = False
+    # 资产流：medium 及以上要求一条"必须经过"的资产/能力链。这里是有效转移的
+    # 下限——每个有效转移 = 某阶段产出非空资产/能力且被下一阶段明确依赖。
+    # easy=0（允许直链），medium=1，hard=2，expert=1（expert 以 novelty 为主）。
+    min_asset_transitions: int = 0
 
 
 RUBRIC: dict[str, DifficultyRubric] = {
@@ -90,6 +97,8 @@ RUBRIC: dict[str, DifficultyRubric] = {
         needs_novelty=False,
         implementation_component_max=5,
         estimated_loc_budget=200,
+        needs_unique_solution=False,
+        min_asset_transitions=0,
     ),
     "medium": DifficultyRubric(
         techniques_min=2,
@@ -101,6 +110,8 @@ RUBRIC: dict[str, DifficultyRubric] = {
         needs_novelty=False,
         implementation_component_max=7,
         estimated_loc_budget=400,
+        needs_unique_solution=True,
+        min_asset_transitions=1,
     ),
     "hard": DifficultyRubric(
         techniques_min=3,
@@ -112,6 +123,8 @@ RUBRIC: dict[str, DifficultyRubric] = {
         needs_novelty=False,
         implementation_component_max=10,
         estimated_loc_budget=700,
+        needs_unique_solution=True,
+        min_asset_transitions=2,
     ),
     "expert": DifficultyRubric(
         techniques_min=2,
@@ -123,6 +136,8 @@ RUBRIC: dict[str, DifficultyRubric] = {
         needs_novelty=True,
         implementation_component_max=15,
         estimated_loc_budget=1200,
+        needs_unique_solution=True,
+        min_asset_transitions=1,
     ),
 }
 
@@ -214,6 +229,31 @@ def validate_difficulty_alignment(
                 f"{MIN_NOVELTY_CHARS} characters describing the non-trivial trick"
             )
 
+    if rubric.needs_unique_solution:
+        unintended = challenge.get("unintended_solutions")
+        valid = isinstance(unintended, list) and any(
+            isinstance(item, str) and item.strip() for item in unintended
+        )
+        if not valid:
+            _flag(
+                f"{difficulty} requires a single intended solve path: list every "
+                "considered alternate/unintended solution and how the design "
+                "blocks it in a non-empty `unintended_solutions` array (easy may "
+                "omit it and allow multiple paths)"
+            )
+
+    if rubric.min_asset_transitions > 0:
+        transitions = _count_asset_transitions(challenge)
+        if transitions < rubric.min_asset_transitions:
+            _flag(
+                f"{difficulty} requires a required asset/capability chain with at "
+                f"least {rubric.min_asset_transitions} effective transition(s); "
+                f"`asset_flow` declares {transitions}. Each stage must produce a "
+                "concrete asset/capability that the next stage requires (a stage "
+                "needs both `produced_asset_or_capability` and "
+                "`why_next_stage_requires_it`). easy may omit asset_flow."
+            )
+
     if not violations:
         return
 
@@ -278,6 +318,33 @@ def _count_intended_path_steps(challenge: Mapping[str, Any]) -> int:
     if not isinstance(raw, list):
         return 0
     return sum(1 for entry in raw if isinstance(entry, str) and entry.strip())
+
+
+def _count_asset_transitions(challenge: Mapping[str, Any]) -> int:
+    """Count effective asset-flow transitions.
+
+    A transition is effective only when a stage both produces a concrete
+    asset/capability (``produced_asset_or_capability``) and states why the
+    next stage requires it (``why_next_stage_requires_it``). Story-filler
+    stages that produce nothing required do not count toward difficulty.
+    """
+    raw = challenge.get("asset_flow")
+    if not isinstance(raw, list):
+        return 0
+    transitions = 0
+    for stage in raw:
+        if not isinstance(stage, Mapping):
+            continue
+        produced = stage.get("produced_asset_or_capability")
+        why = stage.get("why_next_stage_requires_it")
+        if (
+            isinstance(produced, str)
+            and produced.strip()
+            and isinstance(why, str)
+            and why.strip()
+        ):
+            transitions += 1
+    return transitions
 
 
 def _require_business_scenario(

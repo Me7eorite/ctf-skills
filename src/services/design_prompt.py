@@ -154,6 +154,39 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                         "minItems": 1,
                         "items": {"type": "string", "minLength": 1},
                     },
+                    "unintended_solutions": {
+                        "type": "array",
+                        "description": (
+                            "Required for medium/hard/expert (a single intended "
+                            "solve path). Each entry names one alternate/unintended "
+                            "solution you considered and how the design blocks it. "
+                            "easy MAY omit this and allow multiple solve paths."
+                        ),
+                        "items": {"type": "string", "minLength": 1},
+                    },
+                    "asset_flow": {
+                        "type": "array",
+                        "description": (
+                            "The required asset/capability chain. Each stage must "
+                            "produce something the next stage needs — this is what "
+                            "makes a challenge medium+ rather than a pile of "
+                            "techniques. Required for medium (>=1 transition) and "
+                            "hard (>=2 transitions); easy MAY omit it or use a "
+                            "direct flow. A transition counts only when the stage "
+                            "has both produced_asset_or_capability and "
+                            "why_next_stage_requires_it."
+                        ),
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "stage": {"type": "integer"},
+                                "player_input_or_capability": {"type": "string"},
+                                "technique": {"type": "string"},
+                                "produced_asset_or_capability": {"type": "string"},
+                                "why_next_stage_requires_it": {"type": "string"},
+                            },
+                        },
+                    },
                     "artifacts": {
                         "type": "array",
                         "minItems": 5,
@@ -227,6 +260,29 @@ def _render_output_contract(task: DesignTask) -> str:
         if task.category in {"web", "pwn"}
         else ""
     )
+    uniqueness_hint = (
+        "\n5. This is a `" + task.difficulty + "` challenge: it MUST have a "
+        "SINGLE intended solve path. Populate `unintended_solutions` with a "
+        "non-empty list — each entry naming one alternate/unintended solution "
+        "you considered and exactly how the design blocks it (mitigation, "
+        "constraint, or removed primitive)."
+        if task.difficulty != "easy"
+        else "\n5. This is an `easy` challenge: multiple solve paths are "
+        "acceptable; `unintended_solutions` is optional."
+    )
+    _asset_min = {"medium": 1, "hard": 2, "expert": 1}.get(task.difficulty, 0)
+    asset_flow_hint = (
+        f"\n6. This `{task.difficulty}` challenge MUST encode a required "
+        f"asset/capability chain in `asset_flow` with at least {_asset_min} "
+        "effective transition(s): each such stage produces a concrete "
+        "`produced_asset_or_capability` that the next stage cannot proceed "
+        "without (`why_next_stage_requires_it`). Techniques that do not feed "
+        "the next stage do not count — the flag must not be reachable while "
+        "skipping the chain."
+        if _asset_min > 0
+        else "\n6. This `easy` challenge MAY omit `asset_flow` or use a direct "
+        "observe→exploit→flag flow; no required chain is enforced."
+    )
     invariants = (
         "Invariants (enforced server-side; violating any of these fails "
         "the attempt):\n"
@@ -248,6 +304,8 @@ def _render_output_contract(task: DesignTask) -> str:
         "`primary_technique` explicitly says the intended solve is "
         "`strings on the binary`; likewise, `validate.sh` and "
         "`writenup/exp.py` MUST NOT embed the literal `metadata.flag`."
+        + uniqueness_hint
+        + asset_flow_hint
     )
     return f"{invariants}\n\n```json\n{schema_text}\n```"
 
@@ -296,6 +354,10 @@ def _render_build_budget(difficulty: str) -> str:
             f"{'yes' if rubric.needs_implementation_plan else 'no'}",
             f"- novelty field required: "
             f"{'yes' if rubric.needs_novelty else 'no'}",
+            f"- single intended solve path (unintended_solutions required): "
+            f"{'yes' if rubric.needs_unique_solution else 'no — multiple paths allowed'}",
+            f"- required asset_flow transitions: "
+            f"{rubric.min_asset_transitions if rubric.min_asset_transitions else 'none (direct flow allowed)'}",
             "",
             "If your design cannot fit this budget, simplify or split it; "
             "otherwise upgrade the difficulty tier.",

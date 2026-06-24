@@ -4,12 +4,12 @@ Machine-checked rubric for the four difficulty tiers. The validator enforces the
 
 ## Tiers
 
-| Tier | Techniques (考点) | Intended path step cap | implementation_plan | max explicit components | LOC budget (build) | Business scenario | Novelty field |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| easy   | exactly **1** | ≤ 4 | optional | ≤ 5  | ≤ 200  | optional (toy service OK) | not required |
-| medium | **2 or 3** | ≤ 5 | optional | ≤ 7  | ≤ 400  | **required** | not required |
-| hard   | **3 or 4** | ≤ 7 | **required** | ≤ 10 | ≤ 700  | **required** | not required |
-| expert | **≥ 2** | ≤ 10 | **required** | ≤ 15 | ≤ 1200 | **required** | **required** — describe the 0day-style trick |
+| Tier | Techniques (考点) | Intended path step cap | implementation_plan | max explicit components | LOC budget (build) | Business scenario | Novelty field | Solution uniqueness |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| easy   | exactly **1** | ≤ 4 | optional | ≤ 5  | ≤ 200  | optional (toy service OK) | not required | multiple paths OK (`unintended_solutions` optional) |
+| medium | **2 or 3** | ≤ 5 | optional | ≤ 7  | ≤ 400  | **required** | not required | **single intended path** — `unintended_solutions` required |
+| hard   | **3 or 4** | ≤ 7 | **required** | ≤ 10 | ≤ 700  | **required** | not required | **single intended path** — `unintended_solutions` required |
+| expert | **≥ 2** | ≤ 10 | **required** | ≤ 15 | ≤ 1200 | **required** | **required** — describe the 0day-style trick | **single intended path** — `unintended_solutions` required |
 
 **Counting technique slots:** the validator gathers `techniques`, `primary_technique`, and `secondary_technique`, normalizes each label to a canonical sub-technique, folds mechanical decode/unwrap transforms order-free, and counts distinct non-mechanical 考点. If every declared technique is mechanical, the whole decode/unwrap chain counts as exactly one `encoding` 考点. Mechanical transforms add nothing when a real non-mechanical technique is present.
 
@@ -18,6 +18,8 @@ Machine-checked rubric for the four difficulty tiers. The validator enforces the
 **Counting intended_path steps:** the validator counts non-empty string entries in `intended_path` only as an upper-bound sanity check. Do not pad `intended_path` to meet a tier; there is no per-tier minimum.
 
 **Business scenario heuristic:** for medium and harder, the `prompt` field must be at least 60 characters and the parent task `scenario` field must be non-empty. A one-line prompt like "find the SQLi and read the flag" is rejected as too thin to carry business context.
+
+**Solution uniqueness (medium and harder):** these tiers MUST have a single intended solve path. The validator requires a non-empty `unintended_solutions` array — each entry names one alternate/unintended solution you considered and how the design closes it (mitigation, constraint, or removed primitive). Examples: "one-gadget RCE — blocked by a seccomp filter denying `execve`", "flag dumped via `strings` — flag is XOR-encoded in `.data` and reconstructed at runtime", "auth bypass via default creds — seeded accounts use random passwords". `easy` may omit the field and allow multiple paths. Note: this enforces that you *considered and documented* uniqueness; it cannot prove no other solution exists, so still sanity-check during the reference solve.
 
 **Novelty heuristic for expert:** the `novelty` field must be at least 40 characters and explicitly identify the unusual element — for example: "Parser differential between two HTTP smuggling implementations chained with a custom pickle gadget", or "Custom JWS algorithm-confusion via unregistered alg=none-like state in an in-house library". Generic statements like "advanced exploitation" are rejected.
 
@@ -62,5 +64,6 @@ When generating a design, populate these fields with the rubric in mind:
 - `intended_path` — one step per significant observation/action; do not pad with filler and do not use step count to justify a higher tier.
 - `implementation_plan` — required for hard/expert; describe vulnerability location, flag handling, and what forces the intended chain. When useful, add `components` as an array naming only independently buildable or deployable units.
 - `novelty` — required for expert; describe what is non-trivial in 1–3 sentences.
+- `unintended_solutions` — required for medium/hard/expert; list each considered alternate solution and how the design blocks it. Optional for easy.
 
 If the validator rejects with a difficulty-alignment error, revise or split the design to meet the tier, or upgrade it to the appropriate difficulty.

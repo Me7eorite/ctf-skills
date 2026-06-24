@@ -20,6 +20,8 @@ from typing import Any
 from urllib.parse import urlparse
 from uuid import UUID
 
+from domain.design.technique_taxonomy import resolve_sub_technique
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -68,6 +70,32 @@ def _quality_soft_pass_slack() -> int:
     if value < 0:
         _LOGGER.warning(
             "RESEARCH_QUALITY_SOFT_PASS_BELOW_BY=%r negative; falling back to 0",
+            raw,
+        )
+        return 0
+    return value
+
+
+def _diversity_soft_pass_slack() -> int:
+    """How many distinct sub-techniques below ``target_count`` the gate accepts.
+
+    Mirrors ``RESEARCH_QUALITY_SOFT_PASS_BELOW_BY`` for the diversity floor:
+    set ``RESEARCH_DIVERSITY_SOFT_PASS_BELOW_BY=1`` to tolerate one duplicate
+    sub-technique with a warning instead of failing the whole run. Default
+    ``0`` is strict (every task must get a distinct sub-technique).
+    """
+    raw = os.environ.get("RESEARCH_DIVERSITY_SOFT_PASS_BELOW_BY", "0")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        _LOGGER.warning(
+            "invalid RESEARCH_DIVERSITY_SOFT_PASS_BELOW_BY=%r; falling back to 0",
+            raw,
+        )
+        return 0
+    if value < 0:
+        _LOGGER.warning(
+            "RESEARCH_DIVERSITY_SOFT_PASS_BELOW_BY=%r negative; falling back to 0",
             raw,
         )
         return 0
@@ -284,6 +312,28 @@ def apply_research_quality_gate(
             got,
             needed,
             slack,
+        )
+
+    # Diversity floor: the planner can only diversify within the findings pool,
+    # so research must supply at least ``target_count`` distinct sub-techniques
+    # or duplicate 考点 become unavoidable downstream. Counts distinct canonical
+    # sub-techniques and applies the same soft-pass pattern as findings count.
+    distinct = len({resolve_sub_technique(finding) for finding in findings})
+    diversity_needed = max(1, target_count)
+    diversity_slack = _diversity_soft_pass_slack()
+    diversity_floor = max(1, diversity_needed - diversity_slack)
+    if distinct < diversity_floor:
+        return (
+            False,
+            f"insufficient_diversity:distinct={distinct},need={diversity_needed}",
+        )
+    if distinct < diversity_needed:
+        _LOGGER.warning(
+            "research diversity gate soft-passed: distinct=%d, needed=%d, slack=%d "
+            "(set RESEARCH_DIVERSITY_SOFT_PASS_BELOW_BY=0 to disable soft pass)",
+            distinct,
+            diversity_needed,
+            diversity_slack,
         )
     return True, None
 
