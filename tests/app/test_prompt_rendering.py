@@ -162,6 +162,28 @@ class RenderPromptTests(unittest.TestCase):
             )
             self.assertIn("first-time run", rendered)
 
+    def test_reverse_prompt_forbids_plaintext_flag_shortcuts(self):
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            paths = _seed_paths(tmp_path)
+            running_shard = tmp_path / "running.json"
+            running_shard.write_text("{}", encoding="utf-8")
+
+            rendered = render_prompt(
+                paths,  # type: ignore[arg-type]
+                running_shard,
+                tmp_path / "r.json",
+                worker="dry-01",
+                original_shard_name="re-0001-0001.json",
+            )
+
+            self.assertIn("Local build source under `src/` may contain", rendered)
+            self.assertIn("windows/amd64", rendered)
+            self.assertIn("MinGW-w64", rendered)
+            self.assertIn("OLLVM", rendered)
+            self.assertIn("Running the delivered artifact with no exploit/license/input", rendered)
+            self.assertIn("the intended path must be necessary", rendered)
+
     def test_prompt_forbids_in_script_image_build(self):
         with TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

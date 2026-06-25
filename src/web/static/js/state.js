@@ -16,6 +16,8 @@ export const appState = {
       generation_request_id: "",
     },
     selection: new Set(),
+    laneCount: 4,
+    lanePools: null,
     flags: {},
     poll: { timer: null, loading: false },
   },

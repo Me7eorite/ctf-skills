@@ -22,6 +22,7 @@ from domain.resume import (
     document_evidence,
     find_challenge_directory,
     implement_evidence,
+    implement_evidence_reason,
     validator_message,
 )
 from domain.validation import ChallengeValidator
@@ -257,8 +258,9 @@ def validate_gate(
     # 按阶段顺序检查证据
     if not design_evidence(plan.directory, challenge_id):
         return "design evidence incomplete"
-    if not implement_evidence(plan.directory, category):
-        return "implement evidence incomplete"
+    implement_reason = implement_evidence_reason(plan.directory, category)
+    if implement_reason is not None:
+        return f"implement evidence incomplete: {implement_reason}"
     build_ok, build_reason = build_evidence(plan.directory, category, image_exists)
     if not build_ok:
         return f"build evidence incomplete: {build_reason}"

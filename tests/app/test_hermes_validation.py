@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from domain.resume import ChallengeResumePlan
-from hermes.validation import run_validation
+from hermes.prompt import render_validation_repair_prompt
+from hermes.validation import run_validation, validate_gate
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,20 @@ class _ContractFailingValidator:
                 "metadata.build_status is not passed",
                 "missing deploy/Dockerfile",
             ],
+        }
+
+
+class _UnnecessaryPathValidator:
+    def validate_challenge(self, challenge_id: str) -> dict[str, Any]:
+        reason = (
+            "flag is recoverable in plaintext without the intended technique "
+            "(attachments/checker)"
+        )
+        return {
+            "challenge_id": challenge_id,
+            "status": "unnecessary_intended_path",
+            "error": reason,
+            "contract_errors": [reason],
         }
 
 
@@ -124,6 +139,139 @@ def test_contract_errors_are_recorded_as_validation_error(tmp_path: Path) -> Non
         "validator: status=contract_failed "
         "error=metadata.build_status is not passed; missing deploy/Dockerfile"
     )
+
+
+def test_unnecessary_intended_path_reason_is_forwarded_to_repair(tmp_path: Path) -> None:
+    paths = _Paths(tmp_path)
+    challenge = _make_gate_passing_web_challenge(paths, "web-0001")
+    recorder = _Recorder()
+
+    results = run_validation(
+        state=recorder,
+        validator=_UnnecessaryPathValidator(),  # type: ignore[arg-type]
+        paths=paths,  # type: ignore[arg-type]
+        image_exists=lambda _image: True,
+        original_shard_name="web-0001-0001.json",
+        worker="worker-01",
+        challenge_ids=["web-0001"],
+        plan_by_id={
+            "web-0001": ChallengeResumePlan(
+                challenge_id="web-0001",
+                directory=challenge,
+                lookup_status="ok",
+                first_pending_stage="validate",
+            )
+        },
+    )
+
+    assert results[0]["validation_status"] == "unnecessary_intended_path"
+    assert "attachments/checker" in results[0]["validation_error"]
+    assert results[0]["validation_contract_errors"] == [
+        "flag is recoverable in plaintext without the intended technique (attachments/checker)"
+    ]
+    failed_events = [
+        event
+        for event in recorder.events
+        if event.get("stage") == "validate" and event.get("status") == "failed"
+    ]
+    assert "attachments/checker" in failed_events[-1]["message"]
+
+
+def test_validation_repair_prompt_explains_unnecessary_intended_path() -> None:
+    prompt = render_validation_repair_prompt(
+        attempt=1,
+        max_attempts=2,
+        validation_results=[
+            {
+                "challenge_id": "re-0001",
+                "solve_status": "failed",
+                "validation_status": "unnecessary_intended_path",
+                "validation_error": (
+                    "flag is recoverable in plaintext without the intended "
+                    "technique (attachments/checker)"
+                ),
+            }
+        ],
+    )
+
+    assert '"unnecessary_intended_path"' in prompt
+    assert "Focused repair plan:" in prompt
+    assert "Root cause: the flag is reachable without the intended technique." in prompt
+    assert "remove plaintext flag bytes" in prompt
+    assert "binary print the flag when run with no input" in prompt
+
+
+def test_validation_repair_prompt_classifies_nonzero_exit() -> None:
+    prompt = render_validation_repair_prompt(
+        attempt=1,
+        max_attempts=2,
+        validation_results=[
+            {
+                "challenge_id": "web-0001",
+                "solve_status": "failed",
+                "validation_status": "nonzero_exit",
+                "validation_returncode": 1,
+                "validation_stderr_tail": "ModuleNotFoundError: No module named 'requests'",
+            }
+        ],
+    )
+
+    assert "Focused repair plan:" in prompt
+    assert "Root cause: `validate.sh` exited non-zero." in prompt
+    assert "Remove the missing dependency" in prompt
+
+
+def test_validation_repair_prompt_blocks_metadata_replacement_cheat() -> None:
+    prompt = render_validation_repair_prompt(
+        attempt=2,
+        max_attempts=2,
+        validation_results=[
+            {
+                "challenge_id": "re-0001",
+                "solve_status": "failed",
+                "validation_status": "contract_failed",
+                "validation_error": (
+                    "re solver references 'metadata.json'; it must derive the "
+                    "flag from the artifact, not organizer files"
+                ),
+                "validation_contract_errors": [
+                    "validate.sh embeds the literal metadata.flag; the reference solver must recover the flag, not hardcode it",
+                    "re solver references 'metadata.json'; it must derive the flag from the artifact, not organizer files",
+                ],
+            }
+        ],
+    )
+
+    assert "Remove all `metadata.json` / `challenge.yml` reads" in prompt
+    assert "do not compare against metadata inside the script" in prompt
+    assert "same cheat in another form" in prompt
+
+
+def test_validate_gate_reports_specific_implementation_gap(tmp_path: Path) -> None:
+    paths = _Paths(tmp_path)
+    challenge = paths.challenges / "re" / "re-0001-demo"
+    challenge.mkdir(parents=True)
+    (challenge / "metadata.json").write_text(
+        json.dumps(
+            {
+                "id": "re-0001",
+                "category": "re",
+                "build_status": "pending",
+                "flag": "flag{demo}",
+            }
+        ),
+        encoding="utf-8",
+    )
+    plan = ChallengeResumePlan(
+        challenge_id="re-0001",
+        directory=challenge,
+        lookup_status="ok",
+        first_pending_stage="validate",
+    )
+
+    error = validate_gate("re-0001", plan, paths, image_exists=lambda _image: True)  # type: ignore[arg-type]
+
+    assert error == "implement evidence incomplete: src missing"
 
 
 def test_workspace_validation_uses_exact_bound_path(tmp_path: Path) -> None:

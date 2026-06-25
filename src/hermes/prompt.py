@@ -52,6 +52,7 @@ def render_validation_repair_prompt(
             }
         )
     rendered = json.dumps(diagnostics, ensure_ascii=False, indent=2)
+    repair_plan = _render_repair_plan(diagnostics)
     non_regression = _render_non_regression_section(prior_contract_errors)
     return f"""You are repairing CTF challenge artifacts after authoritative host validation failed.
 
@@ -63,6 +64,9 @@ Host validation diagnostics:
 ```json
 {rendered}
 ```
+
+Focused repair plan:
+{repair_plan}
 
 How to read `validation_error`:
 - `"contract_failed"` + `validation_error` starting with `"build evidence incomplete: metadata.<FIELD> missing"`
@@ -76,6 +80,13 @@ How to read `validation_error`:
 - `"build evidence incomplete: metadata.artifact_sha256 does not match artifact contents"`
   means the file at `metadata.artifact` was rebuilt without updating its `artifact_sha256`.
   Recompute the SHA-256 and write it back to `metadata.json`.
+- `"unnecessary_intended_path"` means the host found a shortcut that recovers the
+  flag without the intended technique. Use `validation_error` to identify the shortcut.
+  For `re`, remove plaintext flag bytes from delivered files in `attachments/` and
+  `dist/`; local organizer source under `src/` may contain the flag if it is not
+  shipped. Do not make the binary print the flag when run with no input. Store only
+  encoded/encrypted material in the player artifact and update `writenup/exp.py` so
+  it derives the flag through the declared reversing technique.
 {_VALIDATION_CONTRACT_CHECKLIST}{non_regression}
 Run `validate.sh` yourself and iterate until it exits 0 and its last recovered flag equals
 `metadata.flag`. Do not hardcode or merely echo the expected flag in the exploit. The exploit
@@ -83,12 +94,156 @@ must recover it through the intended vulnerability. Do not write `validate/*` pr
 the host runner will perform and record the authoritative validation again after you return.
 Update documentation and metadata when the repaired implementation changes them.
 
-Before you finish, self-check every challenge you touched: confirm `validate.sh` and
-`writenup/exp.py` contain neither the literal `metadata.flag` value nor any reference to
-`metadata.json` / `challenge.yml` / `docker-compose*`, and (for `re`) that they do open the
-delivered artifact under `attachments/`. A repair that fixes one diagnostic by violating a
-different rule above still fails host validation.
+Before you finish, self-check every challenge you touched with real file searches:
+- Run a search equivalent to `grep -R "metadata.json\\|challenge.yml\\|docker-compose\\|flag{{" validate.sh writenup/exp.py`.
+- For `re`, any `metadata.json` or `challenge.yml` hit in `validate.sh` or `writenup/exp.py`
+  is still a failure. `validate.sh` must validate by running the solver and extracting a
+  `flag{{...}}` token from solver output, not by reading organizer answers.
+- For `re`, confirm `validate.sh` or `writenup/exp.py` passes/opens the artifact under
+  `attachments/`.
+A repair that fixes one diagnostic by violating a different rule above still fails host validation.
 """
+
+
+def _render_repair_plan(diagnostics: Sequence[Mapping[str, object]]) -> str:
+    if not diagnostics:
+        return "- No failed challenge diagnostics were supplied; inspect `./input/shard.json` and exit without broad rewrites."
+    lines: list[str] = []
+    for item in diagnostics:
+        challenge_id = str(item.get("challenge_id") or "unknown")
+        status = str(item.get("validation_status") or "failed")
+        error = str(item.get("validation_error") or "").strip()
+        contract_errors = item.get("validation_contract_errors")
+        if isinstance(contract_errors, list) and contract_errors:
+            error = "; ".join(str(entry) for entry in contract_errors if entry) or error
+        stdout_tail = str(item.get("validation_stdout_tail") or "")
+        stderr_tail = str(item.get("validation_stderr_tail") or "")
+        lines.append(f"- `{challenge_id}`: status=`{status}`")
+        lines.extend(
+            f"  - {step}"
+            for step in _repair_steps_for_status(
+                status,
+                error=error,
+                stdout_tail=stdout_tail,
+                stderr_tail=stderr_tail,
+            )
+        )
+    return "\n".join(lines)
+
+
+def _repair_steps_for_status(
+    status: str,
+    *,
+    error: str,
+    stdout_tail: str,
+    stderr_tail: str,
+) -> list[str]:
+    lower_error = error.lower()
+    lower_output = f"{stdout_tail}\n{stderr_tail}".lower()
+    if status == "contract_failed":
+        if "references 'metadata.json'" in lower_error or "references 'challenge.yml'" in lower_error:
+            return [
+                "Root cause: the Re validation path reads organizer files instead of solving the artifact.",
+                "Remove all `metadata.json` / `challenge.yml` reads from both `validate.sh` and `writenup/exp.py`.",
+                "Do not replace a hardcoded flag with metadata reads; that is the same cheat in another form.",
+                "Make `validate.sh` run `writenup/exp.py ./attachments/<artifact>` and extract the final `flag{...}` from solver stdout; do not compare against metadata inside the script.",
+                "Make `writenup/exp.py` parse/decrypt data from the artifact bytes or execute the artifact with a derived input.",
+            ]
+        if "embeds the literal metadata.flag" in lower_error:
+            return [
+                "Root cause: the validator or solver contains the literal flag.",
+                "Edit `validate.sh` / `writenup/exp.py` so they recover the flag from the target or artifact at runtime.",
+                "Do not replace the hardcoded flag with reads from `metadata.json`, `challenge.yml`, or `docker-compose*`; that is the same cheat in another form.",
+            ]
+        if "metadata.build_status is not passed" in lower_error:
+            return [
+                "Root cause: `metadata.json` still reports an incomplete build.",
+                "Run the real build command, verify the artifact/image exists, then set `build_status` to `passed` only after success.",
+                "Update artifact path, compiler/build command, and SHA-256 if the build output changed.",
+            ]
+        if "implement evidence incomplete" in lower_error:
+            if "src missing" in lower_error or "src has no business source" in lower_error:
+                return [
+                    "Root cause: the implementation source tree is incomplete.",
+                    "Create real challenge source under `src/` for Re or `deploy/src/` for Web/Pwn; do not leave only metadata/README/validate files.",
+                    "Then rebuild the player artifact and update metadata build fields.",
+                ]
+            return [
+                "Root cause: implementation evidence is incomplete.",
+                "Create the missing source/deploy file named in the diagnostic, then rebuild and update metadata.",
+                "Do not mark `build_status` passed until the source and artifact are both present.",
+            ]
+        if "missing deploy/" in lower_error:
+            return [
+                "Root cause: required Web/Pwn deployment files are missing.",
+                "Create the missing `deploy/Dockerfile`, `deploy/docker-compose.yml`, and `deploy/src/` files using the existing design.",
+                "For Compose, keep one service and a literal `- FLAG=<metadata.flag>` environment entry.",
+            ]
+        if "no compiled elf" in lower_error or "no compiled pe" in lower_error:
+            return [
+                "Root cause: the player-facing compiled artifact is missing from `attachments/`.",
+                "Compile the declared target format/architecture and place the binary under `attachments/`.",
+                "Update `metadata.artifact`, `metadata.artifact_sha256`, compiler, and build command.",
+            ]
+        if "architecture is not" in lower_error or "wrong architecture" in lower_error:
+            return [
+                "Root cause: the delivered artifact format or architecture does not match metadata.",
+                "Rebuild using the declared toolchain/target instead of changing the challenge category or ID.",
+                "Use `file attachments/<artifact>` and update metadata only to match the verified artifact.",
+            ]
+        return [
+            "Root cause: a host contract check failed before the exploit ran.",
+            "Fix the named contract error exactly; avoid redesigning unrelated files.",
+            "After the fix, run `validate.sh` and re-check the host contract checklist.",
+        ]
+    if status == "unnecessary_intended_path":
+        if "running " in lower_error and "no input prints the flag" in lower_error:
+            return [
+                "Root cause: the delivered binary prints the flag without the intended input/path.",
+                "Change the target so it requires the intended exploit, license key, or reverse-engineered input before revealing the flag.",
+                "Keep the solver deriving that input from the delivered artifact or live service.",
+            ]
+        return [
+            "Root cause: the flag is reachable without the intended technique.",
+            "For Re, remove plaintext flag bytes from `attachments/` and `dist/`; organizer-only `src/` may contain build-time material if not shipped.",
+            "Encode/encrypt delivered flag material and update `writenup/exp.py` to recover it through the declared technique.",
+        ]
+    if status == "missing_validation":
+        return [
+            "Root cause: `validate.sh` is missing.",
+            "Create `validate.sh` as the single reproducible entrypoint that runs the real solver.",
+            "Its last recovered flag must be printed by the solver; do not read or echo `metadata.flag` inside validation.",
+        ]
+    if status == "flag_mismatch":
+        return [
+            "Root cause: `validate.sh` ran but printed a different final flag.",
+            "Fix either the target flag injection/encryption or the solver extraction so they agree with `metadata.flag`.",
+            "Do not change `metadata.flag` unless the generated target was rebuilt consistently with that new flag.",
+        ]
+    if status == "nonzero_exit":
+        hint = "Use stderr/stdout traceback to fix the failing command."
+        if "modulenotfounderror" in lower_output or "no module named" in lower_output:
+            hint = "Remove the missing dependency, vendor it locally, or add it to the Docker/image build instead of installing during validation."
+        elif "connection refused" in lower_output or "timed out" in lower_output:
+            hint = "Fix service startup/readiness, host/port wiring, and cleanup traps before rerunning the exploit."
+        elif "permission denied" in lower_output:
+            hint = "Fix executable bits, ownership, or container user permissions for the artifact and scripts."
+        return [
+            "Root cause: `validate.sh` exited non-zero.",
+            hint,
+            "Keep validation offline-capable and deterministic; rerun `validate.sh` after each fix.",
+        ]
+    if status == "timeout":
+        return [
+            "Root cause: validation timed out.",
+            "Add readiness checks, bounded retries, and shorter exploit loops; remove brute force or network dependency from validation.",
+            "Make the solver deterministic enough to finish within the host timeout.",
+        ]
+    return [
+        "Root cause: host validation failed.",
+        "Use the status, error, stdout tail, and stderr tail above to make the smallest targeted fix.",
+        "Rerun `validate.sh` before finishing and avoid changing challenge identity or delivery layout.",
+    ]
 
 
 # Host contract checklist replayed into every repair prompt. The host validator
@@ -117,9 +272,9 @@ Web / Pwn:
   Dockerfile, binary, or runtime dependencies change; keep `metadata.artifact_sha256` in sync.
 - Web additionally requires `metadata.runtime` and `metadata.framework`.
 
-Re / Pwn (ELF target):
-- The compiled player-facing ELF lives in `attachments/` (pwn may also ship it
-  under `deploy/`), and its architecture MUST match
+Re / Pwn binary target:
+- The compiled player-facing ELF or PE/EXE lives in `attachments/` (pwn may
+  also ship ELF under `deploy/`), and its architecture MUST match
   `metadata.architecture` / `metadata.target_platform`.
 
 Re:

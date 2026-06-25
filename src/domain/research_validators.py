@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 from uuid import UUID
 
 from domain.design.technique_taxonomy import resolve_sub_technique
+from domain.research import DIFFICULTY_LABELS, ResearchFindingKind
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -100,10 +101,6 @@ def _diversity_soft_pass_slack() -> int:
         )
         return 0
     return value
-
-from domain.research import DIFFICULTY_LABELS, ResearchFindingKind
-
-
 class ResearchValidationError(ValueError):
     """领域校验器拒绝输入时抛出的异常。"""
 
@@ -122,8 +119,8 @@ RUNTIME_CONSTRAINT_KEYS = {
     "target_platform",
     "strip",
 }
-TARGET_FORMATS = {"elf", "wasm", "jar", "container"}
-TARGET_PLATFORMS = {"linux/amd64", "linux/arm64", "linux/arm"}
+TARGET_FORMATS = {"elf", "exe", "wasm", "jar", "container"}
+TARGET_PLATFORMS = {"linux/amd64", "linux/arm64", "linux/arm", "windows/amd64"}
 
 
 def validate_distribution(

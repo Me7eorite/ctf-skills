@@ -37,6 +37,8 @@ class _StubBuildTaskManager:
     def __init__(self, response: tuple[bool, str] = (True, "worker started")):
         self.response = response
         self.calls: list[tuple[str, UUID]] = []
+        self.lane_batches: list[list[UUID]] = []
+        self.pool: dict | None = None
 
     def start_worker(self, *, category: str, build_attempt_id: UUID):
         self.calls.append((category, build_attempt_id))
@@ -45,6 +47,43 @@ class _StubBuildTaskManager:
     def start_sequential_worker(self, *, build_attempt_ids: list[UUID]):
         self.calls.extend(("sequence", attempt_id) for attempt_id in build_attempt_ids)
         return self.response
+
+    def start_sequential_lanes(self, *, lanes: list[list[UUID]]):
+        ok, message = self.response
+        if not ok:
+            return False, message, {}
+        self.lane_batches = lanes
+        pool_lanes = []
+        for index, attempt_ids in enumerate(lanes, start=1):
+            worker = f"stub-lane-{index:02d}"
+            self.calls.extend((worker, attempt_id) for attempt_id in attempt_ids)
+            pool_lanes.append(
+                {
+                    "lane": index,
+                    "worker": worker,
+                    "build_attempt_ids": [str(attempt_id) for attempt_id in attempt_ids],
+                    "queue_length": len(attempt_ids),
+                    "running": True,
+                    "returncode": None,
+                    "log": f"stub-lane-{index:02d}.log",
+                    "message": f"{worker} running",
+                }
+            )
+        self.pool = {
+            "id": "stub-pool",
+            "started_at": "2026-01-01 00:00:00",
+            "running": True,
+            "lane_count": len(pool_lanes),
+            "active_lanes": len(pool_lanes),
+            "total_attempts": sum(len(batch) for batch in lanes),
+            "succeeded_lanes": 0,
+            "failed_lanes": 0,
+            "lanes": pool_lanes,
+        }
+        return True, message, self.pool
+
+    def lane_pools_state(self):
+        return [self.pool] if self.pool else []
 
 
 @pytest.fixture(scope="module")
@@ -567,6 +606,62 @@ def test_sequential_worker_preserves_requested_attempt_order(
         assert second_row.status == "queued"
         assert first_row.worker == "dashboard-sequential-01"
         assert second_row.worker == "dashboard-sequential-01"
+
+
+def test_sequential_lane_pool_splits_selected_attempts_round_robin(
+    client: TestClient,
+    session_factory: SessionFactory,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    first_task = _seed_designed_task(session_factory, task_no=1)
+    second_task = _seed_designed_task(session_factory, task_no=2)
+    third_task = _seed_designed_task(session_factory, task_no=3)
+    with transaction(factory=session_factory) as session:
+        repo = BuildAttemptsRepository(session)
+        first = _create_canonical_attempt(repo, first_task)
+        second = _create_canonical_attempt(repo, second_task)
+        third = _create_canonical_attempt(repo, third_task)
+
+    _write_pending_attempt(client, first)
+    _write_pending_attempt(client, second)
+    _write_pending_attempt(client, third)
+    tasks = _StubBuildTaskManager()
+    client.app.state.dashboard_tasks = tasks
+    monkeypatch.setattr(
+        build_attempts_endpoints,
+        "hermes_profile_health",
+        lambda _profile: (True, "", "ok"),
+    )
+
+    response = client.post(
+        "/api/build-attempts/worker/start-sequential-lanes",
+        json={"build_attempt_ids": [str(first.id), str(second.id), str(third.id)], "lanes": 2},
+    )
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["queue_length"] == 3
+    assert body["requested_lanes"] == 2
+    assert body["lane_count"] == 2
+    assert body["pool"]["lanes"][0]["build_attempt_ids"] == [str(first.id), str(third.id)]
+    assert body["pool"]["lanes"][1]["build_attempt_ids"] == [str(second.id)]
+    assert tasks.lane_batches == [[first.id, third.id], [second.id]]
+    assert tasks.calls == [
+        ("stub-lane-01", first.id),
+        ("stub-lane-01", third.id),
+        ("stub-lane-02", second.id),
+    ]
+    with session_factory() as session:
+        first_row = session.get(build_model.BuildAttempt, first.id)
+        second_row = session.get(build_model.BuildAttempt, second.id)
+        third_row = session.get(build_model.BuildAttempt, third.id)
+        assert first_row.worker == "stub-lane-01"
+        assert second_row.worker == "stub-lane-02"
+        assert third_row.worker == "stub-lane-01"
+
+    pools_response = client.get("/api/build-attempts/worker/pools")
+    assert pools_response.status_code == 200
+    assert pools_response.json()["pools"][0]["id"] == "stub-pool"
 
 
 def test_queue_start_runs_all_eligible_attempts_in_created_order(

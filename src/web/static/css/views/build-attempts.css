@@ -31,6 +31,28 @@
   justify-content: flex-end;
 }
 
+.ba-lane-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--ink-600);
+  font-size: var(--font-xs);
+}
+
+.ba-lane-control input {
+  width: 52px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink-900);
+  font-weight: 700;
+}
+
 .ba-summary-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -86,6 +108,64 @@
 
 .ba-list-card .filter-bar {
   border-bottom: 1px solid var(--line);
+}
+
+.ba-lane-pools {
+  margin-bottom: var(--space-lg);
+}
+
+.ba-lane-pool-list {
+  display: grid;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-lg);
+}
+
+.ba-lane-pool {
+  display: grid;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--ink-50);
+}
+
+.ba-lane-pool-head,
+.ba-lane-card-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+
+.ba-lane-pool-head strong {
+  display: block;
+  color: var(--ink-900);
+}
+
+.ba-lane-pool-head span {
+  color: var(--ink-500);
+  font-size: var(--font-xs);
+}
+
+.ba-lane-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: var(--space-sm);
+}
+
+.ba-lane-card {
+  display: grid;
+  gap: 4px;
+  padding: var(--space-sm);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink-500);
+  font-size: var(--font-xs);
+}
+
+.ba-lane-card-title strong {
+  color: var(--ink-900);
 }
 
 .ba-table-wrap {
@@ -342,6 +422,11 @@
   .ba-detail-actions .btn,
   .ba-card-actions .btn {
     flex: 1;
+  }
+
+  .ba-lane-control {
+    justify-content: space-between;
+    width: 100%;
   }
 
   .ba-summary-grid,

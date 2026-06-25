@@ -42,7 +42,9 @@ function clearPoll() {
 
 function needsActivePolling() {
   const rows = state.detail ? [state.detail] : (state.list || []);
-  return rows.some((attempt) => attempt.status === "queued" || attempt.status === "running");
+  const activeRows = rows.some((attempt) => attempt.status === "queued" || attempt.status === "running");
+  const activePools = (state.lanePools || []).some((pool) => pool.running);
+  return activeRows || activePools;
 }
 
 function schedulePoll(delay = SETTLED_POLL_MS) {
@@ -74,7 +76,12 @@ async function poll() {
         initIcons();
       }
     } else {
-      state.list = await api(buildListUrl());
+      const [list, pools] = await Promise.all([
+        api(buildListUrl()),
+        fetchLanePools(),
+      ]);
+      state.list = list;
+      state.lanePools = pools;
       render(appState.data);
       initIcons();
     }
@@ -90,13 +97,23 @@ async function ensureList() {
   if (state.list !== null || state.flags.list?.loading) return;
   state.flags.list = { loading: true, error: null };
   try {
-    state.list = await api(buildListUrl());
+    const [list, pools] = await Promise.all([
+      api(buildListUrl()),
+      fetchLanePools(),
+    ]);
+    state.list = list;
+    state.lanePools = pools;
     state.flags.list = { loading: false, error: null };
   } catch (err) {
     state.flags.list = { loading: false, error: err.message };
   }
   render(appState.data);
   initIcons();
+}
+
+async function fetchLanePools() {
+  const result = await api("/api/build-attempts/worker/pools");
+  return Array.isArray(result.pools) ? result.pools : [];
 }
 
 async function ensureDetail(id) {
@@ -183,9 +200,7 @@ async function startCurrentQueue() {
 async function startSelectedQueue() {
   if (!state.selection.size) return;
   const rows = state.list || [];
-  const orderedIds = rows
-    .filter((row) => row.status === "queued" && state.selection.has(row.id))
-    .map((row) => row.id);
+  const orderedIds = selectedQueuedIds(rows);
   if (!orderedIds.length) {
     showToast("选中的题目均已不在 queued 状态", true);
     return;
@@ -203,6 +218,47 @@ async function startSelectedQueue() {
   } catch (err) {
     showToast(err.message, true);
   }
+}
+
+async function startSelectedLanes() {
+  if (!state.selection.size) return;
+  const rows = state.list || [];
+  const orderedIds = selectedQueuedIds(rows);
+  if (!orderedIds.length) {
+    showToast("选中的题目均已不在 queued 状态", true);
+    return;
+  }
+  try {
+    const result = await postJson(
+      "/api/build-attempts/worker/start-sequential-lanes",
+      {
+        build_attempt_ids: orderedIds,
+        lanes: currentLaneCount(),
+      },
+    );
+    showToast(`多队列已启动 · ${result.lane_count} 条 lane · 共 ${result.queue_length} 个任务`);
+    state.selection.clear();
+    state.lanePools = result.pool ? [result.pool, ...(state.lanePools || [])] : state.lanePools;
+    state.list = null;
+    await ensureList();
+    schedulePoll(START_REFRESH_MS);
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+function selectedQueuedIds(rows) {
+  return rows
+    .filter((row) => row.status === "queued" && state.selection.has(row.id))
+    .map((row) => row.id);
+}
+
+function currentLaneCount() {
+  const input = document.querySelector("#ba-lane-count");
+  const raw = Number(input?.value || state.laneCount || 4);
+  const lanes = Number.isFinite(raw) ? Math.floor(raw) : 4;
+  state.laneCount = Math.min(16, Math.max(1, lanes));
+  return state.laneCount;
 }
 
 function toggleRowSelection(attemptId, checked) {
@@ -394,7 +450,15 @@ function renderList(root) {
       <div class="ba-page-actions">
         <button id="ba-start-selected" class="btn btn-primary btn-sm" ${selectedCount ? "" : "disabled"}
           title="按表格中的勾选顺序顺序执行所选 queued 题目">
-          <i data-lucide="play"></i>启动选中${selectedCount ? `（${selectedCount}）` : ""}
+          <i data-lucide="play"></i>启动选中（单队列）${selectedCount ? `· ${selectedCount}` : ""}
+        </button>
+        <label class="ba-lane-control" title="把选中任务拆成多条顺序队列；每条 lane 内仍按顺序执行">
+          <span>lane</span>
+          <input id="ba-lane-count" type="number" min="1" max="16" step="1" value="${escapeHtml(state.laneCount || 4)}">
+        </label>
+        <button id="ba-start-selected-lanes" class="btn btn-primary btn-sm" ${selectedCount ? "" : "disabled"}
+          title="按表格顺序 round-robin 拆分选中 queued 题目，多条顺序队列并发运行">
+          <i data-lucide="columns-3"></i>启动多队列${selectedCount ? `（${selectedCount}）` : ""}
         </button>
         <button id="ba-start-queue" class="btn btn-secondary btn-sm"
           title="按当前的分类/生成请求筛选，启动全部 queued 题目（按创建时间从早到晚，最多 100 条）">
@@ -410,6 +474,8 @@ function renderList(root) {
       ${renderBuildMetric("失败/丢失", summary.failed + summary.lost, "triangle-alert", "danger")}
     </div>
 
+    ${renderLanePools()}
+
     <section class="card ba-list-card">
       <div class="ba-list-summary">
         <div>
@@ -421,6 +487,59 @@ function renderList(root) {
       ${renderFilters()}
       ${rows.length ? `${renderTable(rows)}${renderAttemptCards(rows)}` : `<div class="empty card-body">没有匹配的构建记录</div>`}
     </section>
+  `;
+}
+
+function renderLanePools() {
+  const pools = state.lanePools || appState.data?.process?.lane_pools || [];
+  if (!pools.length) return "";
+  return `
+    <section class="card ba-lane-pools">
+      <div class="ba-list-summary">
+        <div>
+          <div class="card-title">多队列执行池</div>
+          <div class="card-subtitle">每条 lane 内顺序执行，多条 lane 并发运行。</div>
+        </div>
+        <span class="pill">${pools.filter((pool) => pool.running).length} 个运行中</span>
+      </div>
+      <div class="ba-lane-pool-list">
+        ${pools.map(renderLanePool).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderLanePool(pool) {
+  const lanes = Array.isArray(pool.lanes) ? pool.lanes : [];
+  return `
+    <article class="ba-lane-pool">
+      <div class="ba-lane-pool-head">
+        <div>
+          <strong>${escapeHtml(shortId(pool.id))}</strong>
+          <span>${escapeHtml(pool.started_at || "-")} · ${pool.total_attempts || 0} 个任务</span>
+        </div>
+        ${pool.running ? softPill(`运行中 · ${pool.active_lanes || 0}/${pool.lane_count || lanes.length}`) : softPill("已结束")}
+      </div>
+      <div class="ba-lane-grid">
+        ${lanes.map(renderLane).join("")}
+      </div>
+    </article>
+  `;
+}
+
+function renderLane(lane) {
+  const status = lane.running
+    ? "运行中"
+    : (lane.returncode === 0 ? "完成" : `失败 ${lane.returncode ?? ""}`.trim());
+  return `
+    <div class="ba-lane-card">
+      <div class="ba-lane-card-title">
+        <strong>Lane ${escapeHtml(lane.lane)}</strong>
+        ${softPill(status)}
+      </div>
+      <div class="mono">${escapeHtml(lane.worker || "-")}</div>
+      <div>${escapeHtml(lane.queue_length || 0)} 个任务 · log: <span class="mono">${escapeHtml(lane.log || "-")}</span></div>
+    </div>
   `;
 }
 
@@ -977,6 +1096,10 @@ export function bind() {
       startSelectedQueue();
       return;
     }
+    if (event.target.closest("#ba-start-selected-lanes")) {
+      startSelectedLanes();
+      return;
+    }
     if (event.target.closest("#ba-worker")) {
       startBuildWorker();
       return;
@@ -1035,6 +1158,11 @@ export function bind() {
     }
     if (event.target.id === "ba-select-all") {
       toggleSelectAll(event.target.checked);
+      return;
+    }
+    if (event.target.id === "ba-lane-count") {
+      currentLaneCount();
+      render(appState.data);
       return;
     }
     if (event.target.classList.contains("ba-row-select")) {

@@ -18,6 +18,11 @@ def test_build_attempt_actions_use_constrained_endpoints():
     assert "启动全部待运行" in source
     assert "启动选中" in source
     assert "/api/build-attempts/worker/start-sequential" in source
+    assert "/api/build-attempts/worker/start-sequential-lanes" in source
+    assert "/api/build-attempts/worker/pools" in source
+    assert "启动多队列" in source
+    assert 'id="ba-lane-count"' in source
+    assert "多队列执行池" in source
     assert "/revalidate`" in source
     assert 'runAction("worker")' not in source
     assert 'runAction("validate")' not in source

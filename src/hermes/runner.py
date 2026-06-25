@@ -121,6 +121,30 @@ def _iteration_from_shard_name(original_shard_name: str | None) -> int:
 
 _LOGGER = logging.getLogger(__name__)
 DEFAULT_VALIDATION_REPAIR_ATTEMPTS = 2
+_VALIDATION_REPAIR_TIMEOUT_ENV = "HERMES_VALIDATION_REPAIR_TIMEOUT"
+
+
+def _resolve_validation_repair_timeout(effective_timeout: int) -> int:
+    raw_timeout = os.environ.get(_VALIDATION_REPAIR_TIMEOUT_ENV)
+    if raw_timeout is None or not raw_timeout.strip():
+        return min(effective_timeout, 600)
+    try:
+        configured = int(raw_timeout)
+    except ValueError:
+        _LOGGER.warning(
+            "invalid %s=%r; using capped default",
+            _VALIDATION_REPAIR_TIMEOUT_ENV,
+            raw_timeout,
+        )
+        return min(effective_timeout, 600)
+    if configured <= 0:
+        _LOGGER.warning(
+            "invalid %s=%r; using capped default",
+            _VALIDATION_REPAIR_TIMEOUT_ENV,
+            raw_timeout,
+        )
+        return min(effective_timeout, 600)
+    return min(configured, effective_timeout)
 
 
 class _BestEffortProgressStore:
@@ -844,7 +868,9 @@ class HermesRunner:
         # into each prompt as a non-regression list so the agent does not satisfy
         # the latest diagnostic by reintroducing an earlier one.
         seen_contract_errors: list[str] = []
-        for repair_attempt in range(1, self.validation_repair_attempts + 1):
+        repair_budget = self.validation_repair_attempts
+        repair_timeout = _resolve_validation_repair_timeout(effective_timeout)
+        for repair_attempt in range(1, repair_budget + 1):
             if not any(result.get("solve_status") == "failed" for result in per_results):
                 break
             for result in per_results:
@@ -859,12 +885,12 @@ class HermesRunner:
                 status="running",
                 message=(
                     "validation repair: sending host diagnostics to Hermes "
-                    f"({repair_attempt}/{self.validation_repair_attempts})"
+                    f"({repair_attempt}/{repair_budget})"
                 ),
             )
             repair_prompt = render_validation_repair_prompt(
                 attempt=repair_attempt,
-                max_attempts=self.validation_repair_attempts,
+                max_attempts=repair_budget,
                 validation_results=per_results,
                 prior_contract_errors=seen_contract_errors,
             )
@@ -877,7 +903,7 @@ class HermesRunner:
                     repair_prompt,
                     repair_log,
                     dry_run=False,
-                    timeout=effective_timeout,
+                    timeout=repair_timeout,
                     workspace=workspace,
                     profile_name=profile_name,
                 )

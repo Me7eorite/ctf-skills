@@ -175,14 +175,31 @@ Container rules for Web and Pwn:
 Reverse rules:
 
 - Default to a Linux amd64 ELF when `target_platform` is absent. Valid
-  declared values are `linux/amd64`, `linux/arm64`, and `linux/arm`; the
-  produced ELF MUST match the matrix-declared `target_platform`.
+  declared values are `linux/amd64`, `linux/arm64`, `linux/arm`, and
+  `windows/amd64`. The produced artifact MUST match the matrix-declared
+  `target_platform` and `target_format`.
+- For `target_platform=windows/amd64`, build a Windows PE `.exe` with an
+  available MinGW-w64 cross compiler such as `x86_64-w64-mingw32-gcc`; do not
+  silently substitute a Linux ELF.
+- When an OLLVM/obfuscating clang toolchain is available and the design calls
+  for control-flow flattening, bogus control flow, instruction substitution, or
+  opaque predicates, prefer that toolchain over plain `gcc` and record the exact
+  command. Fall back to `gcc` only when the requested obfuscation is infeasible,
+  and report that as a build limitation rather than changing the design.
 - Compile the player-facing artifact into `attachments/`. New challenges MUST
   use `attachments/` because that is the unified delivery directory the packer
   ships to players.
 - A source file or README placeholder in `attachments/` is a failure.
 - The distributed binary must not expose the plaintext flag through ordinary
   `strings` unless that is explicitly the intended easy technique.
+- Do not store the plaintext `metadata.flag` in player-visible or published
+  paths (`attachments/` or `dist/`) unless `strings` is explicitly the intended
+  easy technique. Local build source under `src/` may contain organizer-only
+  plaintext, but it must not be copied into `attachments/` or `dist/`.
+  Encode/encrypt flag material in delivered binaries and make the solver
+  recover it through the declared reversing technique.
+- Running the delivered artifact with no exploit/license/input must not print
+  the flag for non-`strings` techniques; the intended path must be necessary.
 
 Pwn rules:
 
@@ -200,15 +217,16 @@ Pwn rules:
   defines no `volumes`, and runs with the intended non-root account (`ctf` for
   ordinary Pwn, or the selected Web base image's service user); then build and
   run that exact Compose configuration.
-- Re: run the compiler, then inspect the produced artifact with `file`.
+- Re: run the compiler selected by the declared target/toolchain, then inspect
+  the produced artifact with `file`.
 - Record build commands, compiler/runtime versions, and artifact SHA-256 in
   `metadata.json`.
 - Re builds must verify the artifact architecture against the matrix
-  `target_platform`. `file attachments/<artifact>` must report a Linux ELF
-  whose machine matches the
-  declared platform: `linux/amd64` → x86-64, `linux/arm64` → aarch64,
-  `linux/arm` → ARM. A host-native macOS binary or any ELF of the wrong
-  architecture is a failed build, not an acceptable fallback.
+  `target_platform`. `file attachments/<artifact>` must report a matching
+  artifact: `linux/amd64` → Linux ELF x86-64, `linux/arm64` → Linux ELF
+  aarch64, `linux/arm` → Linux ELF ARM, `windows/amd64` → PE32+ executable
+  x86-64. A host-native macOS binary, wrong architecture, or wrong format is a
+  failed build, not an acceptable fallback.
 - For Re challenges, do not pull Docker images or depend on network access just
   to compile. Use an already available local toolchain or an existing pinned
   project tool. If the exact requested target cannot be built in the current
@@ -369,7 +387,7 @@ At minimum:
   "template": "<template>",
   "runtime": "<web runtime or null>",
   "framework": "<web framework or null>",
-  "target_format": "<elf|wasm|jar|container>",
+  "target_format": "<elf|exe|wasm|jar|container>",
   "architecture": "<architecture>",
   "build_command": "<command actually run>",
   "artifact": "<player-facing artifact or image>",

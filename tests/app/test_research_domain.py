@@ -24,6 +24,7 @@ from domain.research_validators import (
     validate_category,
     validate_distribution,
     validate_finding,
+    validate_runtime_constraints,
 )
 
 # ---------------------------------------------------------------------------
@@ -67,6 +68,17 @@ def test_generation_request_accepts_seed_urls_tuple():
     )
     assert req.seed_urls == ("https://example.com/a", "https://example.com/b")
     assert req.category == "web"
+
+
+def test_runtime_constraints_accept_windows_exe_target():
+    constraints = validate_runtime_constraints(
+        {"target_format": "exe", "target_platform": "windows/amd64"}
+    )
+
+    assert constraints == {
+        "target_format": "exe",
+        "target_platform": "windows/amd64",
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Mapping
 
 # ---------- Defaults ----------
 
@@ -34,12 +34,146 @@ COMMON_ARTIFACTS: tuple[str, ...] = (
     "writenup/exp.py",
 )
 
-CONTAINER_ARTIFACTS: tuple[str, ...] = (
+CONTAINER_BASE_ARTIFACTS: tuple[str, ...] = (
     "deploy/Dockerfile",
     "deploy/docker-compose.yml",
-    "deploy/src/app.py",
     "deploy/_files/start.sh",
 )
+
+
+@dataclass(frozen=True)
+class RuntimeArtifactRule:
+    """语言及运行配置的工件约束。"""
+
+    required_exact: tuple[str, ...] = ()
+    required_any_exact: tuple[tuple[str, ...], ...] = ()
+    required_patterns: tuple[re.Pattern[str], ...] = ()
+    required_any_patterns: tuple[tuple[re.Pattern[str], ...], ...] = ()
+
+
+@dataclass(frozen=True)
+class RuntimeArtifactRequirements:
+    """运行时声明。"""
+
+    language: str | None
+    profile: str | None
+
+
+def _pattern(expr: str) -> re.Pattern[str]:
+    return re.compile(expr)
+
+
+RUNTIME_ARTIFACT_RULES: dict[str, dict[str, RuntimeArtifactRule]] = {
+    "python": {
+        "default": RuntimeArtifactRule(
+            required_exact=("deploy/src/app.py",),
+        ),
+    },
+    "php": {
+        "default": RuntimeArtifactRule(
+            required_exact=("deploy/src/index.php",),
+        ),
+    },
+    "go": {
+        "default": RuntimeArtifactRule(
+            required_exact=("deploy/src/main.go",),
+        ),
+    },
+    "java": {
+        "jar": RuntimeArtifactRule(
+            required_patterns=(
+                _pattern(r"^deploy/src/(?:src/main/java/.*\\.java|Main\\.java)$"),
+            ),
+            required_any_exact=(
+                (
+                    "deploy/_files/build.sh",
+                    "deploy/_files/pom.xml",
+                    "deploy/_files/build.gradle",
+                ),
+            ),
+        ),
+        "tomcat": RuntimeArtifactRule(
+            required_exact=("deploy/src/src/main/webapp/WEB-INF/web.xml",),
+            required_any_exact=(
+                (
+                    "deploy/_files/server.xml",
+                    "deploy/_files/setup.sh",
+                ),
+            ),
+            required_any_patterns=(
+                (
+                    _pattern(r"^deploy/src/src/main/java/.*Servlet\\.java$"),
+                    _pattern(r"^deploy/src/src/main/webapp/.*\\.jsp$"),
+                ),
+            ),
+        ),
+    },
+}
+
+DEFAULT_RUNTIME_LANGUAGE = "python"
+
+
+def default_runtime_profile(language: str) -> str:
+    profiles = RUNTIME_ARTIFACT_RULES.get(language)
+    if not profiles:
+        raise ValueError(f"unknown runtime language: {language}")
+    return next(iter(profiles))
+
+
+DEFAULT_RUNTIME_PROFILE = default_runtime_profile(DEFAULT_RUNTIME_LANGUAGE)
+
+
+def default_container_artifacts() -> tuple[str, ...]:
+    return (
+        *CONTAINER_BASE_ARTIFACTS,
+        *RUNTIME_ARTIFACT_RULES[DEFAULT_RUNTIME_LANGUAGE][DEFAULT_RUNTIME_PROFILE].required_exact,
+    )
+
+
+CONTAINER_ARTIFACTS: tuple[str, ...] = default_container_artifacts()
+
+
+def resolve_runtime_artifact_rule(
+    language: str | None,
+    profile: str | None,
+) -> RuntimeArtifactRule:
+    """Return language/profile-specific artifact约束.
+
+    未填写语言或 profile 时采用默认配置；未知语言按默认语言处理，
+    未知 profile 则回落到该语言的默认 profile。
+    """
+
+    lang = (language or DEFAULT_RUNTIME_LANGUAGE).lower()
+    profiles = RUNTIME_ARTIFACT_RULES.get(lang)
+    if not profiles:
+        lang = DEFAULT_RUNTIME_LANGUAGE
+        profiles = RUNTIME_ARTIFACT_RULES[lang]
+    prof = (profile or default_runtime_profile(lang)).lower()
+    rule = profiles.get(prof)
+    if rule is None:
+        prof = default_runtime_profile(lang)
+        rule = profiles[prof]
+    return rule
+
+
+RUNTIME_LANGUAGES: tuple[str, ...] = tuple(RUNTIME_ARTIFACT_RULES.keys())
+
+
+def extract_runtime_requirements(challenge: Mapping[str, Any]) -> RuntimeArtifactRequirements:
+    """从 challenge 中提取 language/profile 声明。"""
+
+    runtime = challenge.get("implementation_plan") or {}
+    language = None
+    profile = None
+    if isinstance(runtime, Mapping):
+        language = runtime.get("runtime_language") or runtime.get("language")
+        profile = runtime.get("runtime_profile") or runtime.get("profile")
+    language = challenge.get("runtime_language", language)
+    profile = challenge.get("runtime_profile", profile)
+    return RuntimeArtifactRequirements(
+        language=language if isinstance(language, str) else None,
+        profile=profile if isinstance(profile, str) else None,
+    )
 
 KNOWN_ARTIFACT_PREFIXES: tuple[str, ...] = (
     "deploy/",

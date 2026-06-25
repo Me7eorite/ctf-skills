@@ -43,6 +43,8 @@ from services.build_profile_readiness import unavailable_build_profiles
 LOG = logging.getLogger(__name__)
 DEFAULT_LIST_LIMIT = 100
 MAX_LIST_LIMIT = 500
+DEFAULT_SEQUENTIAL_LANES = 4
+MAX_SEQUENTIAL_LANES = 16
 
 
 def _env_int(name: str, default: int) -> int:
@@ -291,48 +293,10 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
 
     @app.post("/api/build-attempts/worker/start-sequential")
     async def start_sequential_build_worker(request: Request) -> JSONResponse:
-        try:
-            payload = await request.json()
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=HTTPStatus.BAD_REQUEST,
-                detail=f"request body must be JSON: {exc}",
-            ) from exc
-        if not isinstance(payload, dict):
-            raise HTTPException(
-                status_code=HTTPStatus.BAD_REQUEST,
-                detail="request body must be a JSON object",
-            )
-        raw_ids = payload.get("build_attempt_ids")
-        if not isinstance(raw_ids, list) or not raw_ids:
-            raise HTTPException(
-                status_code=HTTPStatus.BAD_REQUEST,
-                detail="build_attempt_ids must be a non-empty array of UUID strings",
-            )
-        attempt_ids = [_parse_uuid(value, "build_attempt_ids") for value in raw_ids]
-        if len(set(attempt_ids)) != len(attempt_ids):
-            raise HTTPException(
-                status_code=HTTPStatus.BAD_REQUEST,
-                detail="duplicate build attempt ids are not allowed",
-            )
-
+        payload = await _json_object(request)
+        attempt_ids = _parse_build_attempt_ids(payload)
         BuildOrchestrationService(paths=_project_paths(app)).recover_staging()
-        categories = []
-        for attempt_id in attempt_ids:
-            selected = _exact_eligible_attempt(app, attempt_id)
-            if selected is None:
-                raise HTTPException(
-                    status_code=HTTPStatus.NOT_FOUND,
-                    detail=f"build attempt {attempt_id} not found",
-                )
-            status, category, matches_pending = selected
-            if status != "queued" or not matches_pending:
-                raise HTTPException(
-                    status_code=HTTPStatus.CONFLICT,
-                    detail=(f"build attempt {attempt_id} is not an eligible queued task"),
-                )
-            categories.append(category)
-
+        categories = _selected_attempt_categories(app, attempt_ids)
         preflight = _sequential_profile_preflight_response(categories)
         if preflight is not None:
             return preflight
@@ -353,6 +317,53 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
             },
             status_code=HTTPStatus.ACCEPTED,
         )
+
+    @app.post("/api/build-attempts/worker/start-sequential-lanes")
+    async def start_sequential_lane_pool(request: Request) -> JSONResponse:
+        payload = await _json_object(request)
+        attempt_ids = _parse_build_attempt_ids(payload)
+        lane_count = _parse_lane_count(payload.get("lanes"))
+
+        BuildOrchestrationService(paths=_project_paths(app)).recover_staging()
+        categories = _selected_attempt_categories(app, attempt_ids)
+        preflight = _sequential_profile_preflight_response(categories)
+        if preflight is not None:
+            return preflight
+
+        lane_batches = _round_robin_lanes(attempt_ids, lane_count)
+        tasks = app.state.dashboard_tasks
+        ok, message, pool = tasks.start_sequential_lanes(lanes=lane_batches)
+        if not ok:
+            raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=message)
+        for lane in pool.get("lanes", []):
+            lane_attempt_ids = [
+                UUID(value)
+                for value in lane.get("build_attempt_ids", [])
+            ]
+            if lane_attempt_ids:
+                _assign_queued_attempt_worker(
+                    lane_attempt_ids,
+                    worker=lane.get("worker", ""),
+                )
+        return JSONResponse(
+            {
+                "ok": True,
+                "message": message,
+                "build_attempt_ids": [str(item) for item in attempt_ids],
+                "queue_length": len(attempt_ids),
+                "requested_lanes": lane_count,
+                "lane_count": len(pool.get("lanes", [])),
+                "pool": pool,
+            },
+            status_code=HTTPStatus.ACCEPTED,
+        )
+
+    @app.get("/api/build-attempts/worker/pools")
+    def list_sequential_lane_pools() -> JSONResponse:
+        tasks = app.state.dashboard_tasks
+        if not hasattr(tasks, "lane_pools_state"):
+            return JSONResponse({"pools": []})
+        return JSONResponse({"pools": tasks.lane_pools_state()})
 
     @app.post("/api/build-attempts/queue/start")
     async def start_build_attempt_queue(request: Request) -> JSONResponse:
@@ -697,6 +708,95 @@ def _submit_batch(app: FastAPI, task_ids: list[UUID]) -> list[UUID]:
             status_code=HTTPStatus.CONFLICT,
             detail="a build is already active for this design task",
         ) from exc
+
+
+async def _json_object(request: Request) -> dict[str, Any]:
+    try:
+        payload = await request.json()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail=f"request body must be JSON: {exc}",
+        ) from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail="request body must be a JSON object",
+        )
+    return payload
+
+
+def _parse_build_attempt_ids(payload: dict[str, Any]) -> list[UUID]:
+    raw_ids = payload.get("build_attempt_ids")
+    if not isinstance(raw_ids, list) or not raw_ids:
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail="build_attempt_ids must be a non-empty array of UUID strings",
+        )
+    attempt_ids = [_parse_uuid(value, "build_attempt_ids") for value in raw_ids]
+    if len(set(attempt_ids)) != len(attempt_ids):
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail="duplicate build attempt ids are not allowed",
+        )
+    return attempt_ids
+
+
+def _parse_lane_count(raw: Any) -> int:
+    if raw is None:
+        return DEFAULT_SEQUENTIAL_LANES
+    if isinstance(raw, bool):
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail="lanes must be a positive integer",
+        )
+    try:
+        lanes = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail="lanes must be a positive integer",
+        ) from exc
+    if lanes <= 0:
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail="lanes must be a positive integer",
+        )
+    if lanes > MAX_SEQUENTIAL_LANES:
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail=f"lanes must be <= {MAX_SEQUENTIAL_LANES}",
+        )
+    return lanes
+
+
+def _selected_attempt_categories(app: FastAPI, attempt_ids: list[UUID]) -> list[str]:
+    categories = []
+    for attempt_id in attempt_ids:
+        selected = _exact_eligible_attempt(app, attempt_id)
+        if selected is None:
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND,
+                detail=f"build attempt {attempt_id} not found",
+            )
+        status, category, matches_pending = selected
+        if status != "queued" or not matches_pending:
+            raise HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail=(f"build attempt {attempt_id} is not an eligible queued task"),
+            )
+        categories.append(category)
+    return categories
+
+
+def _round_robin_lanes(attempt_ids: list[UUID], lane_count: int) -> list[list[UUID]]:
+    lanes: list[list[UUID]] = [
+        []
+        for _index in range(min(lane_count, len(attempt_ids)))
+    ]
+    for index, attempt_id in enumerate(attempt_ids):
+        lanes[index % len(lanes)].append(attempt_id)
+    return lanes
 
 
 def _require_task_build_profiles(app: FastAPI, task_ids: list[UUID]) -> None:

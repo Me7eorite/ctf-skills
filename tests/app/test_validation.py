@@ -3,7 +3,13 @@ import unittest
 from pathlib import Path
 
 from core.paths import ProjectPaths
-from domain.validation import ChallengeValidator, elf_machine, is_elf
+from domain.validation import (
+    ChallengeValidator,
+    elf_machine,
+    is_elf,
+    is_pe,
+    pe_machine,
+)
 
 
 class ValidationTests(unittest.TestCase):
@@ -29,6 +35,17 @@ class ValidationTests(unittest.TestCase):
         binary.write_bytes(header)
 
         self.assertEqual(elf_machine(binary), "x86_64")
+
+    def test_pe_detection_reads_architecture(self):
+        binary = self.paths.root / "sample.exe"
+        header = bytearray(b"MZ" + b"\x00" * 0x7E)
+        header[0x3C:0x40] = (0x80).to_bytes(4, "little")
+        header.extend(b"PE\x00\x00")
+        header.extend((0x8664).to_bytes(2, "little"))
+        binary.write_bytes(header)
+
+        self.assertTrue(is_pe(binary))
+        self.assertEqual(pe_machine(binary), "x86_64")
 
     def test_web_contract_requires_deploy_files(self):
         challenge = self.paths.challenges / "web" / "web-0001-demo"
@@ -84,6 +101,27 @@ class ValidationTests(unittest.TestCase):
             "flag": "flag{demo}",
             "target_format": "elf",
             "target_platform": "linux/amd64",
+        }
+
+        self.assertEqual(self.validator.contract_errors(challenge, metadata), [])
+
+    def test_reverse_contract_accepts_windows_amd64_exe(self):
+        challenge = self.paths.challenges / "re" / "re-0001-exe"
+        (challenge / "attachments").mkdir(parents=True)
+        header = bytearray(b"MZ" + b"\x00" * 0x7E)
+        header[0x3C:0x40] = (0x80).to_bytes(4, "little")
+        header.extend(b"PE\x00\x00")
+        header.extend((0x8664).to_bytes(2, "little"))
+        (challenge / "attachments" / "checker.exe").write_bytes(header)
+        metadata = {
+            "id": "re-0001-exe",
+            "title": "Demo",
+            "category": "re",
+            "difficulty": "easy",
+            "build_status": "passed",
+            "flag": "flag{demo}",
+            "target_format": "exe",
+            "target_platform": "windows/amd64",
         }
 
         self.assertEqual(self.validator.contract_errors(challenge, metadata), [])
@@ -464,11 +502,20 @@ class IntendedPathNecessityTests(unittest.TestCase):
         }
         return challenge, metadata
 
-    def test_plaintext_flag_in_source_is_unnecessary(self):
+    def test_plaintext_flag_in_local_source_is_allowed(self):
         challenge, metadata = self._re_challenge()
         (challenge / "src" / "crackme.c").write_text(
             'const char *f = "flag{the_secret}";\n', encoding="utf-8"
         )
+        reason = self.validator._intended_path_unnecessary(
+            challenge, metadata, "flag{the_secret}"
+        )
+        self.assertIsNone(reason)
+
+    def test_plaintext_flag_in_delivered_file_is_unnecessary(self):
+        challenge, metadata = self._re_challenge()
+        (challenge / "attachments").mkdir()
+        (challenge / "attachments" / "checker").write_bytes(b"flag{the_secret}")
         reason = self.validator._intended_path_unnecessary(
             challenge, metadata, "flag{the_secret}"
         )

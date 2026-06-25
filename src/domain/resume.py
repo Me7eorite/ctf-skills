@@ -187,18 +187,29 @@ def implement_evidence(challenge_dir: Path, category: str) -> bool:
     web/pwn: deploy/src 目录存在 + Dockerfile + docker-compose.yml + 有业务代码
     re: src 目录下存在业务代码
     """
+    return implement_evidence_reason(challenge_dir, category) is None
+
+
+def implement_evidence_reason(challenge_dir: Path, category: str) -> str | None:
+    """Return the missing implementation evidence reason, or None when complete."""
     if category in {"web", "pwn"}:
         deploy = challenge_dir / "deploy"
         if not (deploy / "src").is_dir():
-            return False
+            return "deploy/src missing"
         if not (deploy / "Dockerfile").is_file():
-            return False
+            return "deploy/Dockerfile missing"
         if not (deploy / "docker-compose.yml").is_file():
-            return False
-        return _any_business_source(deploy / "src")
+            return "deploy/docker-compose.yml missing"
+        if not _any_business_source(deploy / "src"):
+            return "deploy/src has no business source"
+        return None
     if category == "re":
-        return _any_business_source(challenge_dir / "src")
-    return False
+        if not (challenge_dir / "src").is_dir():
+            return "src missing"
+        if not _any_business_source(challenge_dir / "src"):
+            return "src has no business source"
+        return None
+    return f"unsupported category {category!r}"
 
 
 def _sha256_of_file(path: Path) -> str | None:

@@ -76,17 +76,43 @@ def _file_contains_bytes(path: Path, needle: str) -> bool:
     return needle.encode("utf-8", "ignore") in data
 
 
-def _artifact_elfs(challenge_dir: Path, category: str | None) -> list[Path]:
-    """Locate delivered ELF artifacts (mirrors the contract-check roots)."""
+def _delivered_artifact_roots(challenge_dir: Path, category: str | None) -> list[Path]:
     roots = [challenge_dir / "attachments", challenge_dir / "dist"]
     if category == "pwn":
         roots.append(challenge_dir / "deploy")
+    return roots
+
+
+def _artifact_elfs(challenge_dir: Path, category: str | None) -> list[Path]:
+    """Locate delivered ELF artifacts (mirrors the contract-check roots)."""
     return [
         path
-        for root in roots
+        for root in _delivered_artifact_roots(challenge_dir, category)
         if root.exists()
         for path in root.rglob("*")
         if is_elf(path)
+    ]
+
+
+def _artifact_pes(challenge_dir: Path, category: str | None) -> list[Path]:
+    """Locate delivered PE/COFF artifacts for Windows RE challenges."""
+    return [
+        path
+        for root in _delivered_artifact_roots(challenge_dir, category)
+        if root.exists()
+        for path in root.rglob("*")
+        if is_pe(path)
+    ]
+
+
+def _delivered_artifacts(challenge_dir: Path, category: str | None) -> list[Path]:
+    """Locate delivered binary artifacts checked for shortcuts."""
+    return [
+        path
+        for root in _delivered_artifact_roots(challenge_dir, category)
+        if root.exists()
+        for path in root.rglob("*")
+        if path.is_file() and (is_elf(path) or is_pe(path))
     ]
 
 
@@ -121,23 +147,19 @@ def _bare_run_reveals_flag(artifact: Path, flag: str, timeout: int) -> bool:
     return flag in (proc.stdout or "") or flag in (proc.stderr or "")
 
 
-def _plaintext_flag_locations(challenge_dir: Path, flag: str) -> list[str]:
-    """Return delivered/source files where the flag appears in plaintext.
+def _plaintext_flag_locations(
+    challenge_dir: Path, flag: str, category: str | None = None
+) -> list[str]:
+    """Return delivered files where the flag appears in plaintext.
 
-    Scans the player-delivered artifacts (attachments/dist) and the published
-    source tree (src/, deploy/src/). Organizer-only answer files
-    (metadata.json, challenge.yml, docker-compose) legitimately carry the flag
-    and are excluded.
+    Scans player-delivered artifacts. Local source trees may carry plaintext
+    organizer material during implementation, but they must not be shipped as
+    player attachments.
     """
     if not flag:
         return []
     hits: list[str] = []
-    scan_roots = [
-        challenge_dir / "attachments",
-        challenge_dir / "dist",
-        challenge_dir / "src",
-        challenge_dir / "deploy" / "src",
-    ]
+    scan_roots = _delivered_artifact_roots(challenge_dir, category)
     for root in scan_roots:
         if not root.exists():
             continue
@@ -200,6 +222,43 @@ def is_elf(path: Path) -> bool:
             return handle.read(4) == b"\x7fELF"
     except OSError:
         return False
+
+
+def is_pe(path: Path) -> bool:
+    """判断文件是否为 PE/COFF 格式（Windows .exe/.dll）。"""
+    try:
+        if not path.is_file():
+            return False
+        with path.open("rb") as handle:
+            mz_header = handle.read(0x40)
+            if len(mz_header) < 0x40 or mz_header[:2] != b"MZ":
+                return False
+            pe_offset = int.from_bytes(mz_header[0x3C:0x40], "little")
+            if pe_offset <= 0:
+                return False
+            handle.seek(pe_offset)
+            return handle.read(4) == b"PE\x00\x00"
+    except OSError:
+        return False
+
+
+def pe_machine(path: Path) -> str:
+    """解析 PE/COFF 文件的 machine 架构标签。"""
+    try:
+        with path.open("rb") as handle:
+            mz_header = handle.read(0x40)
+            pe_offset = int.from_bytes(mz_header[0x3C:0x40], "little")
+            handle.seek(pe_offset + 4)
+            machine = int.from_bytes(handle.read(2), "little")
+    except OSError:
+        return "unknown"
+    return {
+        0x014C: "x86",
+        0x8664: "x86_64",
+        0xAA64: "aarch64",
+        0x01C0: "arm",
+        0x01C4: "armv7",
+    }.get(machine, "unknown")
 
 
 def elf_machine(path: Path) -> str:
@@ -431,8 +490,13 @@ class ChallengeValidator:
             )
             if necessity:
                 record_status("failed", necessity)
-                return {**record, "status": "unnecessary_intended_path",
-                        "necessity_note": necessity}
+                return {
+                    **record,
+                    "status": "unnecessary_intended_path",
+                    "error": necessity,
+                    "necessity_note": necessity,
+                    "contract_errors": [necessity],
+                }
             record_status("passed")
             return {**record, "status": "passed"}
 
@@ -450,8 +514,9 @@ class ChallengeValidator:
            the flag — the anti-debug / timing / license / flatten mechanism is
            decorative and the player can ``./chal`` their way to the flag.
         B. The flag (or a license-like literal that gates it) appears in
-           plaintext inside the delivered artifact or the published source — so
-           ``strings`` / reading source recovers it without the technique.
+           plaintext inside a delivered artifact — so ``strings`` recovers it
+           without the technique. Local source files may contain the organizer
+           flag as long as they are not shipped to players.
 
         Web/pwn service-level necessity (hitting the entrypoint without the
         exploit) needs the running service and is handled by a separate
@@ -463,7 +528,9 @@ class ChallengeValidator:
             return None
 
         # B — static plaintext flag in delivered artifact or published source.
-        plaintext_hits = _plaintext_flag_locations(challenge_dir, expected_flag)
+        plaintext_hits = _plaintext_flag_locations(
+            challenge_dir, expected_flag, category
+        )
         if plaintext_hits:
             return (
                 "flag is recoverable in plaintext without the intended technique "
@@ -472,7 +539,7 @@ class ChallengeValidator:
 
         # A — bare run of the artifact reveals the flag (re/pwn only).
         if category in {"re", "pwn"}:
-            for artifact in _artifact_elfs(challenge_dir, category):
+            for artifact in _delivered_artifacts(challenge_dir, category):
                 if _bare_run_reveals_flag(artifact, expected_flag, self.timeout):
                     rel = artifact.relative_to(challenge_dir).as_posix()
                     return (
@@ -525,25 +592,14 @@ class ChallengeValidator:
             ):
                 errors.append("Web metadata must record runtime and framework")
 
-        if category in {"re", "pwn"} and metadata.get("target_format", "elf") == "elf":
+        target_format = metadata.get("target_format", "elf")
+        if category in {"re", "pwn"} and target_format == "elf":
             # RE/Pwn 的 ELF 产物架构检查。
             # 约定：交付目录是 attachments/（玩家下载用），等同于打包出口。
             # dist/ 只作为历史遗留兼容位置继续扫描，不再出现在新题生成口径中。
             # pwn 还会扫 deploy/
             # 因为 docker 镜像里有时直接嵌编译产物。
-            roots = [
-                challenge_dir / "attachments",
-                challenge_dir / "dist",  # legacy compatibility
-            ]
-            if category == "pwn":
-                roots.append(challenge_dir / "deploy")
-            elf_paths = [
-                path
-                for root in roots
-                if root.exists()
-                for path in root.rglob("*")
-                if is_elf(path)
-            ]
+            elf_paths = _artifact_elfs(challenge_dir, category)
             if not elf_paths:
                 errors.append("no compiled ELF artifact found in attachments/")
 
@@ -578,6 +634,43 @@ class ChallengeValidator:
                 exposed = [
                     path.relative_to(challenge_dir).as_posix()
                     for path in elf_paths
+                    if _file_contains_bytes(path, flag)
+                ]
+                if exposed:
+                    errors.append(
+                        "delivered artifact exposes the plaintext flag via strings "
+                        f"({', '.join(exposed)}); embed it so the solver must "
+                        "recover it, or declare strings as the intended technique"
+                    )
+
+        if category == "re" and target_format == "exe":
+            pe_paths = _artifact_pes(challenge_dir, category)
+            if not pe_paths:
+                errors.append("no compiled PE/EXE artifact found in attachments/")
+
+            expected_architecture = (
+                metadata.get("architecture")
+                or metadata.get("target_platform", "").rsplit("/", 1)[-1]
+            )
+            accepted = ARCH_ACCEPTS.get(expected_architecture)
+            if accepted:
+                canonical = accepted[0]
+                wrong_arch = [
+                    path.relative_to(challenge_dir).as_posix()
+                    for path in pe_paths
+                    if pe_machine(path) not in accepted
+                ]
+                if wrong_arch:
+                    errors.append(
+                        f"PE artifact architecture is not {canonical}: "
+                        + ", ".join(wrong_arch)
+                    )
+
+            flag = metadata.get("flag") or ""
+            if flag and not _strings_is_intended(metadata):
+                exposed = [
+                    path.relative_to(challenge_dir).as_posix()
+                    for path in pe_paths
                     if _file_contains_bytes(path, flag)
                 ]
                 if exposed:

@@ -1,7 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from uuid import UUID
 
 from core.jsonio import write_json
@@ -118,3 +118,37 @@ class DashboardTests(unittest.TestCase):
             if value == "--build-attempt-sequence"
         ]
         self.assertEqual(sequence, [first, second])
+
+    def test_sequential_lanes_split_attempts_round_robin(self):
+        first = UUID("11111111-1111-1111-1111-111111111111")
+        second = UUID("22222222-2222-2222-2222-222222222222")
+        third = UUID("33333333-3333-3333-3333-333333333333")
+        processes = [Mock(), Mock()]
+        for process in processes:
+            process.poll.return_value = None
+        with (
+            patch("web.dashboard.subprocess.Popen", side_effect=processes) as popen,
+            patch("web.dashboard.time.sleep"),
+            patch("web.dashboard.uuid4") as patched_uuid4,
+        ):
+            patched_uuid4.return_value.hex = "abcdef1234567890"
+
+            ok, message, pool = TaskManager(self.paths).start_sequential_lanes(
+                lanes=[[first, third], [second]],
+            )
+
+        self.assertTrue(ok)
+        self.assertIn("2 条 lane", message)
+        self.assertEqual(pool["lane_count"], 2)
+        commands = [call.args[0] for call in popen.call_args_list]
+        sequences = [
+            [
+                command[index + 1]
+                for index, value in enumerate(command)
+                if value == "--build-attempt-sequence"
+            ]
+            for command in commands
+        ]
+        self.assertEqual(sequences, [[str(first), str(third)], [str(second)]])
+        self.assertEqual(commands[0][4], "dashboard-lane-01-abcdef12")
+        self.assertEqual(commands[1][4], "dashboard-lane-02-abcdef12")

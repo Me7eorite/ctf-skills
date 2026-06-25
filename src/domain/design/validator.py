@@ -26,7 +26,7 @@ from urllib.parse import urlsplit
 from domain.design.difficulty import validate_difficulty_alignment
 from domain.design.schema import (
     COMMON_ARTIFACTS,
-    CONTAINER_ARTIFACTS,
+    CONTAINER_BASE_ARTIFACTS,
     DEFAULT_FLAG_FORMAT,
     FORBIDDEN_IMPLEMENTATION_KEYS,
     HTTP_URL_RE,
@@ -39,7 +39,11 @@ from domain.design.schema import (
     REQUIRED_CHALLENGE_TEXT_FIELDS,
     URL_RE,
     ChallengeDesignValidationError,
+    RuntimeArtifactRule,
+    RuntimeArtifactRequirements,
     ValidatedDesignPayload,
+    extract_runtime_requirements,
+    resolve_runtime_artifact_rule,
 )
 from domain.design_tasks import DesignTask
 from domain.research import DIFFICULTY_LABELS
@@ -133,8 +137,19 @@ def validate_design_payload(
             )
         _require_artifacts(
             challenge["artifacts"],
-            (*COMMON_ARTIFACTS, *CONTAINER_ARTIFACTS),
-            "web/pwn artifacts",
+            (*COMMON_ARTIFACTS, *CONTAINER_BASE_ARTIFACTS),
+            "web/pwn core artifacts",
+        )
+
+        runtime_req = extract_runtime_requirements(challenge)
+        runtime_rule = resolve_runtime_artifact_rule(
+            runtime_req.language,
+            runtime_req.profile,
+        )
+        _enforce_runtime_artifact_rule(
+            challenge["artifacts"],
+            runtime_rule,
+            runtime_req,
         )
     else:
         _require_artifacts(challenge["artifacts"], COMMON_ARTIFACTS, "artifacts")
@@ -205,6 +220,47 @@ def _require_artifacts(
         raise ChallengeDesignValidationError(
             f"{label} must include: {', '.join(missing)}"
         )
+
+
+def _enforce_runtime_artifact_rule(
+    artifacts: list[str],
+    rule: RuntimeArtifactRule,
+    requirements: RuntimeArtifactRequirements,
+) -> None:
+    normalized = [entry.strip() for entry in artifacts]
+    normalized_set = {entry for entry in normalized}
+
+    language = (requirements.language or "python").lower()
+    profile = (requirements.profile or "default").lower()
+    label_prefix = f"runtime ({language}/{profile}) artifact"
+
+    for entry in rule.required_exact:
+        if entry not in normalized_set:
+            raise ChallengeDesignValidationError(
+                f"{label_prefix} missing required file: {entry}"
+            )
+
+    for group in rule.required_any_exact:
+        if not any(item in normalized_set for item in group):
+            options = ", ".join(group)
+            raise ChallengeDesignValidationError(
+                f"{label_prefix} requires at least one of: {options}"
+            )
+
+    for pattern in rule.required_patterns:
+        if not any(pattern.search(item) for item in normalized):
+            raise ChallengeDesignValidationError(
+                f"{label_prefix} requires file matching pattern: {pattern.pattern}"
+            )
+
+    for group in rule.required_any_patterns:
+        if not any(
+            pattern.search(item) for pattern in group for item in normalized
+        ):
+            patterns = ", ".join(p.pattern for p in group)
+            raise ChallengeDesignValidationError(
+                f"{label_prefix} requires files matching at least one of: {patterns}"
+            )
 
 
 def _reject_implementation_payload(challenge: Mapping[str, Any]) -> None:
