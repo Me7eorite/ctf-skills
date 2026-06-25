@@ -36,6 +36,18 @@ def test_request_detail_exposes_quality_gate_and_runtime_constraints() -> None:
     assert "暂停 Worker 可能影响正在执行的其他研究需求" in source
 
 
+def test_research_submit_supports_search_keywords() -> None:
+    source = (STATIC / "js" / "views" / "research-submit.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "form-search-keywords" in source
+    assert "search_keywords" in source
+    assert "runtimeConstraints.search_keywords = searchKeywords" in source
+    assert "话题 + 关键字" in source
+    assert "考点关键字" in source
+
+
 def test_request_detail_header_is_a_state_aware_summary_card() -> None:
     source = (STATIC / "js" / "views" / "research-requests.js").read_text(
         encoding="utf-8"

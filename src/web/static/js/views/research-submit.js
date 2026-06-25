@@ -11,6 +11,7 @@ const state = {
     topic: "",
     target_count: 5,
     seed_urls: "",
+    search_keywords: "",
     max_attempts: 3,
     distribution: { easy: 0, medium: 0, hard: 0, expert: 0 },
     submitting: false,
@@ -49,6 +50,7 @@ export function render(data) {
   const target = Number(f.target_count);
   const distMatch = distSum === target && distSum > 0;
   const proc = data?.process || {};
+  const keywordCount = parseLines(f.search_keywords).length;
 
   root.innerHTML = `
     <div class="layout-content-inner">
@@ -155,11 +157,18 @@ export function render(data) {
             <span class="rs-step-badge ok">3</span>
             <div class="rs-step-meta">
               <div class="rs-step-title">高级选项</div>
-              <div class="rs-step-desc">种子 URL 与其它可选参数</div>
+              <div class="rs-step-desc">考点关键字、种子 URL 与其它可选参数</div>
             </div>
             <i data-lucide="${state.showAdvanced ? 'chevron-up' : 'chevron-down'}" class="rs-collapse-chevron ${state.showAdvanced ? 'open' : ''}"></i>
           </div>
           <div id="advanced-panel" class="rs-step-body" style="${state.showAdvanced ? "" : "display: none;"}">
+            <label>
+              <span class="label">考点关键字（可选，每行一个）</span>
+              <textarea id="form-search-keywords" rows="3"
+                placeholder="JWT kid header traversal&#10;JWKS cache poisoning&#10;prototype pollution"
+                class="textarea input-mono">${escapeHtml(f.search_keywords)}</textarea>
+              <span class="label-hint">Hermes 会用“话题 + 关键字”组合检索网页资料，并把采用的来源写入 sources[]</span>
+            </label>
             <label>
               <span class="label">种子 URL（可选，每行一个）</span>
               <textarea id="form-seed-urls" rows="3"
@@ -221,7 +230,11 @@ export function render(data) {
             </div>
             <div class="rs-summary-item">
               <span class="rs-summary-label">种子 URL</span>
-              <span class="rs-summary-value">${(f.seed_urls || '').split('\\n').filter(s => s.trim()).length || 0} 条</span>
+              <span class="rs-summary-value">${parseLines(f.seed_urls).length || 0} 条</span>
+            </div>
+            <div class="rs-summary-item">
+              <span class="rs-summary-label">考点关键字</span>
+              <span class="rs-summary-value">${keywordCount} 条</span>
             </div>
             <div class="rs-summary-item">
               <span class="rs-summary-label">最大重试</span>
@@ -278,8 +291,13 @@ export function render(data) {
 
 async function handleSubmit() {
   const f = state.form;
-  const seedList = f.seed_urls.split("\n").map(s => s.trim()).filter(s => s.length > 0);
+  const seedList = parseLines(f.seed_urls);
+  const searchKeywords = parseLines(f.search_keywords);
   const dist = Object.fromEntries(Object.entries(f.distribution).filter(([_, v]) => Number(v) > 0));
+  const runtimeConstraints = {};
+  if (searchKeywords.length > 0) {
+    runtimeConstraints.search_keywords = searchKeywords;
+  }
 
   f.submitting = true;
   f.lastResult = null;
@@ -295,6 +313,7 @@ async function handleSubmit() {
       difficulty_distribution: dist,
       seed_urls: seedList,
       max_attempts: Number(f.max_attempts),
+      runtime_constraints: runtimeConstraints,
     });
     f.lastResult = result;
     showToast(`\u5DF2\u5165\u961F\uFF1A${result.request.id.slice(0, 8)}\u2026`);
@@ -313,6 +332,7 @@ function resetForm() {
     topic: "",
     target_count: 5,
     seed_urls: "",
+    search_keywords: "",
     max_attempts: 3,
     distribution: { easy: 0, medium: 0, hard: 0, expert: 0 },
     submitting: false,
@@ -358,5 +378,10 @@ export function bind() {
     else if (e.target.id === "form-target-count") state.form.target_count = e.target.value;
     else if (e.target.id === "form-max-attempts") state.form.max_attempts = e.target.value;
     else if (e.target.id === "form-seed-urls") state.form.seed_urls = e.target.value;
+    else if (e.target.id === "form-search-keywords") state.form.search_keywords = e.target.value;
   });
+}
+
+function parseLines(value) {
+  return String(value || "").split("\n").map(s => s.trim()).filter(s => s.length > 0);
 }
