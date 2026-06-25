@@ -128,6 +128,22 @@ class RenderResearchPromptTests(unittest.TestCase):
         self.assertRegex(prompt, r'"runtime":\s*"node"')
         self.assertRegex(prompt, r'"framework":\s*"Express"')
 
+    def test_search_keywords_render_as_search_plan_inputs(self):
+        request = _make_request(
+            "web",
+            topic="JWT authentication bypass",
+            runtime_constraints={
+                "search_keywords": ["kid header traversal", "JWKS cache poisoning"],
+            },
+        )
+        prompt = render_research_prompt(request)
+
+        self.assertIn("Search keywords / key points", prompt)
+        self.assertIn("- kid header traversal", prompt)
+        self.assertIn("- JWKS cache poisoning", prompt)
+        self.assertIn("Build search queries", prompt)
+        self.assertIn("JWT authentication bypass", prompt)
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

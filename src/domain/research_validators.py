@@ -118,6 +118,7 @@ RUNTIME_CONSTRAINT_KEYS = {
     "mitigations",
     "target_platform",
     "strip",
+    "search_keywords",
 }
 TARGET_FORMATS = {"elf", "exe", "wasm", "jar", "container"}
 TARGET_PLATFORMS = {"linux/amd64", "linux/arm64", "linux/arm", "windows/amd64"}
@@ -225,6 +226,21 @@ def _validate_runtime_constraint_value(key: str, value: Any) -> Any:
         if not isinstance(value, bool):
             raise ResearchValidationError("runtime_constraints['strip'] must be a bool")
         return value
+    if key == "search_keywords":
+        if isinstance(value, str):
+            items = [item.strip() for item in value.split(",")]
+        elif isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+            items = [str(item).strip() for item in value]
+        else:
+            raise ResearchValidationError(
+                "runtime_constraints['search_keywords'] must be a string or array"
+            )
+        keywords = [item for item in items if item]
+        if not keywords:
+            raise ResearchValidationError(
+                "runtime_constraints['search_keywords'] must contain at least one keyword"
+            )
+        return keywords
     raise ResearchValidationError(f"unknown runtime_constraints key {key!r}")
 
 

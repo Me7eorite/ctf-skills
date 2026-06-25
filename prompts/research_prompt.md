@@ -22,26 +22,36 @@ the authoritative scope marker for this run.
 - **Target challenge count**: {target_count}
 - **Difficulty distribution**: {difficulty_distribution}
 - **Runtime constraints**: {runtime_constraints}
+- **Search keywords / key points**: {search_keywords}
 - **Seed URLs** (start here):
 {seed_urls}
 
-If the seed list is empty, begin from your general knowledge of the topic
-and locate authoritative references via your normal browsing/search tools.
+If the seed list is empty, or if the search keywords name additional key
+points, construct web searches from the category, topic, and keywords. Prefer
+authoritative primary sources: official docs, standards, advisories, CVE/NVD
+records, framework documentation, project repositories, release notes, and
+high-quality writeups with reproducible technical detail.
 
 ## Procedure
 
 1. Read each seed URL first and treat them as authoritative starting points
    for the topic.
-2. Follow links and search for additional sources as needed, but stay
+2. Build search queries from:
+   - the exact topic,
+   - each supplied search keyword/key point,
+   - category-specific terms such as `{category} CTF challenge`,
+     vulnerability, exploitation, mitigation, internals, PoC, writeup, or
+     official documentation when relevant.
+3. Follow links and search for additional sources as needed, but stay
    strictly within category `{category}`.
-3. For each source you actually consult and rely on, append one entry to
+4. For each source you actually consult and rely on, append one entry to
    `sources[]` (see schema below).
-4. Distill the material into finding entries (`technique`, `variant`,
+5. Distill the material into finding entries (`technique`, `variant`,
    `scenario`, `prerequisite`). Every finding MUST cite at least one source
    via `source_indices`.
-5. For each finding, set `technique_family` to one of the category lanes below.
+6. For each finding, set `technique_family` to one of the category lanes below.
    If none fits, use `other`.
-6. Do not invent references. If you cannot substantiate a finding, drop it.
+7. Do not invent references. If you cannot substantiate a finding, drop it.
 
 ## Technique family vocabulary
 

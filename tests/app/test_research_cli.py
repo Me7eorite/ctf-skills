@@ -413,6 +413,46 @@ class ResearchSubmitMoreTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(captured["max_attempts"], 5)
 
+    def test_search_keywords_forwarded_as_runtime_constraint(self):
+        captured = {}
+        request = _make_request(category="web", target_count=2)
+        run = _make_run(request_id=request.id, status="queued")
+
+        class FakeJobService:
+            def __init__(self, *_a, **_kw):
+                pass
+
+            def submit_request(self, **kwargs):
+                captured.update(kwargs)
+                return (request, run)
+
+        with patch("persistence.session.transaction", side_effect=RuntimeError), patch(
+            "services.ResearchJobService", FakeJobService
+        ):
+            code, _stdout, _stderr = _capture_run(
+                [
+                    "research",
+                    "submit",
+                    "--category",
+                    "web",
+                    "--topic",
+                    "JWT auth",
+                    "--count",
+                    "2",
+                    "--difficulty",
+                    "easy:2",
+                    "--search-keyword",
+                    "kid traversal",
+                    "--search-keyword",
+                    "JWKS cache poisoning",
+                ]
+            )
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            captured["runtime_constraints"]["search_keywords"],
+            ["kid traversal", "JWKS cache poisoning"],
+        )
+
     def test_submit_has_no_timeout_flag(self):
         # 中文注释：submit 不应有 --timeout；argparse 必须拒绝。
         with patch("persistence.session.transaction", side_effect=RuntimeError):

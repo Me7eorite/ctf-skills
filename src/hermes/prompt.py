@@ -460,6 +460,23 @@ def _render_runtime_constraints(runtime_constraints) -> str:
     return json.dumps(dict(runtime_constraints), ensure_ascii=False, sort_keys=True)
 
 
+def _render_search_keywords(runtime_constraints) -> str:
+    if not runtime_constraints:
+        return "(none supplied)"
+    raw = dict(runtime_constraints).get("search_keywords")
+    if not raw:
+        return "(none supplied)"
+    if isinstance(raw, str):
+        keywords = [item.strip() for item in raw.split(",") if item.strip()]
+    elif isinstance(raw, Sequence) and not isinstance(raw, (bytes, bytearray)):
+        keywords = [str(item).strip() for item in raw if str(item).strip()]
+    else:
+        keywords = [str(raw).strip()]
+    if not keywords:
+        return "(none supplied)"
+    return "\n".join(f"- {keyword}" for keyword in keywords)
+
+
 def _render_worked_example(category: str) -> str:
     # 中文注释：生成一个随 category 变化的示例，证明提示词不硬编码初始分类集合。
     example_payload = {
@@ -499,6 +516,7 @@ def render_research_prompt(generation_request: GenerationRequest) -> str:
         "{target_count}": str(generation_request.target_count),
         "{difficulty_distribution}": _render_difficulty_distribution(generation_request.difficulty_distribution),
         "{runtime_constraints}": _render_runtime_constraints(generation_request.runtime_constraints),
+        "{search_keywords}": _render_search_keywords(generation_request.runtime_constraints),
         "{seed_urls}": _render_seed_urls(generation_request.seed_urls),
         "{technique_family_vocabulary}": render_family_vocabulary(category_code),
         "{worked_example}": _render_worked_example(category_code),

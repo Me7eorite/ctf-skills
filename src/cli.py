@@ -503,6 +503,13 @@ def _register_research_commands(
         "--seed-url", dest="seed_urls", action="append", default=[],
         help="seed URL; may be passed multiple times",
     )
+    submit.add_argument(
+        "--search-keyword",
+        dest="search_keywords",
+        action="append",
+        default=[],
+        help="research search keyword/key point; may be passed multiple times",
+    )
     submit.add_argument("--max-attempts", type=_positive_int, default=3)
     submit.add_argument(
         "--runtime-constraint",
@@ -924,6 +931,12 @@ def _research_submit(args: argparse.Namespace) -> None:
 
     try:
         runtime_constraints = _parse_runtime_constraints(args.runtime_constraints)
+        if args.search_keywords:
+            runtime_constraints = {
+                **runtime_constraints,
+                "search_keywords": args.search_keywords,
+            }
+            runtime_constraints = validate_runtime_constraints(runtime_constraints)
         request, run = ResearchJobService().submit_request(
             category=args.category,
             topic=args.topic,

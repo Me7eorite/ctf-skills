@@ -81,6 +81,24 @@ def test_runtime_constraints_accept_windows_exe_target():
     }
 
 
+def test_runtime_constraints_accept_search_keywords_array_and_csv():
+    assert validate_runtime_constraints(
+        {"search_keywords": ["JWT kid", "path traversal"]}
+    ) == {
+        "search_keywords": ["JWT kid", "path traversal"],
+    }
+    assert validate_runtime_constraints(
+        {"search_keywords": "prototype pollution, sandbox escape"}
+    ) == {
+        "search_keywords": ["prototype pollution", "sandbox escape"],
+    }
+
+
+def test_runtime_constraints_reject_empty_search_keywords():
+    with pytest.raises(ResearchValidationError, match="search_keywords"):
+        validate_runtime_constraints({"search_keywords": " , "})
+
+
 # ---------------------------------------------------------------------------
 # validate_distribution
 # ---------------------------------------------------------------------------
