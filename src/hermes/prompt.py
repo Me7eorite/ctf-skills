@@ -264,6 +264,9 @@ Common (web, pwn, re):
 
 Web / Pwn:
 - Keep `deploy/Dockerfile`, `deploy/docker-compose.yml`, and `deploy/src/`.
+- `deploy/Dockerfile` MUST install `deploy/_files/start.sh` into the image as
+  `/root/start.sh`; the Compose service or image entrypoint MUST start through
+  `/root/start.sh`.
 - The Compose service MUST define the literal environment list entry `- FLAG=flag{...}`
   equal to `metadata.flag`, and the service code MUST read `FLAG`.
 - The exploit recovers the flag from the live service via `CHAL_HOST`/`CHAL_PORT`,

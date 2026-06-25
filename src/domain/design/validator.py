@@ -40,8 +40,8 @@ from domain.design.schema import (
     REQUIRED_CHALLENGE_TEXT_FIELDS,
     URL_RE,
     ChallengeDesignValidationError,
-    RuntimeArtifactRule,
     RuntimeArtifactRequirements,
+    RuntimeArtifactRule,
     ValidatedDesignPayload,
     extract_runtime_requirements,
     resolve_runtime_artifact_rule,
@@ -231,7 +231,7 @@ def _enforce_runtime_artifact_rule(
     normalized = [entry.strip() for entry in artifacts]
     normalized_set = {entry for entry in normalized}
 
-    language = (requirements.language or "python").lower()
+    language = (requirements.language or "unspecified").lower()
     profile = (requirements.profile or "default").lower()
     label_prefix = f"runtime ({language}/{profile}) artifact"
 

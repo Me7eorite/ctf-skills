@@ -135,6 +135,37 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                     "points": {"type": "integer", "minimum": 1},
                     "deployment": {"type": "string"},
                     "port": {"type": ["integer", "null"]},
+                    "language": {
+                        "type": "string",
+                        "description": (
+                            "Required for re/pwn. For re, use the assigned "
+                            "language/toolchain, e.g. c, cpp, rust, go, java, "
+                            "or kotlin. For pwn, use c, cpp, rust, go, or asm "
+                            "when assigned; do not default to c."
+                        ),
+                    },
+                    "compiler": {
+                        "type": "string",
+                        "description": (
+                            "Required for re/pwn. Examples: gcc, clang, g++, "
+                            "rustc, go build, javac, kotlinc, "
+                            "x86_64-w64-mingw32-gcc."
+                        ),
+                    },
+                    "target_format": {
+                        "type": "string",
+                        "description": (
+                            "Required for re/pwn. Examples: elf, exe, wasm, "
+                            "jar, container."
+                        ),
+                    },
+                    "target_platform": {
+                        "type": "string",
+                        "description": (
+                            "Required for re unless target_format is jar/wasm; "
+                            "examples: linux/amd64, linux/arm64, windows/amd64."
+                        ),
+                    },
                     "techniques": {
                         "type": "array",
                         "items": {"type": "string", "minLength": 1},
@@ -268,6 +299,38 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                             "difficulty (see Build Budget section)."
                         ),
                         "properties": {
+                            "runtime": {
+                                "type": "string",
+                                "description": (
+                                    "Required for web. Use the assigned stack "
+                                    "exactly, e.g. python:3.11-slim, node:20, "
+                                    "php:8-apache, java:17-tomcat, golang, "
+                                    "or rust."
+                                ),
+                            },
+                            "framework": {
+                                "type": "string",
+                                "description": (
+                                    "Required for web. Use the assigned framework "
+                                    "exactly, e.g. Flask, Express, plain PHP, "
+                                    "Spring Boot, Jakarta Servlet, Gin, Axum, "
+                                    "Actix Web, or Rocket."
+                                ),
+                            },
+                            "runtime_language": {
+                                "type": "string",
+                                "description": (
+                                    "Required for web. One of python, node, php, "
+                                    "java, go, rust; do not default to python."
+                                ),
+                            },
+                            "runtime_profile": {
+                                "type": "string",
+                                "description": (
+                                    "Optional runtime profile such as default, "
+                                    "jar, or tomcat."
+                                ),
+                            },
                             "components": {
                                 "type": "array",
                                 "description": (
@@ -304,7 +367,14 @@ def _render_output_contract(task: DesignTask) -> str:
     container_artifacts_hint = (
         "\n- For web/pwn, `artifacts` must additionally include "
         "`deploy/Dockerfile`, `deploy/docker-compose.yml`, "
-        "`deploy/src/app.py`, and `deploy/_files/start.sh`."
+        "`deploy/_files/start.sh`, and runtime-specific source files. "
+        "Examples: Python `deploy/src/app.py`; Node `deploy/src/package.json` "
+        "plus `deploy/src/server.js`/`app.js`/`index.js`; PHP "
+        "`deploy/src/index.php`; Go `deploy/src/main.go`; Java jar "
+        "`deploy/src/Main.java` or `deploy/src/src/main/java/...` plus a "
+        "build file; Tomcat `deploy/src/src/main/webapp/WEB-INF/web.xml` "
+        "plus a Servlet/JSP; Rust `deploy/src/Cargo.toml` plus "
+        "`deploy/src/src/main.rs` or `deploy/src/main.rs`."
         if task.category in {"web", "pwn"}
         else ""
     )

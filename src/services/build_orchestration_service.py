@@ -36,6 +36,26 @@ from services.design_difficulty_validator import DesignDifficultyValidator
 
 LOG = logging.getLogger(__name__)
 STAGING_ORPHAN_GRACE_SECONDS = 60 * 60
+RE_LANGUAGE_DEFAULTS: dict[str, dict[str, str]] = {
+    "c": {"compiler": "gcc", "target_format": "elf"},
+    "cpp": {"compiler": "g++", "target_format": "elf"},
+    "c++": {"compiler": "g++", "target_format": "elf"},
+    "rust": {"compiler": "rustc", "target_format": "elf"},
+    "go": {"compiler": "go build", "target_format": "elf"},
+    "golang": {"compiler": "go build", "target_format": "elf"},
+    "java": {"compiler": "javac", "target_format": "jar"},
+    "kotlin": {"compiler": "kotlinc", "target_format": "jar"},
+}
+PWN_LANGUAGE_DEFAULTS: dict[str, dict[str, str]] = {
+    "c": {"compiler": "gcc", "target_format": "elf"},
+    "cpp": {"compiler": "g++", "target_format": "elf"},
+    "c++": {"compiler": "g++", "target_format": "elf"},
+    "rust": {"compiler": "rustc", "target_format": "elf"},
+    "go": {"compiler": "go build", "target_format": "elf"},
+    "golang": {"compiler": "go build", "target_format": "elf"},
+    "asm": {"compiler": "nasm + ld", "target_format": "elf"},
+    "assembly": {"compiler": "nasm + ld", "target_format": "elf"},
+}
 
 MATRIX_FIELDS: dict[str, tuple[str, ...]] = {
     "web": (
@@ -717,6 +737,22 @@ def _matrix_values(
     def value(name: str, default: Any) -> Any:
         return challenge.get(name, plan.get(name, constraints.get(name, default)))
 
+    language_default = "c"
+    compiler_default = "gcc"
+    target_format_default = "elf"
+    if task.category == "re":
+        language_default = value("language", "c")
+        language_key = str(language_default).strip().lower()
+        defaults = RE_LANGUAGE_DEFAULTS.get(language_key, RE_LANGUAGE_DEFAULTS["c"])
+        compiler_default = defaults["compiler"]
+        target_format_default = defaults["target_format"]
+    elif task.category == "pwn":
+        language_default = value("language", "c")
+        language_key = str(language_default).strip().lower()
+        defaults = PWN_LANGUAGE_DEFAULTS.get(language_key, PWN_LANGUAGE_DEFAULTS["c"])
+        compiler_default = defaults["compiler"]
+        target_format_default = defaults["target_format"]
+
     return {
         "id": task.challenge_id,
         "title": task.title,
@@ -728,9 +764,9 @@ def _matrix_values(
         "runtime": value("runtime", "unspecified"),
         "framework": value("framework", "unspecified"),
         "port": task.port,
-        "language": value("language", "c"),
-        "compiler": value("compiler", "gcc"),
-        "target_format": value("target_format", "elf"),
+        "language": value("language", language_default),
+        "compiler": value("compiler", compiler_default),
+        "target_format": value("target_format", target_format_default),
         "architecture": value("architecture", "x86_64"),
         "mitigations": value("mitigations", {}),
         "target_platform": value("target_platform", "linux/amd64"),

@@ -286,6 +286,139 @@ def test_validate_design_payload_rejects_prose_artifacts():
         validate_design_payload(payload, _parent_task())
 
 
+def test_validate_design_payload_accepts_php_web_runtime_without_app_py():
+    payload = _payload(
+        artifacts=[
+            "README.md",
+            "metadata.json",
+            "validate.sh",
+            "deploy/Dockerfile",
+            "deploy/docker-compose.yml",
+            "deploy/src/index.php",
+            "deploy/_files/start.sh",
+            "writenup/wp.md",
+            "writenup/exp.py",
+        ],
+        implementation_plan={
+            "runtime": "php:8.3-apache",
+            "framework": "plain PHP",
+            "service_user": "www-data",
+            "service_model": "single docker compose service",
+        },
+    )
+
+    result = validate_design_payload(payload, _parent_task())
+
+    assert result.challenge["implementation_plan"]["runtime"] == "php:8.3-apache"
+
+
+def test_validate_design_payload_accepts_node_web_runtime_without_app_py():
+    payload = _payload(
+        artifacts=[
+            "README.md",
+            "metadata.json",
+            "validate.sh",
+            "deploy/Dockerfile",
+            "deploy/docker-compose.yml",
+            "deploy/src/package.json",
+            "deploy/src/server.js",
+            "deploy/_files/start.sh",
+            "writenup/wp.md",
+            "writenup/exp.py",
+        ],
+        implementation_plan={
+            "runtime": "node:20-alpine",
+            "framework": "Express",
+            "service_user": "ctf",
+            "service_model": "single docker compose service",
+        },
+    )
+
+    result = validate_design_payload(payload, _parent_task())
+
+    assert result.challenge["implementation_plan"]["framework"] == "Express"
+
+
+def test_validate_design_payload_accepts_go_web_runtime_without_app_py():
+    payload = _payload(
+        artifacts=[
+            "README.md",
+            "metadata.json",
+            "validate.sh",
+            "deploy/Dockerfile",
+            "deploy/docker-compose.yml",
+            "deploy/src/main.go",
+            "deploy/_files/start.sh",
+            "writenup/wp.md",
+            "writenup/exp.py",
+        ],
+        implementation_plan={
+            "runtime": "golang:1.22",
+            "framework": "Gin",
+            "service_user": "ctf",
+            "service_model": "single docker compose service",
+        },
+    )
+
+    result = validate_design_payload(payload, _parent_task())
+
+    assert result.challenge["implementation_plan"]["runtime"] == "golang:1.22"
+
+
+def test_validate_design_payload_accepts_java_spring_runtime_without_app_py():
+    payload = _payload(
+        artifacts=[
+            "README.md",
+            "metadata.json",
+            "validate.sh",
+            "deploy/Dockerfile",
+            "deploy/docker-compose.yml",
+            "deploy/src/Main.java",
+            "deploy/_files/build.sh",
+            "deploy/_files/start.sh",
+            "writenup/wp.md",
+            "writenup/exp.py",
+        ],
+        implementation_plan={
+            "runtime": "java:17",
+            "framework": "Spring Boot",
+            "service_user": "ctf",
+            "service_model": "single docker compose service",
+        },
+    )
+
+    result = validate_design_payload(payload, _parent_task())
+
+    assert result.challenge["implementation_plan"]["framework"] == "Spring Boot"
+
+
+def test_validate_design_payload_accepts_rust_web_runtime_without_app_py():
+    payload = _payload(
+        artifacts=[
+            "README.md",
+            "metadata.json",
+            "validate.sh",
+            "deploy/Dockerfile",
+            "deploy/docker-compose.yml",
+            "deploy/src/Cargo.toml",
+            "deploy/src/src/main.rs",
+            "deploy/_files/start.sh",
+            "writenup/wp.md",
+            "writenup/exp.py",
+        ],
+        implementation_plan={
+            "runtime": "rust:1.78",
+            "framework": "Axum",
+            "service_user": "ctf",
+            "service_model": "single docker compose service",
+        },
+    )
+
+    result = validate_design_payload(payload, _parent_task())
+
+    assert result.challenge["implementation_plan"]["framework"] == "Axum"
+
+
 @pytest.mark.parametrize(
     "artifact",
     [

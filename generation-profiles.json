@@ -8,7 +8,8 @@
         {"runtime": "node", "frameworks": ["Express", "Fastify", "Koa"]},
         {"runtime": "php", "frameworks": ["plain PHP", "Slim", "Laravel"]},
         {"runtime": "java", "frameworks": ["Spring Boot", "Jakarta Servlet"]},
-        {"runtime": "go", "frameworks": ["net/http", "Gin", "Fiber"]}
+        {"runtime": "go", "frameworks": ["net/http", "Gin", "Fiber"]},
+        {"runtime": "rust", "frameworks": ["Axum", "Actix Web", "Rocket"]}
       ],
       "technique_quota": 1,
       "cooldown_window": 1,
@@ -21,7 +22,14 @@
     },
     "pwn": {
       "required_artifact": "Linux ELF plus single-service Docker image",
-      "toolchains": ["gcc", "clang"],
+      "language_toolchains": {
+        "c": {"compilers": ["gcc", "clang"], "target_format": "elf"},
+        "cpp": {"compilers": ["g++", "clang++"], "target_format": "elf"},
+        "rust": {"compilers": ["rustc", "cargo build --release"], "target_format": "elf"},
+        "go": {"compilers": ["go build"], "target_format": "elf"},
+        "asm": {"compilers": ["nasm + ld", "gcc"], "target_format": "elf"}
+      },
+      "toolchains": ["gcc", "clang", "g++", "clang++", "rustc", "cargo build --release", "go build", "nasm + ld"],
       "architectures": ["x86_64"],
       "technique_quota": 1,
       "cooldown_window": 1,
@@ -40,6 +48,14 @@
       ],
       "default_format": "elf",
       "default_platform": "linux/amd64",
+      "language_toolchains": {
+        "c": {"compiler": "gcc", "target_format": "elf"},
+        "cpp": {"compiler": "g++", "target_format": "elf"},
+        "rust": {"compiler": "rustc", "target_format": "elf"},
+        "go": {"compiler": "go build", "target_format": "elf"},
+        "java": {"compiler": "javac", "target_format": "jar"},
+        "kotlin": {"compiler": "kotlinc", "target_format": "jar"}
+      },
       "technique_quota": 1,
       "cooldown_window": 1,
       "policy": [

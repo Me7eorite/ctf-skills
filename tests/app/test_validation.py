@@ -12,6 +12,14 @@ from domain.validation import (
 )
 
 
+def _write_root_start_contract(deploy: Path) -> None:
+    (deploy / "_files").mkdir(parents=True, exist_ok=True)
+    (deploy / "_files" / "start.sh").write_text("#!/bin/sh\nexec \"$@\"\n")
+    (deploy / "Dockerfile").write_text(
+        "FROM scratch\nCOPY _files/start.sh /root/start.sh\n"
+    )
+
+
 class ValidationTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -138,7 +146,7 @@ class ValidationTests(unittest.TestCase):
         deploy = challenge / "deploy"
         (deploy / "src").mkdir(parents=True)
         (deploy / "src" / "challenge.c").write_text("int main(void) { return 0; }\n")
-        (deploy / "Dockerfile").write_text("FROM scratch\n")
+        _write_root_start_contract(deploy)
         (deploy / "docker-compose.yml").write_text(
             "services:\n  challenge:\n    environment:\n      - FLAG=flag{demo}\n"
         )
@@ -160,7 +168,7 @@ class ValidationTests(unittest.TestCase):
         deploy = challenge / "deploy"
         (deploy / "src").mkdir(parents=True)
         (deploy / "src" / "app.js").write_text("console.log(process.env.FLAG)\n")
-        (deploy / "Dockerfile").write_text("FROM scratch\n")
+        _write_root_start_contract(deploy)
         (deploy / "docker-compose.yml").write_text(
             "services:\n  challenge:\n    environment:\n      - FLAG=${FLAG}\n"
         )
@@ -361,7 +369,7 @@ class SolverIntegrityTests(unittest.TestCase):
         challenge = self.paths.challenges / "web" / "web-0001-demo"
         deploy = challenge / "deploy"
         (deploy / "src").mkdir(parents=True)
-        (deploy / "Dockerfile").write_text("FROM nginx\n", encoding="utf-8")
+        _write_root_start_contract(deploy)
         (deploy / "docker-compose.yml").write_text(
             "services:\n  app:\n    environment:\n      - FLAG=flag{the_secret}\n",
             encoding="utf-8",

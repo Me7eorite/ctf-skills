@@ -72,6 +72,19 @@ RUNTIME_ARTIFACT_RULES: dict[str, dict[str, RuntimeArtifactRule]] = {
             required_exact=("deploy/src/app.py",),
         ),
     },
+    "node": {
+        "default": RuntimeArtifactRule(
+            required_any_exact=(
+                (
+                    "deploy/src/server.js",
+                    "deploy/src/app.js",
+                    "deploy/src/index.js",
+                ),
+            ),
+            required_exact=("deploy/src/package.json",),
+            required_service_user="ctf",
+        ),
+    },
     "php": {
         "default": RuntimeArtifactRule(
             required_exact=("deploy/src/index.php",),
@@ -84,10 +97,22 @@ RUNTIME_ARTIFACT_RULES: dict[str, dict[str, RuntimeArtifactRule]] = {
             required_service_user="ctf",
         ),
     },
+    "rust": {
+        "default": RuntimeArtifactRule(
+            required_exact=("deploy/src/Cargo.toml",),
+            required_any_exact=(
+                (
+                    "deploy/src/src/main.rs",
+                    "deploy/src/main.rs",
+                ),
+            ),
+            required_service_user="ctf",
+        ),
+    },
     "java": {
         "jar": RuntimeArtifactRule(
             required_patterns=(
-                _pattern(r"^deploy/src/(?:src/main/java/.*\\.java|Main\\.java)$"),
+                _pattern(r"^deploy/src/(?:src/main/java/.*\.java|Main\.java)$"),
             ),
             required_any_exact=(
                 (
@@ -108,8 +133,8 @@ RUNTIME_ARTIFACT_RULES: dict[str, dict[str, RuntimeArtifactRule]] = {
             ),
             required_any_patterns=(
                 (
-                    _pattern(r"^deploy/src/src/main/java/.*Servlet\\.java$"),
-                    _pattern(r"^deploy/src/src/main/webapp/.*\\.jsp$"),
+                    _pattern(r"^deploy/src/src/main/java/.*Servlet\.java$"),
+                    _pattern(r"^deploy/src/src/main/webapp/.*\.jsp$"),
                 ),
             ),
             allowed_service_users=("tomcat",),
@@ -204,14 +229,53 @@ def extract_runtime_requirements(challenge: Mapping[str, Any]) -> RuntimeArtifac
         language = runtime.get("runtime_language") or runtime.get("language")
         profile = runtime.get("runtime_profile") or runtime.get("profile")
         service_user = runtime.get("service_user") or runtime.get("user")
+        if not language:
+            language = _infer_runtime_language(runtime.get("runtime"))
+        if not profile:
+            profile = _infer_runtime_profile(runtime.get("runtime"), runtime.get("framework"))
     language = challenge.get("runtime_language", language)
     profile = challenge.get("runtime_profile", profile)
     service_user = challenge.get("service_user", service_user)
+    if not language:
+        language = _infer_runtime_language(challenge.get("runtime"))
+    if not profile:
+        profile = _infer_runtime_profile(challenge.get("runtime"), challenge.get("framework"))
     return RuntimeArtifactRequirements(
         language=language if isinstance(language, str) else None,
         profile=profile if isinstance(profile, str) else None,
         service_user=service_user if isinstance(service_user, str) else None,
     )
+
+
+def _infer_runtime_language(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    aliases = {
+        "python": ("python", "flask", "fastapi", "django"),
+        "node": ("node", "nodejs", "express", "fastify", "koa"),
+        "php": ("php", "apache-php", "plain php", "slim", "laravel"),
+        "java": ("java", "spring", "spring boot", "tomcat", "servlet", "jakarta"),
+        "go": ("go", "golang", "gin", "fiber", "net/http"),
+        "rust": ("rust", "axum", "actix", "actix web", "rocket"),
+    }
+    for language_name, prefixes in aliases.items():
+        if any(normalized.startswith(prefix) for prefix in prefixes):
+            return language_name
+    return None
+
+
+def _infer_runtime_profile(runtime: Any, framework: Any) -> str | None:
+    text = " ".join(
+        value.strip().lower()
+        for value in (runtime, framework)
+        if isinstance(value, str)
+    )
+    if "tomcat" in text or "servlet" in text or "jsp" in text:
+        return "tomcat"
+    if "jar" in text or "spring" in text:
+        return "jar"
+    return None
 
 KNOWN_ARTIFACT_PREFIXES: tuple[str, ...] = (
     "deploy/",

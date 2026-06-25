@@ -150,6 +150,11 @@ Container rules for Web and Pwn:
   permanently as root.
 - Keep challenge files read-only at runtime where practical. Create only the
   narrow writable directories the service needs, owned by its runtime user.
+- Every Web/Pwn image MUST copy `deploy/_files/start.sh` into the image as
+  `/root/start.sh`, mark it executable, and use `/root/start.sh` as the service
+  entrypoint or command. Keep this wrapper small; it should drop to the
+  appropriate service user before starting long-running business processes when
+  the selected runtime supports that pattern.
 - `deploy/docker-compose.yml` MUST NOT use `volumes` (neither bind mounts nor
   named volumes). Copy all source, configuration, startup assets, and required
   initial data into the image during `docker build`.
@@ -174,10 +179,20 @@ Container rules for Web and Pwn:
 
 Reverse rules:
 
+- Do not default to C or `gcc`. Use the matrix/design `language`, `compiler`,
+  `target_format`, and `target_platform` exactly. Supported RE authoring
+  languages include C, C++, Rust, Go, Java, and Kotlin; supported delivered
+  formats include ELF, PE/EXE, WASM, and JAR when declared.
 - Default to a Linux amd64 ELF when `target_platform` is absent. Valid
   declared values are `linux/amd64`, `linux/arm64`, `linux/arm`, and
   `windows/amd64`. The produced artifact MUST match the matrix-declared
   `target_platform` and `target_format`.
+- For C++ ELF builds, prefer `g++`/`clang++`, not `gcc`. For Rust ELF builds,
+  use `rustc` or `cargo build --release` and copy the compiled binary into
+  `attachments/`. For Go ELF builds, use `go build` with the declared
+  `GOOS/GOARCH` target. For Java/Kotlin JAR challenges, compile with
+  `javac`/`kotlinc` or the declared build tool and ship the JAR in
+  `attachments/`.
 - For `target_platform=windows/amd64`, build a Windows PE `.exe` with an
   available MinGW-w64 cross compiler such as `x86_64-w64-mingw32-gcc`; do not
   silently substitute a Linux ELF.
@@ -203,9 +218,18 @@ Reverse rules:
 
 Pwn rules:
 
+- Do not default to C or `gcc`. Use the matrix/design `language`, `compiler`,
+  mitigation profile, and architecture exactly. Supported Pwn source languages
+  include C, C++, Rust, Go, and assembly, as long as the delivered player
+  artifact is the declared Linux ELF and the exploit targets that exact binary
+  or service.
 - Compile the ELF with the requested mitigation profile and place it in
   `attachments/` along with any pinned `libc.so.6` / `ld-linux-*.so.2` the
   exploit needs.
+- For C++ Pwn, use `g++`/`clang++`; for Rust Pwn, use `rustc` or
+  `cargo build --release`; for Go Pwn, use `go build` with flags that preserve
+  the intended native vulnerability model; for assembly Pwn, use the declared
+  assembler/linker pipeline such as `nasm + ld`.
 - Record the actual mitigation state and distribute the relevant binary.
 - Pin the libc/toolchain where exploit stability depends on it.
 
@@ -217,8 +241,8 @@ Pwn rules:
   defines no `volumes`, and runs with the intended non-root account (`ctf` for
   ordinary Pwn, or the selected Web base image's service user); then build and
   run that exact Compose configuration.
-- Re: run the compiler selected by the declared target/toolchain, then inspect
-  the produced artifact with `file`.
+- Re/Pwn: run the compiler selected by the declared target/toolchain, then
+  inspect the produced artifact with `file`.
 - Record build commands, compiler/runtime versions, and artifact SHA-256 in
   `metadata.json`.
 - Re builds must verify the artifact architecture against the matrix

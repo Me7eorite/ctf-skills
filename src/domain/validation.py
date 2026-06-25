@@ -49,6 +49,9 @@ _FORBIDDEN_DOCKER_CLEANUP_RE = re.compile(
     r"docker-compose\s+down\b[^\n;&|]*\s(?:-v|--volumes)\b)",
     re.MULTILINE,
 )
+_ROOT_START_INSTALL_RE = re.compile(
+    r"(?im)^\s*(?:COPY|ADD)\s+(?:--[^\r\n]+\s+)*[^\r\n#]*start\.sh\s+/root/start\.sh\b"
+)
 
 
 def _read_text(path: Path) -> str | None:
@@ -56,6 +59,13 @@ def _read_text(path: Path) -> str | None:
         return path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
+
+
+def _dockerfile_installs_root_start(dockerfile: Path) -> bool:
+    text = _read_text(dockerfile)
+    if not text:
+        return False
+    return bool(_ROOT_START_INSTALL_RE.search(text))
 
 
 # When the intended technique IS recovering the flag via strings/static reading,
@@ -587,6 +597,16 @@ class ChallengeValidator:
                 for path in required
                 if not path.exists()
             )
+            start_path = challenge_dir / "deploy" / "_files" / "start.sh"
+            if not start_path.is_file():
+                errors.append("missing deploy/_files/start.sh")
+            dockerfile_path = challenge_dir / "deploy" / "Dockerfile"
+            if dockerfile_path.is_file() and not _dockerfile_installs_root_start(
+                dockerfile_path
+            ):
+                errors.append(
+                    "deploy/Dockerfile must copy deploy/_files/start.sh to /root/start.sh"
+                )
             compose_path = challenge_dir / "deploy" / "docker-compose.yml"
             if compose_path.is_file():
                 compose_flag = compose_literal_flag(compose_path)
