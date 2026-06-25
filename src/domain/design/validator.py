@@ -26,6 +26,7 @@ from urllib.parse import urlsplit
 from domain.design.difficulty import validate_difficulty_alignment
 from domain.design.schema import (
     COMMON_ARTIFACTS,
+    CONTAINER_ARTIFACTS,
     CONTAINER_BASE_ARTIFACTS,
     DEFAULT_FLAG_FORMAT,
     FORBIDDEN_IMPLEMENTATION_KEYS,
@@ -260,6 +261,21 @@ def _enforce_runtime_artifact_rule(
             patterns = ", ".join(p.pattern for p in group)
             raise ChallengeDesignValidationError(
                 f"{label_prefix} requires files matching at least one of: {patterns}"
+            )
+
+    enforced_user = rule.required_service_user
+    declared_user = (requirements.service_user or "").strip()
+    if enforced_user and declared_user.lower() != enforced_user.lower():
+        raise ChallengeDesignValidationError(
+            f"{label_prefix} requires service_user={enforced_user}"
+        )
+
+    if rule.allowed_service_users and declared_user:
+        allowed = tuple(u.lower() for u in rule.allowed_service_users)
+        if declared_user.lower() not in allowed:
+            allowed_list = ", ".join(rule.allowed_service_users)
+            raise ChallengeDesignValidationError(
+                f"{label_prefix} service_user must be one of: {allowed_list}"
             )
 
 

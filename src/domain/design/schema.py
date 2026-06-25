@@ -49,6 +49,8 @@ class RuntimeArtifactRule:
     required_any_exact: tuple[tuple[str, ...], ...] = ()
     required_patterns: tuple[re.Pattern[str], ...] = ()
     required_any_patterns: tuple[tuple[re.Pattern[str], ...], ...] = ()
+    required_service_user: str | None = None
+    allowed_service_users: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,7 @@ class RuntimeArtifactRequirements:
 
     language: str | None
     profile: str | None
+    service_user: str | None
 
 
 def _pattern(expr: str) -> re.Pattern[str]:
@@ -72,11 +75,13 @@ RUNTIME_ARTIFACT_RULES: dict[str, dict[str, RuntimeArtifactRule]] = {
     "php": {
         "default": RuntimeArtifactRule(
             required_exact=("deploy/src/index.php",),
+            allowed_service_users=("www-data", "apache", "ctf"),
         ),
     },
     "go": {
         "default": RuntimeArtifactRule(
             required_exact=("deploy/src/main.go",),
+            required_service_user="ctf",
         ),
     },
     "java": {
@@ -91,6 +96,7 @@ RUNTIME_ARTIFACT_RULES: dict[str, dict[str, RuntimeArtifactRule]] = {
                     "deploy/_files/build.gradle",
                 ),
             ),
+            required_service_user="ctf",
         ),
         "tomcat": RuntimeArtifactRule(
             required_exact=("deploy/src/src/main/webapp/WEB-INF/web.xml",),
@@ -106,6 +112,34 @@ RUNTIME_ARTIFACT_RULES: dict[str, dict[str, RuntimeArtifactRule]] = {
                     _pattern(r"^deploy/src/src/main/webapp/.*\\.jsp$"),
                 ),
             ),
+            allowed_service_users=("tomcat",),
+        ),
+    },
+    "pwn": {
+        "binary": RuntimeArtifactRule(
+            required_patterns=(
+                _pattern(r"^deploy/src/(?:[A-Za-z0-9_.-]+)$"),
+            ),
+            required_any_patterns=(
+                (
+                    _pattern(r"^deploy/src/(?:pwn|chal{1,2}|challenge)$"),
+                    _pattern(r"^deploy/src/bin/.*"),
+                ),
+            ),
+            required_any_exact=(
+                (
+                    "deploy/_files/start.sh",
+                    "deploy/_files/entrypoint.sh",
+                ),
+            ),
+            required_service_user="ctf",
+        ),
+        "xinetd": RuntimeArtifactRule(
+            required_exact=("deploy/_files/etc/xinetd.d/chal",),
+            required_patterns=(
+                _pattern(r"^deploy/src/(?:[A-Za-z0-9_.-]+)$"),
+            ),
+            allowed_service_users=("root", "xinetd"),
         ),
     },
 }
@@ -165,14 +199,18 @@ def extract_runtime_requirements(challenge: Mapping[str, Any]) -> RuntimeArtifac
     runtime = challenge.get("implementation_plan") or {}
     language = None
     profile = None
+    service_user = None
     if isinstance(runtime, Mapping):
         language = runtime.get("runtime_language") or runtime.get("language")
         profile = runtime.get("runtime_profile") or runtime.get("profile")
+        service_user = runtime.get("service_user") or runtime.get("user")
     language = challenge.get("runtime_language", language)
     profile = challenge.get("runtime_profile", profile)
+    service_user = challenge.get("service_user", service_user)
     return RuntimeArtifactRequirements(
         language=language if isinstance(language, str) else None,
         profile=profile if isinstance(profile, str) else None,
+        service_user=service_user if isinstance(service_user, str) else None,
     )
 
 KNOWN_ARTIFACT_PREFIXES: tuple[str, ...] = (

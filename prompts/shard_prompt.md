@@ -274,6 +274,9 @@ MUST redirect its output to stderr (`>&2`); cleanup must never write to stdout.
 Before starting a container named `"$CONTAINER_NAME"`, remove a stale
 same-name container with
 `docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true`.
+Do not remove Docker volumes, prune Docker resources, or run `docker compose down`
+with `-v`/`--volumes`; cleanup must be limited to the challenge's own container
+and Compose service so host PostgreSQL/database volumes are never touched.
 Forced rebuilds are an operator concern (`docker rmi` outside the script);
 `validate.sh` itself does not need a force flag. For Re, `validate.sh` must
 build the artifact when needed and run the solver against the player-facing
@@ -294,6 +297,9 @@ violates any of them fails validation regardless of what `validate.sh` prints:
 - A `re` `validate.sh`/`writenup/exp.py` MUST reference the distributed artifact
   under `attachments/` and MUST NOT reference `metadata.json` or `challenge.yml`
   — derive the flag from the binary, never from organizer files.
+- `validate.sh` MUST NOT contain `docker volume rm`, `docker volume prune`,
+  Docker prune commands, or `docker compose down -v`/`--volumes`. Destructive
+  Docker cleanup is rejected before execution.
 
 ## 5. Document
 

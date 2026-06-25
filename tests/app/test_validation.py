@@ -405,6 +405,28 @@ class SolverIntegrityTests(unittest.TestCase):
         errors = self.validator.contract_errors(challenge, metadata)
         self.assertEqual(errors, [])
 
+    def test_validate_sh_volume_removal_is_rejected(self):
+        challenge, metadata = self._web_challenge(
+            exp_py="import os,requests\nprint(requests.get('http://target/').text)\n"
+        )
+        (challenge / "validate.sh").write_text(
+            "#!/bin/sh\ndocker volume rm challenge_postgres_data\n",
+            encoding="utf-8",
+        )
+        errors = self.validator.contract_errors(challenge, metadata)
+        self.assertTrue(any("destructive Docker cleanup" in e for e in errors))
+
+    def test_validate_sh_compose_down_volumes_is_rejected(self):
+        challenge, metadata = self._web_challenge(
+            exp_py="import os,requests\nprint(requests.get('http://target/').text)\n"
+        )
+        (challenge / "validate.sh").write_text(
+            "#!/bin/sh\ndocker compose down --volumes --remove-orphans\n",
+            encoding="utf-8",
+        )
+        errors = self.validator.contract_errors(challenge, metadata)
+        self.assertTrue(any("destructive Docker cleanup" in e for e in errors))
+
 
 class StringsExposureTests(unittest.TestCase):
     def setUp(self):

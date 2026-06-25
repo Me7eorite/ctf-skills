@@ -41,6 +41,14 @@ FLAG_TOKEN_RE = re.compile(
 # read to obtain the flag — it must recover it from the live target (web/pwn) or
 # the distributed artifact (re), not from these config/answer files.
 _FORBIDDEN_EXPLOIT_SOURCES = ("metadata.json", "challenge.yml", "docker-compose")
+_FORBIDDEN_DOCKER_CLEANUP_RE = re.compile(
+    r"(?:^|[;&|]\s*)"
+    r"(?:docker\s+volume\s+(?:rm|prune)\b|"
+    r"docker\s+(?:system|container|image|network)\s+prune\b|"
+    r"docker\s+compose\s+down\b[^\n;&|]*\s(?:-v|--volumes)\b|"
+    r"docker-compose\s+down\b[^\n;&|]*\s(?:-v|--volumes)\b)",
+    re.MULTILINE,
+)
 
 
 def _read_text(path: Path) -> str | None:
@@ -700,6 +708,8 @@ class ChallengeValidator:
              compose file that injects it.
           C. A ``re`` solver must actually reference the distributed artifact
              under ``attachments/`` and must not read organizer files.
+          D. Docker cleanup must never remove/prune volumes or global resources;
+             generated validators may only remove their own named container.
         """
         errors: list[str] = []
         category = metadata.get("category")
@@ -727,6 +737,13 @@ class ChallengeValidator:
                         f"writenup/exp.py references '{token}'; the exploit must "
                         "recover the flag from the target, not organizer files"
                     )
+
+        # D — destructive Docker cleanup can remove host infrastructure volumes
+        if validate_text and _FORBIDDEN_DOCKER_CLEANUP_RE.search(validate_text):
+            errors.append(
+                "validate.sh contains destructive Docker cleanup; it must not "
+                "remove/prune volumes or global Docker resources"
+            )
 
         # C — a re solver must open the distributed artifact, never organizer files
         if category == "re":
