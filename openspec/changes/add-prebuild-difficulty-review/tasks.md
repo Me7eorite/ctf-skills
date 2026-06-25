@@ -15,6 +15,8 @@
 - [x] 2.4 Export model/repository from existing package entry points.
 - [x] 2.5 Add repository support to supersede a failed draft, store review
   feedback on the latest attempt, and return the task to Design retry.
+- [x] 2.6 Add review summary support for total reviews, failed reviews, and the
+  latest review result.
 
 ## 3. Build Orchestration
 
@@ -37,6 +39,8 @@
   orchestration tests passing.
 - [x] 4.4 Assert failed pre-build review requeues the task, supersedes the
   draft, and feeds review guidance into the next design prompt.
+- [x] 4.5 Assert design-task list/detail API exposes difficulty review
+  diagnostics for batch operators.
 
 ## 5. Verification
 

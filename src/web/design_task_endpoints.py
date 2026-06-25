@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 from domain import challenge_designs as challenge_dto
 from domain import design_tasks as design_dto
+from domain.design.difficulty_review import DesignDifficultyReview
 
 
 def register_design_task_read_endpoints(app: FastAPI) -> None:
@@ -21,7 +22,10 @@ def register_design_task_read_endpoints(app: FastAPI) -> None:
         category: str | None = Query(default=None),
         limit: int = Query(default=100, ge=1, le=500),
     ) -> JSONResponse:
-        from persistence.repositories import DesignTaskRepository
+        from persistence.repositories import (
+            DesignDifficultyReviewRepository,
+            DesignTaskRepository,
+        )
         from persistence.session import transaction
 
         if status is not None and status not in design_dto.DesignTaskStatus:
@@ -50,7 +54,20 @@ def register_design_task_read_endpoints(app: FastAPI) -> None:
                 category=category,
                 limit=limit,
             )
-        return JSONResponse([design_task_dict(task) for task in tasks])
+            review_repo = DesignDifficultyReviewRepository(session)
+            summaries = {
+                task.id: review_repo.summarize_for_design_task(task.id)
+                for task in tasks
+            }
+        return JSONResponse(
+            [
+                design_task_dict(
+                    task,
+                    difficulty_review_summary=summaries.get(task.id),
+                )
+                for task in tasks
+            ]
+        )
 
     @app.get("/api/design-tasks/collapse")
     def design_batch_collapse(
@@ -99,7 +116,10 @@ def register_design_task_read_endpoints(app: FastAPI) -> None:
 
     @app.get("/api/design-tasks/{task_id}")
     def get_design_task(task_id: str) -> JSONResponse:
-        from persistence.repositories import DesignTaskRepository
+        from persistence.repositories import (
+            DesignDifficultyReviewRepository,
+            DesignTaskRepository,
+        )
         from persistence.session import transaction
 
         try:
@@ -112,6 +132,11 @@ def register_design_task_read_endpoints(app: FastAPI) -> None:
 
         with transaction() as session:
             result = DesignTaskRepository(session).get_with_history(task_uuid)
+            review_summary = (
+                DesignDifficultyReviewRepository(session).summarize_for_design_task(task_uuid)
+                if result is not None
+                else None
+            )
         if result is None:
             raise HTTPException(
                 status_code=HTTPStatus.NOT_FOUND,
@@ -123,6 +148,7 @@ def register_design_task_read_endpoints(app: FastAPI) -> None:
                 task,
                 attempts=attempts,
                 latest_design=latest_design,
+                difficulty_review_summary=review_summary,
             )
         )
 
@@ -171,6 +197,7 @@ def design_task_dict(
     *,
     attempts: list[challenge_dto.DesignAttempt] | None = None,
     latest_design: challenge_dto.ChallengeDesign | None = None,
+    difficulty_review_summary: dict[str, object] | None = None,
 ) -> dict[str, Any]:
     row = {
         "id": str(task.id),
@@ -199,7 +226,39 @@ def design_task_dict(
         row["attempts"] = [attempt_summary_dict(attempt) for attempt in attempts]
     if latest_design is not None or attempts is not None:
         row["latest_design"] = challenge_design_dict(latest_design)
+    if difficulty_review_summary is not None:
+        row["difficulty_review_summary"] = difficulty_review_summary_dict(
+            difficulty_review_summary
+        )
     return row
+
+
+def difficulty_review_summary_dict(summary: dict[str, object]) -> dict[str, Any]:
+    latest = summary.get("latest")
+    return {
+        "total": int(summary.get("total") or 0),
+        "failed": int(summary.get("failed") or 0),
+        "latest": difficulty_review_dict(latest)
+        if isinstance(latest, DesignDifficultyReview)
+        else None,
+    }
+
+
+def difficulty_review_dict(review: DesignDifficultyReview) -> dict[str, Any]:
+    return {
+        "id": str(review.id),
+        "design_task_id": str(review.design_task_id),
+        "challenge_design_id": str(review.challenge_design_id),
+        "passed": review.passed,
+        "claimed_difficulty": review.claimed_difficulty,
+        "actual_difficulty": review.actual_difficulty,
+        "confidence": review.confidence,
+        "reasons": list(review.reasons),
+        "detected_risks": list(review.detected_risks),
+        "required_revision": list(review.required_revision),
+        "reviewer": review.reviewer,
+        "created_at": isofmt(review.created_at),
+    }
 
 
 def attempt_summary_dict(attempt: challenge_dto.DesignAttempt) -> dict[str, Any]:

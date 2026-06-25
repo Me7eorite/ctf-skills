@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 
 from core.paths import ProjectPaths
 from domain.challenge_designs import ChallengeDesign, DesignAttempt
+from domain.design.difficulty_review import DesignDifficultyReview
 from domain.design_task_validators import DesignTaskValidationError
 from domain.design_tasks import DesignTask
 from web.dashboard import DashboardService
@@ -96,12 +97,31 @@ def _make_design(task_id: UUID, attempt_id: UUID) -> ChallengeDesign:
     )
 
 
+def _make_review(task_id: UUID, design_id: UUID) -> DesignDifficultyReview:
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    return DesignDifficultyReview(
+        id=uuid4(),
+        design_task_id=task_id,
+        challenge_design_id=design_id,
+        passed=False,
+        claimed_difficulty="medium",
+        actual_difficulty="below_claimed",
+        confidence=0.9,
+        reasons=("medium requires a required asset/capability chain",),
+        detected_risks=("declared difficulty may be step inflation",),
+        required_revision=("revise asset_flow",),
+        reviewer="deterministic-asset-flow",
+        created_at=now,
+    )
+
+
 @contextlib.contextmanager
 def _app_client(
     *,
     planning_service=None,
     design_repo=None,
     research_repo=None,
+    difficulty_review_repo=None,
 ):
     """Build a TestClient whose design-task endpoints see the supplied stubs."""
     temp = tempfile.TemporaryDirectory()
@@ -142,6 +162,13 @@ def _app_client(
             list_attempts=lambda _task_id: [],
             latest_design=lambda _task_id: None,
         )
+        default_difficulty_review_repo = SimpleNamespace(
+            summarize_for_design_task=lambda _task_id: {
+                "total": 0,
+                "failed": 0,
+                "latest": None,
+            },
+        )
         default_planning_service = SimpleNamespace(
             generate_for_request=lambda _request_id: [],
         )
@@ -158,6 +185,10 @@ def _app_client(
             patch(
                 "persistence.repositories.ChallengeDesignRepository",
                 return_value=default_challenge_design_repo,
+            ),
+            patch(
+                "persistence.repositories.DesignDifficultyReviewRepository",
+                return_value=difficulty_review_repo or default_difficulty_review_repo,
             ),
             patch(
                 "services.DesignTaskPlanningService",
@@ -475,7 +506,14 @@ class DesignTaskReadEndpointTests(unittest.TestCase):
             get_with_history=lambda _id: None,
             set_design_task_status=lambda _id, _status: None,
         )
-        with _app_client(design_repo=repo) as client:
+        review_repo = SimpleNamespace(
+            summarize_for_design_task=lambda _task_id: {
+                "total": 2,
+                "failed": 1,
+                "latest": None,
+            },
+        )
+        with _app_client(design_repo=repo, difficulty_review_repo=review_repo) as client:
             resp = client.get(
                 "/api/design-tasks"
                 f"?generation_request_id={request_id}&status=queued&category=web"
@@ -494,6 +532,7 @@ class DesignTaskReadEndpointTests(unittest.TestCase):
             )
             self.assertNotIn("attempts", payload[0])
             self.assertNotIn("latest_design", payload[0])
+            self.assertEqual(payload[0]["difficulty_review_summary"]["failed"], 1)
             self.assertEqual(calls[0]["generation_request_id"], request_id)
             self.assertEqual(calls[0]["status"], "queued")
             self.assertEqual(calls[0]["category"], "web")
@@ -532,6 +571,7 @@ class DesignTaskReadEndpointTests(unittest.TestCase):
         task = _make_design_task()
         attempt = _make_attempt(task.id)
         design = _make_design(task.id, attempt.id)
+        review = _make_review(task.id, design.id)
 
         repo = SimpleNamespace(
             list_design_tasks=lambda _id: [],
@@ -540,13 +580,25 @@ class DesignTaskReadEndpointTests(unittest.TestCase):
             get_with_history=lambda _id: (task, [attempt], design),
             set_design_task_status=lambda _id, _status: None,
         )
-        with _app_client(design_repo=repo) as client:
+        review_repo = SimpleNamespace(
+            summarize_for_design_task=lambda _task_id: {
+                "total": 1,
+                "failed": 1,
+                "latest": review,
+            },
+        )
+        with _app_client(design_repo=repo, difficulty_review_repo=review_repo) as client:
             resp = client.get(f"/api/design-tasks/{task.id}")
             self.assertEqual(resp.status_code, 200)
             payload = resp.json()
             self.assertEqual(payload["id"], str(task.id))
             self.assertEqual(payload["attempts"][0]["attempt"], 1)
             self.assertEqual(payload["latest_design"]["id"], str(design.id))
+            summary = payload["difficulty_review_summary"]
+            self.assertEqual(summary["total"], 1)
+            self.assertEqual(summary["failed"], 1)
+            self.assertFalse(summary["latest"]["passed"])
+            self.assertEqual(summary["latest"]["required_revision"], ["revise asset_flow"])
 
     def test_detail_unknown_or_malformed_returns_404(self):
         with _app_client() as client:

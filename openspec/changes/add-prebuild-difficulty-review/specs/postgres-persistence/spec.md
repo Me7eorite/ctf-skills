@@ -26,3 +26,28 @@ identifier, and creation timestamp.
 - **THEN** the system inserts another `design_difficulty_reviews` row
 - **AND** the previous review row is not overwritten
 
+### Requirement: Design task reads expose review diagnostics
+
+The system SHALL expose per-design-task difficulty review diagnostics so batch
+operators can distinguish active Design retries from repeated pre-build review
+failures.
+
+The diagnostics SHALL include total review count, failed review count, and the
+latest review result with reasons and required revisions when present.
+
+#### Scenario: Design task detail includes latest review
+
+- **GIVEN** a design task has at least one pre-build difficulty review
+- **WHEN** the operator reads the design task detail
+- **THEN** the response includes `difficulty_review_summary.total`
+- **AND** the response includes `difficulty_review_summary.failed`
+- **AND** the response includes the latest review's reasons and required
+  revisions
+
+#### Scenario: Design task list includes review failure count
+
+- **GIVEN** a batch contains tasks that failed pre-build difficulty review
+- **WHEN** the operator lists design tasks for that batch
+- **THEN** each row includes `difficulty_review_summary.failed`
+- **AND** the operator can identify tasks repeatedly returning from Build review
+  to Design retry

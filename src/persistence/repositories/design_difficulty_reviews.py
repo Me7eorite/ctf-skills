@@ -51,6 +51,33 @@ class DesignDifficultyReviewRepository:
         ).one_or_none()
         return _review(row) if row else None
 
+    def summarize_for_design_task(self, design_task_id: UUID) -> dict[str, object]:
+        total = int(
+            self.session.scalar(
+                sa.select(sa.func.count())
+                .select_from(model.DesignDifficultyReview)
+                .where(model.DesignDifficultyReview.design_task_id == design_task_id)
+            )
+            or 0
+        )
+        failed = int(
+            self.session.scalar(
+                sa.select(sa.func.count())
+                .select_from(model.DesignDifficultyReview)
+                .where(
+                    model.DesignDifficultyReview.design_task_id == design_task_id,
+                    model.DesignDifficultyReview.passed.is_(False),
+                )
+            )
+            or 0
+        )
+        latest = self.latest_for_design_task(design_task_id)
+        return {
+            "total": total,
+            "failed": failed,
+            "latest": latest,
+        }
+
 
 def _review(row: model.DesignDifficultyReview) -> DesignDifficultyReview:
     return DesignDifficultyReview(
