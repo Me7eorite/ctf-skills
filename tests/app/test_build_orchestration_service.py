@@ -85,6 +85,7 @@ def _clean_database(session_factory: SessionFactory) -> None:
         session.execute(sa.delete(exec_model.Execution))
         session.execute(sa.delete(exec_model.BuildFeedbackSnapshot))
         session.execute(sa.delete(build_model.BuildAttempt))
+        session.execute(sa.delete(design_model.DesignDifficultyReview))
         session.execute(sa.delete(design_model.ChallengeDesign))
         session.execute(sa.delete(design_model.DesignAttempt))
         session.execute(sa.delete(task_model.DesignTask))
@@ -93,7 +94,7 @@ def _clean_database(session_factory: SessionFactory) -> None:
         session.commit()
 
 
-def _payload(challenge_id: str, *, port: int = 8081) -> dict:
+def _payload(challenge_id: str, *, port: int = 8081, difficulty: str = "easy") -> dict:
     return {
         "event": {"flag_format": "flag{...}"},
         "challenges": [
@@ -101,7 +102,7 @@ def _payload(challenge_id: str, *, port: int = 8081) -> dict:
                 "id": challenge_id,
                 "title": "Blind Login",
                 "category": "web",
-                "difficulty": "easy",
+                "difficulty": difficulty,
                 "points": 100,
                 "deployment": f"docker compose service on port {port}",
                 "port": port,
@@ -121,14 +122,20 @@ def _payload(challenge_id: str, *, port: int = 8081) -> dict:
     }
 
 
-def _seed_designed_task(session_factory: SessionFactory, *, task_no: int = 1) -> UUID:
+def _seed_designed_task(
+    session_factory: SessionFactory,
+    *,
+    task_no: int = 1,
+    difficulty: str = "easy",
+    design_payload: dict | None = None,
+) -> UUID:
     with session_factory() as session:
         request = research_model.GenerationRequest(
             id=uuid4(),
             category="web",
             topic=f"topic-{uuid4()}",
             target_count=1,
-            difficulty_distribution={"easy": 1},
+            difficulty_distribution={difficulty: 1},
             status="researched",
         )
         run = research_model.ResearchRun(
@@ -145,12 +152,12 @@ def _seed_designed_task(session_factory: SessionFactory, *, task_no: int = 1) ->
             challenge_id=f"web-{uuid4().hex[:8]}",
             title=f"Task {task_no}",
             category="web",
-            difficulty="easy",
+            difficulty=difficulty,
             primary_technique="boolean blind sqli",
             learning_objective="Extract data through boolean responses.",
             points=100,
             port=8080 + task_no,
-            scenario="Distinct login response behavior.",
+            scenario="Distinct login response behavior with a realistic account recovery workflow.",
             constraints={},
             evidence_summary="",
             finding_ids=[],
@@ -169,7 +176,7 @@ def _seed_designed_task(session_factory: SessionFactory, *, task_no: int = 1) ->
             id=uuid4(),
             design_task_id=task.id,
             design_attempt_id=design_attempt.id,
-            payload=_payload(task.challenge_id, port=task.port or 8081),
+            payload=design_payload or _payload(task.challenge_id, port=task.port or 8081, difficulty=difficulty),
             summary="validated design",
             flag_format="flag{...}",
             validation_notes="passed",
@@ -206,6 +213,10 @@ def test_submit_batch_preserves_order_commits_and_publishes(
         attempts = [BuildAttemptsRepository(session).get(item) for item in attempt_ids]
         assert [item.design_task_id for item in attempts if item] == [task_b, task_a]
         assert all(session.get(task_model.DesignTask, task).status == "building" for task in [task_a, task_b])
+        review_count = session.scalar(
+            sa.select(sa.func.count()).select_from(design_model.DesignDifficultyReview)
+        )
+        assert review_count == 2
         shard_by_attempt = {
             item.id: item.shard_basename for item in attempts if item is not None
         }
@@ -219,6 +230,78 @@ def test_submit_batch_preserves_order_commits_and_publishes(
         assert "resume_from_shard_basename" not in payload
         assert set(payload["challenges"][0]) == set(MATRIX_FIELDS["web"]) | {"design"}
     assert service.paths.build_attempt_staging.is_dir()
+
+
+def test_prebuild_difficulty_review_blocks_failed_medium_design(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    invalid_payload = _payload("web-invalid-medium", difficulty="medium")
+    invalid_payload["challenges"][0].update(
+        {
+            "prompt": (
+                "Recover the admin note from the support portal while preserving "
+                "the expected customer support workflow."
+            ),
+            "techniques": ["boolean blind sqli", "idor"],
+            "actual_solution_type": ["boolean blind sqli"],
+            "unintended_solutions": ["Direct flag reads require admin session."],
+        }
+    )
+    task_id = _seed_designed_task(
+        session_factory,
+        difficulty="medium",
+        design_payload=invalid_payload,
+    )
+    service = _service(tmp_path, session_factory)
+
+    with pytest.raises(BuildOrchestrationError) as excinfo:
+        service.submit_single(task_id)
+
+    assert excinfo.value.code == "difficulty_review_failed"
+    assert "pre-build difficulty review" in str(excinfo.value)
+    with session_factory() as session:
+        assert BuildAttemptsRepository(session).list_for_design_task(task_id) == []
+        task = session.get(task_model.DesignTask, task_id)
+        assert task is not None and task.status == "queued"
+        draft_count = session.scalar(
+            sa.select(sa.func.count())
+            .select_from(design_model.ChallengeDesign)
+            .where(
+                design_model.ChallengeDesign.design_task_id == task_id,
+                design_model.ChallengeDesign.status == "draft",
+            )
+        )
+        assert draft_count == 0
+        superseded_count = session.scalar(
+            sa.select(sa.func.count())
+            .select_from(design_model.ChallengeDesign)
+            .where(
+                design_model.ChallengeDesign.design_task_id == task_id,
+                design_model.ChallengeDesign.status == "superseded",
+            )
+        )
+        assert superseded_count == 1
+        latest_attempt = session.scalar(
+            sa.select(design_model.DesignAttempt)
+            .where(design_model.DesignAttempt.design_task_id == task_id)
+            .order_by(design_model.DesignAttempt.attempt.desc())
+            .limit(1)
+        )
+        assert latest_attempt is not None
+        assert latest_attempt.status == "completed"
+        assert latest_attempt.last_error is not None
+        assert "Pre-build difficulty review failed" in latest_attempt.last_error
+        review = session.scalar(
+            sa.select(design_model.DesignDifficultyReview).where(
+                design_model.DesignDifficultyReview.design_task_id == task_id
+            )
+        )
+        assert review is not None
+        assert review.passed is False
+        assert review.actual_difficulty == "below_claimed"
+        assert review.required_revision
+    assert not list((service.paths.shards / "pending").glob("*.json"))
 
 
 @pytest.mark.parametrize("category", ["web", "pwn", "re"])

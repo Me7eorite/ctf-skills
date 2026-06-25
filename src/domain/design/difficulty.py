@@ -183,6 +183,7 @@ def validate_difficulty_alignment(
     parent_task: DesignTask,
     *,
     legacy_grandfather: bool = False,
+    enforcement: str | None = None,
 ) -> None:
     """Reject ``challenge`` if its content does not match its difficulty tier.
 
@@ -206,7 +207,40 @@ def validate_difficulty_alignment(
             f"no difficulty rubric defined for {difficulty!r}"
         )
 
-    enforcement = _enforcement_mode()
+    selected_enforcement = enforcement or _enforcement_mode()
+    if selected_enforcement not in {_ENFORCEMENT_STRICT, _ENFORCEMENT_LENIENT}:
+        raise ValueError(f"unsupported difficulty enforcement mode {selected_enforcement!r}")
+    violations = difficulty_alignment_violations(challenge, parent_task)
+
+    if not violations:
+        return
+
+    if selected_enforcement == _ENFORCEMENT_LENIENT:
+        for message in violations:
+            _LOGGER.warning(
+                "design difficulty soft-passed for challenge %s (%s): %s "
+                "(set DESIGN_DIFFICULTY_ENFORCEMENT=strict to reject)",
+                challenge.get("id", "<unknown>"),
+                difficulty,
+                message,
+            )
+        return
+
+    # Strict (default): surface the first violation so the operator sees
+    # a single, actionable error rather than a wall of bullets.
+    raise ChallengeDesignValidationError(violations[0])
+
+
+def difficulty_alignment_violations(
+    challenge: Mapping[str, Any],
+    parent_task: DesignTask,
+) -> list[str]:
+    """Return all difficulty-rubric violations without applying enforcement."""
+    difficulty = parent_task.difficulty
+    rubric = RUBRIC.get(difficulty)
+    if rubric is None:
+        return [f"no difficulty rubric defined for {difficulty!r}"]
+
     violations: list[str] = []
 
     def _flag(message: str) -> None:
@@ -344,23 +378,7 @@ def validate_difficulty_alignment(
                     "shortcut."
                 )
 
-    if not violations:
-        return
-
-    if enforcement == _ENFORCEMENT_LENIENT:
-        for message in violations:
-            _LOGGER.warning(
-                "design difficulty soft-passed for challenge %s (%s): %s "
-                "(set DESIGN_DIFFICULTY_ENFORCEMENT=strict to reject)",
-                challenge.get("id", "<unknown>"),
-                difficulty,
-                message,
-            )
-        return
-
-    # Strict (default): surface the first violation so the operator sees
-    # a single, actionable error rather than a wall of bullets.
-    raise ChallengeDesignValidationError(violations[0])
+    return violations
 
 
 # ---------- Counting helpers ----------

@@ -99,3 +99,36 @@ class ChallengeDesign(Base):
 
     design_task: Mapped[DesignTask] = relationship()
     design_attempt: Mapped[DesignAttempt] = relationship()
+
+
+class DesignDifficultyReview(Base):
+    __tablename__ = "design_difficulty_reviews"
+    __table_args__ = (
+        sa.CheckConstraint("confidence >= 0 AND confidence <= 1", name="ck_design_difficulty_reviews_confidence"),
+        sa.Index("ix_design_difficulty_reviews_task_created", "design_task_id", "created_at"),
+        sa.Index("ix_design_difficulty_reviews_design_created", "challenge_design_id", "created_at"),
+    )
+
+    id: Mapped[UuidPk]
+    design_task_id: Mapped[UUID] = mapped_column(
+        sa.Uuid(),
+        sa.ForeignKey("design_tasks.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    challenge_design_id: Mapped[UUID] = mapped_column(
+        sa.Uuid(),
+        sa.ForeignKey("challenge_designs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    passed: Mapped[bool] = mapped_column(sa.Boolean(), nullable=False)
+    claimed_difficulty: Mapped[str] = mapped_column(sa.Text(), nullable=False)
+    actual_difficulty: Mapped[str] = mapped_column(sa.Text(), nullable=False)
+    confidence: Mapped[float] = mapped_column(sa.Float(), nullable=False)
+    reasons: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default=sa.text("'[]'::jsonb"))
+    detected_risks: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default=sa.text("'[]'::jsonb"))
+    required_revision: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default=sa.text("'[]'::jsonb"))
+    reviewer: Mapped[str] = mapped_column(sa.Text(), nullable=False)
+    created_at: Mapped[CreatedAt]
+
+    design_task: Mapped[DesignTask] = relationship()
+    challenge_design: Mapped[ChallengeDesign] = relationship()

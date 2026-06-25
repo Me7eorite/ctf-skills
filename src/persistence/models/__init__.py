@@ -2,7 +2,11 @@
 
 from persistence.models.base import Base
 from persistence.models.build_attempts import BuildAttempt
-from persistence.models.challenge_designs import ChallengeDesign, DesignAttempt
+from persistence.models.challenge_designs import (
+    ChallengeDesign,
+    DesignAttempt,
+    DesignDifficultyReview,
+)
 from persistence.models.design_tasks import DesignTask
 from persistence.models.executions import (
     BuildFeedbackSnapshot,
@@ -28,6 +32,7 @@ __all__ = [
     "BuildFeedbackSnapshot",
     "ChallengeCategory",
     "ChallengeDesign",
+    "DesignDifficultyReview",
     "DesignAttempt",
     "DesignTask",
     "Execution",

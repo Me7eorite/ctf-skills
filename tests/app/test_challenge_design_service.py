@@ -54,6 +54,7 @@ def session_factory() -> SessionFactory:
 @pytest.fixture(autouse=True)
 def clean_database(session_factory: SessionFactory):
     with session_factory() as session:
+        session.execute(sa.delete(cd_model.DesignDifficultyReview))
         session.execute(sa.delete(cd_model.ChallengeDesign))
         session.execute(sa.delete(cd_model.DesignAttempt))
         session.execute(sa.delete(dt_model.DesignTask))
@@ -354,6 +355,43 @@ def test_retry_prompt_includes_previous_validation_error(
     assert first.error is not None
     assert "## Retry Feedback" in executor.calls[1]["prompt_text"]
     assert first.error in executor.calls[1]["prompt_text"]
+
+
+def test_retry_prompt_includes_prebuild_review_feedback_from_completed_attempt(
+    session_factory: SessionFactory,
+    tmp_path: Path,
+):
+    task_id, _ = _seed(session_factory, max_attempts=2)
+    with session_factory() as session:
+        session.add(
+            cd_model.DesignAttempt(
+                id=uuid4(),
+                design_task_id=task_id,
+                attempt=1,
+                status="completed",
+                claim_token=uuid4(),
+                started_at=datetime.now(timezone.utc),
+                finished_at=datetime.now(timezone.utc),
+                profile_name_used="default",
+                last_error=(
+                    "Pre-build difficulty review failed.\n"
+                    "Required revisions:\n- revise asset_flow"
+                ),
+            )
+        )
+        session.get(dt_model.DesignTask, task_id).status = "queued"
+        session.commit()
+    executor = FakeDesignExecutor(stdout=_valid_stdout())
+
+    result = _service(tmp_path, session_factory, executor).design_for_task(task_id, "alice")
+
+    assert result.attempt_status == "completed"
+    assert result.design_task_status == "designed"
+    assert "## Retry Feedback" in executor.calls[0]["prompt_text"]
+    assert "revise asset_flow" in executor.calls[0]["prompt_text"]
+    with session_factory() as session:
+        attempts = ChallengeDesignRepository(session).list_attempts(task_id)
+        assert [attempt.attempt for attempt in attempts] == [1, 2]
 
 
 def test_exhausted_retry_marks_task_failed(

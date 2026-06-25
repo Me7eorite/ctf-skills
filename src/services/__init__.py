@@ -16,6 +16,7 @@ from services.challenge_design_service import (
     ChallengeDesignService,
     ChallengeDesignServiceResult,
 )
+from services.design_difficulty_validator import DesignDifficultyValidator
 from services.design_task_planning_service import DesignTaskPlanningService
 from services.research_agent_executor import ResearchAgentExecutor
 from services.research_backfill_service import (
@@ -45,6 +46,7 @@ __all__ = [
     "ChallengeDesignService",
     "ChallengeDesignServiceResult",
     "DesignTaskPlanningService",
+    "DesignDifficultyValidator",
     "ResearchAgentExecutor",
     "BackfillPreview",
     "BackfillResult",

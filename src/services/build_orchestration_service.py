@@ -19,6 +19,7 @@ from core.jsonio import read_json, write_json
 from core.paths import ProjectPaths
 from domain import challenge_designs as design_dto
 from domain import design_tasks as task_dto
+from domain.design.difficulty_review import DifficultyReviewResult
 from persistence.models import build_attempts as build_model
 from persistence.models import design_tasks as task_model
 from persistence.models import executions as exec_model
@@ -26,10 +27,12 @@ from persistence.models.progress import ProgressEvent
 from persistence.repositories import (
     BuildAttemptsRepository,
     ChallengeDesignRepository,
+    DesignDifficultyReviewRepository,
     DesignTaskRepository,
     ExecutionsRepository,
 )
 from persistence.session import SessionFactory, transaction
+from services.design_difficulty_validator import DesignDifficultyValidator
 
 LOG = logging.getLogger(__name__)
 STAGING_ORPHAN_GRACE_SECONDS = 60 * 60
@@ -113,6 +116,7 @@ class _PreparedSubmission:
     repair_requested: bool = False
     repair_context: dict[str, Any] | None = None
     repair_mode: bool = False
+    difficulty_review: DifficultyReviewResult | None = None
 
 
 class BuildOrchestrationService:
@@ -406,6 +410,22 @@ class BuildOrchestrationService:
                 design = design_repo.latest_design(task_id)
                 if design is None:
                     raise BuildOrchestrationError(f"design task {task_id} has no validated draft design")
+                difficulty_review = DesignDifficultyValidator().review(
+                    design_task=task,
+                    challenge_design=design,
+                )
+                if not difficulty_review.passed:
+                    reason = difficulty_review.reasons[0] if difficulty_review.reasons else "difficulty review failed"
+                    self._record_failed_review_and_request_revision(
+                        task_id=task.id,
+                        challenge_design_id=design.id,
+                        result=difficulty_review,
+                        review_error=_review_error_message(difficulty_review),
+                    )
+                    raise BuildOrchestrationError(
+                        f"design task {task_id} failed pre-build difficulty review: {reason}",
+                        code="difficulty_review_failed",
+                    )
 
                 source_attempt_id = retry_sources.get(task_id)
                 minting = execution_minting_enabled()
@@ -419,12 +439,15 @@ class BuildOrchestrationService:
                 # Retry/repair resume existing evidence by appending a new
                 # execution to the source container. Clean rebuild intentionally
                 # starts a new container even when execution minting is enabled.
+                is_repair = task_id in (repair_sources or {})
                 is_retry = (
                     minting
                     and source_attempt_id is not None
-                    and execution_mode != "clean"
+                    and (execution_mode != "clean" or is_repair)
                 )
                 if is_retry:
+                    if source_attempt_id is None:
+                        raise BuildOrchestrationError("retry source attempt is required")
                     container_id = source_attempt_id
                     iteration_no = self._next_iteration_no(session, container_id)
                     # resume/clean retries are kind=retry; revision is a separate
@@ -464,6 +487,7 @@ class BuildOrchestrationService:
                         repair_requested=task_id in (repair_sources or {}),
                         repair_context=dict((repair_sources or {}).get(task_id) or {}),
                         repair_mode=task_id in (repair_sources or {}),
+                        difficulty_review=difficulty_review,
                     )
                 )
         return prepared
@@ -506,6 +530,12 @@ class BuildOrchestrationService:
                     expected_source_id=retry_sources.get(row.id),
                     execution_mode=submission.execution_mode,
                 )
+                if submission.difficulty_review is not None:
+                    DesignDifficultyReviewRepository(session).record(
+                        design_task_id=row.id,
+                        challenge_design_id=submission.design.id,
+                        result=submission.difficulty_review,
+                    )
                 if submission.is_fresh:
                     build_repo.create_attempt(
                         row.id,
@@ -607,6 +637,26 @@ class BuildOrchestrationService:
     def _session(self) -> Session:
         return self.session_factory()
 
+    def _record_failed_review_and_request_revision(
+        self,
+        *,
+        task_id: UUID,
+        challenge_design_id: UUID,
+        result: DifficultyReviewResult,
+        review_error: str,
+    ) -> None:
+        with transaction(factory=self.session_factory) as session:
+            DesignDifficultyReviewRepository(session).record(
+                design_task_id=task_id,
+                challenge_design_id=challenge_design_id,
+                result=result,
+            )
+            ChallengeDesignRepository(session).request_revision_from_review(
+                design_task_id=task_id,
+                challenge_design_id=challenge_design_id,
+                review_error=review_error,
+            )
+
     @staticmethod
     def _normalize_terminal_execution(
         session: Session,
@@ -702,3 +752,14 @@ def _payload_matches_attempt(
         and str(payload.get("build_attempt_id")) == str(attempt_id)
         and str(payload.get("design_task_id")) == str(design_task_id)
     )
+
+
+def _review_error_message(result: DifficultyReviewResult) -> str:
+    lines = ["Pre-build difficulty review failed."]
+    if result.reasons:
+        lines.append("Reasons:")
+        lines.extend(f"- {item}" for item in result.reasons)
+    if result.required_revision:
+        lines.append("Required revisions:")
+        lines.extend(f"- {item}" for item in result.required_revision)
+    return "\n".join(lines)

@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from domain import challenge_designs as dto
 from persistence.models import challenge_designs as model
 from persistence.models import design_tasks as dt_model
+from persistence.models import research as research_model
 
 
 class ChallengeDesignPersistenceError(ValueError):
@@ -180,6 +181,63 @@ class ChallengeDesignRepository:
             .limit(1)
         ).one_or_none()
         return _design(row) if row else None
+
+    def request_revision_from_review(
+        self,
+        *,
+        design_task_id: UUID,
+        challenge_design_id: UUID,
+        review_error: str,
+    ) -> dto.ChallengeDesign:
+        """Supersede a failed draft and requeue the task for another design attempt."""
+        if not review_error:
+            raise ChallengeDesignPersistenceError("review_error is required")
+        task = self._lock_design_task(design_task_id)
+        if task.status != "designed":
+            raise ChallengeDesignPersistenceError(
+                f"design task {design_task_id} is {task.status}, expected designed"
+            )
+        design = self.session.scalars(
+            sa.select(model.ChallengeDesign)
+            .where(
+                model.ChallengeDesign.id == challenge_design_id,
+                model.ChallengeDesign.design_task_id == design_task_id,
+                model.ChallengeDesign.status == "draft",
+            )
+            .with_for_update()
+        ).one_or_none()
+        if design is None:
+            raise ChallengeDesignPersistenceError(
+                f"draft challenge design {challenge_design_id} was not found"
+            )
+        attempt = self.session.scalars(
+            sa.select(model.DesignAttempt)
+            .where(model.DesignAttempt.id == design.design_attempt_id)
+            .with_for_update()
+        ).one_or_none()
+        if attempt is None:
+            raise ChallengeDesignPersistenceError(
+                f"design attempt {design.design_attempt_id} was not found"
+            )
+        max_attempts = self.session.scalar(
+            sa.select(research_model.GenerationRequest.max_attempts).where(
+                research_model.GenerationRequest.id == task.generation_request_id
+            )
+        )
+        if max_attempts is None:
+            raise ChallengeDesignPersistenceError(
+                f"generation request {task.generation_request_id} does not exist"
+            )
+
+        now = _utcnow()
+        design.status = "superseded"
+        design.updated_at = now
+        attempt.last_error = review_error
+        task.status = "queued" if attempt.attempt < int(max_attempts) else "failed"
+        task.updated_at = now
+        self.session.flush()
+        self.session.refresh(design)
+        return _design(design)
 
     def _lock_design_task(self, design_task_id: UUID) -> dt_model.DesignTask:
         task = self.session.scalars(

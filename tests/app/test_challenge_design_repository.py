@@ -51,6 +51,7 @@ def session_factory() -> SessionFactory:
 @pytest.fixture(autouse=True)
 def clean_database(session_factory: SessionFactory):
     with session_factory() as session:
+        session.execute(sa.delete(cd_model.DesignDifficultyReview))
         session.execute(sa.delete(cd_model.ChallengeDesign))
         session.execute(sa.delete(cd_model.DesignAttempt))
         session.execute(sa.delete(dt_model.DesignTask))
@@ -228,6 +229,44 @@ def test_partial_unique_constraint_allows_only_one_draft(
         )
         with pytest.raises(IntegrityError):
             session.flush()
+    finally:
+        session.rollback()
+        session.close()
+
+
+def test_request_revision_supersedes_draft_and_requeues_task(
+    session_factory: SessionFactory,
+):
+    task_id = _seed_design_task(session_factory)
+    session = session_factory()
+    try:
+        repo = ChallengeDesignRepository(session)
+        attempt = repo.create_attempt(task_id, 1, "alice", "default")
+        design = repo.complete_attempt(
+            attempt.id,
+            attempt.claim_token,
+            "work/design/logs/a.log",
+            _payload(),
+            "Blind Login",
+            "flag{...}",
+            "quality gate passed",
+            True,
+        )
+
+        superseded = repo.request_revision_from_review(
+            design_task_id=task_id,
+            challenge_design_id=design.id,
+            review_error="Pre-build difficulty review failed.\nRequired revisions:\n- add asset_flow",
+        )
+
+        assert superseded.status == "superseded"
+        assert repo.latest_design(task_id) is None
+        task = session.get(dt_model.DesignTask, task_id)
+        assert task is not None and task.status == "queued"
+        updated_attempt = repo.get_attempt(attempt.id)
+        assert updated_attempt is not None
+        assert updated_attempt.status == "completed"
+        assert "add asset_flow" in (updated_attempt.last_error or "")
     finally:
         session.rollback()
         session.close()
