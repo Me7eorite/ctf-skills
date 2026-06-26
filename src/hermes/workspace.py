@@ -28,7 +28,12 @@ _LAYOUT = ("input", "references", "output", "logs", "bin", "state")
 # (`design-core.md` — output shape, spec template, quality gate, safety) plus
 # a unified `category-tactics.md` covering every category. Per-category
 # splits and the standalone delivery-format reference were removed.
-_COMMON_REFERENCES = ("design-core.md", "category-tactics.md", "difficulty-rubric.md")
+_COMMON_REFERENCES = (
+    "design-core.md",
+    "category-tactics.md",
+    "difficulty-rubric.md",
+    "shared_generation_strategy.md",
+)
 _CATEGORIES_WITH_REFERENCES = frozenset({"web", "pwn", "re"})
 # 中文注释：`_CHALLENGE_NAMESPACE` 只用来识别"这个目录名属于挑战命名空间"，
 # 比之前 ^(web|pwn|re)-\d+ 宽松，能覆盖真实 design-task 生成的
