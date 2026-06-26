@@ -202,7 +202,8 @@ def test_executor_failure_creates_retry_without_touching_binding(
 ):
     request, claimed = _submit_and_claim(session_factory, max_attempts=2)
 
-    def fake_hermes_invoke(**_kwargs):
+    def fake_hermes_invoke(**kwargs):
+        kwargs["log_path"].write_text("", encoding="utf-8")
         return HermesProcessResult(returncode=7, stdout="", cancelled=False)
 
     monkeypatch.setattr("services.research_agent_executor.profile_exists", lambda _name: True)
@@ -220,13 +221,52 @@ def test_executor_failure_creates_retry_without_touching_binding(
         assert retry is not None
         assert binding is not None
         assert run.status == "failed"
-        assert run.last_error == "Hermes exited with 7"
+        assert run.last_error == (
+            "Hermes exited with 7:empty_stdout; "
+            "finalize_failed:Hermes exited with 7:empty_stdout"
+        )
         assert retry.status == "queued"
         assert retry.attempt == 2
         assert parent.status == "researching"
         assert binding.last_used_run_id is None
         assert ResearchRepository(session).list_sources(claimed.id) == []
         assert ResearchRepository(session).list_findings(claimed.id) == []
+
+
+def test_executor_finalize_recovers_empty_primary_output(
+    session_factory: SessionFactory,
+    paths: ProjectPaths,
+    fast_heartbeat,
+    monkeypatch,
+):
+    request, claimed = _submit_and_claim(session_factory)
+    prompts: list[str] = []
+
+    def fake_hermes_invoke(**kwargs):
+        prompts.append(kwargs["prompt"])
+        kwargs["log_path"].write_text("", encoding="utf-8")
+        if len(prompts) == 1:
+            return HermesProcessResult(returncode=0, stdout="", cancelled=False)
+        assert kwargs["log_path"].name.endswith(".finalize.log")
+        return HermesProcessResult(returncode=0, stdout=_research_stdout(), cancelled=False)
+
+    monkeypatch.setattr("services.research_agent_executor.profile_exists", lambda _name: True)
+    _run_executor(_executor(paths, session_factory, fake_hermes_invoke), claimed)
+
+    with session_factory() as session:
+        run = session.get(model.ResearchRun, claimed.id)
+        parent = session.get(model.GenerationRequest, request.id)
+        assert run is not None
+        assert parent is not None
+        assert run.status == "completed"
+        assert run.hermes_log_path == str(paths.research_logs / f"{claimed.id}.log")
+        assert parent.status == "researched"
+        assert len(ResearchRepository(session).list_sources(claimed.id)) == 1
+        assert len(ResearchRepository(session).list_findings(claimed.id)) == 1
+
+    assert len(prompts) == 2
+    assert "Do not perform new web searches" in prompts[1]
+    assert (paths.research_logs / f"{claimed.id}.log.finalize.log").exists()
 
 
 def test_executor_final_failure_marks_parent_failed(
@@ -236,7 +276,8 @@ def test_executor_final_failure_marks_parent_failed(
 ):
     request, claimed = _submit_and_claim(session_factory, max_attempts=1)
 
-    def fake_hermes_invoke(**_kwargs):
+    def fake_hermes_invoke(**kwargs):
+        kwargs["log_path"].write_text("", encoding="utf-8")
         return HermesProcessResult(returncode=7, stdout="", cancelled=False)
 
     monkeypatch.setattr("services.research_agent_executor.profile_exists", lambda _name: True)

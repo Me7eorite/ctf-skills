@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -24,6 +25,12 @@ LOGGER = logging.getLogger(__name__)
 HEARTBEAT_INTERVAL_SECONDS = 30.0
 RESEARCH_BINDING_ROLE = "research"
 DEFAULT_PROFILE_NAME = "default"
+DEFAULT_FINALIZE_TIMEOUT_SECONDS = 180
+FINALIZE_STDOUT_MAX_CHARS = 12000
+ITERATION_BUDGET_MARKERS = (
+    "Iteration budget exhausted",
+    "Reached maximum iterations",
+)
 
 HermesInvoke = Callable[..., HermesProcessResult]
 
@@ -110,13 +117,26 @@ class ResearchAgentExecutor:
                 LOGGER.warning("lost claim before starting run %s", run.id)
                 return
 
-            prompt_text = render_research_prompt(generation_request)
+            prompt_text = _with_previous_failure_context(
+                render_research_prompt(generation_request),
+                previous_error=self._previous_run_error(run),
+            )
             res_data = self.hermes_invoke(
                 prompt=prompt_text,
                 profile_name=profile_name,
                 log_path=log_path,
                 timeout=hermes_timeout_seconds,
                 paths=self.paths,
+                cancel_event=lost_lease,
+            )
+
+            parse_result = self._parse_or_finalize(
+                generation_request=generation_request,
+                run_id=run.id,
+                profile_name=profile_name,
+                log_path=log_path,
+                hermes_timeout_seconds=hermes_timeout_seconds,
+                primary_result=res_data,
                 cancel_event=lost_lease,
             )
         finally:
@@ -131,25 +151,11 @@ class ResearchAgentExecutor:
             )
             return
 
-        try:
-            parsed = parse_research_output(
-                res_data.stdout,
-                target_count=generation_request.target_count,
-                category=generation_request.category,
-            )
-            source_payloads, finding_payloads = materialize_research_raw_text(
-                parsed,
-                paths=self.paths,
-                run_id=run.id,
-            )
-        except ResearchValidationError as exc:
-            last_error = (
-                f"Hermes exited with {res_data.returncode}"
-                if res_data.returncode != 0
-                else str(exc)
-            )
-            self._mark_failed_if_owned(run, agent_id, last_error, log_path)
+        if parse_result.error is not None:
+            self._mark_failed_if_owned(run, agent_id, parse_result.error, log_path)
             return
+        source_payloads = parse_result.sources
+        finding_payloads = parse_result.findings
 
         if res_data.returncode != 0:
             LOGGER.warning(
@@ -178,6 +184,78 @@ class ResearchAgentExecutor:
         except ResearchValidationError as exc:
             self._mark_failed_if_owned(run, agent_id, str(exc), log_path)
 
+    def _parse_or_finalize(
+        self,
+        *,
+        generation_request: dto.GenerationRequest,
+        run_id: UUID,
+        profile_name: str,
+        log_path: Path,
+        hermes_timeout_seconds: int,
+        primary_result: HermesProcessResult,
+        cancel_event: threading.Event,
+    ) -> "_ResearchParseResult":
+        primary = _parse_result_payload(
+            primary_result.stdout,
+            paths=self.paths,
+            run_id=run_id,
+            target_count=generation_request.target_count,
+            category=generation_request.category,
+        )
+        if primary.error is None:
+            return primary
+
+        failure_reason = _classify_research_failure(primary_result, primary.error)
+        if not _should_finalize_research_failure(primary_result, primary.error):
+            return _ResearchParseResult(error=failure_reason)
+        if primary_result.cancelled or cancel_event.is_set():
+            return _ResearchParseResult(error=failure_reason)
+
+        finalize_timeout = _finalize_timeout_seconds(hermes_timeout_seconds)
+        finalize_log_path = log_path.with_name(log_path.name + ".finalize.log")
+        finalize_prompt = _render_finalize_prompt(
+            generation_request,
+            failure_reason=failure_reason,
+            stdout_text=primary_result.stdout,
+        )
+        LOGGER.warning(
+            "research run %s primary output failed (%s); invoking finalize for %ss",
+            run_id,
+            failure_reason,
+            finalize_timeout,
+        )
+        finalize_result = self.hermes_invoke(
+            prompt=finalize_prompt,
+            profile_name=profile_name,
+            log_path=finalize_log_path,
+            timeout=finalize_timeout,
+            paths=self.paths,
+            cancel_event=cancel_event,
+        )
+        if finalize_result.cancelled or cancel_event.is_set():
+            return _ResearchParseResult(error=failure_reason)
+
+        finalized = _parse_result_payload(
+            finalize_result.stdout,
+            paths=self.paths,
+            run_id=run_id,
+            target_count=generation_request.target_count,
+            category=generation_request.category,
+        )
+        if finalized.error is None:
+            if primary_result.returncode != 0:
+                LOGGER.warning(
+                    "Hermes primary exited with %s but finalize produced valid research output for run %s",
+                    primary_result.returncode,
+                    run_id,
+                )
+            return finalized
+
+        finalize_reason = _classify_research_failure(finalize_result, finalized.error)
+        return _ResearchParseResult(
+            error=f"{failure_reason}; finalize_failed:{finalize_reason}"
+        )
+
     def _resolve_profile_name(self, run_id: UUID) -> str:
         """解析 research role 绑定；缺失或禁用时回退到 default。"""
         # 中文注释：profile binding 属于数据库配置，executor 只读取并选择实际 profile。
@@ -193,6 +271,15 @@ class ResearchAgentExecutor:
         # 中文注释：提示词必须从持久化 request 渲染，不能依赖提交进程的临时状态。
         with transaction(factory=self.repository_factory) as session:
             return ResearchRepository(session).get_generation_request(request_id)
+
+    def _previous_run_error(self, run: dto.ResearchRun) -> str | None:
+        if run.parent_run_id is None:
+            return None
+        with transaction(factory=self.repository_factory) as session:
+            previous = ResearchRepository(session).get_run(run.parent_run_id)
+        if previous is None:
+            return None
+        return previous.last_error
 
     def _heartbeat_loop(
         self,
@@ -274,3 +361,173 @@ def _parse_research_output(
     """Compatibility wrapper for existing tests and callers."""
     parsed = parse_research_output(stdout_text, target_count=target_count)
     return materialize_research_raw_text(parsed, paths=paths, run_id=run_id)
+
+
+class _ResearchParseResult:
+    def __init__(
+        self,
+        *,
+        sources: list[dict[str, Any]] | None = None,
+        findings: list[dict[str, Any]] | None = None,
+        error: str | None = None,
+    ) -> None:
+        self.sources = sources or []
+        self.findings = findings or []
+        self.error = error
+
+
+def _parse_result_payload(
+    stdout_text: str,
+    *,
+    paths: ProjectPaths,
+    run_id: UUID,
+    target_count: int,
+    category: str | None,
+) -> _ResearchParseResult:
+    repaired_stdout = _repair_common_json_key_glitches(stdout_text)
+    if repaired_stdout != stdout_text:
+        repaired = _try_parse_result_payload(
+            repaired_stdout,
+            paths=paths,
+            run_id=run_id,
+            target_count=target_count,
+            category=category,
+        )
+        if repaired.error is None:
+            LOGGER.warning("recovered research stdout after repairing duplicated JSON key quote")
+            return repaired
+
+    parsed = _try_parse_result_payload(
+        stdout_text,
+        paths=paths,
+        run_id=run_id,
+        target_count=target_count,
+        category=category,
+    )
+    if parsed.error != "unparseable_output:no_terminal_json_object":
+        return parsed
+    return parsed
+
+
+def _try_parse_result_payload(
+    stdout_text: str,
+    *,
+    paths: ProjectPaths,
+    run_id: UUID,
+    target_count: int,
+    category: str | None,
+) -> _ResearchParseResult:
+    try:
+        parsed = parse_research_output(
+            stdout_text,
+            target_count=target_count,
+            category=category,
+        )
+        sources, findings = materialize_research_raw_text(
+            parsed,
+            paths=paths,
+            run_id=run_id,
+        )
+        return _ResearchParseResult(sources=sources, findings=findings)
+    except ResearchValidationError as exc:
+        return _ResearchParseResult(error=str(exc))
+
+
+def _repair_common_json_key_glitches(stdout_text: str) -> str:
+    repaired = stdout_text
+    for key in ("sources", "findings"):
+        repaired = repaired.replace(f'""{key}"', f'"{key}"')
+    return repaired
+
+
+def _classify_research_failure(
+    result: HermesProcessResult,
+    parse_error: str | None,
+) -> str:
+    stdout = result.stdout or ""
+    if result.returncode != 0 and not stdout.strip():
+        return f"Hermes exited with {result.returncode}:empty_stdout"
+    if result.returncode == 124:
+        if not stdout.strip():
+            return "hermes_timeout:empty_stdout"
+        return f"hermes_timeout:{parse_error or 'no_valid_json'}"
+    if not stdout.strip():
+        return "empty_stdout"
+    if any(marker in stdout for marker in ITERATION_BUDGET_MARKERS):
+        return f"iteration_budget_exhausted:{parse_error or 'no_valid_json'}"
+    return parse_error or f"Hermes exited with {result.returncode}"
+
+
+def _should_finalize_research_failure(
+    result: HermesProcessResult,
+    parse_error: str | None,
+) -> bool:
+    stdout = result.stdout or ""
+    if result.returncode != 0 or not stdout.strip():
+        return True
+    if any(marker in stdout for marker in ITERATION_BUDGET_MARKERS):
+        return True
+    return parse_error == "unparseable_output:no_terminal_json_object"
+
+
+def _finalize_timeout_seconds(hermes_timeout_seconds: int) -> int:
+    raw = os.environ.get("RESEARCH_FINALIZE_TIMEOUT_SECONDS")
+    if raw:
+        try:
+            configured = int(raw)
+        except ValueError:
+            LOGGER.warning(
+                "invalid RESEARCH_FINALIZE_TIMEOUT_SECONDS=%r; using default %s",
+                raw,
+                DEFAULT_FINALIZE_TIMEOUT_SECONDS,
+            )
+        else:
+            if configured > 0:
+                return configured
+            LOGGER.warning(
+                "RESEARCH_FINALIZE_TIMEOUT_SECONDS=%r must be positive; using default %s",
+                raw,
+                DEFAULT_FINALIZE_TIMEOUT_SECONDS,
+            )
+    return max(30, min(DEFAULT_FINALIZE_TIMEOUT_SECONDS, hermes_timeout_seconds))
+
+
+def _render_finalize_prompt(
+    request: dto.GenerationRequest,
+    *,
+    failure_reason: str,
+    stdout_text: str,
+) -> str:
+    stdout_excerpt = stdout_text[-FINALIZE_STDOUT_MAX_CHARS:] if stdout_text else "(empty stdout)"
+    return (
+        "You are finalizing a CTF research run that already spent its broad-search pass.\n"
+        "Do not perform new web searches, open new pages, spawn subagents, or continue exploration.\n"
+        "Use only the material in the previous stdout excerpt below and your current context.\n"
+        "Your only task is to emit exactly one valid JSON object matching the research schema: "
+        "`sources` array and `findings` array. No markdown, no prose, no code fences.\n"
+        "Every finding must cite at least one source via 0-based `source_indices`.\n"
+        "If a source hash is unknown, provide a stable lowercase sha256-shaped placeholder; "
+        "the host will normalize non-authoritative hashes later.\n\n"
+        f"Category: {request.category}\n"
+        f"Topic: {request.topic}\n"
+        f"Target challenge count: {request.target_count}\n"
+        f"Previous failure reason: {failure_reason}\n\n"
+        "Previous stdout excerpt:\n"
+        "```text\n"
+        f"{stdout_excerpt}\n"
+        "```\n\n"
+        "Return the JSON object now."
+    )
+
+
+def _with_previous_failure_context(prompt: str, *, previous_error: str | None) -> str:
+    if not previous_error:
+        return prompt
+    return (
+        prompt
+        + "\n\n## Previous attempt failure\n\n"
+        + "The previous attempt for this same request failed before research results were persisted.\n"
+        + f"Failure reason: `{previous_error}`\n"
+        + "Keep the same broad search scope, but correct this delivery failure in the current run. "
+        + "In particular, do not finish with empty stdout, progress-only stdout, or malformed JSON.\n"
+    )

@@ -57,6 +57,15 @@ high-quality writeups with reproducible technical detail.
    If none fits, use `other`.
 7. Do not invent references. If you cannot substantiate a finding, drop it.
 
+## Completion budget
+
+Keep the broad search scope, but reserve enough time and iterations to finish.
+When the run is near its time or iteration budget, stop opening new sources and
+finalize from the sources already consulted. A partial but valid JSON document
+with fewer substantiated findings is better than no terminal JSON object.
+Never end the run with only progress text, subagent summaries, or search notes.
+The last thing printed to stdout must be the single JSON object described below.
+
 ## Technique family vocabulary
 
 Use exactly one of these values for `findings[i].technique_family`:
@@ -112,3 +121,5 @@ Note that `findings[0].source_indices` is `[0]` — a non-empty list of valid
 - Every finding must cite at least one source via `source_indices`.
 - Do not fabricate sources or findings. Drop a finding if it cannot be
   substantiated by a real source.
+- If search/iteration budget is exhausted, immediately summarize the consulted
+  sources into the required JSON object instead of continuing exploration.

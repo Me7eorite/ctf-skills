@@ -18,7 +18,14 @@ from domain.research_validators import (
     extract_terminal_json_object,
 )
 from hermes.process import HermesProcessResult
-from services.research_agent_executor import ResearchAgentExecutor, _parse_research_output
+from services.research_agent_executor import (
+    ResearchAgentExecutor,
+    _classify_research_failure,
+    _parse_research_output,
+    _parse_result_payload,
+    _render_finalize_prompt,
+    _should_finalize_research_failure,
+)
 from services.research_job_service import _finding_source_ids
 from services.research_output import materialize_research_raw_text, parse_research_output
 from services.research_worker import ResearchWorker, _sigterm_as_keyboard_interrupt
@@ -139,6 +146,79 @@ def test_parse_research_output_replaces_invalid_content_hash(caplog):
     assert "replaced invalid research source content_hash at index 0" in caplog.text
 
 
+def test_research_failure_classification_targets_output_delivery_failures():
+    empty = HermesProcessResult(returncode=0, stdout="", cancelled=False)
+    timeout = HermesProcessResult(returncode=124, stdout="search notes", cancelled=False)
+    bad_field = HermesProcessResult(returncode=0, stdout='{"sources": []}', cancelled=False)
+
+    assert _classify_research_failure(empty, "unparseable_output:no_terminal_json_object") == "empty_stdout"
+    assert _classify_research_failure(timeout, "unparseable_output:no_terminal_json_object").startswith(
+        "hermes_timeout:"
+    )
+    assert _should_finalize_research_failure(
+        empty,
+        "unparseable_output:no_terminal_json_object",
+    )
+    assert _should_finalize_research_failure(
+        timeout,
+        "unparseable_output:no_terminal_json_object",
+    )
+    assert not _should_finalize_research_failure(
+        bad_field,
+        "unparseable_output:sources_not_list",
+    )
+
+
+def test_parse_result_payload_repairs_duplicated_json_key_quote(tmp_path):
+    paths = ProjectPaths(root=tmp_path, repository=tmp_path)
+    run_id = uuid4()
+    stdout_text = (
+        '{"sources":[{"url":"https://example.com/a","title":"A","summary":"Summary",'
+        '"content_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],'
+        '""findings":[{"kind":"technique","label":"Technique","summary":"Finding summary",'
+        '"source_indices":[0]}]}'
+    )
+
+    parsed = _parse_result_payload(
+        stdout_text,
+        paths=paths,
+        run_id=run_id,
+        target_count=1,
+        category="re",
+    )
+
+    assert parsed.error is None
+    assert parsed.sources[0]["url"] == "https://example.com/a"
+    assert parsed.findings[0]["label"] == "Technique"
+
+
+def test_finalize_prompt_preserves_scope_but_forbids_new_searches():
+    request = GenerationRequest(
+        id=uuid4(),
+        category="re",
+        topic="algorithm reversing",
+        target_count=10,
+        difficulty_distribution={"easy": 10},
+        runtime_constraints={},
+        seed_urls=(),
+        max_attempts=4,
+        status="researching",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    prompt = _render_finalize_prompt(
+        request,
+        failure_reason="iteration_budget_exhausted:unparseable_output:no_terminal_json_object",
+        stdout_text="consulted source A about TEA and source B about XOR",
+    )
+
+    assert "Do not perform new web searches" in prompt
+    assert "algorithm reversing" in prompt
+    assert "exactly one valid JSON object" in prompt
+    assert "consulted source A" in prompt
+
+
 def test_legacy_parse_wrapper_still_materializes_raw_text(tmp_path):
     paths = ProjectPaths(root=tmp_path, repository=tmp_path)
     run_id = uuid4()
@@ -255,7 +335,10 @@ def test_finding_source_ids_rejects_negative_index():
         _finding_source_ids({"source_indices": [-1]}, [uuid4()])
 
 
-def test_terminal_json_extraction_and_quality_gate_contracts():
+def test_terminal_json_extraction_and_quality_gate_contracts(monkeypatch):
+    monkeypatch.delenv("RESEARCH_QUALITY_RATIO", raising=False)
+    monkeypatch.delenv("RESEARCH_QUALITY_SOFT_PASS_BELOW_BY", raising=False)
+    monkeypatch.delenv("RESEARCH_DIVERSITY_SOFT_PASS_BELOW_BY", raising=False)
     parsed = extract_terminal_json_object(
         'debug {not json}\n```json\n{"sources": [], "findings": [{"summary": "brace } in text"}]}\n```'
     )
