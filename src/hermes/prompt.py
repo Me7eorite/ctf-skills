@@ -14,6 +14,7 @@ from domain.research import GenerationRequest
 from domain.resume import ShardResumePlan
 
 RESEARCH_PROMPT_TEMPLATE_PATH = Path(__file__).resolve().parents[2] / "prompts" / "research_prompt.md"
+SHARED_GENERATION_STRATEGY_PATH = Path(__file__).resolve().parents[2] / "prompts" / "shared_generation_strategy.md"
 
 
 def render_validation_repair_prompt(
@@ -507,7 +508,8 @@ def _render_generation_policy(runtime_constraints) -> str:
     raw = dict(runtime_constraints).get("generation_policy")
     if not isinstance(raw, str) or not raw.strip():
         return "- (none supplied)"
-    return raw.strip()
+    shared = SHARED_GENERATION_STRATEGY_PATH.read_text(encoding="utf-8").strip()
+    return "\n\n".join([raw.strip(), shared]).strip()
 
 
 def _render_worked_example(category: str) -> str:

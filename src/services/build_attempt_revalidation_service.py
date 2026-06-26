@@ -214,6 +214,7 @@ class BuildAttemptRevalidationService:
                 attempt_id=row.id,
                 design_task_id=row.design_task_id,
             )
+            self._assert_no_organizer_file_leaks(payload)
             challenge_ids = _challenge_ids(payload)
             if not challenge_ids:
                 raise BuildAttemptRevalidationError(
@@ -224,6 +225,15 @@ class BuildAttemptRevalidationService:
                     "failed shard must contain exactly one challenge id"
                 )
             return BuildAttemptsRepository(session).get(row.id), challenge_ids
+
+    @staticmethod
+    def _assert_no_organizer_file_leaks(payload: Mapping[str, Any]) -> None:
+        text = json.dumps(payload, ensure_ascii=False)
+        for needle in ("metadata.json", "challenge.yml", "writenup/output", "exp.py"):
+            if needle in text:
+                raise BuildAttemptRevalidationError(
+                    f"failed shard payload leaks organizer file reference: {needle}"
+                )
 
     def _failed_payload(
         self,

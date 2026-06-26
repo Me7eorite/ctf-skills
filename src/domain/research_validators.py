@@ -339,12 +339,13 @@ def apply_research_quality_gate(
             slack,
         )
 
-    # Diversity floor: the planner can only diversify within the findings pool,
-    # so research must supply at least ``target_count`` distinct sub-techniques
-    # or duplicate 考点 become unavoidable downstream. Counts distinct canonical
-    # sub-techniques and applies the same soft-pass pattern as findings count.
+    # Diversity floor: require a distinct-technique floor proportional to the
+    # requested research size, not a 1:1 match with target_count. The raw pool
+    # often contains multiple descriptions of the same reverse technique, so a
+    # hard 50/50 uniqueness gate causes repeated, pointless retries on large
+    # research batches.
     distinct = len({resolve_sub_technique(finding) for finding in findings})
-    diversity_needed = max(1, target_count)
+    diversity_needed = max(1, math.ceil(target_count * _quality_ratio()))
     diversity_slack = _diversity_soft_pass_slack()
     diversity_floor = max(1, diversity_needed - diversity_slack)
     if distinct < diversity_floor:

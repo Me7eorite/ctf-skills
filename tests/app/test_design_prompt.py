@@ -35,6 +35,7 @@ For machine-readable output, use this JSON shape:
         "design-core.md",
         "category-tactics.md",
         "difficulty-rubric.md",
+        "shared_generation_strategy.md",
     ):
         paths.design_references.joinpath(name).write_text(
             f"# {name}\nreference body for {name}\n",
@@ -180,6 +181,7 @@ def test_prompt_includes_always_on_references_and_contract(tmp_path):
 
     assert "@skills/design-challenges/references/design-core.md" in prompt
     assert "@skills/design-challenges/references/category-tactics.md" in prompt
+    assert "@skills/design-challenges/references/shared_generation_strategy.md" in prompt
     # Phase 4: the Output Contract is now a JSON Schema + 3 invariants.
     assert "## Output Contract" in prompt
     assert "Invariants" in prompt

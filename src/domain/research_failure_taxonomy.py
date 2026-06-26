@@ -77,6 +77,10 @@ _CATEGORY_COPY: dict[FailureCategory, tuple[str, str, tuple[str, ...]]] = {
 
 
 _INSUFFICIENT_RE = re.compile(r"insufficient_findings:got=(\d+),need=(\d+)", re.IGNORECASE)
+_INSUFFICIENT_DIVERSITY_RE = re.compile(
+    r"insufficient_diversity:distinct=(\d+),need=(\d+)",
+    re.IGNORECASE,
+)
 _HERMES_EXIT_RE = re.compile(r"hermes exited with\s+(-?\d+)", re.IGNORECASE)
 
 
@@ -99,6 +103,10 @@ def classify_last_error(text: str | None) -> FailureClassification:
         got, need = match.groups()
         category = "quality_gate"
         description_override = f"Hermes 输出只有 {got} 条有效研究结论，低于最低要求 {need} 条。"
+    elif match := _INSUFFICIENT_DIVERSITY_RE.search(normalized):
+        got, need = match.groups()
+        category = "quality_gate"
+        description_override = f"Hermes 输出只有 {got} 个不同子技巧，低于最低要求 {need} 个。"
     elif _is_quality_gate(lower):
         category = "quality_gate"
     elif _is_field_validation(lower):

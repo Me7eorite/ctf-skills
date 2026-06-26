@@ -704,15 +704,19 @@ class BuildOrchestrationService:
             .where(
                 ProgressEvent.shard == source.shard_basename,
                 ProgressEvent.status == "failed",
-                ProgressEvent.stage.in_(("validate", "complete")),
             )
             .order_by(ProgressEvent.id.desc())
         ).all()
         for event in events:
             message = (event.message or "").strip()
-            if message and "lease expired" not in message.lower():
-                prefix = f"{event.challenge_id}: " if event.challenge_id else ""
-                return f"{prefix}{message}"[:2000]
+            if not message or "lease expired" in message.lower():
+                continue
+            prefix = f"{event.stage}"
+            if event.challenge_id:
+                prefix = f"{event.challenge_id}:{prefix}"
+            return f"{prefix}: {message}"[:2000]
+        if source.error:
+            return source.error[:2000]
         return None
 
 

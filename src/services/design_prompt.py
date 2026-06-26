@@ -12,6 +12,8 @@ from domain.design.difficulty import RUBRIC as DIFFICULTY_RUBRIC
 from domain.design_tasks import DesignTask
 from domain.research import GenerationRequest, ResearchFinding, ResearchSource
 
+SHARED_GENERATION_STRATEGY = "shared_generation_strategy.md"
+
 # Phase 1 (9-references → 3): the design skill is now a single core file
 # plus a unified category-tactics catalog. cve-pivot.md is read on-demand by
 # the agent, not injected into every design prompt. delivery-format moved to
@@ -22,6 +24,7 @@ ALWAYS_REFERENCE_FILES: tuple[str, ...] = (
     "design-core.md",
     "category-tactics.md",
     "difficulty-rubric.md",
+    SHARED_GENERATION_STRATEGY,
 )
 EVIDENCE_FINDING_LIMIT = 20
 MAX_REFERENCE_CHARS = 5000

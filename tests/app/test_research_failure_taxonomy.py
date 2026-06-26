@@ -15,6 +15,7 @@ from domain.research_failure_taxonomy import classify_last_error
         ("unparseable_output:no_terminal_json_object", "parse_failure"),
         ("unparseable_output:sources_not_list", "parse_failure"),
         ("insufficient_findings:got=3,need=5", "quality_gate"),
+        ("insufficient_diversity:distinct=24,need=50", "quality_gate"),
         ("url_shape_invalid:not-a-url", "field_validation"),
         ("content_hash_shape_invalid:zzz", "field_validation"),
         ("research output field 'sources' must be a list", "field_validation"),
@@ -50,6 +51,14 @@ def test_dynamic_quality_gate_counts_are_in_description() -> None:
     assert result.category == "quality_gate"
     assert "3" in result.description
     assert "5" in result.description
+
+
+def test_dynamic_diversity_gate_counts_are_in_description() -> None:
+    result = classify_last_error("insufficient_diversity:distinct=24,need=50")
+
+    assert result.category == "quality_gate"
+    assert "24" in result.description
+    assert "50" in result.description
 
 
 def test_case_insensitive_matching() -> None:

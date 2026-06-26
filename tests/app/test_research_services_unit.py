@@ -456,6 +456,15 @@ def _diverse_payload(labels):
     }
 
 
+def _diverse_payload_with_count(count, labels):
+    payload = _diverse_payload(labels)
+    payload["findings"] = payload["findings"] + [
+        {"label": f"extra-{idx}", "kind": "technique", "summary": "s"}
+        for idx in range(max(0, count - len(payload["findings"])))
+    ]
+    return payload
+
+
 def test_quality_gate_rejects_insufficient_diversity(monkeypatch):
     # Enough findings by count, but all the same sub-technique → reject so the
     # planner is not forced into duplicate 考点 downstream.
@@ -465,7 +474,7 @@ def test_quality_gate_rejects_insufficient_diversity(monkeypatch):
     payload = _diverse_payload(["SQL injection", "SQL injection", "SQL injection"])
     ok, error = apply_research_quality_gate(payload, 3)
     assert ok is False
-    assert error == "insufficient_diversity:distinct=1,need=3"
+    assert error == "insufficient_diversity:distinct=1,need=2"
 
 
 def test_quality_gate_accepts_distinct_sub_techniques(monkeypatch):
@@ -476,15 +485,25 @@ def test_quality_gate_accepts_distinct_sub_techniques(monkeypatch):
     assert apply_research_quality_gate(payload, 3) == (True, None)
 
 
+def test_quality_gate_diversity_uses_ratio_floor(monkeypatch):
+    from domain.research_validators import apply_research_quality_gate
+
+    monkeypatch.delenv("RESEARCH_DIVERSITY_SOFT_PASS_BELOW_BY", raising=False)
+    monkeypatch.delenv("RESEARCH_QUALITY_SOFT_PASS_BELOW_BY", raising=False)
+    monkeypatch.delenv("RESEARCH_QUALITY_RATIO", raising=False)
+    payload = _diverse_payload_with_count(10, ["SQL injection", "XSS", "SSRF"])
+    assert apply_research_quality_gate(payload, 10) == (True, None)
+
+
 def test_quality_gate_diversity_soft_pass(monkeypatch, caplog):
     # Slack tolerates one duplicate sub-technique with a warning instead of
     # failing the whole run.
     from domain.research_validators import apply_research_quality_gate
 
     monkeypatch.setenv("RESEARCH_DIVERSITY_SOFT_PASS_BELOW_BY", "1")
-    payload = _diverse_payload(["SQL injection", "XSS", "XSS"])  # distinct=2, need=3
+    payload = _diverse_payload_with_count(10, ["SQL injection", "XSS", "SSRF", "XXE"])  # distinct=4, need=5, soft floor=4
     with caplog.at_level("WARNING", logger="domain.research_validators"):
-        ok, error = apply_research_quality_gate(payload, 3)
+        ok, error = apply_research_quality_gate(payload, 10)
     assert (ok, error) == (True, None)
     assert any(
         "research diversity gate soft-passed" in rec.message

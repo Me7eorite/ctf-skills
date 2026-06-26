@@ -162,6 +162,8 @@ class RenderResearchPromptTests(unittest.TestCase):
         self.assertIn("XOR 类题最多 9 题", prompt)
         self.assertIn("solve.py 必须复现算法", prompt)
         self.assertIn("困难题必须包含两阶段以上变换", prompt)
+        self.assertIn("Shared Generation Strategy", prompt)
+        self.assertIn("Preserve distinct sub-techniques", prompt)
 
 
 if __name__ == "__main__":  # pragma: no cover
