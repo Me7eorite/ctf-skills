@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from dataclasses import replace
 from datetime import datetime, timezone
 from http import HTTPStatus
 from pathlib import Path
@@ -176,6 +177,16 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
                 category=category,
                 limit=capped,
             )
+            rows = [
+                _normalize_artifact_status(
+                    session,
+                    _project_paths(app),
+                    row,
+                    category=row.category,
+                    challenge_id=row.challenge_id,
+                )
+                for row in rows
+            ]
             summaries = _failure_summaries(
                 session,
                 [row.shard_basename for row in rows],
@@ -206,6 +217,17 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
             category = session.scalar(
                 sa.select(task_model.DesignTask.category).where(task_model.DesignTask.id == attempt.design_task_id)
             )
+            challenge_id = session.scalar(
+                sa.select(task_model.DesignTask.challenge_id).where(task_model.DesignTask.id == attempt.design_task_id)
+            )
+            if isinstance(category, str) and isinstance(challenge_id, str):
+                attempt = _normalize_artifact_status(
+                    session,
+                    _project_paths(app),
+                    attempt,
+                    category=category,
+                    challenge_id=challenge_id,
+                )
             events = session.scalars(
                 sa.select(ProgressEvent)
                 .where(ProgressEvent.shard == attempt.shard_basename)
@@ -708,6 +730,73 @@ def _submit_batch(app: FastAPI, task_ids: list[UUID]) -> list[UUID]:
             status_code=HTTPStatus.CONFLICT,
             detail="a build is already active for this design task",
         ) from exc
+
+
+def _normalize_artifact_status(
+    session: Any,
+    paths: Any,
+    attempt: BuildAttempt,
+    *,
+    category: str,
+    challenge_id: str,
+) -> BuildAttempt:
+    """Backfill legacy successful attempts whose artifact state was never persisted."""
+    if attempt.status != "succeeded" or attempt.artifact_status != "unknown":
+        return attempt
+    directory = _locate_resulting_challenge_dir(
+        paths,
+        attempt,
+        category=category,
+        challenge_id=challenge_id,
+    )
+    status = "present" if directory is not None else "missing"
+    relative = directory.relative_to(paths.root).as_posix() if directory is not None else None
+    row = session.get(build_model.BuildAttempt, attempt.id)
+    if row is not None and row.status == "succeeded" and row.artifact_status == "unknown":
+        row.artifact_status = status
+        row.resulting_challenge_dir = relative
+        session.flush()
+    return replace(
+        attempt,
+        artifact_status=status,
+        resulting_challenge_dir=relative,
+    )
+
+
+def _locate_resulting_challenge_dir(
+    paths: Any,
+    attempt: BuildAttempt,
+    *,
+    category: str,
+    challenge_id: str,
+) -> Path | None:
+    if attempt.resulting_challenge_dir:
+        existing = paths.root / attempt.resulting_challenge_dir
+        if existing.is_dir():
+            return existing
+
+    for root in (
+        paths.challenges / category,
+        paths.executions / str(attempt.id) / "current" / "output" / "challenges" / category,
+    ):
+        candidate = _find_claimed_challenge_dir(root, challenge_id)
+        if candidate is not None:
+            return candidate
+    return None
+
+
+def _find_claimed_challenge_dir(root: Path, challenge_id: str) -> Path | None:
+    if not root.is_dir():
+        return None
+    exact = root / challenge_id
+    if exact.is_dir():
+        return exact
+    matches = sorted(
+        entry
+        for entry in root.glob(f"{challenge_id}-*")
+        if entry.is_dir() and not entry.is_symlink()
+    )
+    return matches[0] if len(matches) == 1 else None
 
 
 async def _json_object(request: Request) -> dict[str, Any]:

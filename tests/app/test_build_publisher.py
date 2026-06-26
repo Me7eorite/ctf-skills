@@ -113,6 +113,32 @@ def test_prepare_workspace_validation_does_not_touch_canonical() -> None:
         assert not (paths.challenges / "web" / candidate.name).exists()
 
 
+def test_publish_accepts_re_attachments_directory_inside_claimed_output() -> None:
+    with tempfile.TemporaryDirectory() as temp:
+        paths = _paths(Path(temp))
+        payload = {"challenges": [{"id": "re-780f4af4-0006", "category": "re"}]}
+        workspace = _workspace(paths, payload)
+        candidate = (
+            workspace.output
+            / "challenges"
+            / "re"
+            / "re-780f4af4-0006-aes-crackme"
+        )
+        attachments = candidate / "attachments"
+        attachments.mkdir(parents=True)
+        write_json(
+            candidate / "metadata.json",
+            {"id": "re-780f4af4-0006", "category": "re"},
+        )
+        (attachments / "crackme").write_bytes(b"\x7fELF")
+
+        contract = prepare_publication_contract(paths, workspace, payload)
+        result = publish_workspace_output(paths, workspace, contract=contract)
+
+        assert result.outcome == "succeeded"
+        assert (paths.challenges / "re" / candidate.name / "attachments" / "crackme").is_file()
+
+
 def test_publish_noop_when_output_hash_matches_high_water() -> None:
     with tempfile.TemporaryDirectory() as temp:
         paths = _paths(Path(temp))

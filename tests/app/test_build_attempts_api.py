@@ -360,6 +360,38 @@ def test_list_is_folded_before_status_filter_and_caps_limit(
     assert len(capped.json()) == 1
 
 
+def test_list_backfills_unknown_artifact_status_from_existing_output(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory)
+    with transaction(factory=session_factory) as session:
+        task = session.get(task_model.DesignTask, task_id)
+        repo = BuildAttemptsRepository(session)
+        attempt = repo.create_attempt(task_id, f"{uuid4()}.json")
+        repo.update_to_terminal(attempt.id, status="succeeded")
+        challenge_id = task.challenge_id
+
+    challenge_dir = (
+        client.app.state.project_paths.challenges
+        / "web"
+        / f"{challenge_id}-demo"
+    )
+    challenge_dir.mkdir(parents=True)
+    write_json(challenge_dir / "metadata.json", {"id": challenge_id, "category": "web"})
+
+    response = client.get("/api/build-attempts")
+
+    assert response.status_code == 200
+    [row] = response.json()
+    assert row["artifact_status"] == "present"
+    assert row["resulting_challenge_dir"].endswith(f"{challenge_id}-demo")
+    with transaction(factory=session_factory) as session:
+        stored = session.get(build_model.BuildAttempt, UUID(row["id"]))
+        assert stored.artifact_status == "present"
+        assert stored.resulting_challenge_dir.endswith(f"{challenge_id}-demo")
+
+
 def test_detail_exposes_siblings_and_progress_events(
     client: TestClient,
     session_factory: SessionFactory,

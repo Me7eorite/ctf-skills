@@ -185,6 +185,19 @@ def _repair_steps_for_status(
                 "Compile the declared target format/architecture and place the binary under `attachments/`.",
                 "Update `metadata.artifact`, `metadata.artifact_sha256`, compiler, and build command.",
             ]
+        if "metadata.artifact missing" in lower_error:
+            return [
+                "Root cause: the Re build metadata does not name the player-facing artifact.",
+                "Set `metadata.artifact` to the primary delivered binary under `attachments/`, "
+                "for example `attachments/crackme`.",
+                "Recompute and set `metadata.artifact_sha256` from that exact file, then rerun `validate.sh`.",
+            ]
+        if "metadata.artifact_sha256 missing" in lower_error:
+            return [
+                "Root cause: the Re build metadata does not record the delivered artifact hash.",
+                "Compute SHA-256 from the file named by `metadata.artifact` under `attachments/`.",
+                "Write the digest to `metadata.artifact_sha256`, then rerun `validate.sh`.",
+            ]
         if "architecture is not" in lower_error or "wrong architecture" in lower_error:
             return [
                 "Root cause: the delivered artifact format or architecture does not match metadata.",
@@ -223,7 +236,12 @@ def _repair_steps_for_status(
     if status == "nonzero_exit":
         hint = "Use stderr/stdout traceback to fix the failing command."
         if "modulenotfounderror" in lower_output or "no module named" in lower_output:
-            hint = "Remove the missing dependency, vendor it locally, or add it to the Docker/image build instead of installing during validation."
+            hint = (
+                "Remove the missing dependency, rewrite the solver with the Python "
+                "standard library/system tools already present on the host, or vendor "
+                "the helper module under `writenup/`; do not install packages during "
+                "validation."
+            )
         elif "connection refused" in lower_output or "timed out" in lower_output:
             hint = "Fix service startup/readiness, host/port wiring, and cleanup traps before rerunning the exploit."
         elif "permission denied" in lower_output:
@@ -284,6 +302,12 @@ Re:
 - `validate.sh` / `writenup/exp.py` MUST reference the distributed artifact under
   `attachments/` and derive the flag from that binary — never from
   `metadata.json` or `challenge.yml`.
+- `metadata.artifact` MUST point at the primary player-facing artifact under
+  `attachments/`, and `metadata.artifact_sha256` MUST match that exact file.
+- `writenup/exp.py` MUST be offline-capable on the host: use the standard
+  library, existing system tools such as `openssl`, or helper modules vendored
+  under `writenup/`; do not depend on undeclared packages like `Crypto`
+  / pycryptodome or missing local modules such as `aes_256`.
 - The delivered artifact MUST NOT expose the plaintext flag through ordinary `strings`
   unless `primary_technique` declares strings as the intended solve; otherwise embed or
   encode the flag so recovery requires the intended technique.
@@ -477,6 +501,15 @@ def _render_search_keywords(runtime_constraints) -> str:
     return "\n".join(f"- {keyword}" for keyword in keywords)
 
 
+def _render_generation_policy(runtime_constraints) -> str:
+    if not runtime_constraints:
+        return "- (none supplied)"
+    raw = dict(runtime_constraints).get("generation_policy")
+    if not isinstance(raw, str) or not raw.strip():
+        return "- (none supplied)"
+    return raw.strip()
+
+
 def _render_worked_example(category: str) -> str:
     # 中文注释：生成一个随 category 变化的示例，证明提示词不硬编码初始分类集合。
     example_payload = {
@@ -517,6 +550,7 @@ def render_research_prompt(generation_request: GenerationRequest) -> str:
         "{difficulty_distribution}": _render_difficulty_distribution(generation_request.difficulty_distribution),
         "{runtime_constraints}": _render_runtime_constraints(generation_request.runtime_constraints),
         "{search_keywords}": _render_search_keywords(generation_request.runtime_constraints),
+        "{generation_policy}": _render_generation_policy(generation_request.runtime_constraints),
         "{seed_urls}": _render_seed_urls(generation_request.seed_urls),
         "{technique_family_vocabulary}": render_family_vocabulary(category_code),
         "{worked_example}": _render_worked_example(category_code),

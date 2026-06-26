@@ -26,6 +26,10 @@ the authoritative scope marker for this run.
 - **Seed URLs** (start here):
 {seed_urls}
 
+## Generation policy
+
+{generation_policy}
+
 If the seed list is empty, or if the search keywords name additional key
 points, construct web searches from the category, topic, and keywords. Prefer
 authoritative primary sources: official docs, standards, advisories, CVE/NVD

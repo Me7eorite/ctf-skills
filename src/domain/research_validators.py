@@ -119,6 +119,7 @@ RUNTIME_CONSTRAINT_KEYS = {
     "target_platform",
     "strip",
     "search_keywords",
+    "generation_policy",
 }
 TARGET_FORMATS = {"elf", "exe", "wasm", "jar", "container"}
 TARGET_PLATFORMS = {"linux/amd64", "linux/arm64", "linux/arm", "windows/amd64"}
@@ -241,6 +242,17 @@ def _validate_runtime_constraint_value(key: str, value: Any) -> Any:
                 "runtime_constraints['search_keywords'] must contain at least one keyword"
             )
         return keywords
+    if key == "generation_policy":
+        if not isinstance(value, str):
+            raise ResearchValidationError(
+                "runtime_constraints['generation_policy'] must be a string"
+            )
+        policy = value.strip()
+        if not policy:
+            raise ResearchValidationError(
+                "runtime_constraints['generation_policy'] must not be empty"
+            )
+        return policy
     raise ResearchValidationError(f"unknown runtime_constraints key {key!r}")
 
 

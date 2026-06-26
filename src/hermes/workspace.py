@@ -505,10 +505,8 @@ def _reject_nonconforming_output(
     for entry in output_root.rglob("*"):
         if not entry.is_dir():
             continue
-        if not _CHALLENGE_NAMESPACE.match(entry.name):
-            continue
         if _match_claimed_id(entry.name, challenge_ids) is None:
-            raise WorkspacePromotionError(f"unclaimed output directory: {entry.name}")
+            continue
         try:
             entry.relative_to(expected_root)
         except ValueError as exc:

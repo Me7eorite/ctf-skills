@@ -269,6 +269,12 @@ flag, and write the authoritative `validate/passed` or `validate/failed` event.
 
 - Write `writenup/exp.py` as a real reference exploit/solver.
 - Write `validate.sh` as the single reproducible validation entrypoint.
+- `writenup/exp.py` must be offline-capable in the host validation
+  environment. Use the Python standard library, system tools already used by
+  the challenge such as `openssl`, or helper modules that you vendor under
+  `writenup/`. Do not import undeclared packages such as `Crypto`/pycryptodome
+  or a local module like `aes_256` unless the module file is generated and
+  tested as part of the challenge.
 - Web/Pwn exploits must connect to the running service using `CHAL_HOST` and
   `CHAL_PORT`; no offline flag fallback is allowed.
 - Re solvers must derive the flag from the distributed artifact under
@@ -321,6 +327,10 @@ violates any of them fails validation regardless of what `validate.sh` prints:
 - A `re` `validate.sh`/`writenup/exp.py` MUST reference the distributed artifact
   under `attachments/` and MUST NOT reference `metadata.json` or `challenge.yml`
   — derive the flag from the binary, never from organizer files.
+- A `re` metadata file MUST name the primary player-facing artifact with
+  `"artifact": "attachments/<binary>"` and the matching
+  `"artifact_sha256": "<sha256>"`. If the artifact is rebuilt, recompute the
+  SHA-256 before marking `build_status` or `solve_status` as `passed`.
 - `validate.sh` MUST NOT contain `docker volume rm`, `docker volume prune`,
   Docker prune commands, or `docker compose down -v`/`--volumes`. Destructive
   Docker cleanup is rejected before execution.

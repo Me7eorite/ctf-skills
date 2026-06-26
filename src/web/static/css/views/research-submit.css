@@ -207,6 +207,13 @@
               opacity var(--transition-normal) ease;
 }
 
+.rs-policy-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  margin: calc(var(--space-sm) * -1) 0 var(--space-md);
+}
+
 /* === Sticky Action Bar === */
 .rs-action-bar {
   position: sticky;

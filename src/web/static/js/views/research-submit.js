@@ -12,6 +12,7 @@ const state = {
     target_count: 5,
     seed_urls: "",
     search_keywords: "",
+    generation_policy: "",
     max_attempts: 3,
     distribution: { easy: 0, medium: 0, hard: 0, expert: 0 },
     submitting: false,
@@ -23,6 +24,14 @@ const state = {
 
 const DIFFICULTY_LABELS = ["easy", "medium", "hard", "expert"];
 const DIFFICULTY_COLORS = { easy: "var(--accent-green)", medium: "var(--brand-500)", hard: "var(--accent-amber)", expert: "var(--accent-red)" };
+const DEFAULT_RE_POLICY = [
+  "XOR 类题最多 9 题。",
+  "每道题必须有明确算法差异，避免 encrypted_flag + static_key + XOR 批量重复。",
+  "solve.py 必须复现算法或从二进制中提取参数，不得直接硬编码最终 flag。",
+  "简单题可以单阶段算法。",
+  "中等题至少包含 key 派生、分块、查表、状态变量或编码组合之一。",
+  "困难题必须包含两阶段以上变换，或需要 Z3、局部爆破、算法识别之一。",
+].join("\n");
 
 async function ensureCategories() {
   if (state.categories !== null) return;
@@ -51,6 +60,7 @@ export function render(data) {
   const distMatch = distSum === target && distSum > 0;
   const proc = data?.process || {};
   const keywordCount = parseLines(f.search_keywords).length;
+  const hasPolicy = f.generation_policy.trim().length > 0;
 
   root.innerHTML = `
     <div class="layout-content-inner">
@@ -170,6 +180,19 @@ export function render(data) {
               <span class="label-hint">Hermes 会用“话题 + 关键字”组合检索网页资料，并把采用的来源写入 sources[]</span>
             </label>
             <label>
+              <span class="label">生成策略（可选）</span>
+              <textarea id="form-generation-policy" rows="7"
+                placeholder="${escapeHtml(DEFAULT_RE_POLICY)}"
+                class="textarea input-mono">${escapeHtml(f.generation_policy)}</textarea>
+              <span class="label-hint">用于约束整个批次的技术分布、难度机制和 solve.py 规则；会进入 research 与后续设计约束</span>
+            </label>
+            <div class="rs-policy-actions">
+              <button id="form-use-re-policy" type="button" class="btn btn-secondary btn-sm">
+                <i data-lucide="list-checks" style="width: 14px; height: 14px;"></i>
+                <span>填入 Re 策略模板</span>
+              </button>
+            </div>
+            <label>
               <span class="label">种子 URL（可选，每行一个）</span>
               <textarea id="form-seed-urls" rows="3"
                 placeholder="https://owasp.org/Top10/&#10;https://portswigger.net/web-security"
@@ -237,6 +260,10 @@ export function render(data) {
               <span class="rs-summary-value">${keywordCount} 条</span>
             </div>
             <div class="rs-summary-item">
+              <span class="rs-summary-label">生成策略</span>
+              <span class="rs-summary-value">${hasPolicy ? '已设置' : '未设置'}</span>
+            </div>
+            <div class="rs-summary-item">
               <span class="rs-summary-label">最大重试</span>
               <span class="rs-summary-value">${f.max_attempts}</span>
             </div>
@@ -298,6 +325,9 @@ async function handleSubmit() {
   if (searchKeywords.length > 0) {
     runtimeConstraints.search_keywords = searchKeywords;
   }
+  if (f.generation_policy.trim()) {
+    runtimeConstraints.generation_policy = f.generation_policy.trim();
+  }
 
   f.submitting = true;
   f.lastResult = null;
@@ -333,6 +363,7 @@ function resetForm() {
     target_count: 5,
     seed_urls: "",
     search_keywords: "",
+    generation_policy: "",
     max_attempts: 3,
     distribution: { easy: 0, medium: 0, hard: 0, expert: 0 },
     submitting: false,
@@ -356,7 +387,14 @@ export function bind() {
     if (e.target.closest("#form-reset")) {
       resetForm();
     }
-    if (e.target.closest("#advanced-toggle")) {
+    if (e.target.closest("#form-use-re-policy")) {
+      state.form.generation_policy = DEFAULT_RE_POLICY;
+      state.showAdvanced = true;
+      render(state.data);
+      initIcons();
+      return;
+    }
+    if (e.target.closest("#advanced-toggle .rs-collapse-toggle")) {
       state.showAdvanced = !state.showAdvanced;
       render(state.data);
       initIcons();
@@ -379,6 +417,7 @@ export function bind() {
     else if (e.target.id === "form-max-attempts") state.form.max_attempts = e.target.value;
     else if (e.target.id === "form-seed-urls") state.form.seed_urls = e.target.value;
     else if (e.target.id === "form-search-keywords") state.form.search_keywords = e.target.value;
+    else if (e.target.id === "form-generation-policy") state.form.generation_policy = e.target.value;
   });
 }
 

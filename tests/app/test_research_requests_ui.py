@@ -48,6 +48,20 @@ def test_research_submit_supports_search_keywords() -> None:
     assert "考点关键字" in source
 
 
+def test_research_submit_supports_generation_policy() -> None:
+    source = (STATIC / "js" / "views" / "research-submit.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "form-generation-policy" in source
+    assert "DEFAULT_RE_POLICY" in source
+    assert "runtimeConstraints.generation_policy = f.generation_policy.trim()" in source
+    assert "填入 Re 策略模板" in source
+    assert "XOR 类题最多 9 题" in source
+    assert "solve.py 必须复现算法" in source
+    assert "生成策略" in source
+
+
 def test_request_detail_header_is_a_state_aware_summary_card() -> None:
     source = (STATIC / "js" / "views" / "research-requests.js").read_text(
         encoding="utf-8"

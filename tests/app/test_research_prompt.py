@@ -144,6 +144,25 @@ class RenderResearchPromptTests(unittest.TestCase):
         self.assertIn("Build search queries", prompt)
         self.assertIn("JWT authentication bypass", prompt)
 
+    def test_generation_policy_renders_as_dedicated_section(self):
+        request = _make_request(
+            "re",
+            topic="batch reversing constraints",
+            runtime_constraints={
+                "generation_policy": (
+                    "XOR 类题最多 9 题。\n"
+                    "solve.py 必须复现算法或从二进制中提取参数。\n"
+                    "困难题必须包含两阶段以上变换。"
+                )
+            },
+        )
+        prompt = render_research_prompt(request)
+
+        self.assertIn("## Generation policy", prompt)
+        self.assertIn("XOR 类题最多 9 题", prompt)
+        self.assertIn("solve.py 必须复现算法", prompt)
+        self.assertIn("困难题必须包含两阶段以上变换", prompt)
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

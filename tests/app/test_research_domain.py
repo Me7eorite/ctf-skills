@@ -99,6 +99,25 @@ def test_runtime_constraints_reject_empty_search_keywords():
         validate_runtime_constraints({"search_keywords": " , "})
 
 
+def test_runtime_constraints_accept_generation_policy():
+    constraints = validate_runtime_constraints(
+        {
+            "generation_policy": (
+                "XOR 类题最多 9 题。\n"
+                "solve.py 必须复现算法或从二进制中提取参数。"
+            )
+        }
+    )
+
+    assert "XOR 类题最多 9 题" in constraints["generation_policy"]
+    assert "solve.py 必须复现算法" in constraints["generation_policy"]
+
+
+def test_runtime_constraints_reject_empty_generation_policy():
+    with pytest.raises(ResearchValidationError, match="generation_policy"):
+        validate_runtime_constraints({"generation_policy": "   "})
+
+
 # ---------------------------------------------------------------------------
 # validate_distribution
 # ---------------------------------------------------------------------------

@@ -29,6 +29,7 @@ from hermes.runner import HermesRunner
 from hermes.workspace import (
     WorkspacePreflightError,
     WorkspacePromotionError,
+    _reject_nonconforming_output,
     derive_workspace_id,
     import_workspace_report,
     materialize_resume_outputs,
@@ -764,6 +765,28 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         with self.assertRaisesRegex(WorkspacePromotionError, "non-conforming"):
             contract = prepare_publication_contract(self.paths, workspace, payload)
             publish_workspace_output(self.paths, workspace, contract=contract)
+
+    def test_legacy_output_allowlist_accepts_attachments_inside_claimed_output(self) -> None:
+        output_root = self.paths.root / "output"
+        expected_root = output_root / "challenges" / "re"
+        candidate = expected_root / "re-780f4af4-0006-aes-crackme"
+        (candidate / "attachments").mkdir(parents=True)
+        (candidate / "attachments" / "crackme").write_bytes(b"\x7fELF")
+
+        _reject_nonconforming_output(
+            output_root,
+            expected_root,
+            {"re-780f4af4-0006"},
+        )
+
+        wrong = output_root / "re-780f4af4-0006-wrong-place"
+        wrong.mkdir()
+        with self.assertRaisesRegex(WorkspacePromotionError, "non-conforming"):
+            _reject_nonconforming_output(
+                output_root,
+                expected_root,
+                {"re-780f4af4-0006"},
+            )
 
     def test_resume_materialization_copies_claimed_only(self) -> None:
         payload = {"challenges": [{"id": "web-0001", "category": "web"}]}
