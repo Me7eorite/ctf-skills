@@ -86,6 +86,18 @@ repairs, the solver and `validate.sh` must derive the flag from the artifact in
 `attachments/`; do not introduce `dist/`, `metadata.json`, `challenge.yml`, or
 Docker/Compose files as solver inputs.
 
+All required files must live directly under that canonical challenge root. Do
+not run or create a separate scaffolder that writes `output/challenges/...`
+inside the challenge directory, `src/`, `attachments/`, or `deploy/`. A nested
+`output/challenges/<category>/<id>-.../metadata.json` is invalid; move those
+files to the canonical root before reporting any stage as passed.
+The current working directory is an isolated execution workspace. Do not `cd`
+to the repository/project root (for example `/root/ctf-skills`) to write
+challenge output, reports, or scratch JSON. Project-root side effects such as
+`output/`, `challenges/`, `.design_output/`, `challenge*.json`, `design*.json`,
+or `<category>-*.json` are rejected; write only under `./output/challenges`,
+`./logs/report.json`, or the declared challenge root.
+
 {repair_section}
 
 # 0. Resume Check
@@ -204,6 +216,10 @@ Reverse rules:
 - Compile the player-facing artifact into `attachments/`. New challenges MUST
   use `attachments/` because that is the unified delivery directory the packer
   ships to players.
+- `metadata.json`, `README.md`, `validate.sh`, `writenup/`, `src/`, and
+  `attachments/` must be siblings at the challenge root. Never place a complete
+  generated challenge tree under `attachments/output/`, `src/output/`,
+  `deploy/output/`, or any other nested `output/challenges/` path.
 - A source file or README placeholder in `attachments/` is a failure.
 - The distributed binary must not expose the plaintext flag through ordinary
   `strings` unless that is explicitly the intended easy technique.
@@ -245,6 +261,10 @@ Pwn rules:
   inspect the produced artifact with `file`.
 - Record build commands, compiler/runtime versions, and artifact SHA-256 in
   `metadata.json`.
+- `metadata.build_command` must be the actual command that produced the
+  published artifact or image. For Re/Pwn file artifacts,
+  `metadata.artifact_sha256` must be recomputed from the exact file named by
+  `metadata.artifact` after every rebuild or strip/copy step.
 - Re builds must verify the artifact architecture against the matrix
   `target_platform`. `file attachments/<artifact>` must report a matching
   artifact: `linux/amd64` → Linux ELF x86-64, `linux/arm64` → Linux ELF

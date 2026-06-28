@@ -426,6 +426,10 @@ def _render_output_contract(task: DesignTask) -> str:
         "and `writenup/exp.py`. Extensionless native executables and "
         "conventional build files are valid; for example "
         "`attachments/crackme` and `deploy/Makefile`."
+        " Do not include generated scaffold paths such as "
+        "`output/challenges/...`, `src/output/...`, or "
+        "`attachments/output/...`; all required evidence files live directly "
+        "under the canonical challenge root."
         + container_artifacts_hint
         + "\n3. `validation` MAY reference local compose URLs "
         "(`http://127.0.0.1:<port>`, `http://localhost:<port>`) but MUST "

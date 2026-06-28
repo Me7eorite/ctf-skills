@@ -19,9 +19,8 @@ from domain.resume import (
     ChallengeResumePlan,
     build_evidence,
     design_evidence,
-    document_evidence,
+    document_evidence_reason,
     find_challenge_directory,
-    implement_evidence,
     implement_evidence_reason,
     validator_message,
 )
@@ -264,8 +263,9 @@ def validate_gate(
     build_ok, build_reason = build_evidence(plan.directory, category, image_exists)
     if not build_ok:
         return f"build evidence incomplete: {build_reason}"
-    if not document_evidence(plan.directory):
-        return "document evidence incomplete"
+    document_reason = document_evidence_reason(plan.directory)
+    if document_reason is not None:
+        return f"document evidence incomplete: {document_reason}"
 
     # 检查校验所需的前置文件
     if not (plan.directory / "validate.sh").is_file():

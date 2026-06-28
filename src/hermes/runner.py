@@ -17,7 +17,7 @@ import os
 import re
 import shutil
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -779,6 +779,7 @@ class HermesRunner:
             repair_requested=repair_requested,
             repair_context=repair_context,
         )
+        root_output_snapshot = _project_root_output_snapshot(self.paths.root)
         tailer = WorkspaceProgressTailer(workspace, self._progress.record)
         tailer.start()
         invoke_started = time.monotonic()
@@ -813,6 +814,34 @@ class HermesRunner:
         invoke_elapsed = max(0.0, time.monotonic() - invoke_started)
 
         import_workspace_report(workspace, report)
+        root_output_leaks = _project_root_output_leaks(self.paths.root, root_output_snapshot)
+        if root_output_leaks:
+            leak_list = ", ".join(root_output_leaks[:5])
+            if len(root_output_leaks) > 5:
+                leak_list += f", ... (+{len(root_output_leaks) - 5} more)"
+            message = (
+                "Hermes wrote output outside the execution workspace under "
+                f"project root: {leak_list}"
+            )
+            self._mark_shard_failed(
+                shard,
+                original_shard_name,
+                worker,
+                challenge_ids,
+                report,
+                message,
+                1,
+                hermes_phase="workspace_output_leak",
+                elapsed_seconds=invoke_elapsed,
+                workspace=workspace,
+            )
+            return fail_outcome(
+                hermes_phase="workspace_output_leak",
+                returncode=1,
+                error=message,
+                elapsed_seconds=invoke_elapsed,
+                workspace=workspace,
+            )
 
         # Hermes 返回非零：普通进程错误立即失败；超时产物交给同一套
         # workspace-bound host validation 判断是否已经完整，禁止为验证而提前发布。
@@ -896,6 +925,7 @@ class HermesRunner:
             )
             repair_log = workspace.logs / f"hermes-validation-repair-{repair_attempt}.log"
             pre_signature = _output_signature(workspace.output)
+            repair_root_output_snapshot = _project_root_output_snapshot(self.paths.root)
             repair_tailer = WorkspaceProgressTailer(workspace, self._progress.record)
             repair_tailer.start()
             try:
@@ -916,6 +946,27 @@ class HermesRunner:
                     repair_attempt,
                     repair_returncode,
                 )
+                break
+            repair_root_output_leaks = _project_root_output_leaks(
+                self.paths.root,
+                repair_root_output_snapshot,
+            )
+            if repair_root_output_leaks:
+                error = (
+                    "workspace output leak during repair: "
+                    + ", ".join(repair_root_output_leaks[:5])
+                )
+                per_results = [
+                    {
+                        "challenge_id": challenge_id,
+                        "solve_status": "failed",
+                        "validation_status": "contract_failed",
+                        "validation_error": error,
+                        "validation_contract_errors": [error],
+                    }
+                    for challenge_id in challenge_ids
+                ]
+                merge_validation_into_report(report, per_results)
                 break
             post_signature = _output_signature(workspace.output)
             if pre_signature == post_signature:
@@ -1425,6 +1476,68 @@ def _output_signature(output_dir: Path) -> tuple[int, int, int]:
         if stat.st_mtime_ns > max_mtime:
             max_mtime = stat.st_mtime_ns
     return (file_count, total_size, max_mtime)
+
+
+_PROJECT_ROOT_LEAK_DIRS = ("output", "challenges", ".design_output")
+_PROJECT_ROOT_LEAK_FILE_PREFIXES = (
+    "challenge",
+    "design",
+    "re-",
+    "web-",
+    "pwn-",
+)
+
+
+def _project_root_output_snapshot(root: Path) -> dict[str, tuple[int, int]]:
+    """Snapshot likely misplaced model outputs under the project root.
+
+    Existing dirty files are tolerated: only paths that are created or modified
+    after the snapshot are treated as leaks for the current Hermes invocation.
+    """
+    snapshot: dict[str, tuple[int, int]] = {}
+    for path in _iter_project_root_output_candidates(root):
+        try:
+            if not path.is_file():
+                continue
+            stat = path.stat()
+        except OSError:
+            continue
+        snapshot[path.relative_to(root).as_posix()] = (stat.st_size, stat.st_mtime_ns)
+    return snapshot
+
+
+def _project_root_output_leaks(
+    root: Path,
+    before: Mapping[str, tuple[int, int]],
+) -> list[str]:
+    leaks: list[str] = []
+    for path in _iter_project_root_output_candidates(root):
+        try:
+            if not path.is_file():
+                continue
+            stat = path.stat()
+        except OSError:
+            continue
+        relative = path.relative_to(root).as_posix()
+        if before.get(relative) != (stat.st_size, stat.st_mtime_ns):
+            leaks.append(relative)
+    return sorted(leaks)
+
+
+def _iter_project_root_output_candidates(root: Path) -> Iterable[Path]:
+    for dirname in _PROJECT_ROOT_LEAK_DIRS:
+        directory = root / dirname
+        if directory.is_dir() and not directory.is_symlink():
+            yield from directory.rglob("*")
+    try:
+        direct_children = list(root.iterdir())
+    except OSError:
+        return
+    for path in direct_children:
+        if not path.is_file() or path.suffix != ".json":
+            continue
+        if path.name.startswith(_PROJECT_ROOT_LEAK_FILE_PREFIXES):
+            yield path
 
 
 def _resume_source_shard_name(shard: Path, current_original_name: str) -> str:

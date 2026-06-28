@@ -277,6 +277,10 @@ simultaneously rather than trading one for another.
 
 Common (web, pwn, re):
 - `metadata.json` MUST keep `id`, `title`, `difficulty`, `build_status: passed`, and `flag`.
+- `metadata.json`, `README.md`, `validate.sh`, `writenup/`, `src/`/`deploy/`,
+  and `attachments/` MUST be direct children of the canonical challenge root.
+  Do not leave a generated `output/challenges/...` tree under `src/`,
+  `attachments/`, `deploy/`, or the challenge root.
 - `validate.sh` and `writenup/exp.py` MUST NOT contain the literal `metadata.flag` value.
 - `writenup/exp.py` MUST NOT read the flag from organizer files (`metadata.json`,
   `challenge.yml`, `docker-compose*`); it recovers the flag at runtime.
@@ -305,6 +309,9 @@ Re:
   `metadata.json` or `challenge.yml`.
 - `metadata.artifact` MUST point at the primary player-facing artifact under
   `attachments/`, and `metadata.artifact_sha256` MUST match that exact file.
+- `metadata.build_command` MUST be populated with the command actually used to
+  create that artifact; after every rebuild, strip, or copy, recompute the hash
+  from the final file in `attachments/`.
 - `writenup/exp.py` MUST be offline-capable on the host: use the standard
   library, existing system tools such as `openssl`, or helper modules vendored
   under `writenup/`; do not depend on undeclared packages like `Crypto`

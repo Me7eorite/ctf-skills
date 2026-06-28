@@ -15,7 +15,9 @@ from domain.resume import (
     carry_forward_message,
     compute_resume_plan,
     document_evidence,
+    document_evidence_reason,
     find_challenge_directory,
+    implement_evidence_reason,
     validator_message,
 )
 
@@ -483,6 +485,9 @@ class DocumentEvidenceTests(unittest.TestCase):
             challenge_dir = Path(tmp) / "c"
             challenge_dir.mkdir()
             self.assertFalse(document_evidence(challenge_dir))
+            self.assertEqual(
+                document_evidence_reason(challenge_dir), "writenup/wp.md missing"
+            )
 
     def test_too_small_fails(self):
         with TemporaryDirectory() as tmp:
@@ -495,6 +500,9 @@ class DocumentEvidenceTests(unittest.TestCase):
                 "## a\n## b\n", encoding="utf-8"
             )
             self.assertFalse(document_evidence(challenge_dir))
+            self.assertEqual(
+                document_evidence_reason(challenge_dir), "writenup/wp.md too small"
+            )
 
     def test_too_few_headings_fails(self):
         with TemporaryDirectory() as tmp:
@@ -508,6 +516,10 @@ class DocumentEvidenceTests(unittest.TestCase):
                 f"## only\n{big}\n", encoding="utf-8"
             )
             self.assertFalse(document_evidence(challenge_dir))
+            self.assertEqual(
+                document_evidence_reason(challenge_dir),
+                "writenup/wp.md has fewer than 2 level-2 headings",
+            )
 
     def test_meets_thresholds_passes(self):
         with TemporaryDirectory() as tmp:
@@ -521,6 +533,31 @@ class DocumentEvidenceTests(unittest.TestCase):
                 f"## a\n## b\n{big}\n", encoding="utf-8"
             )
             self.assertTrue(document_evidence(challenge_dir))
+            self.assertIsNone(document_evidence_reason(challenge_dir))
+
+
+class ImplementEvidenceTests(unittest.TestCase):
+    def test_nested_generated_output_is_actionable_failure(self):
+        with TemporaryDirectory() as tmp:
+            challenge_dir = Path(tmp) / "c"
+            nested = (
+                challenge_dir
+                / "attachments"
+                / "output"
+                / "challenges"
+                / "re"
+                / "re-0001-demo"
+            )
+            nested.mkdir(parents=True)
+            (nested / "metadata.json").write_text("{}", encoding="utf-8")
+
+            reason = implement_evidence_reason(challenge_dir, "re")
+
+            self.assertEqual(
+                reason,
+                "nested generated output at attachments/output/challenges; "
+                "move required files to the canonical challenge root",
+            )
 
 
 class MessageFormatTests(unittest.TestCase):

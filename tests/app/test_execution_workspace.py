@@ -67,6 +67,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
             "design-core.md",
             "category-tactics.md",
             "difficulty-rubric.md",
+            "shared_generation_strategy.md",
         ):
             (self.paths.design_references / filename).write_text(f"# {filename}\n", encoding="utf-8")
 
@@ -505,6 +506,41 @@ class ExecutionWorkspaceTests(unittest.TestCase):
                 / "web-0001-demo"
             ).exists()
         )
+
+    def test_runner_rejects_project_root_output_leak(self) -> None:
+        self.paths.prompt_template.parent.mkdir(parents=True, exist_ok=True)
+        self.paths.prompt_template.write_text("prompt\n", encoding="utf-8")
+        shard = self.paths.shards / "pending" / "root-leak.json"
+        write_json(
+            shard,
+            {"challenges": [{"id": "web-0001", "category": "web"}]},
+        )
+        stale = self.paths.root / "challenge-design.json"
+        stale.write_text("old\n", encoding="utf-8")
+        runner = HermesRunner(
+            self.paths,
+            profile_exists=lambda _: True,
+            validation_repair_attempts=0,
+        )
+
+        def invoke(_prompt, _log, *, workspace, **_kwargs):
+            self._artifact(workspace.output / "challenges")
+            leaked = self.paths.root / "output" / "challenges"
+            self._artifact(leaked)
+            (self.paths.root / "design-output.json").write_text("new\n", encoding="utf-8")
+            return 0
+
+        with patch.object(runner, "_invoke", side_effect=invoke):
+            outcome = runner.process_one("worker-1", dry_run=False)
+
+        self.assertEqual(outcome["status"], "failed")
+        self.assertEqual(outcome["hermes_phase"], "workspace_output_leak")
+        self.assertIn("output/challenges/web/web-0001-demo", outcome["error"])
+        self.assertIn("design-output.json", outcome["error"])
+        self.assertFalse(
+            (self.paths.challenges / "web" / "web-0001-demo").exists()
+        )
+        self.assertEqual(stale.read_text(encoding="utf-8"), "old\n")
 
     def test_runner_publishes_once_after_workspace_validation_passes(self) -> None:
         self.paths.prompt_template.parent.mkdir(parents=True, exist_ok=True)

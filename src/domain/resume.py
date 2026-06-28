@@ -19,7 +19,8 @@ from typing import Any
 
 from core.docker import image_exists as default_image_exists
 from core.paths import ProjectPaths
-from core.state import EXECUTION_STAGES as STAGE_ORDER, ProgressStore
+from core.state import EXECUTION_STAGES as STAGE_ORDER
+from core.state import ProgressStore
 
 # 文档检查参数：最小字节数、最小标题数
 _DOCUMENT_HEADING_PREFIX = "## "
@@ -192,6 +193,9 @@ def implement_evidence(challenge_dir: Path, category: str) -> bool:
 
 def implement_evidence_reason(challenge_dir: Path, category: str) -> str | None:
     """Return the missing implementation evidence reason, or None when complete."""
+    nested = _nested_generated_output_reason(challenge_dir)
+    if nested is not None:
+        return nested
     if category in {"web", "pwn"}:
         deploy = challenge_dir / "deploy"
         if not (deploy / "src").is_dir():
@@ -210,6 +214,30 @@ def implement_evidence_reason(challenge_dir: Path, category: str) -> str | None:
             return "src has no business source"
         return None
     return f"unsupported category {category!r}"
+
+
+def _nested_generated_output_reason(challenge_dir: Path) -> str | None:
+    """Detect a common authoring mistake: generating a second challenge tree inside one.
+
+    Hermes agents sometimes run their own scaffolder from the challenge
+    directory, which creates ``output/challenges/...`` under ``src/`` or
+    ``attachments/``. The canonical challenge root then lacks the required
+    evidence while a nested copy contains it. Treat that layout as an
+    implementation failure with an actionable reason instead of letting a later
+    stage fail with a generic missing-file error.
+    """
+    for path in challenge_dir.rglob("output/challenges"):
+        if not path.is_dir():
+            continue
+        try:
+            relative = path.relative_to(challenge_dir).as_posix()
+        except ValueError:
+            relative = path.as_posix()
+        return (
+            f"nested generated output at {relative}; move required files to "
+            "the canonical challenge root"
+        )
+    return None
 
 
 def _sha256_of_file(path: Path) -> str | None:
@@ -365,6 +393,30 @@ def document_evidence(challenge_dir: Path) -> bool:
         if heading_count < _DOCUMENT_MIN_HEADINGS:
             return False
     return True
+
+
+def document_evidence_reason(challenge_dir: Path) -> str | None:
+    """Return a precise missing-documentation reason, or None when complete."""
+    for relative in ("writenup/wp.md", "README.md"):
+        path = challenge_dir / relative
+        if not path.is_file():
+            return f"{relative} missing"
+        try:
+            size = path.stat().st_size
+        except OSError:
+            return f"{relative} unreadable"
+        if size <= _DOCUMENT_MIN_BYTES:
+            return f"{relative} too small"
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            return f"{relative} unreadable"
+        heading_count = sum(
+            1 for line in text.splitlines() if line.startswith(_DOCUMENT_HEADING_PREFIX)
+        )
+        if heading_count < _DOCUMENT_MIN_HEADINGS:
+            return f"{relative} has fewer than {_DOCUMENT_MIN_HEADINGS} level-2 headings"
+    return None
 
 
 # ========== 恢复计划计算 ==========

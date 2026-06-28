@@ -30,7 +30,12 @@ def _paths(root: Path) -> ProjectPaths:
     paths.design_skill.parent.mkdir(parents=True, exist_ok=True)
     paths.design_skill.write_text("# skill\n", encoding="utf-8")
     paths.design_references.mkdir(parents=True, exist_ok=True)
-    for filename in ("design-core.md", "category-tactics.md", "difficulty-rubric.md"):
+    for filename in (
+        "design-core.md",
+        "category-tactics.md",
+        "difficulty-rubric.md",
+        "shared_generation_strategy.md",
+    ):
         (paths.design_references / filename).write_text(
             f"# {filename}\n",
             encoding="utf-8",
@@ -287,6 +292,32 @@ def test_publish_rejects_missing_metadata() -> None:
         contract = prepare_publication_contract(paths, workspace, payload)
 
         with pytest.raises(WorkspacePromotionError, match="missing metadata"):
+            publish_workspace_output(paths, workspace, contract=contract)
+
+
+def test_publish_reports_nested_metadata_location() -> None:
+    with tempfile.TemporaryDirectory() as temp:
+        paths = _paths(Path(temp))
+        payload = {"challenges": [{"id": "web-0001", "category": "web"}]}
+        workspace = _workspace(paths, payload)
+        artifact = _artifact(workspace.output / "challenges")
+        (artifact / "metadata.json").unlink()
+        nested = (
+            artifact
+            / "attachments"
+            / "output"
+            / "challenges"
+            / "web"
+            / "web-0001-demo"
+        )
+        nested.mkdir(parents=True)
+        write_json(nested / "metadata.json", {"id": "web-0001", "category": "web"})
+        contract = prepare_publication_contract(paths, workspace, payload)
+
+        with pytest.raises(
+            WorkspacePromotionError,
+            match="metadata.json for web-0001 is nested at attachments/output/challenges",
+        ):
             publish_workspace_output(paths, workspace, contract=contract)
 
 

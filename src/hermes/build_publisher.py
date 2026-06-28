@@ -426,6 +426,16 @@ def _collect_candidates(
             )
         metadata = read_json(entry / "metadata.json", None)
         if not isinstance(metadata, dict):
+            nested_metadata = _find_nested_metadata(entry)
+            if nested_metadata is not None:
+                nested_relative = nested_metadata.relative_to(entry).as_posix()
+                raise WorkspacePublishError(
+                    f"metadata.json for {challenge_id} is nested at {nested_relative}; "
+                    "move required files to the canonical challenge root",
+                    phase="allowlist",
+                    claimed_id=challenge_id,
+                    path=nested_relative,
+                )
             raise WorkspacePublishError(
                 f"missing metadata.json for {challenge_id}",
                 phase="allowlist",
@@ -446,6 +456,14 @@ def _collect_candidates(
             phase="allowlist",
         )
     return candidates
+
+
+def _find_nested_metadata(challenge_dir: Path) -> Path | None:
+    """Return metadata from accidentally nested challenge scaffolds, if present."""
+    for path in sorted(challenge_dir.rglob("output/challenges/*/*/metadata.json")):
+        if path.is_file():
+            return path
+    return None
 
 
 def _normalize_execution_mode(payload: Mapping[str, Any]) -> str:
