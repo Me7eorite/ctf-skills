@@ -18,7 +18,11 @@ import sqlalchemy as sa
 from core.clock import utcnow as _utcnow
 from domain import research as dto
 from domain.design.technique_taxonomy import resolve_family
-from domain.research_validators import ResearchValidationError, validate_runtime_constraints
+from domain.research_validators import (
+    ResearchValidationError,
+    minimum_research_findings,
+    validate_runtime_constraints,
+)
 from persistence.models import research as model
 from persistence.repositories import ResearchRepository
 from persistence.session import SessionFactory, transaction
@@ -385,6 +389,41 @@ class ResearchJobService:
             # 读操作也走短 session，避免 executor 持有跨线程/跨子进程的数据库连接。
             return ResearchRepository(session).get_binding(role)
 
+    def ensure_supplement_run(self, generation_request_id: UUID) -> dto.ResearchRun:
+        """Queue a supplemental run for researched requests that are still underfilled."""
+        with transaction(factory=self.repository_factory) as session:
+            request = _get_request(session, generation_request_id)
+            latest = _latest_run(session, generation_request_id)
+            if latest is not None and latest.status in {"queued", "running"}:
+                return _run_dto(latest)
+            if request.status != "researched":
+                raise ResearchValidationError("request_not_supplementable")
+
+            latest_completed = _latest_completed_run(session, generation_request_id)
+            if latest_completed is None:
+                raise ResearchValidationError("no_completed_research_to_supplement")
+            finding_count = _finding_count(session, latest_completed.id)
+            minimum = minimum_research_findings(request.target_count)
+            if finding_count >= minimum:
+                raise ResearchValidationError("already_researched")
+
+            next_attempt = (latest.attempt if latest is not None else latest_completed.attempt) + 1
+            if request.max_attempts < next_attempt:
+                request.max_attempts = next_attempt
+            request.status = "researching"
+            request.updated_at = _utcnow()
+            run = model.ResearchRun(
+                id=uuid4(),
+                generation_request_id=generation_request_id,
+                parent_run_id=latest_completed.id,
+                attempt=next_attempt,
+                status="queued",
+            )
+            session.add(run)
+            session.flush()
+            session.refresh(run)
+            return _run_dto(run)
+
     def _get_owned_running_run(
         self,
         session,
@@ -690,6 +729,33 @@ def _latest_run(session, request_id: UUID) -> model.ResearchRun | None:
         .where(model.ResearchRun.generation_request_id == request_id)
         .order_by(model.ResearchRun.created_at.desc(), model.ResearchRun.attempt.desc())
         .limit(1)
+    )
+
+
+def _latest_completed_run(session, request_id: UUID) -> model.ResearchRun | None:
+    return session.scalar(
+        sa.select(model.ResearchRun)
+        .where(
+            model.ResearchRun.generation_request_id == request_id,
+            model.ResearchRun.status == "completed",
+        )
+        .order_by(
+            model.ResearchRun.finished_at.desc().nulls_last(),
+            model.ResearchRun.created_at.desc(),
+            model.ResearchRun.attempt.desc(),
+        )
+        .limit(1)
+    )
+
+
+def _finding_count(session, run_id: UUID) -> int:
+    return int(
+        session.scalar(
+            sa.select(sa.func.count())
+            .select_from(model.ResearchFinding)
+            .where(model.ResearchFinding.research_run_id == run_id)
+        )
+        or 0
     )
 
 

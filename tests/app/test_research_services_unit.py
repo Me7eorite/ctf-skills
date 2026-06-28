@@ -78,6 +78,40 @@ def test_parse_research_output_is_pure_until_materialize(tmp_path):
     assert finding_payloads[0]["technique_family"] == "other"
 
 
+def test_parse_research_output_can_skip_quality_gate_for_supplements():
+    stdout_text = json.dumps(
+        {
+            "sources": [
+                {
+                    "url": "https://example.com/a",
+                    "title": "A",
+                    "summary": "Summary",
+                    "content_hash": "a" * 64,
+                }
+            ],
+            "findings": [
+                {
+                    "kind": "technique",
+                    "label": "Technique",
+                    "summary": "Finding summary",
+                    "source_indices": [0],
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(ResearchValidationError, match="insufficient_findings"):
+        parse_research_output(stdout_text, target_count=4)
+
+    parsed = parse_research_output(
+        stdout_text,
+        target_count=4,
+        enforce_quality=False,
+    )
+
+    assert len(parsed.findings) == 1
+
+
 def test_parse_research_output_preserves_valid_family_and_coerces_unknown(caplog):
     stdout_text = json.dumps(
         {
@@ -501,7 +535,20 @@ def test_quality_gate_diversity_soft_pass(monkeypatch, caplog):
     from domain.research_validators import apply_research_quality_gate
 
     monkeypatch.setenv("RESEARCH_DIVERSITY_SOFT_PASS_BELOW_BY", "1")
-    payload = _diverse_payload_with_count(10, ["SQL injection", "XSS", "SSRF", "XXE"])  # distinct=4, need=5, soft floor=4
+    payload = _diverse_payload(
+        [
+            "SQL injection",
+            "XSS",
+            "SSRF",
+            "XXE",
+            "SQL injection",
+            "XSS",
+            "SSRF",
+            "XXE",
+            "SQL injection",
+            "XSS",
+        ]
+    )
     with caplog.at_level("WARNING", logger="domain.research_validators"):
         ok, error = apply_research_quality_gate(payload, 10)
     assert (ok, error) == (True, None)

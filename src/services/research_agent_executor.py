@@ -12,7 +12,7 @@ from uuid import UUID
 
 from core.paths import ProjectPaths
 from domain import research as dto
-from domain.research_validators import ResearchValidationError
+from domain.research_validators import ResearchValidationError, minimum_research_findings
 from hermes.process import HermesProcessResult, profile_exists
 from hermes.prompt import render_research_prompt
 from hermes.research import invoke_research_agent
@@ -117,9 +117,14 @@ class ResearchAgentExecutor:
                 LOGGER.warning("lost claim before starting run %s", run.id)
                 return
 
-            prompt_text = _with_previous_failure_context(
-                render_research_prompt(generation_request),
-                previous_error=self._previous_run_error(run),
+            prompt_text = _with_supplement_context(
+                _with_previous_failure_context(
+                    render_research_prompt(generation_request),
+                    previous_error=self._previous_run_error(run),
+                ),
+                repository_factory=getattr(self.job_service, "repository_factory", None),
+                run=run,
+                request=generation_request,
             )
             res_data = self.hermes_invoke(
                 prompt=prompt_text,
@@ -430,7 +435,32 @@ def _try_parse_result_payload(
         )
         return _ResearchParseResult(sources=sources, findings=findings)
     except ResearchValidationError as exc:
-        return _ResearchParseResult(error=str(exc))
+        error = str(exc)
+        if _is_supplementable_quality_error(error):
+            try:
+                parsed = parse_research_output(
+                    stdout_text,
+                    target_count=target_count,
+                    category=category,
+                    enforce_quality=False,
+                )
+                sources, findings = materialize_research_raw_text(
+                    parsed,
+                    paths=paths,
+                    run_id=run_id,
+                )
+            except ResearchValidationError:
+                return _ResearchParseResult(error=error)
+            LOGGER.warning(
+                "persisting partial research output despite quality gate failure: %s",
+                error,
+            )
+            return _ResearchParseResult(sources=sources, findings=findings)
+        return _ResearchParseResult(error=error)
+
+
+def _is_supplementable_quality_error(error: str) -> bool:
+    return error.startswith(("insufficient_findings:", "insufficient_diversity:"))
 
 
 def _repair_common_json_key_glitches(stdout_text: str) -> str:
@@ -530,4 +560,49 @@ def _with_previous_failure_context(prompt: str, *, previous_error: str | None) -
         + f"Failure reason: `{previous_error}`\n"
         + "Keep the same broad search scope, but correct this delivery failure in the current run. "
         + "In particular, do not finish with empty stdout, progress-only stdout, or malformed JSON.\n"
+    )
+
+
+def _with_supplement_context(
+    prompt: str,
+    *,
+    repository_factory: SessionFactory | None,
+    run: dto.ResearchRun,
+    request: dto.GenerationRequest,
+) -> str:
+    if run.parent_run_id is None:
+        return prompt
+    with transaction(factory=repository_factory) as session:
+        repo = ResearchRepository(session)
+        sources = repo.list_sources(run.parent_run_id)
+        findings = repo.list_findings(run.parent_run_id)
+    if not findings:
+        return prompt
+
+    minimum = minimum_research_findings(request.target_count)
+    missing_minimum = max(0, minimum - len(findings))
+    missing_target = max(0, request.target_count - len(findings))
+    source_lines = [
+        f"- [{idx}] {source.title}: {source.url}"
+        for idx, source in enumerate(sources[:12])
+    ]
+    finding_lines = [
+        f"- {finding.label} ({finding.kind}): {finding.summary}"
+        for finding in findings[:20]
+    ]
+    return (
+        prompt
+        + "\n\n## Supplemental research context\n\n"
+        + "This run is continuing a completed-but-underfilled research result. "
+        + "Do not restart from scratch and do not discard useful previous findings.\n"
+        + f"Existing findings: {len(findings)}. Minimum needed: {minimum}. "
+        + f"Missing to minimum: {missing_minimum}. Missing to target count: {missing_target}.\n"
+        + "Return one complete consolidated JSON object containing the existing usable findings "
+        + "plus enough new distinct findings to meet the target count when possible. "
+        + "Avoid duplicate labels, duplicate sub-techniques, and repeated source-only restatements.\n\n"
+        + "Existing sources to preserve or reuse when still relevant:\n"
+        + ("\n".join(source_lines) if source_lines else "- (none recorded)")
+        + "\n\nExisting findings to preserve:\n"
+        + "\n".join(finding_lines)
+        + "\n"
     )

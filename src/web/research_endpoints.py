@@ -27,7 +27,11 @@ from domain.design.technique_taxonomy import resolve_family
 from domain.design_task_validators import DesignTaskValidationError
 from domain.research import GenerationRequestStatus, ResearchRunStatus
 from domain.research_failure_taxonomy import classify_last_error
-from domain.research_validators import ResearchValidationError, validate_runtime_constraints
+from domain.research_validators import (
+    ResearchValidationError,
+    minimum_research_findings,
+    validate_runtime_constraints,
+)
 from services.research_log_utils import (
     SafeResearchLogError,
     has_ordered_stdout_markers,
@@ -125,6 +129,13 @@ def _register_worker_endpoints(app: FastAPI, manager) -> None:
             ok, status_code, body = _preflight_scoped_research_worker(generation_request_id)
             if not ok:
                 return JSONResponse(body, status_code=status_code)
+            if body.get("needs_supplement"):
+                from services.research_job_service import ResearchJobService
+
+                try:
+                    ResearchJobService().ensure_supplement_run(UUID(generation_request_id))
+                except ResearchValidationError as exc:
+                    return JSONResponse({"code": str(exc)}, status_code=HTTPStatus.CONFLICT)
 
         ok, message = manager.start(
             kind=kind,
@@ -172,7 +183,6 @@ def _preflight_scoped_research_worker(request_id: str) -> tuple[bool, int, dict[
 
     from persistence.models import research as model
     from persistence.session import transaction
-
     request_uuid = UUID(request_id)
     with transaction() as session:
         if not hasattr(session, "get"):
@@ -181,10 +191,34 @@ def _preflight_scoped_research_worker(request_id: str) -> tuple[bool, int, dict[
         if row is None:
             return False, HTTPStatus.NOT_FOUND, {"detail": "request not found"}
         if row.status == "researched":
-            return False, HTTPStatus.CONFLICT, {"code": "already_researched"}
+            latest_completed = session.scalar(
+                sa.select(model.ResearchRun)
+                .where(
+                    model.ResearchRun.generation_request_id == request_uuid,
+                    model.ResearchRun.status == "completed",
+                )
+                .order_by(
+                    model.ResearchRun.finished_at.desc().nulls_last(),
+                    model.ResearchRun.created_at.desc(),
+                    model.ResearchRun.attempt.desc(),
+                )
+                .limit(1)
+            )
+            if latest_completed is None:
+                return False, HTTPStatus.CONFLICT, {"code": "already_researched"}
+            finding_count = int(
+                session.scalar(
+                    sa.select(sa.func.count())
+                    .select_from(model.ResearchFinding)
+                    .where(model.ResearchFinding.research_run_id == latest_completed.id)
+                )
+                or 0
+            )
+            if finding_count >= minimum_research_findings(row.target_count):
+                return False, HTTPStatus.CONFLICT, {"code": "already_researched"}
         if row.status == "failed":
             return False, HTTPStatus.CONFLICT, {"code": "final_failure_no_retry_left"}
-        if row.status not in {"draft", "researching"}:
+        if row.status not in {"draft", "researching", "researched"}:
             return False, HTTPStatus.CONFLICT, {"code": "request_not_runnable"}
         runnable = session.scalar(
             sa.select(sa.func.count())
@@ -201,6 +235,8 @@ def _preflight_scoped_research_worker(request_id: str) -> tuple[bool, int, dict[
             )
         )
         if not runnable:
+            if row.status == "researched":
+                return True, HTTPStatus.ACCEPTED, {"needs_supplement": True}
             return False, HTTPStatus.CONFLICT, {"code": "no_runnable_run"}
     return True, HTTPStatus.ACCEPTED, {}
 
@@ -847,6 +883,7 @@ def _request_dict(
         "category": request.category,
         "topic": request.topic,
         "target_count": request.target_count,
+        "minimum_findings": minimum_research_findings(request.target_count),
         "difficulty_distribution": dict(request.difficulty_distribution),
         "runtime_constraints": dict(request.runtime_constraints),
         "seed_urls": list(request.seed_urls),

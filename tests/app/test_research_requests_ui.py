@@ -28,10 +28,12 @@ def test_request_detail_exposes_quality_gate_and_runtime_constraints() -> None:
         encoding="utf-8"
     )
 
-    assert "Math.ceil(Number(request.target_count || 0) * 0.5)" in source
+    assert "request.minimum_findings" in source
     assert 'request.runtime_constraints || {}' in source
     assert "有效研究结论" in source
     assert "最低要求" in source
+    assert "补充研究" in source
+    assert "可继续补充研究" in source
     assert "生成设计任务" in source
     assert "暂停 Worker 可能影响正在执行的其他研究需求" in source
 

@@ -497,7 +497,7 @@ function renderDetail(root) {
   const workerRunning = !!worker.running;
   const available = worker.available !== false;
   const findingCount = Object.values(findings_by_kind).reduce((sum, items) => sum + items.length, 0);
-  const minimumFindings = Math.ceil(Number(request.target_count || 0) * 0.5);
+  const minimumFindings = Number(request.minimum_findings || Math.ceil(Number(request.target_count || 0) * 0.5));
   const qualityPassed = request.status === "researched" && findingCount >= minimumFindings;
   const designTaskCount = design_tasks_summary?.total || 0;
   const displayStatus = request.display_status || request.status;
@@ -631,7 +631,7 @@ function renderPrimaryAction({ request, latest, qualityPassed, designTaskCount, 
     return `<button class="btn btn-primary design-tasks-generate"><i data-lucide="wand-sparkles"></i> 生成设计任务</button>`;
   }
   if (request.status === "researched") {
-    return `<button class="btn btn-secondary" disabled><i data-lucide="triangle-alert"></i> 质量未达标</button>`;
+    return `<button class="btn btn-primary" id="detail-run-once"${workerRunning || !available ? " disabled" : ""}><i data-lucide="plus-circle"></i> 补充研究</button>`;
   }
   if (request.display_status === "researching") {
     return `<button class="btn btn-primary detail-open-runs"><i data-lucide="activity"></i> 查看运行状态</button>`;
@@ -658,7 +658,7 @@ function renderResearchProgress(request, latest, findingCount, minimumFindings) 
           ${stages.map((stage, index) => `<div class="rq-progress-step ${index < stageIndex || displayStatus === "researched" ? "done" : index === stageIndex ? "active" : ""}"><span>${index < stageIndex || displayStatus === "researched" ? "✓" : index + 1}</span><strong>${stage}</strong></div>`).join("")}
         </div>
         ${latest?.last_error ? renderFailureAlert(latest) : ""}
-        ${request.status === "researched" ? `<div class="rq-quality ${findingCount >= minimumFindings ? "passed" : "failed"}"><i data-lucide="${findingCount >= minimumFindings ? "badge-check" : "triangle-alert"}"></i><div><strong>${findingCount >= minimumFindings ? "已通过质量检查" : "未通过质量检查"}</strong><p>有效研究结论 ${findingCount} 条，最低要求 ${minimumFindings} 条。</p></div></div>` : ""}
+        ${request.status === "researched" ? `<div class="rq-quality ${findingCount >= minimumFindings ? "passed" : "failed"}"><i data-lucide="${findingCount >= minimumFindings ? "badge-check" : "triangle-alert"}"></i><div><strong>${findingCount >= minimumFindings ? "已通过质量检查" : "未通过质量检查"}</strong><p>有效研究结论 ${findingCount} 条，最低要求 ${minimumFindings} 条。${findingCount >= minimumFindings ? "" : "可继续补充研究。"}</p></div></div>` : ""}
       </div>
     </section>
   `;

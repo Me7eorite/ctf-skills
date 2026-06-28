@@ -77,6 +77,12 @@ def _quality_soft_pass_slack() -> int:
     return value
 
 
+def minimum_research_findings(target_count: int) -> int:
+    """Return the effective findings floor after ratio and soft-pass slack."""
+    needed = max(1, math.ceil(target_count * _quality_ratio()))
+    return max(1, needed - _quality_soft_pass_slack())
+
+
 def _diversity_soft_pass_slack() -> int:
     """How many distinct sub-techniques below ``target_count`` the gate accepts.
 

@@ -33,15 +33,17 @@ def parse_research_output(
     *,
     target_count: int = 1,
     category: str | None = None,
+    enforce_quality: bool = True,
 ) -> ParsedResearchOutput:
     """Parse, normalize, and quality-gate Hermes research stdout without I/O."""
     res_data = extract_terminal_json_object(stdout_text)
     if res_data is None:
         raise ResearchValidationError("unparseable_output:no_terminal_json_object")
     res_data = _normalize_source_content_hashes(res_data)
-    ok, error = apply_research_quality_gate(res_data, target_count)
-    if not ok:
-        raise ResearchValidationError(error or "unparseable_output:quality_gate_failed")
+    if enforce_quality:
+        ok, error = apply_research_quality_gate(res_data, target_count)
+        if not ok:
+            raise ResearchValidationError(error or "unparseable_output:quality_gate_failed")
 
     source_items = res_data.get("sources")
     finding_items = res_data.get("findings")

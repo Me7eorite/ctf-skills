@@ -51,8 +51,10 @@ high-quality writeups with reproducible technical detail.
 4. For each source you actually consult and rely on, append one entry to
    `sources[]` (see schema below).
 5. Distill the material into finding entries (`technique`, `variant`,
-   `scenario`, `prerequisite`). Every finding MUST cite at least one source
-   via `source_indices`.
+   `scenario`, `prerequisite`). Produce **{target_count} distinct findings**
+   when enough substantiated material exists; do not stop early while relevant
+   sourced material remains. Every finding MUST cite at least one source via
+   `source_indices`.
 6. For each finding, set `technique_family` to one of the category lanes below.
    If none fits, use `other`.
 7. Do not invent references. If you cannot substantiate a finding, drop it.
@@ -61,8 +63,10 @@ high-quality writeups with reproducible technical detail.
 
 Keep the broad search scope, but reserve enough time and iterations to finish.
 When the run is near its time or iteration budget, stop opening new sources and
-finalize from the sources already consulted. A partial but valid JSON document
-with fewer substantiated findings is better than no terminal JSON object.
+finalize from the sources already consulted. Aim for exactly {target_count}
+substantiated findings. If the topic genuinely cannot support that many within
+category `{category}`, emit a partial but valid JSON document instead of no
+terminal JSON object; a supplemental run can continue from the persisted result.
 Never end the run with only progress text, subagent summaries, or search notes.
 The last thing printed to stdout must be the single JSON object described below.
 
@@ -119,6 +123,8 @@ Note that `findings[0].source_indices` is `[0]` — a non-empty list of valid
 - Stay within category `{category}`. Refuse cross-category material.
 - Emit exactly one JSON object on stdout, with no surrounding text.
 - Every finding must cite at least one source via `source_indices`.
+- Aim for exactly {target_count} distinct, category-correct findings; only
+  return fewer when the consulted sources cannot substantiate more.
 - Do not fabricate sources or findings. Drop a finding if it cannot be
   substantiated by a real source.
 - If search/iteration budget is exhausted, immediately summarize the consulted
