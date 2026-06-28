@@ -39,6 +39,7 @@ def parse_research_output(
     res_data = extract_terminal_json_object(stdout_text)
     if res_data is None:
         raise ResearchValidationError("unparseable_output:no_terminal_json_object")
+    res_data = _normalize_legacy_result_shape(res_data)
     res_data = _normalize_source_content_hashes(res_data)
     if enforce_quality:
         ok, error = apply_research_quality_gate(res_data, target_count)
@@ -65,6 +66,58 @@ def parse_research_output(
         for finding_item in finding_items
     ]
     return ParsedResearchOutput(sources=source_payloads, findings=finding_payloads)
+
+
+def _normalize_legacy_result_shape(parsed: Mapping[str, Any]) -> dict[str, Any]:
+    """Accept salvageable finalize JSON that used older compact field names."""
+    normalized = dict(parsed)
+    sources = normalized.get("sources")
+    if isinstance(sources, list):
+        normalized_sources: list[Any] = []
+        for source in sources:
+            if not isinstance(source, Mapping):
+                normalized_sources.append(source)
+                continue
+            source_payload = dict(source)
+            if "content_hash" not in source_payload and isinstance(source_payload.get("hash"), str):
+                source_payload["content_hash"] = source_payload["hash"]
+            if "summary" not in source_payload:
+                title = source_payload.get("title")
+                url = source_payload.get("url")
+                if isinstance(title, str) and title.strip():
+                    source_payload["summary"] = title.strip()
+                elif isinstance(url, str) and url.strip():
+                    source_payload["summary"] = url.strip()
+            normalized_sources.append(source_payload)
+        normalized["sources"] = normalized_sources
+
+    findings = normalized.get("findings")
+    if isinstance(findings, list):
+        normalized_findings: list[Any] = []
+        for index, finding in enumerate(findings):
+            if not isinstance(finding, Mapping):
+                normalized_findings.append(finding)
+                continue
+            finding_payload = dict(finding)
+            content = finding_payload.get("content")
+            if "summary" not in finding_payload and isinstance(content, str) and content.strip():
+                finding_payload["summary"] = content.strip()
+            if "label" not in finding_payload and isinstance(content, str) and content.strip():
+                finding_payload["label"] = _derive_finding_label(finding_payload, index)
+            if "kind" not in finding_payload and isinstance(content, str) and content.strip():
+                finding_payload["kind"] = "technique"
+            normalized_findings.append(finding_payload)
+        normalized["findings"] = normalized_findings
+    return normalized
+
+
+def _derive_finding_label(finding: Mapping[str, Any], index: int) -> str:
+    text = finding.get("summary") or finding.get("content")
+    if isinstance(text, str):
+        head = text.strip().split(".", 1)[0].split(":", 1)[0].strip()
+        if head:
+            return head[:80]
+    return f"finding-{index + 1}"
 
 
 def _normalize_source_content_hashes(parsed: Mapping[str, Any]) -> dict[str, Any]:

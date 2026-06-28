@@ -180,6 +180,44 @@ def test_parse_research_output_replaces_invalid_content_hash(caplog):
     assert "replaced invalid research source content_hash at index 0" in caplog.text
 
 
+def test_parse_research_output_accepts_compact_finalize_shape():
+    stdout_text = json.dumps(
+        {
+            "sources": [
+                {
+                    "title": "PE Format Documentation - Microsoft Learn",
+                    "url": "https://learn.microsoft.com/en-us/windows/win32/debug/pe-format",
+                    "hash": "a" * 64,
+                },
+                {
+                    "title": "Corkami PE Format Visuals",
+                    "url": "https://github.com/corkami/pics/tree/master/binary/pe",
+                    "hash": "b" * 64,
+                },
+            ],
+            "findings": [
+                {
+                    "content": "PE file structure: DOS Header, PE Header, Optional Header, and sections.",
+                    "source_indices": [0, 1],
+                },
+                {
+                    "content": "Import Address Table analysis identifies Windows API calls.",
+                    "source_indices": [0],
+                },
+            ],
+        }
+    )
+
+    parsed = parse_research_output(stdout_text, target_count=2, category="re")
+
+    assert parsed.sources[0]["content_hash"] == "a" * 64
+    assert parsed.sources[0]["summary"] == "PE Format Documentation - Microsoft Learn"
+    assert parsed.findings[0]["kind"] == "technique"
+    assert parsed.findings[0]["label"] == "PE file structure"
+    assert parsed.findings[0]["summary"].startswith("PE file structure")
+    assert parsed.findings[0]["source_indices"] == [0, 1]
+
+
 def test_research_failure_classification_targets_output_delivery_failures():
     empty = HermesProcessResult(returncode=0, stdout="", cancelled=False)
     timeout = HermesProcessResult(returncode=124, stdout="search notes", cancelled=False)
