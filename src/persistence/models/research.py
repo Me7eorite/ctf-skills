@@ -8,9 +8,22 @@ from uuid import UUID
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from persistence.models.base import Base
+
+
+def _strip_nul(value: str | None) -> str | None:
+    """剔除 NUL (0x00) 字节。
+
+    PostgreSQL 的 text/jsonb 不允许存储 NUL，而 agent 自由文本里偶尔会带上
+    （例如描述 PE 签名 ``PE\\x00\\x00`` 或抓取到的二进制网页内容）。在写入前清洗
+    可以避免 ``psycopg.DataError`` 直接拖垮整个 worker。
+    """
+    if isinstance(value, str) and "\x00" in value:
+        return value.replace("\x00", "")
+    return value
+
 
 UuidPk = Annotated[UUID, mapped_column(sa.Uuid(), primary_key=True)]
 TextPk = Annotated[str, mapped_column(sa.Text(), primary_key=True)]
@@ -192,6 +205,10 @@ class ResearchSource(Base):
 
     research_run: Mapped[ResearchRun] = relationship()
 
+    @validates("url", "title", "summary", "content_hash", "raw_text_path")
+    def _sanitize_text(self, _key: str, value: str | None) -> str | None:
+        return _strip_nul(value)
+
 
 class ResearchFinding(Base):
     __tablename__ = "research_findings"
@@ -211,6 +228,10 @@ class ResearchFinding(Base):
     technique_family: Mapped[str | None] = mapped_column(sa.Text())
 
     research_run: Mapped[ResearchRun] = relationship()
+
+    @validates("label", "summary", "technique_family")
+    def _sanitize_text(self, _key: str, value: str | None) -> str | None:
+        return _strip_nul(value)
 
 
 class ResearchFindingSource(Base):
