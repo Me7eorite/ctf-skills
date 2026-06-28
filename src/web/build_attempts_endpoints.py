@@ -42,7 +42,7 @@ from services.build_attempt_revalidation_service import (
 from services.build_profile_readiness import unavailable_build_profiles
 
 LOG = logging.getLogger(__name__)
-DEFAULT_LIST_LIMIT = 100
+DEFAULT_LIST_LIMIT = 500
 MAX_LIST_LIMIT = 500
 DEFAULT_SEQUENTIAL_LANES = 4
 MAX_SEQUENTIAL_LANES = 16

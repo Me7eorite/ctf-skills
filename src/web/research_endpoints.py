@@ -9,7 +9,9 @@ handler opens its own short persistence transaction.
 
 from __future__ import annotations
 
+import os
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from http import HTTPStatus
 from pathlib import Path
@@ -1122,6 +1124,33 @@ def _register_design_task_endpoints(app: FastAPI) -> None:
     def queue_design_task(task_id: str) -> JSONResponse:
         return _transition_design_task(task_id, "queued")
 
+    @app.post("/api/design-tasks/queue")
+    async def queue_design_tasks(request: Request) -> JSONResponse:
+        task_ids = await _task_ids_from_request(request)
+        from persistence.repositories import DesignTaskRepository
+        from persistence.session import transaction
+
+        try:
+            with transaction() as session:
+                repo = DesignTaskRepository(session)
+                queued = [
+                    repo.set_design_task_status(task_id, "queued")
+                    for task_id in task_ids
+                ]
+        except DesignTaskValidationError as exc:
+            status = (
+                HTTPStatus.NOT_FOUND
+                if "does not exist" in str(exc)
+                else HTTPStatus.CONFLICT
+            )
+            raise HTTPException(status_code=status, detail=str(exc)) from exc
+        return JSONResponse(
+            {
+                "design_task_ids": [str(task.id) for task in queued],
+                "total": len(queued),
+            }
+        )
+
     @app.post("/api/design-tasks/{task_id}/archive")
     def archive_design_task(task_id: str) -> JSONResponse:
         return _transition_design_task(task_id, "archived")
@@ -1158,6 +1187,63 @@ def _register_design_task_endpoints(app: FastAPI) -> None:
             ) from exc
 
         return JSONResponse(_design_result_dict(result))
+
+    @app.post("/api/design-tasks/design")
+    async def design_challenges(request: Request) -> JSONResponse:
+        from services import (
+            ChallengeDesignConflictError,
+            ChallengeDesignNotFoundError,
+            ChallengeDesignService,
+        )
+
+        payload = await _json_object(request)
+        task_ids = _task_ids_from_payload(payload)
+        concurrency = _parse_design_batch_concurrency(payload.get("concurrency"))
+        paths = _project_paths(app)
+
+        def _run(task_id: UUID) -> dict[str, Any]:
+            service = ChallengeDesignService(paths=paths)
+            try:
+                result = service.design_for_task(task_id, caller="dashboard-batch")
+            except ChallengeDesignNotFoundError as exc:
+                return {
+                    "design_task_id": str(task_id),
+                    "status": "not_found",
+                    "error": str(exc),
+                }
+            except ChallengeDesignConflictError as exc:
+                return {
+                    "design_task_id": str(task_id),
+                    "status": "conflict",
+                    "error": str(exc),
+                }
+            row = _design_result_dict(result)
+            row["status"] = result.attempt_status
+            return row
+
+        indexed_results: dict[int, dict[str, Any]] = {}
+        with ThreadPoolExecutor(max_workers=concurrency) as executor:
+            futures = {
+                executor.submit(_run, task_id): index
+                for index, task_id in enumerate(task_ids)
+            }
+            for future in as_completed(futures):
+                indexed_results[futures[future]] = future.result()
+        results = [indexed_results[index] for index in range(len(task_ids))]
+        failed = sum(
+            1
+            for result in results
+            if result.get("attempt_status") == "failed"
+            or result.get("status") in {"failed", "not_found", "conflict"}
+        )
+        return JSONResponse(
+            {
+                "total": len(results),
+                "failed": failed,
+                "concurrency": concurrency,
+                "results": results,
+            }
+        )
 
     @app.get("/api/design-attempts/{attempt_id}/artifact")
     def get_design_attempt_artifact(
@@ -1234,6 +1320,89 @@ def _transition_design_task(task_id: str, target_status: str) -> JSONResponse:
         raise HTTPException(status_code=status, detail=str(exc)) from exc
 
     return JSONResponse(_design_task_dict(updated))
+
+
+async def _task_ids_from_request(request: Request) -> list[UUID]:
+    return _task_ids_from_payload(await _json_object(request))
+
+
+async def _json_object(request: Request) -> dict[str, Any]:
+    try:
+        payload = await request.json()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail=f"request body must be JSON: {exc}",
+        ) from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail="request body must be a JSON object",
+        )
+    return payload
+
+
+def _task_ids_from_payload(payload: dict[str, Any]) -> list[UUID]:
+    raw_ids = payload.get("design_task_ids")
+    if not isinstance(raw_ids, list) or not raw_ids:
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail="design_task_ids must be a non-empty array",
+        )
+    task_ids: list[UUID] = []
+    seen: set[UUID] = set()
+    for raw in raw_ids:
+        try:
+            task_id = UUID(str(raw))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail="design_task_ids must contain only uuids",
+            ) from exc
+        if task_id in seen:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail="duplicate design_task_ids are not allowed",
+            )
+        seen.add(task_id)
+        task_ids.append(task_id)
+    return task_ids
+
+
+def _parse_design_batch_concurrency(raw: Any) -> int:
+    default = _env_positive_int("DESIGN_BATCH_DEFAULT_CONCURRENCY", 2)
+    maximum = _env_positive_int("DESIGN_BATCH_MAX_CONCURRENCY", 4)
+    if raw is None:
+        return min(default, maximum)
+    if isinstance(raw, bool):
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail="concurrency must be a positive integer",
+        )
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail="concurrency must be a positive integer",
+        ) from exc
+    if value <= 0:
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail="concurrency must be a positive integer",
+        )
+    return min(value, maximum)
+
+
+def _env_positive_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
 
 
 def _request_uuid_or_404(request_id: str) -> UUID:

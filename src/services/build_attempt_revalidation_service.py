@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+import uuid
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -128,7 +130,12 @@ class BuildAttemptRevalidationService:
                 raise BuildAttemptRevalidationError(reason)
 
             challenge_dir = _relative_challenge_dir(
-                self.paths, plans[challenge_ids[0]]
+                self.paths,
+                _canonicalize_challenge_directory(
+                    self.paths,
+                    challenge_ids[0],
+                    plans[challenge_ids[0]],
+                ),
             )
             try:
                 self._mark_succeeded(
@@ -229,11 +236,14 @@ class BuildAttemptRevalidationService:
 
     @staticmethod
     def _assert_no_organizer_file_leaks(payload: Mapping[str, Any]) -> None:
-        text = json.dumps(payload, ensure_ascii=False)
+        if payload.get("repair_requested") is not True:
+            return
+        context = payload.get("repair_context", {})
+        text = json.dumps(context, ensure_ascii=False)
         for needle in ("metadata.json", "challenge.yml", "writenup/output", "exp.py"):
             if needle in text:
                 raise BuildAttemptRevalidationError(
-                    f"failed shard payload leaks organizer file reference: {needle}"
+                    f"failed shard repair context leaks organizer file reference: {needle}"
                 )
 
     def _failed_payload(
@@ -508,11 +518,52 @@ def _failure_reason(result: Mapping[str, Any]) -> str:
     return status
 
 
-def _relative_challenge_dir(paths: ProjectPaths, plan: ChallengeResumePlan) -> str:
+def _canonicalize_challenge_directory(
+    paths: ProjectPaths,
+    challenge_id: str,
+    plan: ChallengeResumePlan,
+) -> Path:
     if plan.directory is None:
         raise BuildAttemptRevalidationError(plan.lookup_status)
+    directory = plan.directory.resolve()
     try:
-        return plan.directory.resolve().relative_to(paths.root.resolve()).as_posix()
+        directory.relative_to(paths.challenges.resolve())
+        return directory
+    except ValueError:
+        pass
+    try:
+        directory.relative_to(paths.executions.resolve())
+    except ValueError as exc:
+        raise BuildAttemptRevalidationError(
+            "workspace challenge directory is outside managed storage"
+        ) from exc
+
+    metadata = read_json(directory / "metadata.json", None)
+    if not isinstance(metadata, Mapping) or metadata.get("id") != challenge_id:
+        raise BuildAttemptRevalidationError("challenge metadata id does not match")
+    category = metadata.get("category") or directory.parent.name
+    if not isinstance(category, str) or not category:
+        raise BuildAttemptRevalidationError("challenge metadata category is missing")
+    destination_root = paths.challenges / category
+    destination = destination_root / directory.name
+    if destination.exists():
+        raise BuildAttemptRevalidationError(
+            f"canonical challenge directory already exists: {destination.relative_to(paths.root).as_posix()}"
+        )
+    destination_root.mkdir(parents=True, exist_ok=True)
+    temporary = destination_root / f".revalidate-{uuid.uuid4().hex}"
+    shutil.copytree(directory, temporary, symlinks=False)
+    try:
+        temporary.replace(destination)
+    except Exception:
+        shutil.rmtree(temporary, ignore_errors=True)
+        raise
+    return destination
+
+
+def _relative_challenge_dir(paths: ProjectPaths, directory: Path) -> str:
+    try:
+        return directory.resolve().relative_to(paths.root.resolve()).as_posix()
     except ValueError as exc:
         raise BuildAttemptRevalidationError(
             "challenge directory is outside project root"

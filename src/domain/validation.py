@@ -54,6 +54,170 @@ _ROOT_START_INSTALL_RE = re.compile(
 )
 
 
+def validation_failure_detail(
+    *,
+    phase: str,
+    code: str,
+    message: str,
+    status: str | None = None,
+    path: str | None = None,
+    hint: str | None = None,
+) -> dict[str, str]:
+    """Return a stable machine-readable validation diagnostic."""
+    detail = {
+        "phase": phase,
+        "code": code,
+        "message": message,
+    }
+    if status:
+        detail["status"] = status
+    if path:
+        detail["path"] = path
+    if hint:
+        detail["hint"] = hint
+    return detail
+
+
+def classify_validation_failure(
+    *,
+    status: str,
+    error: str | None = None,
+    stderr: str | None = None,
+    contract_errors: list[str] | None = None,
+) -> list[dict[str, str]]:
+    """Classify legacy validation strings into stable repair-friendly codes."""
+    messages = contract_errors or ([error] if error else [])
+    if status == "nonzero_exit":
+        text = stderr or error or "validate.sh exited non-zero"
+        if "ModuleNotFoundError" in text or "No module named" in text:
+            code = "missing_dependency"
+            hint = "Make the solver offline-capable with the standard library or vendored helpers."
+        else:
+            code = "nonzero_exit"
+            hint = "Inspect validate.sh stderr/stdout and repair the failing command."
+        return [
+            validation_failure_detail(
+                phase="validate",
+                code=code,
+                status=status,
+                message=text.strip(),
+                path="validate.sh",
+                hint=hint,
+            )
+        ]
+    if status == "flag_mismatch":
+        return [
+            validation_failure_detail(
+                phase="validate",
+                code="flag_mismatch",
+                status=status,
+                message=error or "validate.sh did not print metadata.flag",
+                path="validate.sh",
+                hint="Make the final stdout flag token match metadata.flag.",
+            )
+        ]
+    if status in {"missing_validation", "timeout", "no_shell", "invalid_metadata"}:
+        return [
+            validation_failure_detail(
+                phase="validate",
+                code=status,
+                status=status,
+                message=error or status,
+            )
+        ]
+    if messages:
+        return [
+            _classify_contract_error(message, status=status)
+            for message in messages
+            if message
+        ]
+    return [
+        validation_failure_detail(
+            phase="validate",
+            code=status or "failed",
+            status=status,
+            message=error or status or "validation failed",
+        )
+    ]
+
+
+def _classify_contract_error(message: str, *, status: str = "contract_failed") -> dict[str, str]:
+    phase = "contract"
+    code = "contract_failed"
+    path: str | None = None
+    hint: str | None = None
+    if "nested generated output" in message:
+        phase = "gate"
+        code = "nested_output"
+        path = "output/challenges"
+        hint = "Move required files to the canonical challenge root and remove nested output trees."
+    elif "metadata." in message and "missing" in message:
+        code = "missing_metadata_field"
+        field = message.split("metadata.", 1)[1].split()[0]
+        path = "metadata.json"
+        hint = f"Populate metadata.{field} from the actual built artifact or service."
+    elif "metadata.build_status is not passed" in message:
+        code = "build_status_not_passed"
+        path = "metadata.json"
+        hint = "Only mark build_status passed after a real artifact or image exists."
+    elif "writenup/wp.md missing" in message:
+        phase = "gate"
+        code = "missing_document"
+        path = "writenup/wp.md"
+        hint = "Add a reproducible writeup with enough structure for document evidence."
+    elif "README.md missing" in message:
+        phase = "gate"
+        code = "missing_document"
+        path = "README.md"
+        hint = "Add an organizer README with build, run, and solve evidence."
+    elif "no compiled ELF artifact" in message:
+        code = "missing_artifact"
+        path = "attachments/"
+        hint = "Copy the compiled ELF into attachments/ and update artifact_sha256."
+    elif "no compiled PE/EXE artifact" in message:
+        code = "missing_artifact"
+        path = "attachments/"
+        hint = "Copy the compiled PE/EXE into attachments/ and update artifact_sha256."
+    elif "artifact file" in message and "missing under attachments" in message:
+        phase = "gate"
+        code = "missing_artifact"
+        path = "attachments/"
+        hint = "Ensure metadata.artifact points to an existing file under attachments/."
+    elif "artifact_sha256 does not match" in message:
+        phase = "gate"
+        code = "artifact_hash_mismatch"
+        path = "metadata.json"
+        hint = "Recompute metadata.artifact_sha256 from the exact published artifact."
+    elif "references 'metadata.json'" in message or "references 'challenge.yml'" in message:
+        code = "forbidden_solver_source"
+        path = "writenup/exp.py"
+        hint = "Derive the flag from the target or distributed artifact, not organizer files."
+    elif "embeds the literal metadata.flag" in message:
+        code = "hardcoded_flag"
+        path = "validate.sh" if message.startswith("validate.sh") else "writenup/exp.py"
+        hint = "Remove the literal flag and recover it at runtime."
+    elif "does not reference the distributed artifact" in message:
+        code = "solver_not_artifact_bound"
+        path = "writenup/exp.py"
+        hint = "Bind the RE solver to attachments/<artifact>."
+    elif "destructive Docker cleanup" in message:
+        code = "destructive_cleanup"
+        path = "validate.sh"
+        hint = "Limit cleanup to this challenge's own container/service."
+    elif "plaintext flag" in message or "recoverable in plaintext" in message:
+        code = "plaintext_flag_exposure"
+        path = "attachments/"
+        hint = "Encode or encrypt flag material in the delivered artifact."
+    return validation_failure_detail(
+        phase=phase,
+        code=code,
+        status=status,
+        message=message,
+        path=path,
+        hint=hint,
+    )
+
+
 def _read_text(path: Path) -> str | None:
     try:
         return path.read_text(encoding="utf-8", errors="replace")
@@ -453,13 +617,28 @@ class ChallengeValidator:
         errors = self.contract_errors(challenge_dir, metadata)
         if errors:
             record_status("failed", "; ".join(errors))
-            return {**record, "status": "contract_failed", "contract_errors": errors}
+            return {
+                **record,
+                "status": "contract_failed",
+                "contract_errors": errors,
+                "failure_details": classify_validation_failure(
+                    status="contract_failed",
+                    contract_errors=errors,
+                ),
+            }
 
         # 第二步：检查 validate.sh 是否存在
         validation_script = challenge_dir / "validate.sh"
         if not validation_script.exists():
             record_status("failed", "validate.sh missing")
-            return {**record, "status": "missing_validation"}
+            return {
+                **record,
+                "status": "missing_validation",
+                "failure_details": classify_validation_failure(
+                    status="missing_validation",
+                    error="validate.sh missing",
+                ),
+            }
 
         # 第三步：执行参考解题脚本
         started = time.monotonic()
@@ -474,10 +653,25 @@ class ChallengeValidator:
             )
         except subprocess.TimeoutExpired:
             record_status("failed", "validation timed out")
-            return {**record, "status": "timeout"}
+            return {
+                **record,
+                "status": "timeout",
+                "failure_details": classify_validation_failure(
+                    status="timeout",
+                    error="validation timed out",
+                ),
+            }
         except FileNotFoundError as exc:
             record_status("failed", "validation shell not found")
-            return {**record, "status": "no_shell", "error": str(exc)}
+            return {
+                **record,
+                "status": "no_shell",
+                "error": str(exc),
+                "failure_details": classify_validation_failure(
+                    status="no_shell",
+                    error=str(exc),
+                ),
+            }
 
         # 记录执行结果
         record.update(
@@ -493,7 +687,15 @@ class ChallengeValidator:
         # 非零退出 → 失败
         if process.returncode != 0:
             record_status("failed", f"validation exited {process.returncode}")
-            return {**record, "status": "nonzero_exit"}
+            return {
+                **record,
+                "status": "nonzero_exit",
+                "failure_details": classify_validation_failure(
+                    status="nonzero_exit",
+                    stderr=record.get("stderr_tail"),
+                    error="validate.sh exited non-zero",
+                ),
+            }
 
         # 比对 flag
         matches = FLAG_TOKEN_RE.findall(process.stdout)
@@ -514,12 +716,24 @@ class ChallengeValidator:
                     "error": necessity,
                     "necessity_note": necessity,
                     "contract_errors": [necessity],
+                    "failure_details": classify_validation_failure(
+                        status="unnecessary_intended_path",
+                        error=necessity,
+                        contract_errors=[necessity],
+                    ),
                 }
             record_status("passed")
             return {**record, "status": "passed"}
 
         record_status("failed", "flag did not match metadata")
-        return {**record, "status": "flag_mismatch"}
+        return {
+            **record,
+            "status": "flag_mismatch",
+            "failure_details": classify_validation_failure(
+                status="flag_mismatch",
+                error="flag did not match metadata",
+            ),
+        }
 
     def _intended_path_unnecessary(
         self, challenge_dir: Path, metadata: dict, expected_flag: str

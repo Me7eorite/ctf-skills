@@ -23,12 +23,20 @@ class OrganizerFileLeakGuardTests(unittest.TestCase):
             {"challenges": [{"id": "re-0001", "category": "re"}]}
         )
 
-    def test_metadata_reference_is_rejected(self):
+    def test_generation_guidance_reference_is_allowed_for_non_repair_payload(self):
+        BuildAttemptRevalidationService._assert_no_organizer_file_leaks(
+            {"hint": "write metadata.json and challenge.yml as required files"}
+        )
+
+    def test_repair_context_metadata_reference_is_rejected(self):
         with self.assertRaisesRegex(
             BuildAttemptRevalidationError, "metadata.json"
         ):
             BuildAttemptRevalidationService._assert_no_organizer_file_leaks(
-                {"hint": "read metadata.json for the flag"}
+                {
+                    "repair_requested": True,
+                    "repair_context": {"hint": "read metadata.json for the flag"},
+                }
             )
 
 

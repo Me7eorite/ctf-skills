@@ -130,6 +130,7 @@ def test_contract_errors_are_recorded_as_validation_error(tmp_path: Path) -> Non
     assert results[0]["validation_error"] == (
         "metadata.build_status is not passed; missing deploy/Dockerfile"
     )
+    assert results[0]["validation_failure_details"][0]["code"] == "build_status_not_passed"
     failed_events = [
         event
         for event in recorder.events
@@ -169,6 +170,7 @@ def test_unnecessary_intended_path_reason_is_forwarded_to_repair(tmp_path: Path)
     assert results[0]["validation_contract_errors"] == [
         "flag is recoverable in plaintext without the intended technique (attachments/checker)"
     ]
+    assert results[0]["validation_failure_details"][0]["code"] == "plaintext_flag_exposure"
     failed_events = [
         event
         for event in recorder.events
@@ -235,8 +237,10 @@ def test_validation_repair_prompt_blocks_metadata_replacement_cheat() -> None:
                     "flag from the artifact, not organizer files"
                 ),
                 "validation_contract_errors": [
-                    "validate.sh embeds the literal metadata.flag; the reference solver must recover the flag, not hardcode it",
-                    "re solver references 'metadata.json'; it must derive the flag from the artifact, not organizer files",
+                    "validate.sh embeds the literal metadata.flag; the reference "
+                    "solver must recover the flag, not hardcode it",
+                    "re solver references 'metadata.json'; it must derive the flag "
+                    "from the artifact, not organizer files",
                 ],
             }
         ],

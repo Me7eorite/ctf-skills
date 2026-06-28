@@ -24,7 +24,7 @@ from domain.resume import (
     implement_evidence_reason,
     validator_message,
 )
-from domain.validation import ChallengeValidator
+from domain.validation import ChallengeValidator, classify_validation_failure
 
 
 class ProgressRecorder(Protocol):
@@ -109,6 +109,10 @@ def run_validation(
                     "solve_status": "failed",
                     "validation_status": "contract_failed",
                     "validation_error": gate_error,
+                    "validation_failure_details": classify_validation_failure(
+                        status="contract_failed",
+                        contract_errors=[gate_error],
+                    ),
                 }
             )
             continue
@@ -166,6 +170,16 @@ def run_validation(
             contract_errors = outcome.get("contract_errors")
             if not error and isinstance(contract_errors, list):
                 error = "; ".join(str(item) for item in contract_errors if item)
+            failure_details = outcome.get("failure_details")
+            if not isinstance(failure_details, list):
+                failure_details = classify_validation_failure(
+                    status=status,
+                    error=str(error) if error else None,
+                    stderr=outcome.get("stderr_tail"),
+                    contract_errors=contract_errors
+                    if isinstance(contract_errors, list)
+                    else None,
+                )
             state.record(
                 shard=original_shard_name,
                 challenge_id=challenge_id,
@@ -185,6 +199,7 @@ def run_validation(
                     "validation_stdout_tail": outcome.get("stdout_tail"),
                     "validation_stderr_tail": outcome.get("stderr_tail"),
                     "validation_contract_errors": contract_errors,
+                    "validation_failure_details": failure_details,
                 }
             )
     return results

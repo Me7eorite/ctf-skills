@@ -107,6 +107,18 @@ def test_bulk_build_exposes_enqueue_and_ordered_execution_modes() -> None:
     assert "build_attempt_ids: result.build_attempt_ids" in source
 
 
+def test_bulk_design_exposes_queue_and_bounded_start_modes() -> None:
+    source = (STATIC / "js" / "views" / "design-tasks.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "提交设计 (" in source
+    assert "并发开始设计" in source
+    assert "/api/design-tasks/queue" in source
+    assert "/api/design-tasks/design" in source
+    assert "concurrency: 2" in source
+
+
 def test_missing_build_profile_is_visible_and_disables_build_eligibility() -> None:
     source = (STATIC / "js" / "views" / "design-tasks.js").read_text(
         encoding="utf-8"

@@ -24,6 +24,7 @@ from domain.challenge_designs import ChallengeDesign, DesignAttempt
 from domain.design.difficulty_review import DesignDifficultyReview
 from domain.design_task_validators import DesignTaskValidationError
 from domain.design_tasks import DesignTask
+from services.challenge_design_service import ChallengeDesignServiceResult
 from web.dashboard import DashboardService
 from web.server import create_app
 
@@ -119,6 +120,7 @@ def _make_review(task_id: UUID, design_id: UUID) -> DesignDifficultyReview:
 def _app_client(
     *,
     planning_service=None,
+    design_service=None,
     design_repo=None,
     research_repo=None,
     difficulty_review_repo=None,
@@ -172,6 +174,7 @@ def _app_client(
         default_planning_service = SimpleNamespace(
             generate_for_request=lambda _request_id: [],
         )
+        default_design_service = SimpleNamespace()
         patches = [
             patch("persistence.session.transaction", _ctx),
             patch(
@@ -193,6 +196,10 @@ def _app_client(
             patch(
                 "services.DesignTaskPlanningService",
                 return_value=planning_service or default_planning_service,
+            ),
+            patch(
+                "services.ChallengeDesignService",
+                return_value=design_service or default_design_service,
             ),
         ]
         for p in patches:
@@ -368,6 +375,62 @@ class QueueAndArchiveTests(unittest.TestCase):
             resp = client.post(f"/api/design-tasks/{task_id}/queue")
             self.assertEqual(resp.status_code, 200)
             self.assertEqual(resp.json()["status"], "queued")
+
+    def test_batch_queue_transitions_selected_tasks(self):
+        task_ids = [uuid4(), uuid4()]
+        seen = []
+
+        def _set(task_uuid, status):
+            seen.append((task_uuid, status))
+            return _make_design_task(status="queued")
+
+        repo = SimpleNamespace(
+            list_design_tasks=lambda _id: [],
+            list_tasks=lambda **_kw: [],
+            summarize_for_request=lambda _id: {"total": 0, "by_status": {}},
+            get_with_history=lambda _id: None,
+            set_design_task_status=_set,
+        )
+        with _app_client(design_repo=repo) as client:
+            resp = client.post(
+                "/api/design-tasks/queue",
+                json={"design_task_ids": [str(task_id) for task_id in task_ids]},
+            )
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(resp.json()["total"], 2)
+            self.assertEqual(seen, [(task_ids[0], "queued"), (task_ids[1], "queued")])
+
+    def test_batch_design_runs_selected_tasks_with_bounded_concurrency(self):
+        task_ids = [uuid4(), uuid4()]
+        seen = []
+
+        def _design(task_uuid, caller):
+            seen.append((task_uuid, caller))
+            return ChallengeDesignServiceResult(
+                design_task_id=task_uuid,
+                attempt_id=uuid4(),
+                design_task_status="designed",
+                attempt_status="completed",
+                challenge_design=None,
+                error=None,
+            )
+
+        design_service = SimpleNamespace(design_for_task=_design)
+        with _app_client(design_service=design_service) as client:
+            resp = client.post(
+                "/api/design-tasks/design",
+                json={
+                    "design_task_ids": [str(task_id) for task_id in task_ids],
+                    "concurrency": 99,
+                },
+            )
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.json()
+            self.assertEqual(payload["total"], 2)
+            self.assertEqual(payload["failed"], 0)
+            self.assertEqual(payload["concurrency"], 4)
+            self.assertEqual([item["design_task_status"] for item in payload["results"]], ["designed", "designed"])
+            self.assertEqual({item[1] for item in seen}, {"dashboard-batch"})
 
     def test_archive_transitions_status(self):
         task_id = uuid4()

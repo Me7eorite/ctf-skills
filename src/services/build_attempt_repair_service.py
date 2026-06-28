@@ -19,6 +19,7 @@ from persistence.models import build_attempts as build_model
 from persistence.models import design_tasks as task_model
 from persistence.models.progress import ProgressEvent
 from persistence.session import SessionFactory, transaction
+from services.build_attempt_auto_repair_service import auto_repair_challenge
 from services.build_attempt_revalidation_service import (
     BuildAttemptRevalidationError,
     BuildAttemptRevalidationService,
@@ -68,6 +69,36 @@ class BuildAttemptRepairService:
         prompt_path = repair_dir / "prompt.md"
 
         self._record_event(events_path, "analysis", "started", "analysis started")
+        auto_result = auto_repair_challenge(Path(context["challenge_dir"]))
+        if auto_result.changed:
+            self._record_event(
+                events_path,
+                "solve",
+                "passed",
+                "deterministic repair applied: " + "; ".join(auto_result.actions),
+            )
+            self._record_event(events_path, "verify", "running", "verification running")
+            try:
+                self._revalidate(attempt_id)
+            except BuildAttemptRevalidationError as exc:
+                self._record_event(
+                    events_path,
+                    "verify",
+                    "failed",
+                    f"deterministic repair did not pass: {exc}",
+                )
+            else:
+                self._record_event(events_path, "verify", "passed", "verification passed")
+                return BuildAttemptRepairResult(
+                    attempt_id=attempt_id,
+                    repair_id=repair_id,
+                    status="succeeded",
+                    verification_status="passed",
+                    log_path=str(log_path),
+                    events_path=str(events_path),
+                    failure_summary="deterministic repair applied",
+                )
+
         prompt = _repair_prompt(context)
         prompt_path.write_text(prompt, encoding="utf-8")
         self._record_event(events_path, "solve", "running", "AI repair running")
@@ -97,12 +128,7 @@ class BuildAttemptRepairService:
         self._record_event(events_path, "solve", "passed", "patch applied")
         self._record_event(events_path, "verify", "running", "verification running")
         try:
-            BuildAttemptRevalidationService(
-                paths=self.paths,
-                progress=self.progress,
-                session_factory=self.session_factory,
-                worker=REPAIR_WORKER,
-            ).revalidate(attempt_id)
+            self._revalidate(attempt_id)
         except BuildAttemptRevalidationError as exc:
             detail = str(exc)
             self._record_event(events_path, "verify", "failed", detail)
@@ -113,8 +139,8 @@ class BuildAttemptRepairService:
                 verification_status="failed",
                 log_path=str(log_path),
                 events_path=str(events_path),
-                failure_summary=detail,
-            )
+            failure_summary=detail,
+        )
 
         self._record_event(events_path, "verify", "passed", "verification passed")
         return BuildAttemptRepairResult(
@@ -125,6 +151,14 @@ class BuildAttemptRepairService:
             log_path=str(log_path),
             events_path=str(events_path),
         )
+
+    def _revalidate(self, attempt_id: UUID) -> None:
+        BuildAttemptRevalidationService(
+            paths=self.paths,
+            progress=self.progress,
+            session_factory=self.session_factory,
+            worker=REPAIR_WORKER,
+        ).revalidate(attempt_id)
 
     def _prepare(self, attempt_id: UUID) -> dict[str, Any]:
         with transaction(factory=self.session_factory) as session:
@@ -182,6 +216,8 @@ class BuildAttemptRepairService:
             **attempt,
             "challenge_id": challenge_id,
             "challenge_dir": str(challenge_dir),
+            "failure_details": _failure_details(session, row),
+            "file_context": _file_context(challenge_dir),
         }
 
     @staticmethod
@@ -307,6 +343,9 @@ Workflow:
 Failure summary:
 {context.get("failure_summary") or "(none)"}
 
+Structured failure details:
+{json.dumps(context.get("failure_details") or [], ensure_ascii=False, indent=2)}
+
 Attempt:
 - build_attempt_id: {context["id"]}
 - design_task_id: {context["design_task_id"]}
@@ -323,6 +362,9 @@ Rules:
 - Prefer targeted edits to solver, validate.sh, metadata, documentation, and current artifact files.
 - For reverse-engineering repairs, the solver and validate.sh must derive the flag
   from distributed artifacts, not organizer files such as metadata.json or challenge.yml.
+
+Relevant file context:
+{context.get("file_context") or "(none)"}
 """
 
 
@@ -340,3 +382,33 @@ def _hermes_environment(paths: ProjectPaths, arguments: list[str]) -> dict[str, 
         query_index = arguments.index("-q") if "-q" in arguments else len(arguments)
         arguments[query_index:query_index] = ["--provider", "custom"]
     return environment
+
+
+def _failure_details(session, source) -> list[dict[str, Any]]:
+    del session, source
+    return []
+
+
+def _file_context(challenge_dir: Path) -> str:
+    snippets: list[str] = []
+    for relative in (
+        "metadata.json",
+        "validate.sh",
+        "writenup/exp.py",
+        "README.md",
+        "writenup/wp.md",
+    ):
+        path = challenge_dir / relative
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        snippets.append(f"--- {relative} ---\n{_middle_truncate(text, 6000)}")
+    return "\n\n".join(snippets)
+
+
+def _middle_truncate(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    head = limit // 2
+    tail = limit - head
+    return f"{text[:head]}\n... <truncated> ...\n{text[-tail:]}"

@@ -346,7 +346,7 @@ async function buildTaskNow(taskId) {
 }
 
 async function buildSelectedTasks({ startSequential = false } = {}) {
-  const ids = [...state.selected];
+  const ids = selectedTasks().filter(eligibleForBuild).map((task) => task.id);
   if (!ids.length) return;
   state.flags.bulkBuild = true;
   render(state.data);
@@ -382,6 +382,50 @@ async function buildSelectedTasks({ startSequential = false } = {}) {
     showToast(designErrorMessage(err.message), true);
   } finally {
     state.flags.bulkBuild = false;
+    render(state.data);
+    initIcons();
+  }
+}
+
+async function queueSelectedDesignTasks() {
+  const ids = selectedTasks().filter((task) => task.status === "draft").map((task) => task.id);
+  if (!ids.length) return;
+  state.flags.bulkDesign = "queue";
+  render(state.data);
+  initIcons();
+  try {
+    const result = await postJson("/api/design-tasks/queue", { design_task_ids: ids });
+    ids.forEach((id) => state.selected.delete(id));
+    showToast(`已提交设计 · 共 ${result.total} 个任务`);
+    await reloadList();
+  } catch (err) {
+    showToast(designErrorMessage(err.message), true);
+  } finally {
+    state.flags.bulkDesign = null;
+    render(state.data);
+    initIcons();
+  }
+}
+
+async function designSelectedTasks() {
+  const ids = selectedTasks().filter((task) => task.status === "queued").map((task) => task.id);
+  if (!ids.length) return;
+  state.flags.bulkDesign = "design";
+  render(state.data);
+  initIcons();
+  try {
+    const result = await postJson("/api/design-tasks/design", {
+      design_task_ids: ids,
+      concurrency: 2,
+    });
+    ids.forEach((id) => state.selected.delete(id));
+    const suffix = result.failed ? `，失败 ${result.failed} 个` : "";
+    showToast(`已完成批量设计 · 并发 ${result.concurrency} · 共 ${result.total} 个任务${suffix}`, !!result.failed);
+    await reloadList();
+  } catch (err) {
+    showToast(designErrorMessage(err.message), true);
+  } finally {
+    state.flags.bulkDesign = null;
     render(state.data);
     initIcons();
   }
@@ -545,23 +589,45 @@ function renderList(root) {
       ${rows.length ? renderTable(rows) : `<div class="empty card-body">没有符合条件的题目设计任务</div>`}
     </section>
 
-    ${state.selected.size ? `
+    ${renderBulkBar()}
+  `;
+}
+
+function renderBulkBar() {
+  const tasks = selectedTasks();
+  if (!tasks.length) return "";
+  const draftCount = tasks.filter((task) => task.status === "draft").length;
+  const queuedCount = tasks.filter((task) => task.status === "queued").length;
+  const buildCount = tasks.filter(eligibleForBuild).length;
+  const busy = !!state.flags.bulkBuild || !!state.flags.bulkDesign;
+  return `
       <div class="dt-bulk-bar">
         <span>
-          已选择 <strong>${state.selected.size}</strong> 个可构建任务
-          · 顺序模式同一时间只运行一个，并按勾选顺序继续
+          已选择 <strong>${tasks.length}</strong> 个任务
+          · 设计默认并发 2，构建顺序模式同一时间只运行一个
         </span>
         <div class="btn-group">
           <button class="btn btn-ghost btn-sm" id="dt-clear-selection">取消选择</button>
-          <button id="dt-enqueue-selected" class="btn btn-secondary btn-sm${state.flags.bulkBuild ? " btn-loading" : ""}">
+          ${draftCount ? `
+            <button id="dt-queue-selected" class="btn btn-secondary btn-sm${state.flags.bulkDesign === "queue" ? " btn-loading" : ""}"${busy ? " disabled" : ""}>
+              <i data-lucide="send"></i> 提交设计 (${draftCount})
+            </button>
+          ` : ""}
+          ${queuedCount ? `
+            <button id="dt-design-selected" class="btn btn-primary btn-sm${state.flags.bulkDesign === "design" ? " btn-loading" : ""}"${busy ? " disabled" : ""}>
+              <i data-lucide="sparkles"></i> 并发开始设计 (${queuedCount})
+            </button>
+          ` : ""}
+          ${buildCount ? `
+          <button id="dt-enqueue-selected" class="btn btn-secondary btn-sm${state.flags.bulkBuild ? " btn-loading" : ""}"${busy ? " disabled" : ""}>
             <i data-lucide="list-plus"></i> 仅加入队列
           </button>
-          <button id="dt-build-selected" class="btn btn-primary btn-sm${state.flags.bulkBuild ? " btn-loading" : ""}">
+          <button id="dt-build-selected" class="btn btn-primary btn-sm${state.flags.bulkBuild ? " btn-loading" : ""}"${busy ? " disabled" : ""}>
             <i data-lucide="list-ordered"></i> 按勾选顺序构建
           </button>
+          ` : ""}
         </div>
       </div>
-    ` : ""}
   `;
 }
 
@@ -724,7 +790,7 @@ function renderTable(rows) {
         <tbody>
           ${rows.map((task) => `
             <tr data-design-task-id="${escapeHtml(task.id)}">
-              <td>${renderBuildCheckbox(task)}</td>
+              <td>${renderSelectionCheckbox(task)}</td>
               <td>
                 <button class="dt-task-link dt-open-detail">${escapeHtml(task.title)}</button>
                 <div class="dt-task-meta"><span class="mono">${escapeHtml(task.challenge_id)}</span><span>任务 ${escapeHtml(task.task_no)}</span></div>
@@ -742,13 +808,18 @@ function renderTable(rows) {
   `;
 }
 
-function renderBuildCheckbox(task) {
-  if (!eligibleForBuild(task)) return "";
+function renderSelectionCheckbox(task) {
+  if (!eligibleForSelection(task)) return "";
+  const title = task.status === "draft"
+    ? "选择用于批量提交设计"
+    : task.status === "queued"
+      ? "选择用于批量开始设计"
+      : "选择用于批量构建";
   return `
     <input
-      class="dt-select-build"
+      class="dt-select-task"
       type="checkbox"
-      title="选择用于批量构建"
+      title="${title}"
       aria-label="选择 ${escapeHtml(task.title)}"
       ${state.selected.has(task.id) ? " checked" : ""}
     >
@@ -1056,10 +1127,20 @@ function renderBuildReadinessWarning(category = null) {
 }
 
 function pruneSelection() {
-  const eligibleIds = new Set((state.list || []).filter(eligibleForBuild).map((task) => task.id));
+  const eligibleIds = new Set((state.list || []).filter(eligibleForSelection).map((task) => task.id));
   for (const id of [...state.selected]) {
     if (!eligibleIds.has(id)) state.selected.delete(id);
   }
+}
+
+function selectedTasks() {
+  return [...state.selected]
+    .map((id) => (state.list || []).find((task) => task.id === id))
+    .filter(Boolean);
+}
+
+function eligibleForSelection(task) {
+  return task.status === "draft" || task.status === "queued" || eligibleForBuild(task);
 }
 
 function shortId(value) {
@@ -1140,6 +1221,14 @@ export function bind() {
     }
     if (event.target.closest("#dt-enqueue-selected")) {
       buildSelectedTasks();
+      return;
+    }
+    if (event.target.closest("#dt-queue-selected")) {
+      queueSelectedDesignTasks();
+      return;
+    }
+    if (event.target.closest("#dt-design-selected")) {
+      designSelectedTasks();
       return;
     }
     if (event.target.closest("#dt-back")) {
@@ -1231,7 +1320,7 @@ export function bind() {
       initIcons();
       return;
     }
-    const checkbox = event.target.closest(".dt-select-build");
+    const checkbox = event.target.closest(".dt-select-task");
     if (!checkbox) return;
     const row = checkbox.closest("[data-design-task-id]");
     const taskId = row?.dataset.designTaskId;
