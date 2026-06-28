@@ -1,4 +1,5 @@
 import json
+import tarfile
 import tempfile
 import unittest
 import zipfile
@@ -251,3 +252,203 @@ class PackingTests(unittest.TestCase):
         with patch("packing.packer.shutil.which", return_value=None):
             with self.assertRaisesRegex(PackingError, "docker CLI unavailable"):
                 packer.pack(self.output)
+
+
+class SaveDockerTests(unittest.TestCase):
+    @staticmethod
+    def _completed(returncode=0, stdout="", stderr=""):
+        return type(
+            "P", (), {"returncode": returncode, "stdout": stdout, "stderr": stderr}
+        )()
+
+    @staticmethod
+    def _image_tar(tar_path: Path, repo_tags) -> None:
+        """写一个最小的 docker 镜像存档（含 manifest.json）。"""
+        import io
+
+        manifest = json.dumps([{"RepoTags": repo_tags}]).encode("utf-8")
+        with tarfile.open(tar_path, "w") as archive:
+            info = tarfile.TarInfo("manifest.json")
+            info.size = len(manifest)
+            archive.addfile(info, io.BytesIO(manifest))
+
+    def test_saves_then_prunes_self_generated_image(self):
+        from packing.docker import _save_docker
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            errors: list = []
+            warnings: list = []
+            metadata = {
+                "id": "web-0001",
+                "port": 8080,
+                "docker_image": "web-0001-sqli:latest",
+            }
+            expected = output / "web-0001-sqli[8080]-20260628.tar"
+
+            def fake_run(cmd, *args, **kwargs):
+                # docker save 这一步真正写出存档，供后续校验读取。
+                if cmd[:2] == ["docker", "save"]:
+                    self._image_tar(expected, ["web-0001-sqli:latest"])
+                return self._completed()
+
+            with patch(
+                "packing.docker.subprocess.run", side_effect=fake_run
+            ) as run:
+                tar_path, image_row = _save_docker(
+                    "docker",
+                    metadata,
+                    "web-0001-sqli",
+                    output,
+                    date(2026, 6, 28),
+                    errors,
+                    warnings,
+                    require_docker=True,
+                )
+
+        # 文件名规则恢复原样：题目名[端口]-YYYYMMDD.tar。
+        self.assertEqual(tar_path, expected)
+        self.assertEqual(image_row[1], "web-0001-sqli[8080]-20260628.tar")
+        self.assertEqual(errors, [])
+        self.assertEqual(warnings, [])
+        # 顺序：inspect → save → 校验通过后 image rm。
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertEqual(
+            commands,
+            [
+                ["docker", "image", "inspect", "web-0001-sqli:latest"],
+                ["docker", "save", "-o", str(expected), "web-0001-sqli:latest"],
+                ["docker", "image", "rm", "web-0001-sqli:latest"],
+            ],
+        )
+
+    def test_keeps_image_when_save_verification_fails(self):
+        from packing.docker import _save_docker
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            errors: list = []
+            warnings: list = []
+            metadata = {
+                "id": "web-0001",
+                "port": 8080,
+                "docker_image": "web-0001-sqli:latest",
+            }
+
+            # inspect ok、save 返回 0 但没写出有效 tar（校验必失败）。
+            with patch(
+                "packing.docker.subprocess.run",
+                side_effect=[self._completed(), self._completed()],
+            ) as run:
+                with self.assertRaisesRegex(PackingError, "verification failed"):
+                    _save_docker(
+                        "docker",
+                        metadata,
+                        "web-0001-sqli",
+                        output,
+                        date(2026, 6, 28),
+                        errors,
+                        warnings,
+                        require_docker=True,
+                    )
+            # 校验未过：只调用了 inspect、save，绝不能执行 image rm。
+            commands = [call.args[0] for call in run.call_args_list]
+            self.assertEqual([cmd[:2] for cmd in commands], [["docker", "image"], ["docker", "save"]])
+            self.assertNotIn("rm", [cmd[-1] for cmd in commands])
+
+    def test_prune_failure_warns_but_keeps_tar(self):
+        from packing.docker import _save_docker
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            errors: list = []
+            warnings: list = []
+            metadata = {
+                "id": "web-0001",
+                "port": 8080,
+                "docker_image": "web-0001-sqli:latest",
+            }
+            expected = output / "web-0001-sqli[8080]-20260628.tar"
+
+            def fake_run(cmd, *args, **kwargs):
+                if cmd[:2] == ["docker", "save"]:
+                    self._image_tar(expected, ["web-0001-sqli:latest"])
+                    return self._completed()
+                if cmd[:3] == ["docker", "image", "rm"]:
+                    return self._completed(returncode=1, stderr="image is in use")
+                return self._completed()
+
+            with patch("packing.docker.subprocess.run", side_effect=fake_run):
+                tar_path, image_row = _save_docker(
+                    "docker",
+                    metadata,
+                    "web-0001-sqli",
+                    output,
+                    date(2026, 6, 28),
+                    errors,
+                    warnings,
+                    require_docker=True,
+                )
+
+        # 删除失败不致命：tar 仍交付，仅产生告警。
+        self.assertEqual(tar_path, expected)
+        self.assertEqual(errors, [])
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("image not pruned", warnings[0])
+
+    def test_refuses_image_belonging_to_another_challenge(self):
+        from packing.docker import _save_docker
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            errors: list = []
+            warnings: list = []
+            metadata = {
+                "id": "web-0001",
+                "port": 8080,
+                # 偏移：指向了别的题/基础镜像。
+                "docker_image": "web-0009-other:latest",
+            }
+            with patch("packing.docker.subprocess.run") as run:
+                with self.assertRaisesRegex(PackingError, "does not belong"):
+                    _save_docker(
+                        "docker",
+                        metadata,
+                        "web-0001-sqli",
+                        output,
+                        date(2026, 6, 28),
+                        errors,
+                        warnings,
+                        require_docker=True,
+                    )
+            # 既然归属校验未过，绝不能调用 docker。
+            run.assert_not_called()
+
+    def test_errors_when_self_image_missing_on_host(self):
+        from packing.docker import _save_docker
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            errors: list = []
+            warnings: list = []
+            metadata = {
+                "id": "web-0001",
+                "port": 8080,
+                "docker_image": "web-0001-sqli:latest",
+            }
+            # image inspect 返回非零：镜像不存在。
+            with patch(
+                "packing.docker.subprocess.run",
+                side_effect=[self._completed(returncode=1, stderr="No such image")],
+            ):
+                with self.assertRaisesRegex(PackingError, "not present on host"):
+                    _save_docker(
+                        "docker",
+                        metadata,
+                        "web-0001-sqli",
+                        output,
+                        date(2026, 6, 28),
+                        errors,
+                        warnings,
+                        require_docker=True,
+                    )

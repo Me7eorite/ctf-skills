@@ -61,6 +61,7 @@ The shard fields are requirements, not suggestions. In particular, preserve
 Web runtime/framework choices and Re/Pwn target formats, architectures,
 compilers, ports, and mitigations.
 {design_context_instruction}
+{build_contract_section}
 
 # Inputs
 

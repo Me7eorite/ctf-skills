@@ -287,6 +287,55 @@ class RenderPromptTests(unittest.TestCase):
             self.assertNotIn("authoritative for deployment", plain)
             self.assertIn("authoritative for deployment", designed)
 
+    def test_build_contract_section_locks_governed_fields(self):
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            paths = _seed_paths(tmp_path)
+            shard = tmp_path / "re.json"
+            shard.write_text(
+                (
+                    '{"challenges": [{"id": "re-0001", "category": "re",'
+                    ' "difficulty": "hard", "language": "rust",'
+                    ' "target_format": "wasm", "architecture": "x86_64",'
+                    ' "primary_technique": "vm-devirtualization",'
+                    ' "runtime": "unspecified"}]}'
+                ),
+                encoding="utf-8",
+            )
+            rendered = render_prompt(
+                paths,  # type: ignore[arg-type]
+                shard,
+                tmp_path / "r.json",
+                worker="dry-01",
+                original_shard_name="re.json",
+            )
+
+            self.assertIn("# Authoritative Build Contract", rendered)
+            self.assertIn("`re-0001`:", rendered)
+            self.assertIn("language=rust", rendered)
+            self.assertIn("target_format=wasm", rendered)
+            self.assertIn("primary_technique=vm-devirtualization", rendered)
+            # Matrix placeholder values are not surfaced as governed.
+            self.assertNotIn("runtime=unspecified", rendered)
+            # Fail-rather-than-substitute instruction is present.
+            self.assertIn("report its `build_status` as `failed`", rendered)
+            self.assertIn("Do not build a generic", rendered)
+
+    def test_build_contract_section_absent_without_challenges(self):
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            paths = _seed_paths(tmp_path)
+            shard = tmp_path / "empty.json"
+            shard.write_text("{}", encoding="utf-8")
+            rendered = render_prompt(
+                paths,  # type: ignore[arg-type]
+                shard,
+                tmp_path / "r.json",
+                worker="dry-01",
+                original_shard_name="empty.json",
+            )
+            self.assertNotIn("# Authoritative Build Contract", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

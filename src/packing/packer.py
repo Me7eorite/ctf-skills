@@ -190,6 +190,7 @@ class Packer:
                 directories["docker-tar"],
                 self.options.generated_on or date.today(),
                 self.errors,
+                self.warnings,
                 self.options.require_docker,
             )
 

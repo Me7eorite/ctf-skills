@@ -420,6 +420,7 @@ def render_prompt(
     prompt_text = paths.prompt_template.read_text(encoding="utf-8")
     progress_shard_name = original_shard_name or shard.name
     design_context_instruction = _design_context_instruction(shard)
+    build_contract_section = _render_build_contract_section(shard)
     if workspace_relative:
         runtime_paths = {
             "{shard_path}": "./input/shard.json",
@@ -451,6 +452,7 @@ def render_prompt(
         "{resume_plan}": _render_resume_plan_section(resume_plan, resume_output_targets),
         "{repair_section}": _render_repair_section(repair_requested, repair_context),
         "{design_context_instruction}": design_context_instruction,
+        "{build_contract_section}": build_contract_section,
     }
     for placeholder, rendered_value in replacement_map.items():
         prompt_text = prompt_text.replace(placeholder, rendered_value)
@@ -469,6 +471,97 @@ def _design_context_instruction(shard: Path) -> str:
         "authoritative for deployment, artifacts, flag location, validation "
         "steps, hints, and operator-facing prompt copy."
     )
+
+
+# Governed fields the Build agent must implement exactly. They originate from
+# the design/matrix row (see
+# ``services.build_orchestration_service._matrix_values``) and are the usual
+# drift surface: Build silently falling back to C/ELF/x86_64 instead of the
+# declared language, format, architecture, or technique.
+GOVERNED_CONTRACT_FIELDS: tuple[str, ...] = (
+    "category",
+    "difficulty",
+    "deployment",
+    "primary_technique",
+    "runtime",
+    "framework",
+    "language",
+    "compiler",
+    "target_format",
+    "architecture",
+    "target_platform",
+    "mitigations",
+    "strip",
+    "port",
+)
+
+# Values the matrix row fills in when the design left a field blank. Surfacing
+# them as "governed" would be misleading, so they are skipped.
+_CONTRACT_PLACEHOLDER_VALUES: frozenset[str] = frozenset(
+    {"", "unspecified", "none", "null"}
+)
+
+
+def _format_contract_value(value: object) -> str | None:
+    # 中文注释：把单个 governed 字段值规整成可读文本；占位/空值返回 None 以便跳过。
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, Mapping):
+        if not value:
+            return None
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    text = str(value).strip()
+    if text.lower() in _CONTRACT_PLACEHOLDER_VALUES:
+        return None
+    return text
+
+
+def _render_build_contract_section(shard: Path) -> str:
+    """Render the per-challenge governed fields as a locked, do-not-deviate block.
+
+    中文注释：Build 阶段最常见的偏移是把 design 声明的 language/target_format/
+    architecture/technique 偷偷回落成通用默认（C/ELF/x86_64）。把这些字段显式列成
+    "锁死字段"，并要求做不出就 fail 而非替换，可以收敛偏移概率。
+    """
+    payload = read_json(shard, {})
+    challenges = payload.get("challenges") if isinstance(payload, dict) else None
+    if not isinstance(challenges, list) or not challenges:
+        return ""
+    entries: list[str] = []
+    for challenge in challenges:
+        if not isinstance(challenge, Mapping):
+            continue
+        challenge_id = _format_contract_value(challenge.get("id")) or "unknown"
+        fields = [
+            f"{name}={rendered}"
+            for name in GOVERNED_CONTRACT_FIELDS
+            if (rendered := _format_contract_value(challenge.get(name))) is not None
+        ]
+        if not fields:
+            continue
+        entries.append(f"- `{challenge_id}`: " + ", ".join(fields))
+    if not entries:
+        return ""
+    listing = "\n".join(entries)
+    return f"""
+# Authoritative Build Contract
+
+The GOVERNED fields below come from the committed design for each challenge.
+They are locked: implement them exactly. Do NOT substitute or silently fall
+back to a generic language, compiler, target format, architecture, or technique
+(for example building a C/ELF/x86_64 artifact when another value is declared).
+
+{listing}
+
+If a GOVERNED field cannot be implemented as specified in this environment, STOP
+that challenge and report its `build_status` as `failed` with a concrete reason
+(such as the missing toolchain or unsupported target). Do not build a generic
+substitute and do not change the challenge's declared identity to make it
+buildable. You MAY freely choose only the implementation details that are NOT
+listed above.
+"""
 
 
 def _render_seed_urls(seed_urls: tuple[str, ...]) -> str:
