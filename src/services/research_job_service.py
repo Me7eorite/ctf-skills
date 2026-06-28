@@ -335,6 +335,7 @@ class ResearchJobService:
                     technique_family=_normalize_technique_family(finding, run.generation_request.category),
                 )
 
+            _copy_parent_results_for_supplement(session, run)
             # 成功落库后更新 profile binding 的最近使用记录，并在同一事务内写 completed。
             repo.touch_binding(binding_role, last_used_at=_utcnow(), last_used_run_id=run_id)
             self._apply_run_completed(session, run, log_path)
@@ -499,6 +500,7 @@ class ResearchJobService:
                 source_ids=_finding_source_ids(finding, source_ids),
                 technique_family=_normalize_technique_family(finding, run.generation_request.category),
             )
+        _copy_parent_results_for_supplement(session, run)
         if binding_role is not None:
             repo.touch_binding(binding_role, last_used_at=_utcnow(), last_used_run_id=run.id)
         self._apply_run_completed(session, run, log_path)
@@ -756,6 +758,107 @@ def _finding_count(session, run_id: UUID) -> int:
             .where(model.ResearchFinding.research_run_id == run_id)
         )
         or 0
+    )
+
+
+def _copy_parent_results_for_supplement(session, run: model.ResearchRun) -> None:
+    if run.parent_run_id is None:
+        return
+
+    repo = ResearchRepository(session)
+    current_sources = repo.list_sources(run.id)
+    current_findings = repo.list_findings(run.id)
+    source_id_by_parent_id: dict[UUID, UUID] = {}
+    source_id_by_hash = {source.content_hash: source.id for source in current_sources}
+    existing_finding_keys = {_finding_identity(finding) for finding in current_findings}
+
+    parent_sources = repo.list_sources(run.parent_run_id)
+    parent_source_by_id = {source.id: source for source in parent_sources}
+    for parent_source in parent_sources:
+        existing_source_id = source_id_by_hash.get(parent_source.content_hash)
+        if existing_source_id is not None:
+            source_id_by_parent_id[parent_source.id] = existing_source_id
+
+    parent_findings = repo.list_findings(run.parent_run_id)
+    for parent_finding in parent_findings:
+        key = _finding_identity(parent_finding)
+        if key in existing_finding_keys:
+            continue
+
+        copied_source_ids = [
+            _copy_parent_source_for_supplement(
+                repo,
+                parent_source_by_id[parent_source_id],
+                run_id=run.id,
+                source_id_by_hash=source_id_by_hash,
+                source_id_by_parent_id=source_id_by_parent_id,
+            )
+            for parent_source_id in _finding_source_ids_for_row(session, parent_finding.id)
+            if parent_source_id in parent_source_by_id
+        ]
+        if not copied_source_ids:
+            LOG.warning(
+                "skipping parent finding %s while supplementing run %s: no sources",
+                parent_finding.id,
+                run.id,
+            )
+            continue
+        repo.create_finding(
+            run.id,
+            kind=parent_finding.kind,
+            label=parent_finding.label,
+            summary=parent_finding.summary,
+            source_ids=copied_source_ids,
+            technique_family=parent_finding.technique_family,
+        )
+        existing_finding_keys.add(key)
+
+
+def _copy_parent_source_for_supplement(
+    repo: ResearchRepository,
+    parent_source: dto.ResearchSource,
+    *,
+    run_id: UUID,
+    source_id_by_hash: dict[str, UUID],
+    source_id_by_parent_id: dict[UUID, UUID],
+) -> UUID:
+    existing_source_id = source_id_by_parent_id.get(parent_source.id)
+    if existing_source_id is not None:
+        return existing_source_id
+    existing_source_id = source_id_by_hash.get(parent_source.content_hash)
+    if existing_source_id is not None:
+        source_id_by_parent_id[parent_source.id] = existing_source_id
+        return existing_source_id
+
+    copied = repo.add_source(
+        run_id,
+        url=parent_source.url,
+        title=parent_source.title,
+        summary=parent_source.summary,
+        content_hash=parent_source.content_hash,
+        fetched_at=parent_source.fetched_at,
+        raw_text_path=parent_source.raw_text_path,
+    )
+    source_id_by_hash[parent_source.content_hash] = copied.id
+    source_id_by_parent_id[parent_source.id] = copied.id
+    return copied.id
+
+
+def _finding_source_ids_for_row(session, finding_id: UUID) -> list[UUID]:
+    return list(
+        session.scalars(
+            sa.select(model.ResearchFindingSource.source_id)
+            .where(model.ResearchFindingSource.finding_id == finding_id)
+            .order_by(model.ResearchFindingSource.source_id)
+        )
+    )
+
+
+def _finding_identity(finding: dto.ResearchFinding) -> tuple[str, str, str]:
+    return (
+        finding.kind,
+        finding.label.strip().casefold(),
+        finding.summary.strip().casefold(),
     )
 
 

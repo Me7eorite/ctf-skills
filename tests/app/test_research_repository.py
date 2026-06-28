@@ -543,6 +543,71 @@ def test_token_fencing_and_complete_run_with_results_atomicity(session_factory: 
         assert binding.last_used_run_id == claimed.id
 
 
+def test_supplement_run_preserves_parent_findings_when_output_is_empty(
+    session_factory: SessionFactory,
+):
+    service = ResearchJobService(session_factory)
+    request, _run = service.submit_request(
+        "web",
+        "underfilled supplement",
+        12,
+        {"easy": 12},
+        max_attempts=3,
+    )
+    first = service.claim_next_run("w1", 60, generation_request_id=request.id)
+    assert first is not None
+    assert first.claim_token is not None
+
+    service.complete_run_with_results(
+        first.id,
+        "w1",
+        first.claim_token,
+        sources=[
+            {
+                "url": f"https://example.com/{index}",
+                "title": f"Source {index}",
+                "summary": f"Summary {index}",
+                "content_hash": f"hash-{index}",
+            }
+            for index in range(5)
+        ],
+        findings=[
+            {
+                "kind": "technique",
+                "label": f"Finding {index}",
+                "summary": f"Finding summary {index}",
+                "source_indices": [index],
+            }
+            for index in range(5)
+        ],
+        binding_role="research",
+        log_path="first.log",
+    )
+
+    supplement = service.ensure_supplement_run(request.id)
+    claimed = service.claim_next_run("w2", 60, generation_request_id=request.id)
+    assert claimed is not None
+    assert claimed.id == supplement.id
+    assert claimed.claim_token is not None
+    service.complete_run_with_results(
+        claimed.id,
+        "w2",
+        claimed.claim_token,
+        sources=[],
+        findings=[],
+        binding_role="research",
+        log_path="supplement.log",
+    )
+
+    with session_factory() as session:
+        repo = ResearchRepository(session)
+        latest = repo.get_latest_completed_run_for_request(request.id)
+        assert latest is not None
+        assert latest.id == supplement.id
+        assert len(repo.list_sources(latest.id)) == 5
+        assert len(repo.list_findings(latest.id)) == 5
+
+
 def test_attempt_greater_than_max_attempts_is_rejected(session_factory: SessionFactory):
     service = ResearchJobService(session_factory)
     _, run = service.submit_request("web", "tamper", 1, {"easy": 1}, max_attempts=1)
