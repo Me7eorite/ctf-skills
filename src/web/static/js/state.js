@@ -15,6 +15,13 @@ export const appState = {
       design_task_id: "",
       generation_request_id: "",
     },
+    filterDraft: {
+      status: "",
+      worker: "",
+      category: "",
+      design_task_id: "",
+      generation_request_id: "",
+    },
     selection: new Set(),
     laneCount: 4,
     lanePools: null,

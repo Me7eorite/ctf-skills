@@ -161,7 +161,11 @@ export function researchErrorMessage(error) {
 
 export function formatDateTime(value) {
   if (!value) return "-";
-  const date = new Date(value);
+  const raw = String(value);
+  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(raw)
+    ? raw.replace(" ", "T") + "+08:00"
+    : raw;
+  const date = new Date(normalized);
   if (Number.isNaN(date.getTime())) return String(value).slice(0, 19);
   return date.toLocaleString("zh-CN", {
     timeZone: "Asia/Shanghai",

@@ -13,10 +13,18 @@ import {
 const ACTIVE_POLL_MS = 1000;
 const START_REFRESH_MS = 300;
 const SETTLED_POLL_MS = 12000;
+const LIST_LIMIT = 200;
 const STATUSES = ["queued", "running", "succeeded", "failed", "lost"];
 const CATEGORIES = ["web", "pwn", "re"];
 const state = appState.buildAttempts;
 const detailEventNodes = new Map();
+const EMPTY_FILTERS = {
+  status: "",
+  worker: "",
+  category: "",
+  design_task_id: "",
+  generation_request_id: "",
+};
 
 export function openBuildAttemptsRoute({ detailId = null, filters = {} } = {}) {
   state.detailId = detailId;
@@ -26,6 +34,13 @@ export function openBuildAttemptsRoute({ detailId = null, filters = {} } = {}) {
     ...state.filters,
     ...filters,
   };
+  syncFilterDraft();
+}
+
+export function invalidateBuildAttempts() {
+  state.list = null;
+  state.detail = null;
+  state.lanePools = null;
 }
 
 function isViewActive() {
@@ -131,11 +146,64 @@ async function ensureDetail(id) {
 
 function buildListUrl() {
   const params = new URLSearchParams();
+  params.set("limit", String(LIST_LIMIT));
   for (const [key, value] of Object.entries(state.filters)) {
     if (value) params.set(key, value);
   }
   const query = params.toString();
   return query ? `/api/build-attempts?${query}` : "/api/build-attempts";
+}
+
+function syncFilterDraft() {
+  state.filterDraft = { ...state.filters };
+}
+
+function readFilterInputs() {
+  return {
+    status: document.querySelector("#ba-filter-status")?.value || "",
+    worker: document.querySelector("#ba-filter-worker")?.value.trim() || "",
+    category: document.querySelector("#ba-filter-category")?.value || "",
+    design_task_id: document.querySelector("#ba-filter-design-task")?.value.trim() || "",
+    generation_request_id: document.querySelector("#ba-filter-generation-request")?.value.trim() || "",
+  };
+}
+
+function updateFilterDraftFromInputs() {
+  state.filterDraft = readFilterInputs();
+}
+
+function captureFilterFocus(root) {
+  const active = document.activeElement;
+  if (!active || !root.contains(active) || !active.id?.startsWith("ba-filter-")) return null;
+  return {
+    id: active.id,
+    selectionStart: typeof active.selectionStart === "number" ? active.selectionStart : null,
+    selectionEnd: typeof active.selectionEnd === "number" ? active.selectionEnd : null,
+  };
+}
+
+function restoreFilterFocus(snapshot) {
+  if (!snapshot) return;
+  requestAnimationFrame(() => {
+    const input = document.getElementById(snapshot.id);
+    if (!input) return;
+    input.focus({ preventScroll: true });
+    if (
+      snapshot.selectionStart !== null
+      && snapshot.selectionEnd !== null
+      && typeof input.setSelectionRange === "function"
+    ) {
+      input.setSelectionRange(snapshot.selectionStart, snapshot.selectionEnd);
+    }
+  });
+}
+
+function scheduleFilterApply(delay = 450) {
+  if (state.filterTimer) window.clearTimeout(state.filterTimer);
+  state.filterTimer = window.setTimeout(() => {
+    state.filterTimer = null;
+    applyFiltersFromInputs();
+  }, delay);
 }
 
 async function refreshWithTick() {
@@ -440,6 +508,7 @@ function renderList(root) {
   pruneSelection(rows);
   const selectedCount = state.selection.size;
   const summary = summarizeBuildRows(rows);
+  const focusSnapshot = captureFilterFocus(root);
   root.innerHTML = `
     ${renderBuildReadinessWarning()}
     <div class="ba-page-header">
@@ -474,8 +543,6 @@ function renderList(root) {
       ${renderBuildMetric("失败/丢失", summary.failed + summary.lost, "triangle-alert", "danger")}
     </div>
 
-    ${renderLanePools()}
-
     <section class="card ba-list-card">
       <div class="ba-list-summary">
         <div>
@@ -488,59 +555,7 @@ function renderList(root) {
       ${rows.length ? `${renderTable(rows)}${renderAttemptCards(rows)}` : `<div class="empty card-body">没有匹配的构建记录</div>`}
     </section>
   `;
-}
-
-function renderLanePools() {
-  const pools = state.lanePools || appState.data?.process?.lane_pools || [];
-  if (!pools.length) return "";
-  return `
-    <section class="card ba-lane-pools">
-      <div class="ba-list-summary">
-        <div>
-          <div class="card-title">多队列执行池</div>
-          <div class="card-subtitle">每条 lane 内顺序执行，多条 lane 并发运行。</div>
-        </div>
-        <span class="pill">${pools.filter((pool) => pool.running).length} 个运行中</span>
-      </div>
-      <div class="ba-lane-pool-list">
-        ${pools.map(renderLanePool).join("")}
-      </div>
-    </section>
-  `;
-}
-
-function renderLanePool(pool) {
-  const lanes = Array.isArray(pool.lanes) ? pool.lanes : [];
-  return `
-    <article class="ba-lane-pool">
-      <div class="ba-lane-pool-head">
-        <div>
-          <strong>${escapeHtml(shortId(pool.id))}</strong>
-          <span>${escapeHtml(pool.started_at || "-")} · ${pool.total_attempts || 0} 个任务</span>
-        </div>
-        ${pool.running ? softPill(`运行中 · ${pool.active_lanes || 0}/${pool.lane_count || lanes.length}`) : softPill("已结束")}
-      </div>
-      <div class="ba-lane-grid">
-        ${lanes.map(renderLane).join("")}
-      </div>
-    </article>
-  `;
-}
-
-function renderLane(lane) {
-  const status = lane.running
-    ? "运行中"
-    : (lane.returncode === 0 ? "完成" : `失败 ${lane.returncode ?? ""}`.trim());
-  return `
-    <div class="ba-lane-card">
-      <div class="ba-lane-card-title">
-        <strong>Lane ${escapeHtml(lane.lane)}</strong>
-        ${softPill(status)}
-      </div>
-      <div class="mono">${escapeHtml(lane.worker || "-")}</div>
-      <div>${escapeHtml(lane.queue_length || 0)} 个任务 · log: <span class="mono">${escapeHtml(lane.log || "-")}</span></div>
-    </div>
-  `;
+  restoreFilterFocus(focusSnapshot);
 }
 
 function summarizeBuildRows(rows) {
@@ -600,28 +615,29 @@ function pruneSelection(rows) {
 }
 
 function renderFilters() {
+  const draft = state.filterDraft || state.filters;
   return `
     <div class="filter-bar filter-bar-vertical-sm ba-filters">
       <label class="filter-item">状态
         <select id="ba-filter-status" class="filter-select">
-          <option value=""${state.filters.status === "" ? " selected" : ""}>全部</option>
-          ${STATUSES.map((status) => `<option value="${status}"${state.filters.status === status ? " selected" : ""}>${buildStatusLabel(status)}</option>`).join("")}
+          <option value=""${draft.status === "" ? " selected" : ""}>全部</option>
+          ${STATUSES.map((status) => `<option value="${status}"${draft.status === status ? " selected" : ""}>${buildStatusLabel(status)}</option>`).join("")}
         </select>
       </label>
       <label class="filter-item">Worker
-        <input id="ba-filter-worker" class="filter-input" value="${escapeHtml(state.filters.worker)}" placeholder="worker">
+        <input id="ba-filter-worker" class="filter-input" value="${escapeHtml(draft.worker)}" placeholder="worker">
       </label>
       <label class="filter-item">分类
         <select id="ba-filter-category" class="filter-select">
-          <option value=""${state.filters.category === "" ? " selected" : ""}>全部</option>
-          ${CATEGORIES.map((category) => `<option value="${category}"${state.filters.category === category ? " selected" : ""}>${category}</option>`).join("")}
+          <option value=""${draft.category === "" ? " selected" : ""}>全部</option>
+          ${CATEGORIES.map((category) => `<option value="${category}"${draft.category === category ? " selected" : ""}>${category}</option>`).join("")}
         </select>
       </label>
       <label class="filter-item">设计任务
-        <input id="ba-filter-design-task" class="filter-input" value="${escapeHtml(state.filters.design_task_id)}" placeholder="design_task_id">
+        <input id="ba-filter-design-task" class="filter-input" value="${escapeHtml(draft.design_task_id)}" placeholder="design_task_id">
       </label>
       <label class="filter-item">生成请求
-        <input id="ba-filter-generation-request" class="filter-input" value="${escapeHtml(state.filters.generation_request_id)}" placeholder="generation_request_id">
+        <input id="ba-filter-generation-request" class="filter-input" value="${escapeHtml(draft.generation_request_id)}" placeholder="generation_request_id">
       </label>
       <button id="ba-apply-filter" class="filter-clear">应用筛选</button>
       <button id="ba-clear-filter" class="filter-clear">清空</button>
@@ -1026,13 +1042,8 @@ function failureMessageReason(message) {
 }
 
 function applyFiltersFromInputs() {
-  state.filters = {
-    status: document.querySelector("#ba-filter-status")?.value || "",
-    worker: document.querySelector("#ba-filter-worker")?.value.trim() || "",
-    category: document.querySelector("#ba-filter-category")?.value || "",
-    design_task_id: document.querySelector("#ba-filter-design-task")?.value.trim() || "",
-    generation_request_id: document.querySelector("#ba-filter-generation-request")?.value.trim() || "",
-  };
+  state.filterDraft = readFilterInputs();
+  state.filters = { ...state.filterDraft };
   state.detailId = null;
   state.detail = null;
   state.list = null;
@@ -1041,13 +1052,8 @@ function applyFiltersFromInputs() {
 }
 
 function clearFilters() {
-  state.filters = {
-    status: "",
-    worker: "",
-    category: "",
-    design_task_id: "",
-    generation_request_id: "",
-  };
+  state.filters = { ...EMPTY_FILTERS };
+  syncFilterDraft();
   state.detailId = null;
   state.detail = null;
   state.list = null;
@@ -1167,6 +1173,19 @@ export function bind() {
     }
     if (event.target.classList.contains("ba-row-select")) {
       toggleRowSelection(event.target.dataset.buildAttemptId, event.target.checked);
+    }
+  });
+
+  document.addEventListener("input", (event) => {
+    const root = document.querySelector('[data-view="build-attempts"]');
+    if (!root || !root.contains(event.target)) return;
+    if (
+      event.target.id === "ba-filter-worker"
+      || event.target.id === "ba-filter-design-task"
+      || event.target.id === "ba-filter-generation-request"
+    ) {
+      updateFilterDraftFromInputs();
+      scheduleFilterApply();
     }
   });
 }

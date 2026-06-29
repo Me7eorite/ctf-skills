@@ -346,6 +346,110 @@
   color: var(--ink-500);
 }
 
+.wp-lane-pools {
+  margin-bottom: var(--space-lg);
+}
+
+.wp-lane-pool-list {
+  display: grid;
+  gap: var(--space-md);
+  padding: 0 var(--space-lg) var(--space-lg);
+}
+
+.wp-lane-pool {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.wp-lane-pool-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-md);
+  border-bottom: 1px solid var(--line);
+  background: var(--ink-50);
+}
+
+.wp-lane-pool-head > div {
+  display: grid;
+  gap: 2px;
+}
+
+.wp-lane-pool-head strong {
+  color: var(--ink-900);
+  font-size: var(--font-sm);
+}
+
+.wp-lane-pool-head span {
+  color: var(--ink-500);
+  font-size: var(--font-xs);
+}
+
+.wp-lane-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--space-md);
+  padding: var(--space-md);
+}
+
+.wp-lane-card {
+  display: grid;
+  gap: var(--space-sm);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+  background: var(--surface-elevated);
+}
+
+.wp-lane-card-title {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-md);
+}
+
+.wp-lane-card-title > div {
+  display: grid;
+  gap: 2px;
+}
+
+.wp-lane-card-title strong {
+  color: var(--ink-900);
+  font-size: var(--font-sm);
+}
+
+.wp-lane-card-title span,
+.wp-lane-message,
+.wp-lane-log,
+.wp-lane-task-meta {
+  color: var(--ink-500);
+  font-size: var(--font-xs);
+}
+
+.wp-lane-task-list {
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.wp-lane-task {
+  display: grid;
+  gap: 6px;
+  padding: var(--space-sm);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.wp-lane-task-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+
 .wp-idle {
   padding: var(--space-md) 0;
   color: var(--ink-500);

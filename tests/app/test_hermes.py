@@ -41,6 +41,7 @@ class HermesRunnerTests(unittest.TestCase):
             "design-core.md",
             "category-tactics.md",
             "difficulty-rubric.md",
+            "shared_generation_strategy.md",
         ):
             (self.paths.design_references / filename).write_text(
                 f"# {filename}\n", encoding="utf-8"

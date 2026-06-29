@@ -1,4 +1,4 @@
-import { escapeHtml, stageLabel, statusIndicator, dotTone } from "../ui/format.js";
+import { escapeHtml, stageLabel, statusIndicator, dotTone, formatDateTime } from "../ui/format.js";
 
 function snapshotsHtml(snapshots) {
   if (!snapshots.length) {
@@ -26,7 +26,7 @@ function snapshotsHtml(snapshots) {
         </div>
         <div class="progress-footer">
           <span class="progress-message">${escapeHtml(item.message || "等待进度更新")}</span>
-          <span class="progress-time">${escapeHtml(item.updated_at)}</span>
+          <span class="progress-time">${escapeHtml(formatDateTime(item.updated_at))}</span>
         </div>
       </article>
     `;
@@ -42,7 +42,7 @@ function eventsHtml(events) {
       <span class="timeline-dot dot ${dotTone(item.status)}" style="background: ${getDotColor(item.status)}"></span>
       <div class="timeline-header">
         <span class="timeline-title">${escapeHtml(item.challenge_id || item.shard)}</span>
-        <span class="timeline-time">${escapeHtml(item.created_at)}</span>
+        <span class="timeline-time">${escapeHtml(formatDateTime(item.created_at))}</span>
       </div>
       <div class="timeline-meta">${escapeHtml(stageLabel(item.stage))} · ${escapeHtml(item.status)}</div>
       ${item.message ? `<p class="timeline-message">${escapeHtml(item.message)}</p>` : ""}

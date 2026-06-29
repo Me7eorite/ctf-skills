@@ -1,5 +1,6 @@
 import { api, del, postJson } from "../api.js";
 import { setView } from "../router.js";
+import { invalidateBuildAttempts } from "./build-attempts.js";
 import { initIcons } from "../ui/icons.js";
 import { showToast } from "../ui/toast.js";
 import { confirmDeletion } from "../ui/delete-dialog.js";
@@ -38,11 +39,13 @@ const state = {
   detail: null,
   detailId: null,
   filters: { generation_request_id: "", status: "", category: "" },
+  filterDraft: { generation_request_id: "", status: "", category: "" },
   selected: new Set(),
   planSelected: new Set(),
   collapse: null,
   flags: {},
   poll: { timer: null, loading: false },
+  filterTimer: null,
 };
 
 export function showDesignTasksForRequest(requestId) {
@@ -50,6 +53,7 @@ export function showDesignTasksForRequest(requestId) {
     ...state.filters,
     generation_request_id: requestId || "",
   };
+  state.filterDraft = { ...state.filters };
   state.selected.clear();
   state.planSelected.clear();
   state.detailId = null;
@@ -123,6 +127,36 @@ function buildListUrl() {
   if (state.filters.category) params.set("category", state.filters.category);
   const query = params.toString();
   return query ? `/api/design-tasks?${query}` : "/api/design-tasks";
+}
+
+function syncFilterDraft() {
+  state.filterDraft = { ...state.filters };
+}
+
+function captureFilterFocus(root) {
+  const active = document.activeElement;
+  if (!active || !root.contains(active) || !active.id?.startsWith("dt-filter-")) return null;
+  return {
+    id: active.id,
+    selectionStart: typeof active.selectionStart === "number" ? active.selectionStart : null,
+    selectionEnd: typeof active.selectionEnd === "number" ? active.selectionEnd : null,
+  };
+}
+
+function restoreFilterFocus(snapshot) {
+  if (!snapshot) return;
+  requestAnimationFrame(() => {
+    const input = document.getElementById(snapshot.id);
+    if (!input) return;
+    input.focus({ preventScroll: true });
+    if (
+      snapshot.selectionStart !== null
+      && snapshot.selectionEnd !== null
+      && typeof input.setSelectionRange === "function"
+    ) {
+      input.setSelectionRange(snapshot.selectionStart, snapshot.selectionEnd);
+    }
+  });
 }
 
 function isViewActive() {
@@ -330,6 +364,7 @@ async function buildTaskNow(taskId) {
   try {
     const result = await postJson(`/api/design-tasks/${taskId}/build`, {});
     state.selected.delete(taskId);
+    invalidateBuildAttempts();
     showToast(`已提交构建 · ${shortId(result.build_attempt_id)}`);
     if (state.detailId) {
       await reloadDetail();
@@ -373,7 +408,9 @@ async function buildSelectedTasks({ startSequential = false } = {}) {
     } else {
       showToast(`已加入构建队列 · 共 ${result.build_attempt_ids.length} 个任务`);
     }
+    invalidateBuildAttempts();
     await reloadList();
+    schedulePoll(ACTIVE_POLL_MS);
     const suffix = requestIds.size === 1
       ? `?generation_request_id=${encodeURIComponent([...requestIds][0])}`
       : "";
@@ -398,6 +435,7 @@ async function queueSelectedDesignTasks() {
     ids.forEach((id) => state.selected.delete(id));
     showToast(`已提交设计 · 共 ${result.total} 个任务`);
     await reloadList();
+    schedulePoll(ACTIVE_POLL_MS);
   } catch (err) {
     showToast(designErrorMessage(err.message), true);
   } finally {
@@ -422,6 +460,7 @@ async function designSelectedTasks() {
     const suffix = result.failed ? `，失败 ${result.failed} 个` : "";
     showToast(`已完成批量设计 · 并发 ${result.concurrency} · 共 ${result.total} 个任务${suffix}`, !!result.failed);
     await reloadList();
+    schedulePoll(ACTIVE_POLL_MS);
   } catch (err) {
     showToast(designErrorMessage(err.message), true);
   } finally {
@@ -528,6 +567,8 @@ function renderList(root) {
   }
   const rows = state.list || [];
   const counts = summarizeTaskStages(rows);
+  const focusSnapshot = captureFilterFocus(root);
+  const draft = state.filterDraft || state.filters;
   root.innerHTML = `
     <div class="dt-page-header">
       <div>
@@ -569,18 +610,18 @@ function renderList(root) {
     <section class="card dt-list-card">
       <div class="filter-bar filter-bar-vertical-sm dt-filters">
         <label class="filter-item">所属研究需求
-          <input id="dt-filter-request" class="filter-input" value="${escapeHtml(state.filters.generation_request_id)}" placeholder="输入需求 ID">
+          <input id="dt-filter-request" class="filter-input" value="${escapeHtml(draft.generation_request_id)}" placeholder="输入需求 ID">
         </label>
         <label class="filter-item">状态
           <select id="dt-filter-status" class="filter-select">
-            <option value=""${state.filters.status === "" ? " selected" : ""}>全部状态</option>
-            ${STATUSES.map((status) => `<option value="${escapeHtml(status)}"${state.filters.status === status ? " selected" : ""}>${escapeHtml(designTaskStatusLabel(status))}</option>`).join("")}
+            <option value=""${draft.status === "" ? " selected" : ""}>全部状态</option>
+            ${STATUSES.map((status) => `<option value="${escapeHtml(status)}"${draft.status === status ? " selected" : ""}>${escapeHtml(designTaskStatusLabel(status))}</option>`).join("")}
           </select>
         </label>
         <label class="filter-item">题目类别
           <select id="dt-filter-category" class="filter-select">
-            <option value=""${state.filters.category === "" ? " selected" : ""}>全部类别</option>
-            ${["web", "pwn", "re"].map((category) => `<option value="${category}"${state.filters.category === category ? " selected" : ""}>${escapeHtml(categoryLabel(category))}</option>`).join("")}
+            <option value=""${draft.category === "" ? " selected" : ""}>全部类别</option>
+            ${["web", "pwn", "re"].map((category) => `<option value="${category}"${draft.category === category ? " selected" : ""}>${escapeHtml(categoryLabel(category))}</option>`).join("")}
           </select>
         </label>
         <button id="dt-apply-filter" class="filter-clear">应用筛选</button>
@@ -591,6 +632,7 @@ function renderList(root) {
 
     ${renderBulkBar()}
   `;
+  restoreFilterFocus(focusSnapshot);
 }
 
 function renderBulkBar() {
@@ -1154,14 +1196,31 @@ function openRequest(requestId) {
 }
 
 function applyFiltersFromInputs() {
-  state.filters = {
+  state.filterDraft = {
     generation_request_id: document.querySelector("#dt-filter-request")?.value.trim() || "",
     status: document.querySelector("#dt-filter-status")?.value || "",
     category: document.querySelector("#dt-filter-category")?.value.trim() || "",
   };
+  state.filters = { ...state.filterDraft };
   state.selected.clear();
   state.list = null;
   render(state.data);
+}
+
+function updateFilterDraftFromInputs() {
+  state.filterDraft = {
+    generation_request_id: document.querySelector("#dt-filter-request")?.value.trim() || "",
+    status: document.querySelector("#dt-filter-status")?.value || "",
+    category: document.querySelector("#dt-filter-category")?.value.trim() || "",
+  };
+}
+
+function scheduleFilterApply(delay = 450) {
+  if (state.filterTimer) window.clearTimeout(state.filterTimer);
+  state.filterTimer = window.setTimeout(() => {
+    state.filterTimer = null;
+    applyFiltersFromInputs();
+  }, delay);
 }
 
 export function bind() {
@@ -1194,6 +1253,7 @@ export function bind() {
     }
     if (event.target.closest("#dt-clear-filter")) {
       state.filters = { generation_request_id: "", status: "", category: "" };
+      syncFilterDraft();
       state.selected.clear();
       state.list = null;
       render(state.data);
@@ -1201,6 +1261,7 @@ export function bind() {
     }
     if (event.target.closest("#dt-clear-request-filter")) {
       state.filters.generation_request_id = "";
+      syncFilterDraft();
       state.selected.clear();
       state.list = null;
       render(state.data);
@@ -1307,7 +1368,7 @@ export function bind() {
   document.addEventListener("change", (event) => {
     const root = document.querySelector('[data-view="design-tasks"]');
     if (!root || !root.contains(event.target)) return;
-    if (event.target.id === "dt-filter-status") {
+    if (event.target.id === "dt-filter-status" || event.target.id === "dt-filter-category") {
       applyFiltersFromInputs();
       return;
     }
@@ -1327,5 +1388,14 @@ export function bind() {
     if (taskId && checkbox.checked) state.selected.add(taskId);
     if (taskId && !checkbox.checked) state.selected.delete(taskId);
     render(state.data);
+  });
+
+  document.addEventListener("input", (event) => {
+    const root = document.querySelector('[data-view="design-tasks"]');
+    if (!root || !root.contains(event.target)) return;
+    if (event.target.id === "dt-filter-request") {
+      updateFilterDraftFromInputs();
+      scheduleFilterApply();
+    }
   });
 }

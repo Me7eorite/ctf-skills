@@ -1,10 +1,14 @@
-import { escapeHtml, stageLabel, statusIndicator, dotTone, runStatusLabel } from "../ui/format.js";
+import { escapeHtml, stageLabel, statusIndicator, dotTone, runStatusLabel, formatDateTime } from "../ui/format.js";
 
 function getDotColor(status) {
   if (status === "passed" || status === "done" || status === "completed") return "var(--accent-green)";
   if (status === "failed") return "var(--accent-red)";
   if (status === "running" || status === "queued") return "var(--accent-amber)";
   return "var(--ink-400)";
+}
+
+function shortId(value) {
+  return String(value || "").slice(0, 8);
 }
 
 function renderWorkerCard(proc, snapshots) {
@@ -95,7 +99,7 @@ function renderRecentCompletions(snapshots) {
                 <td class="table-cell-mono">${escapeHtml(item.challenge_id || "—")}</td>
                 <td>${statusIndicator(item.status)}</td>
                 <td>${escapeHtml(stageLabel(item.stage))}</td>
-                <td class="table-cell-time">${escapeHtml(item.updated_at || "—")}</td>
+                <td class="table-cell-time">${escapeHtml(formatDateTime(item.updated_at))}</td>
               </tr>
             `).join("")}
           </tbody>
@@ -123,7 +127,7 @@ function renderEventPanel(events) {
             <div class="wp-event-body">
               <div class="wp-event-head">
                 <span class="wp-event-title">${escapeHtml(item.challenge_id || item.shard || "—")}</span>
-                <span class="wp-event-time">${escapeHtml(item.created_at || "")}</span>
+                <span class="wp-event-time">${escapeHtml(formatDateTime(item.created_at))}</span>
               </div>
               <div class="wp-event-meta">${escapeHtml(stageLabel(item.stage))} · ${escapeHtml(runStatusLabel(item.status) || item.status)}</div>
               ${item.message ? `<p class="wp-event-message">${escapeHtml(item.message)}</p>` : ""}
@@ -132,6 +136,118 @@ function renderEventPanel(events) {
         `).join("")}
       </div>
     </details>
+  `;
+}
+
+function attemptProgress(attemptId, snapshots, events) {
+  const id = String(attemptId || "");
+  const relatedSnapshots = snapshots.filter((item) => String(item.shard || "").includes(id));
+  if (relatedSnapshots.length) {
+    return relatedSnapshots
+      .slice()
+      .sort((a, b) => (b.percent || 0) - (a.percent || 0))[0];
+  }
+  const relatedEvents = events.filter((item) => String(item.shard || "").includes(id));
+  if (relatedEvents.length) {
+    const latest = relatedEvents[relatedEvents.length - 1];
+    return {
+      ...latest,
+      percent: latest.percent || 0,
+      updated_at: latest.created_at,
+    };
+  }
+  return {
+    challenge_id: "",
+    shard: id,
+    worker: "",
+    stage: "queued",
+    status: "queued",
+    percent: 0,
+    message: "等待 lane 执行到该任务",
+    updated_at: "",
+  };
+}
+
+function renderLanePools(proc, snapshots, events) {
+  const pools = proc.lane_pools || [];
+  if (!pools.length) return "";
+  return `
+    <section class="card wp-lane-pools">
+      <div class="card-header">
+        <div>
+          <div class="card-title">多顺序队列执行池</div>
+          <div class="card-subtitle">每条 lane 内顺序执行；这里展示所有子任务和实施进度。</div>
+        </div>
+        <span class="pill">${pools.filter((pool) => pool.running).length} 个运行中</span>
+      </div>
+      <div class="wp-lane-pool-list">
+        ${pools.map((pool) => renderLanePool(pool, snapshots, events)).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderLanePool(pool, snapshots, events) {
+  const lanes = Array.isArray(pool.lanes) ? pool.lanes : [];
+  return `
+    <article class="wp-lane-pool">
+      <div class="wp-lane-pool-head">
+        <div>
+          <strong>${escapeHtml(shortId(pool.id))}</strong>
+          <span>${escapeHtml(formatDateTime(pool.started_at))} · ${pool.total_attempts || 0} 个任务</span>
+        </div>
+        ${pool.running ? statusIndicator("running") : statusIndicator("completed")}
+      </div>
+      <div class="wp-lane-grid">
+        ${lanes.map((lane) => renderLane(lane, snapshots, events)).join("")}
+      </div>
+    </article>
+  `;
+}
+
+function renderLane(lane, snapshots, events) {
+  const status = lane.running
+    ? "running"
+    : (lane.returncode === 0 ? "completed" : "failed");
+  const attempts = Array.isArray(lane.build_attempt_ids) ? lane.build_attempt_ids : [];
+  return `
+    <div class="wp-lane-card">
+      <div class="wp-lane-card-title">
+        <div>
+          <strong>Lane ${escapeHtml(lane.lane)}</strong>
+          <span>${escapeHtml(lane.worker || "-")}</span>
+        </div>
+        ${statusIndicator(status)}
+      </div>
+      <div class="wp-lane-message">${escapeHtml(lane.message || "")}</div>
+      <div class="wp-lane-task-list">
+        ${attempts.map((attemptId) => renderLaneTask(attemptId, attemptProgress(attemptId, snapshots, events))).join("")}
+      </div>
+      <div class="wp-lane-log">log: <span class="mono">${escapeHtml(lane.log || "-")}</span></div>
+    </div>
+  `;
+}
+
+function renderLaneTask(attemptId, progress) {
+  const percent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
+  return `
+    <div class="wp-lane-task">
+      <div class="wp-lane-task-main">
+        <span class="mono">${escapeHtml(shortId(attemptId))}</span>
+        ${statusIndicator(progress.status)}
+      </div>
+      <div class="wp-task-progress">
+        <div class="sidebar-worker-bar">
+          <div class="sidebar-worker-bar-fill ${progress.status === "failed" ? "idle" : "running"}" style="width:${percent}%"></div>
+        </div>
+        <span class="wp-task-percent">${percent}%</span>
+      </div>
+      <div class="wp-lane-task-meta">
+        ${escapeHtml(stageLabel(progress.stage))}
+        ${progress.challenge_id ? ` · ${escapeHtml(progress.challenge_id)}` : ""}
+        ${progress.message ? ` · ${escapeHtml(progress.message)}` : ""}
+      </div>
+    </div>
   `;
 }
 
@@ -178,6 +294,7 @@ export function render(data) {
     <div class="wp-worker-grid">
       ${renderWorkerCard(proc, snapshots)}
     </div>
+    ${renderLanePools(proc, snapshots, events)}
     ${renderRecentCompletions(snapshots)}
     ${renderEventPanel(events)}
   `;

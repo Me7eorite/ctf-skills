@@ -88,6 +88,7 @@ def _copy_real_prompt(target: _Paths) -> None:
         "design-core.md",
         "category-tactics.md",
         "difficulty-rubric.md",
+        "shared_generation_strategy.md",
     ):
         (target.design_references / filename).write_text(f"# {filename}\n", encoding="utf-8")
 

@@ -8,6 +8,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 BUILD_ATTEMPTS_JS = ROOT / "src" / "web" / "static" / "js" / "views" / "build-attempts.js"
 BUILD_ATTEMPTS_CSS = ROOT / "src" / "web" / "static" / "css" / "views" / "build-attempts.css"
+WORKER_POOL_JS = ROOT / "src" / "web" / "static" / "js" / "views" / "worker-pool.js"
+FORMAT_JS = ROOT / "src" / "web" / "static" / "js" / "ui" / "format.js"
 
 
 def test_build_attempt_actions_use_constrained_endpoints():
@@ -20,9 +22,14 @@ def test_build_attempt_actions_use_constrained_endpoints():
     assert "/api/build-attempts/worker/start-sequential" in source
     assert "/api/build-attempts/worker/start-sequential-lanes" in source
     assert "/api/build-attempts/worker/pools" in source
+    assert "const LIST_LIMIT = 200;" in source
+    assert 'params.set("limit", String(LIST_LIMIT));' in source
+    assert "filterDraft" in source
+    assert "captureFilterFocus(root)" in source
+    assert "scheduleFilterApply()" in source
     assert "启动多队列" in source
+    assert "多队列执行池" not in source
     assert 'id="ba-lane-count"' in source
-    assert "多队列执行池" in source
     assert "/revalidate`" in source
     assert 'runAction("worker")' not in source
     assert 'runAction("validate")' not in source
@@ -41,6 +48,19 @@ def test_build_attempt_actions_use_constrained_endpoints():
     assert '["failed", "lost", "succeeded"].includes(attempt.status)' in source
     assert "ba-detail-actions" in source
     assert "ba-card-list" in source
+
+
+def test_worker_pool_shows_multilane_progress_and_beijing_time():
+    source = WORKER_POOL_JS.read_text(encoding="utf-8")
+    fmt = FORMAT_JS.read_text(encoding="utf-8")
+
+    assert "多顺序队列执行池" in source
+    assert "renderLanePools(proc, snapshots, events)" in source
+    assert "lane.build_attempt_ids" in source
+    assert "attemptProgress(attemptId, snapshots, events)" in source
+    assert "formatDateTime(pool.started_at)" in source
+    assert 'timeZone: "Asia/Shanghai"' in fmt
+    assert '"+08:00"' in fmt
 
 
 def test_build_attempt_view_has_mobile_card_layout():
