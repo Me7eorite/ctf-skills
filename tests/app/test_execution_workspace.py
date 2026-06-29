@@ -297,6 +297,39 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         manifest = json.loads(workspace.manifest.read_text(encoding="utf-8"))
         self.assertEqual(manifest["allowed_static_reference_roots"], [])
 
+    def test_materializes_generation_profile_from_repository_when_root_differs(self) -> None:
+        root = Path(self.temp.name) / "runtime-root"
+        repository = Path(self.temp.name) / "repository-root"
+        paths = ProjectPaths(root=root, repository=repository)
+        paths.initialize()
+        paths.generation_profile.parent.mkdir(parents=True, exist_ok=True)
+        paths.generation_profile.write_text('{"source":"repository"}\n', encoding="utf-8")
+        paths.design_skill.parent.mkdir(parents=True, exist_ok=True)
+        paths.design_skill.write_text("# Design\n", encoding="utf-8")
+        paths.design_references.mkdir(parents=True, exist_ok=True)
+        for filename in (
+            "design-core.md",
+            "category-tactics.md",
+            "difficulty-rubric.md",
+            "shared_generation_strategy.md",
+        ):
+            (paths.design_references / filename).write_text(f"# {filename}\n", encoding="utf-8")
+        shard = paths.shards / "running" / "claimed.worker.json"
+        write_json(shard, {"challenges": [{"id": "web-0001", "category": "web"}]})
+
+        workspace = prepare_workspace(
+            paths,
+            shard=shard,
+            original_shard_name="web.json",
+            worker="worker-1",
+        )
+
+        self.assertFalse((root / "generation-profiles.json").exists())
+        self.assertEqual(
+            json.loads((workspace.input / "generation-profiles.json").read_text(encoding="utf-8")),
+            {"source": "repository"},
+        )
+
     def test_preflight_missing_profile_includes_recovery_command(self) -> None:
         shard = self._running_shard({"challenges": [{"id": "web-0001", "category": "web"}]})
         workspace = prepare_workspace(

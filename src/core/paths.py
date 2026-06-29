@@ -19,13 +19,13 @@ class ProjectPaths:
     使用 property 而非字段使得路径总是动态计算，和基础路径保持同步。
 
     属性:
-        root: 项目根目录（包含 pyproject.toml）
-        repository: skills 和 prompts 等资源文件的仓库根目录
+        root: 运行时项目根目录（work/ 等可变产物）
+        repository: skills、prompts 和 profile 等资源文件的仓库根目录
     """
 
-    # 项目根目录
+    # 运行时项目根目录
     root: Path
-    # 仓库根目录（可能和 root 不同，用于引用 skills 等共享资源）
+    # 仓库根目录（可能和 root 不同，用于引用静态共享资源）
     repository: Path
 
     @classmethod
@@ -155,7 +155,7 @@ class ProjectPaths:
     @property
     def generation_profile(self) -> Path:
         """生成配置文件（generation-profiles.json），定义题目生成的参数预设。"""
-        return self.root / "generation-profiles.json"
+        return self.repository / "generation-profiles.json"
 
     @property
     def design_skill(self) -> Path:

@@ -114,11 +114,10 @@ The system SHALL provide an automated test (`tests/app/test_dependency_direction
 - **WHEN** `ProjectPaths.discover()` is called
 - **THEN** `paths.root` equals the absolute path of the repository root (the parent of `src/`)
 - **AND** `paths.work` resolves to `<repo>/work`
-- **AND** `paths.generation_profile` resolves to `<repo>/generation-profiles.json`
+- **AND** `paths.generation_profile` resolves to `<repository>/generation-profiles.json`
 
 #### Scenario: Static resolves under editable install
 
 - **GIVEN** the project installed via `uv pip install -e .`
 - **WHEN** the dashboard server resolves a request for `/static/<asset>`
 - **THEN** the asset is served from `src/web/static/<asset>` and the response status is 200
-
