@@ -6,8 +6,12 @@ from pathlib import Path
 from uuid import uuid4
 
 from core.jsonio import write_json
+from core.paths import ProjectPaths
 from services.build_attempt_auto_repair_service import auto_repair_challenge
-from services.build_attempt_repair_service import BuildAttemptRepairService
+from services.build_attempt_repair_service import (
+    BuildAttemptRepairService,
+    _challenge_directory,
+)
 
 
 def test_auto_repair_removes_nested_output_and_copies_missing_writeup(tmp_path: Path) -> None:
@@ -34,6 +38,34 @@ def test_auto_repair_removes_nested_output_and_copies_missing_writeup(tmp_path: 
     assert result.changed
     assert not (challenge / "src" / "output").exists()
     assert (challenge / "writenup" / "wp.md").is_file()
+
+
+def test_auto_repair_promotes_nested_challenge_when_root_metadata_missing(
+    tmp_path: Path,
+) -> None:
+    challenge = tmp_path / "re-0001"
+    nested = challenge / "output" / "challenges" / "re" / "re-0001-demo"
+    nested.mkdir(parents=True)
+    write_json(
+        nested / "metadata.json",
+        {
+            "id": "re-0001",
+            "category": "re",
+            "artifact": "attachments/chal",
+            "build_status": "passed",
+        },
+    )
+    (nested / "validate.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    (nested / "attachments").mkdir()
+    (nested / "attachments" / "chal").write_bytes(b"\x7fELF" + b"x" * 20)
+
+    result = auto_repair_challenge(challenge, challenge_id="re-0001")
+
+    assert result.changed
+    assert (challenge / "metadata.json").is_file()
+    assert (challenge / "validate.sh").is_file()
+    assert (challenge / "attachments" / "chal").is_file()
+    assert not (challenge / "output").exists()
 
 
 def test_auto_repair_copies_re_artifact_and_updates_metadata(tmp_path: Path) -> None:
@@ -159,3 +191,47 @@ def test_repair_service_skips_hermes_when_deterministic_repair_passes(
     assert result.status == "succeeded"
     assert result.verification_status == "passed"
     assert result.failure_summary == "deterministic repair applied"
+
+
+def test_repair_challenge_directory_prefers_execution_workspace_when_global_missing(
+    tmp_path: Path,
+) -> None:
+    paths = ProjectPaths(root=tmp_path, repository=tmp_path)
+    paths.initialize()
+    challenge = (
+        paths.executions
+        / "attempt-1"
+        / "current"
+        / "output"
+        / "challenges"
+        / "web"
+        / "web-1234-demo"
+    )
+    write_json(challenge / "metadata.json", {"id": "web-1234", "category": "web"})
+
+    found = _challenge_directory(paths, "web-1234", None)
+
+    assert found == challenge
+
+
+def test_repair_challenge_directory_normalizes_unclaimed_output_root(
+    tmp_path: Path,
+) -> None:
+    paths = ProjectPaths(root=tmp_path, repository=tmp_path)
+    paths.initialize()
+    output_root = paths.executions / "attempt-1" / "current" / "output"
+    (output_root / "attachments").mkdir(parents=True)
+    (output_root / "attachments" / "chal").write_bytes(b"\x7fELF" + b"x" * 20)
+    (output_root / "validate.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    write_json(
+        output_root / "metadata.json",
+        {"id": "re-0001", "category": "re", "build_status": "passed"},
+    )
+
+    found = _challenge_directory(paths, "re-0001", None, category="re")
+
+    assert found == output_root / "challenges" / "re" / "re-0001"
+    assert (found / "attachments" / "chal").is_file()
+    assert (found / "validate.sh").is_file()
+    assert (found / "metadata.json").is_file()
+    assert not (output_root / "attachments").exists()

@@ -1418,7 +1418,10 @@ class HermesRunner:
             else self._hermes_arguments()
         )
         environment = os.environ.copy()
-        if self.paths.hermes_home.exists() and not environment.get("HERMES_HOME"):
+        if (
+            hermes_process.project_hermes_home_is_configured(self.paths.hermes_home)
+            and not environment.get("HERMES_HOME")
+        ):
             environment["HERMES_HOME"] = str(self.paths.hermes_home)
         if self._apply_legacy_custom_provider(environment):
             self._remove_conflicting_custom_pool()

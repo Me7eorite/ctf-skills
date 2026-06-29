@@ -33,7 +33,10 @@ def invoke_design_agent(
 
     # 准备环境变量：设置 HERMES_HOME（如果尚未设置）
     environment_map = os.environ.copy()
-    if paths.hermes_home.exists() and not environment_map.get("HERMES_HOME"):
+    if (
+        hermes_process.project_hermes_home_is_configured(paths.hermes_home)
+        and not environment_map.get("HERMES_HOME")
+    ):
         environment_map["HERMES_HOME"] = str(paths.hermes_home)
 
     # 处理旧版 custom provider 兼容逻辑

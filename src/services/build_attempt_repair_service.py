@@ -69,7 +69,10 @@ class BuildAttemptRepairService:
         prompt_path = repair_dir / "prompt.md"
 
         self._record_event(events_path, "analysis", "started", "analysis started")
-        auto_result = auto_repair_challenge(Path(context["challenge_dir"]))
+        auto_result = auto_repair_challenge(
+            Path(context["challenge_dir"]),
+            challenge_id=context["challenge_id"],
+        )
         if auto_result.changed:
             self._record_event(
                 events_path,
@@ -139,8 +142,8 @@ class BuildAttemptRepairService:
                 verification_status="failed",
                 log_path=str(log_path),
                 events_path=str(events_path),
-            failure_summary=detail,
-        )
+                failure_summary=detail,
+            )
 
         self._record_event(events_path, "verify", "passed", "verification passed")
         return BuildAttemptRepairResult(
@@ -211,6 +214,7 @@ class BuildAttemptRepairService:
             self.paths,
             challenge_id,
             attempt["resulting_challenge_dir"],
+            category=attempt["category"],
         )
         return {
             **attempt,
@@ -262,6 +266,8 @@ def _challenge_directory(
     paths: ProjectPaths,
     challenge_id: str,
     resulting_challenge_dir: str | None,
+    *,
+    category: str | None = None,
 ) -> Path:
     if resulting_challenge_dir:
         directory = (paths.root / resulting_challenge_dir).resolve()
@@ -277,7 +283,72 @@ def _challenge_directory(
     if execution_root is not None:
         return execution_root
 
+    normalized = _normalize_unclaimed_workspace_output(paths, challenge_id, category)
+    if normalized is not None:
+        return normalized
+
     raise BuildAttemptRepairError("missing_challenge")
+
+
+_CHALLENGE_ROOT_ENTRIES = {
+    "metadata.json",
+    "challenge.yml",
+    "validate.sh",
+    "README.md",
+    "writenup",
+    "src",
+    "attachments",
+    "deploy",
+    "dist",
+}
+
+
+def _normalize_unclaimed_workspace_output(
+    paths: ProjectPaths,
+    challenge_id: str,
+    category: str | None,
+) -> Path | None:
+    if not category:
+        return None
+    output_roots = _candidate_output_roots(paths)
+    for output_root in output_roots:
+        canonical = output_root / "challenges" / category / challenge_id
+        if canonical.is_dir():
+            return canonical
+        direct_entries = [
+            output_root / name
+            for name in _CHALLENGE_ROOT_ENTRIES
+            if (output_root / name).exists()
+        ]
+        if not direct_entries:
+            continue
+        metadata = read_json(output_root / "metadata.json", None)
+        if isinstance(metadata, dict) and metadata.get("id") not in {None, challenge_id}:
+            continue
+        canonical.mkdir(parents=True, exist_ok=True)
+        moved = False
+        for source in direct_entries:
+            destination = canonical / source.name
+            if destination.exists():
+                continue
+            source.replace(destination)
+            moved = True
+        if moved or any((canonical / name).exists() for name in _CHALLENGE_ROOT_ENTRIES):
+            return canonical
+    return None
+
+
+def _candidate_output_roots(paths: ProjectPaths) -> list[Path]:
+    executions = paths.executions
+    if not executions.exists():
+        return []
+    roots: list[Path] = []
+    for attempt_dir in executions.iterdir():
+        output_root = attempt_dir / "current" / "output"
+        if output_root.is_dir():
+            roots.append(output_root)
+    roots.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    return roots
 
 
 def _latest_execution_workspace(paths: ProjectPaths, challenge_id: str) -> Path | None:
@@ -375,7 +446,10 @@ def _hermes_arguments(category: str) -> list[str]:
 
 def _hermes_environment(paths: ProjectPaths, arguments: list[str]) -> dict[str, str]:
     environment = os.environ.copy()
-    if paths.hermes_home.exists() and not environment.get("HERMES_HOME"):
+    if (
+        hermes_process.project_hermes_home_is_configured(paths.hermes_home)
+        and not environment.get("HERMES_HOME")
+    ):
         environment["HERMES_HOME"] = str(paths.hermes_home)
     if hermes_process.apply_legacy_custom_provider(paths.hermes_home, environment):
         hermes_process.remove_conflicting_custom_pool(paths.hermes_home)

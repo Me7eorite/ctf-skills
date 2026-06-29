@@ -180,6 +180,15 @@ def remove_conflicting_custom_pool(hermes_home: Path) -> bool:
     return True
 
 
+def project_hermes_home_is_configured(hermes_home: Path) -> bool:
+    """Return true when a project Hermes home has actual runtime configuration."""
+    return (
+        (hermes_home / "config.yaml").is_file()
+        or (hermes_home / "auth.json").is_file()
+        or (hermes_home / "profiles").is_dir()
+    )
+
+
 def invoke(
     prompt: str,
     *,

@@ -57,7 +57,10 @@ def invoke_research_agent(
     # 中文注释：组装 Hermes Research Agent 的命令和环境，再委托通用捕获执行器运行。
     hermes_arguments = hermes_process.inject_profile_argument(profile_name)
     environment_map = _build_research_env(paths)
-    if paths.hermes_home.exists() and not environment_map.get("HERMES_HOME"):
+    if (
+        hermes_process.project_hermes_home_is_configured(paths.hermes_home)
+        and not environment_map.get("HERMES_HOME")
+    ):
         environment_map["HERMES_HOME"] = str(paths.hermes_home)
     if hermes_process.apply_legacy_custom_provider(paths.hermes_home, environment_map):
         hermes_process.remove_conflicting_custom_pool(paths.hermes_home)
@@ -88,6 +91,9 @@ def _build_research_env(paths: ProjectPaths) -> dict[str, str]:
             fnmatch.fnmatchcase(key, pattern) for pattern in RESEARCH_ENV_ALLOWLIST_PATTERNS
         ):
             environment_map[key] = value
-    if paths.hermes_home.exists() and not environment_map.get("HERMES_HOME"):
+    if (
+        hermes_process.project_hermes_home_is_configured(paths.hermes_home)
+        and not environment_map.get("HERMES_HOME")
+    ):
         environment_map["HERMES_HOME"] = str(paths.hermes_home)
     return environment_map

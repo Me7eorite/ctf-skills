@@ -27,6 +27,7 @@ from hermes.process import (
     hermes_profile_health,
     invoke,
     invoke_capture,
+    project_hermes_home_is_configured,
 )
 
 
@@ -182,6 +183,22 @@ class InvokeCaptureTests(unittest.TestCase):
             _wait_after_terminate(process)
 
         self.assertEqual(process.timeout, TERMINATION_WAIT_TIMEOUT)
+
+
+class ProjectHermesHomeTests(unittest.TestCase):
+    def test_logs_only_home_does_not_shadow_global_profiles(self):
+        with tempfile.TemporaryDirectory() as temp:
+            hermes_home = Path(temp) / ".hermes"
+            (hermes_home / "logs").mkdir(parents=True)
+
+            self.assertFalse(project_hermes_home_is_configured(hermes_home))
+
+    def test_configured_home_is_used(self):
+        with tempfile.TemporaryDirectory() as temp:
+            hermes_home = Path(temp) / ".hermes"
+            (hermes_home / "profiles" / "cf-re").mkdir(parents=True)
+
+            self.assertTrue(project_hermes_home_is_configured(hermes_home))
 
 
 class InvokeLogMarkerTests(unittest.TestCase):

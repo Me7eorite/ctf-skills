@@ -32,8 +32,6 @@ from services.build_attempt_revalidation_service import (
     BuildAttemptRevalidationError,
     BuildAttemptRevalidationService,
 )
-from services.build_attempt_repair_service import BuildAttemptRepairService
-from services.build_attempt_repair_service import _challenge_directory
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -580,12 +578,3 @@ def _write_web_challenge(paths: ProjectPaths, challenge_id: str, *, root: Path |
     return challenge
 
 
-def test_repair_challenge_directory_prefers_execution_workspace_when_global_missing(
-    tmp_path: Path,
-):
-    paths = ProjectPaths(root=tmp_path, repository=tmp_path)
-    paths.initialize()
-    workspace = paths.executions / "attempt-1" / "current" / "output" / "challenges"
-    challenge = _write_web_challenge(paths, "web-1234", root=workspace)
-    found = _challenge_directory(paths, "web-1234", None)
-    assert found == challenge

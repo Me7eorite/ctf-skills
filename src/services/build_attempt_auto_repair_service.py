@@ -17,12 +17,17 @@ class AutoRepairResult:
     actions: tuple[str, ...] = ()
 
 
-def auto_repair_challenge(challenge_dir: Path) -> AutoRepairResult:
+def auto_repair_challenge(
+    challenge_dir: Path,
+    *,
+    challenge_id: str | None = None,
+) -> AutoRepairResult:
     """Apply safe local repairs that do not require challenge redesign."""
     actions: list[str] = []
+    actions.extend(_promote_nested_challenge_root(challenge_dir, challenge_id))
     metadata = read_json(challenge_dir / "metadata.json", None)
     if not isinstance(metadata, dict):
-        return AutoRepairResult(changed=False)
+        return AutoRepairResult(changed=bool(actions), actions=tuple(actions))
 
     actions.extend(_remove_nested_output_trees(challenge_dir))
     actions.extend(_repair_document_pair(challenge_dir))
@@ -31,6 +36,44 @@ def auto_repair_challenge(challenge_dir: Path) -> AutoRepairResult:
     if actions:
         write_json(challenge_dir / "metadata.json", metadata)
     return AutoRepairResult(changed=bool(actions), actions=tuple(actions))
+
+
+def _promote_nested_challenge_root(
+    challenge_dir: Path,
+    challenge_id: str | None,
+) -> list[str]:
+    if (challenge_dir / "metadata.json").is_file():
+        return []
+    candidates: list[Path] = []
+    for metadata_path in challenge_dir.rglob("output/challenges/*/*/metadata.json"):
+        nested_root = metadata_path.parent
+        metadata = read_json(metadata_path, None)
+        metadata_id = metadata.get("id") if isinstance(metadata, dict) else None
+        if challenge_id and metadata_id != challenge_id:
+            continue
+        if not challenge_id and metadata_id and not nested_root.name.startswith(f"{metadata_id}-"):
+            continue
+        candidates.append(nested_root)
+    if len(candidates) != 1:
+        return []
+
+    nested_root = candidates[0]
+    actions: list[str] = []
+    for child in nested_root.iterdir():
+        destination = challenge_dir / child.name
+        if destination.exists():
+            continue
+        shutil.move(str(child), str(destination))
+        actions.append(
+            f"promoted nested challenge file: {destination.relative_to(challenge_dir).as_posix()}"
+        )
+    output_root = _owning_output_dir(challenge_dir, nested_root)
+    if output_root is not None and output_root.exists():
+        shutil.rmtree(output_root)
+        actions.append(
+            f"removed nested generated output tree: {output_root.relative_to(challenge_dir).as_posix()}"
+        )
+    return actions
 
 
 def _remove_nested_output_trees(challenge_dir: Path) -> list[str]:
