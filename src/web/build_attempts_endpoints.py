@@ -45,7 +45,7 @@ LOG = logging.getLogger(__name__)
 DEFAULT_LIST_LIMIT = 200
 MAX_LIST_LIMIT = 500
 DEFAULT_SEQUENTIAL_LANES = 4
-MAX_SEQUENTIAL_LANES = 16
+DEFAULT_MAX_SEQUENTIAL_LANES = 6
 
 
 def _env_int(name: str, default: int) -> int:
@@ -69,6 +69,10 @@ BUILD_ATTEMPTS_LIST_DEFAULT_LIMIT = _env_int(
 BUILD_ATTEMPTS_LIST_MAX_LIMIT = _env_int(
     "BUILD_ATTEMPTS_LIST_MAX_LIMIT",
     MAX_LIST_LIMIT,
+)
+BUILD_ATTEMPTS_MAX_SEQUENTIAL_LANES = _env_int(
+    "BUILD_ATTEMPTS_MAX_SEQUENTIAL_LANES",
+    DEFAULT_MAX_SEQUENTIAL_LANES,
 )
 
 
@@ -851,10 +855,10 @@ def _parse_lane_count(raw: Any) -> int:
             status_code=HTTPStatus.BAD_REQUEST,
             detail="lanes must be a positive integer",
         )
-    if lanes > MAX_SEQUENTIAL_LANES:
+    if lanes > BUILD_ATTEMPTS_MAX_SEQUENTIAL_LANES:
         raise HTTPException(
             status_code=HTTPStatus.BAD_REQUEST,
-            detail=f"lanes must be <= {MAX_SEQUENTIAL_LANES}",
+            detail=f"lanes must be <= {BUILD_ATTEMPTS_MAX_SEQUENTIAL_LANES}",
         )
     return lanes
 

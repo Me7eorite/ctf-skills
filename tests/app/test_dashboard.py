@@ -118,6 +118,7 @@ class DashboardTests(unittest.TestCase):
             if value == "--build-attempt-sequence"
         ]
         self.assertEqual(sequence, [first, second])
+        self.assertIn("--allow-failed-attempts-exit-zero", command)
 
     def test_sequential_lanes_split_attempts_round_robin(self):
         first = UUID("11111111-1111-1111-1111-111111111111")
@@ -152,3 +153,5 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(sequences, [[str(first), str(third)], [str(second)]])
         self.assertEqual(commands[0][4], "dashboard-lane-01-abcdef12")
         self.assertEqual(commands[1][4], "dashboard-lane-02-abcdef12")
+        self.assertIn("--allow-failed-attempts-exit-zero", commands[0])
+        self.assertIn("--allow-failed-attempts-exit-zero", commands[1])

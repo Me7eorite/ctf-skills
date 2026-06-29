@@ -108,6 +108,7 @@ class TaskManager:
         ]
         for attempt_id in build_attempt_ids:
             command.extend(["--build-attempt-sequence", str(attempt_id)])
+        command.append("--allow-failed-attempts-exit-zero")
         # Do NOT eagerly mark the whole batch running here: the CLI sequence
         # driver claims and leases each attempt only when its turn comes
         # (`_mark_attempt_running`), and heartbeats just the active one. Leasing
@@ -157,6 +158,7 @@ class TaskManager:
                     ]
                     for attempt_id in attempt_ids:
                         command.extend(["--build-attempt-sequence", str(attempt_id)])
+                    command.append("--allow-failed-attempts-exit-zero")
                     with (self.paths.logs / log).open("w", encoding="utf-8") as output:
                         process = subprocess.Popen(
                             command,

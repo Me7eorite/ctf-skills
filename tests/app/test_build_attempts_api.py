@@ -696,6 +696,19 @@ def test_sequential_lane_pool_splits_selected_attempts_round_robin(
     assert pools_response.json()["pools"][0]["id"] == "stub-pool"
 
 
+def test_sequential_lane_pool_rejects_default_over_cap(client: TestClient):
+    response = client.post(
+        "/api/build-attempts/worker/start-sequential-lanes",
+        json={
+            "build_attempt_ids": ["11111111-1111-1111-1111-111111111111"],
+            "lanes": 7,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "lanes must be <= 6"
+
+
 def test_queue_start_runs_all_eligible_attempts_in_created_order(
     client: TestClient,
     session_factory: SessionFactory,

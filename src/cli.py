@@ -395,6 +395,14 @@ def parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--build-attempts-only", action="store_true")
     run.add_argument(
+        "--allow-failed-attempts-exit-zero",
+        action="store_true",
+        help=(
+            "return success for a completed explicit build-attempt sequence even "
+            "when individual attempts failed; aborts still return non-zero"
+        ),
+    )
+    run.add_argument(
         "--timeout",
         type=_positive_int,
         default=None,
@@ -1345,7 +1353,7 @@ def main() -> None:
         print(json.dumps(result, indent=2))
         if result.get("abort_reason") is not None:
             sys.exit(1)
-        if result["failed"]:
+        if result["failed"] and not args.allow_failed_attempts_exit_zero:
             sys.exit(1)
         return
 

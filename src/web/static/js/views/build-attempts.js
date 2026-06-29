@@ -325,7 +325,7 @@ function currentLaneCount() {
   const input = document.querySelector("#ba-lane-count");
   const raw = Number(input?.value || state.laneCount || 4);
   const lanes = Number.isFinite(raw) ? Math.floor(raw) : 4;
-  state.laneCount = Math.min(16, Math.max(1, lanes));
+  state.laneCount = Math.min(6, Math.max(1, lanes));
   return state.laneCount;
 }
 
@@ -523,7 +523,7 @@ function renderList(root) {
         </button>
         <label class="ba-lane-control" title="把选中任务拆成多条顺序队列；每条 lane 内仍按顺序执行">
           <span>lane</span>
-          <input id="ba-lane-count" type="number" min="1" max="16" step="1" value="${escapeHtml(state.laneCount || 4)}">
+          <input id="ba-lane-count" type="number" min="1" max="6" step="1" value="${escapeHtml(state.laneCount || 4)}">
         </label>
         <button id="ba-start-selected-lanes" class="btn btn-primary btn-sm" ${selectedCount ? "" : "disabled"}
           title="按表格顺序 round-robin 拆分选中 queued 题目，多条顺序队列并发运行">
