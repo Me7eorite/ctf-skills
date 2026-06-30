@@ -170,6 +170,26 @@ def _classify_contract_error(message: str, *, status: str = "contract_failed") -
         code = "missing_document"
         path = "README.md"
         hint = "Add an organizer README with build, run, and solve evidence."
+    elif "challenge.yml missing" in message:
+        phase = "gate"
+        code = "missing_delivery_file"
+        path = "challenge.yml"
+        hint = "Generate challenge.yml from metadata so the delivery bundle has platform metadata."
+    elif "writenup/exp.py missing" in message:
+        phase = "gate"
+        code = "missing_solver"
+        path = "writenup/exp.py"
+        hint = "Add the reference solver under writenup/exp.py."
+    elif "src/ missing" in message or "src/ is empty" in message:
+        phase = "gate"
+        code = "missing_source"
+        path = "src/"
+        hint = "Provide non-empty source evidence, or promote deploy/src into src/."
+    elif "too small" in message or "fewer than 2 level-2 headings" in message:
+        phase = "gate"
+        code = "document_too_thin"
+        path = "README.md" if message.startswith("README.md") else "writenup/wp.md"
+        hint = "Add build, solve, and verification evidence with at least two level-2 sections."
     elif "no compiled ELF artifact" in message:
         code = "missing_artifact"
         path = "attachments/"
@@ -188,9 +208,24 @@ def _classify_contract_error(message: str, *, status: str = "contract_failed") -
         code = "artifact_hash_mismatch"
         path = "metadata.json"
         hint = "Recompute metadata.artifact_sha256 from the exact published artifact."
+    elif "metadata.artifact" in message and "executable" in message:
+        phase = "gate"
+        code = "artifact_type_mismatch"
+        path = "metadata.json"
+        hint = "Point metadata.artifact at the primary executable under attachments/."
+    elif "metadata.artifact" in message and "missing" in message:
+        phase = "gate"
+        code = "artifact_missing"
+        path = "metadata.json"
+        hint = "Point metadata.artifact at an existing file under attachments/."
+    elif "generation output is empty" in message:
+        phase = "gate"
+        code = "generation_empty_output"
+        path = None
+        hint = "Regenerate the challenge or rebuild it from the shard specification."
     elif "references 'metadata.json'" in message or "references 'challenge.yml'" in message:
         code = "forbidden_solver_source"
-        path = "writenup/exp.py"
+        path = "validate.sh" if message.startswith("validate.sh") else "writenup/exp.py"
         hint = "Derive the flag from the target or distributed artifact, not organizer files."
     elif "embeds the literal metadata.flag" in message:
         code = "hardcoded_flag"
@@ -315,12 +350,18 @@ def _bare_run_reveals_flag(artifact: Path, flag: str, timeout: int) -> bool:
     except OSError:
         pass
     try:
+        data = artifact.read_bytes()
+        if data.startswith(b"#!"):
+            return flag in data.decode("utf-8", "ignore")
+        command = [str(artifact)]
         proc = subprocess.run(
-            [str(artifact)],
+            command,
             cwd=artifact.parent,
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=min(timeout, 20),
             check=False,
         )
@@ -349,6 +390,81 @@ def _plaintext_flag_locations(
             if path.is_file() and _file_contains_bytes(path, flag):
                 hits.append(path.relative_to(challenge_dir).as_posix())
     return sorted(set(hits))
+
+
+
+def _is_empty_generation_output(challenge_dir: Path) -> bool:
+    if not challenge_dir.exists():
+        return False
+    meaningful_files = [path for path in challenge_dir.rglob("*") if path.is_file()]
+    if meaningful_files:
+        return False
+    return any(path.is_dir() for path in challenge_dir.rglob("*")) or challenge_dir.is_dir()
+
+
+def _delivery_contract_errors(challenge_dir: Path) -> list[str]:
+    errors: list[str] = []
+    for relative in ("challenge.yml", "README.md", "writenup/wp.md", "writenup/exp.py"):
+        if not (challenge_dir / relative).is_file():
+            errors.append(f"{relative} missing")
+    source_root = challenge_dir / "src"
+    if not source_root.is_dir():
+        errors.append("src/ missing")
+    elif not any(path.is_file() and path.stat().st_size > 0 for path in source_root.rglob("*")):
+        errors.append("src/ is empty")
+    for relative in ("README.md", "writenup/wp.md"):
+        reason = _document_quality_error(challenge_dir / relative, relative)
+        if reason:
+            errors.append(reason)
+    for nested in ("output/challenges", "deploy/output/challenges", "attachments/output/challenges"):
+        if (challenge_dir / nested).is_dir():
+            errors.append(f"nested generated output tree remains at {nested}")
+    return errors
+
+
+def _document_quality_error(path: Path, relative: str) -> str | None:
+    text = _read_text(path)
+    if text is None:
+        return None
+    if len(text.strip()) <= 300:
+        return f"{relative} too small"
+    if text.count("##") < 2:
+        return f"{relative} has fewer than 2 level-2 headings"
+    return None
+
+
+def _extend_artifact_metadata_errors(
+    errors: list[str],
+    challenge_dir: Path,
+    metadata: dict,
+    executable_paths: list[Path],
+) -> None:
+    if metadata.get("category") != "re":
+        return
+    artifact = metadata.get("artifact")
+    if artifact is None:
+        return
+    if not isinstance(artifact, str) or not artifact.startswith("attachments/"):
+        errors.append("metadata.artifact missing or not under attachments/")
+        return
+    artifact_path = challenge_dir / artifact
+    if not artifact_path.is_file():
+        errors.append(f"metadata.artifact missing under attachments/: {artifact}")
+        return
+    if executable_paths and not any(path.resolve() == artifact_path.resolve() for path in executable_paths):
+        errors.append("metadata.artifact does not point to the primary executable artifact")
+    expected_sha = metadata.get("artifact_sha256")
+    if not isinstance(expected_sha, str) or not expected_sha:
+        errors.append("metadata.artifact_sha256 missing")
+        return
+    try:
+        import hashlib
+
+        actual_sha = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+    except OSError:
+        return
+    if expected_sha != actual_sha:
+        errors.append("metadata.artifact_sha256 does not match artifact contents")
 
 
 def compose_literal_flag(compose_path: Path) -> str | None:
@@ -604,6 +720,16 @@ class ChallengeValidator:
             "path": str(challenge_dir),
         }
         if not isinstance(metadata, dict):
+            if _is_empty_generation_output(challenge_dir):
+                return {
+                    **record,
+                    "status": "generation_empty_output",
+                    "error": "generation output is empty",
+                    "failure_details": classify_validation_failure(
+                        status="generation_empty_output",
+                        contract_errors=["generation output is empty"],
+                    ),
+                }
             return {**record, "status": "invalid_metadata"}
 
         expected_flag = metadata.get("flag", "")
@@ -738,28 +864,11 @@ class ChallengeValidator:
     def _intended_path_unnecessary(
         self, challenge_dir: Path, metadata: dict, expected_flag: str
     ) -> str | None:
-        """Return a reason string if the flag is reachable WITHOUT the intended path.
-
-        Two deterministic shortcuts make a claimed challenge trivially solvable:
-
-        A. (re/pwn) Running the delivered artifact with no exploit input prints
-           the flag — the anti-debug / timing / license / flatten mechanism is
-           decorative and the player can ``./chal`` their way to the flag.
-        B. The flag (or a license-like literal that gates it) appears in
-           plaintext inside a delivered artifact — so ``strings`` recovers it
-           without the technique. Local source files may contain the organizer
-           flag as long as they are not shipped to players.
-
-        Web/pwn service-level necessity (hitting the entrypoint without the
-        exploit) needs the running service and is handled by a separate
-        service-level check; this method covers the file/artifact shortcuts that
-        are deterministic offline.
-        """
+        """Return a reason string if the flag is reachable WITHOUT the intended path."""
         category = metadata.get("category")
         if _strings_is_intended(metadata):
             return None
 
-        # B — static plaintext flag in delivered artifact or published source.
         plaintext_hits = _plaintext_flag_locations(
             challenge_dir, expected_flag, category
         )
@@ -769,7 +878,6 @@ class ChallengeValidator:
                 f"({', '.join(plaintext_hits)})"
             )
 
-        # A — bare run of the artifact reveals the flag (re/pwn only).
         if category in {"re", "pwn"}:
             for artifact in _delivered_artifacts(challenge_dir, category):
                 if _bare_run_reveals_flag(artifact, expected_flag, self.timeout):
@@ -781,15 +889,7 @@ class ChallengeValidator:
         return None
 
     def contract_errors(self, challenge_dir: Path, metadata: dict) -> list[str]:
-        """执行 metadata 合约检查。
-
-        检查项:
-          1. 必需字段是否存在（id, title, difficulty, build_status, flag）
-          2. build_status 是否为 "passed"
-          3. Web 类别: 必须有 Dockerfile、docker-compose.yml、deploy/src 目录
-          4. RE/Pwn 类别: 必须有编译后的 ELF 产物（新题在 attachments/；
-             历史 dist/ 仍兼容；pwn 的 deploy/ 也会扫描），架构必须与声明匹配
-        """
+        """Run deterministic metadata, artifact, and solver contract checks."""
         errors = [
             f"metadata.{field} is missing"
             for field in ("id", "title", "difficulty", "build_status", "flag")
@@ -800,7 +900,6 @@ class ChallengeValidator:
 
         category = metadata.get("category")
         if category in {"web", "pwn"}:
-            # Web/Pwn 类别必须有完整 Docker 部署文件和确定性 flag 注入。
             required = (
                 challenge_dir / "deploy" / "Dockerfile",
                 challenge_dir / "deploy" / "docker-compose.yml",
@@ -836,16 +935,10 @@ class ChallengeValidator:
 
         target_format = metadata.get("target_format", "elf")
         if category in {"re", "pwn"} and target_format == "elf":
-            # RE/Pwn 的 ELF 产物架构检查。
-            # 约定：交付目录是 attachments/（玩家下载用），等同于打包出口。
-            # dist/ 只作为历史遗留兼容位置继续扫描，不再出现在新题生成口径中。
-            # pwn 还会扫 deploy/
-            # 因为 docker 镜像里有时直接嵌编译产物。
             elf_paths = _artifact_elfs(challenge_dir, category)
             if not elf_paths:
                 errors.append("no compiled ELF artifact found in attachments/")
 
-            # 从 metadata 推断期望的架构
             expected_architecture = (
                 metadata.get("architecture")
                 or metadata.get("target_platform", "").rsplit("/", 1)[-1]
@@ -864,15 +957,10 @@ class ChallengeValidator:
                         + ", ".join(wrong_arch)
                     )
 
-            # Dynamic-ish hardening (re): if `strings` on the delivered artifact
-            # would surface the plaintext flag and that is NOT the declared
-            # technique, the challenge is trivially solvable — reject it.
+            _extend_artifact_metadata_errors(errors, challenge_dir, metadata, elf_paths)
+
             flag = metadata.get("flag") or ""
-            if (
-                category == "re"
-                and flag
-                and not _strings_is_intended(metadata)
-            ):
+            if category == "re" and flag and not _strings_is_intended(metadata):
                 exposed = [
                     path.relative_to(challenge_dir).as_posix()
                     for path in elf_paths
@@ -907,6 +995,8 @@ class ChallengeValidator:
                         f"PE artifact architecture is not {canonical}: "
                         + ", ".join(wrong_arch)
                     )
+
+            _extend_artifact_metadata_errors(errors, challenge_dir, metadata, pe_paths)
 
             flag = metadata.get("flag") or ""
             if flag and not _strings_is_intended(metadata):
@@ -963,14 +1053,21 @@ class ChallengeValidator:
                         "solver must recover the flag, not hardcode it"
                     )
 
-        # B — the exploit must not read the flag from organizer config/answer files
-        if exp_text:
-            for token in _FORBIDDEN_EXPLOIT_SOURCES:
-                if token in exp_text:
+        # B - the exploit/validator must not read organizer config/answer files
+        for name, text in (("validate.sh", validate_text), ("writenup/exp.py", exp_text)):
+            if not text:
+                continue
+            for token in ("metadata.json", "challenge.yml"):
+                if token in text:
                     errors.append(
-                        f"writenup/exp.py references '{token}'; the exploit must "
-                        "recover the flag from the target, not organizer files"
+                        f"{name} references '{token}'; the solver must recover "
+                        "the flag from the target or distributed artifact, not organizer files"
                     )
+        if exp_text and "docker-compose" in exp_text:
+            errors.append(
+                "writenup/exp.py references 'docker-compose'; the exploit must "
+                "recover the flag from the target, not organizer files"
+            )
 
         # D — destructive Docker cleanup can remove host infrastructure volumes
         if validate_text and _FORBIDDEN_DOCKER_CLEANUP_RE.search(validate_text):
@@ -988,12 +1085,6 @@ class ChallengeValidator:
                         "re solver does not reference the distributed artifact "
                         "under attachments/; it must derive the flag from it"
                     )
-                for token in ("metadata.json", "challenge.yml"):
-                    if token in combined:
-                        errors.append(
-                            f"re solver references '{token}'; it must derive the "
-                            "flag from the artifact, not organizer files"
-                        )
         return errors
 
     def _challenge_dirs(self, challenge_ids: list[str]) -> list[Path]:

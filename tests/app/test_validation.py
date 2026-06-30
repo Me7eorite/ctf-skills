@@ -297,7 +297,7 @@ class ValidationTests(unittest.TestCase):
         summary = self.validator.validate(["re-0001"])
 
         self.assertEqual(summary["total"], 1)
-        self.assertEqual(summary["results"][0]["status"], "invalid_metadata")
+        self.assertEqual(summary["results"][0]["status"], "generation_empty_output")
 
 
 class SolverIntegrityTests(unittest.TestCase):

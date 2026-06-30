@@ -204,6 +204,7 @@ class BuildAttemptRepairService:
                 "category": task.category,
                 "failure_summary": failure_summary,
             }
+            failure_details = _failure_details(session, row)
 
         payload = _failed_payload(self.paths, attempt["shard_basename"])
         challenge_ids = _challenge_ids(payload)
@@ -212,6 +213,7 @@ class BuildAttemptRepairService:
         challenge_id = challenge_ids[0]
         challenge_dir = _challenge_directory(
             self.paths,
+            attempt["id"],
             challenge_id,
             attempt["resulting_challenge_dir"],
             category=attempt["category"],
@@ -220,7 +222,7 @@ class BuildAttemptRepairService:
             **attempt,
             "challenge_id": challenge_id,
             "challenge_dir": str(challenge_dir),
-            "failure_details": _failure_details(session, row),
+            "failure_details": failure_details,
             "file_context": _file_context(challenge_dir),
         }
 
@@ -264,6 +266,7 @@ def _challenge_ids(payload: dict[str, Any]) -> list[str]:
 
 def _challenge_directory(
     paths: ProjectPaths,
+    attempt_id: UUID,
     challenge_id: str,
     resulting_challenge_dir: str | None,
     *,
@@ -279,13 +282,18 @@ def _challenge_directory(
             raise BuildAttemptRepairError("resulting challenge directory is missing")
         return directory
 
-    execution_root = _latest_execution_workspace(paths, challenge_id)
-    if execution_root is not None:
-        return execution_root
-
-    normalized = _normalize_unclaimed_workspace_output(paths, challenge_id, category)
+    normalized = _normalize_unclaimed_workspace_output(
+        paths,
+        attempt_id,
+        challenge_id,
+        category,
+    )
     if normalized is not None:
         return normalized
+
+    execution_root = _attempt_execution_workspace(paths, attempt_id, challenge_id)
+    if execution_root is not None:
+        return execution_root
 
     raise BuildAttemptRepairError("missing_challenge")
 
@@ -305,71 +313,67 @@ _CHALLENGE_ROOT_ENTRIES = {
 
 def _normalize_unclaimed_workspace_output(
     paths: ProjectPaths,
+    attempt_id: UUID,
     challenge_id: str,
     category: str | None,
 ) -> Path | None:
     if not category:
         return None
-    output_roots = _candidate_output_roots(paths)
-    for output_root in output_roots:
-        canonical = output_root / "challenges" / category / challenge_id
-        if canonical.is_dir():
-            return canonical
-        direct_entries = [
-            output_root / name
-            for name in _CHALLENGE_ROOT_ENTRIES
-            if (output_root / name).exists()
-        ]
-        if not direct_entries:
+    output_root = paths.executions / str(attempt_id) / "current" / "output"
+    if not output_root.is_dir():
+        return None
+    canonical = output_root / "challenges" / category / challenge_id
+    if canonical.is_dir():
+        return canonical
+    direct_entries = [
+        output_root / name
+        for name in _CHALLENGE_ROOT_ENTRIES
+        if (output_root / name).exists()
+    ]
+    if not direct_entries:
+        return None
+    metadata = read_json(output_root / "metadata.json", None)
+    if isinstance(metadata, dict) and metadata.get("id") not in {None, challenge_id}:
+        return None
+    canonical.mkdir(parents=True, exist_ok=True)
+    moved = False
+    for source in direct_entries:
+        destination = canonical / source.name
+        if destination.exists():
             continue
-        metadata = read_json(output_root / "metadata.json", None)
-        if isinstance(metadata, dict) and metadata.get("id") not in {None, challenge_id}:
-            continue
-        canonical.mkdir(parents=True, exist_ok=True)
-        moved = False
-        for source in direct_entries:
-            destination = canonical / source.name
-            if destination.exists():
-                continue
-            source.replace(destination)
-            moved = True
-        if moved or any((canonical / name).exists() for name in _CHALLENGE_ROOT_ENTRIES):
-            return canonical
+        source.replace(destination)
+        moved = True
+    if moved or any((canonical / name).exists() for name in _CHALLENGE_ROOT_ENTRIES):
+        return canonical
     return None
 
 
-def _candidate_output_roots(paths: ProjectPaths) -> list[Path]:
-    executions = paths.executions
-    if not executions.exists():
-        return []
-    roots: list[Path] = []
-    for attempt_dir in executions.iterdir():
-        output_root = attempt_dir / "current" / "output"
-        if output_root.is_dir():
-            roots.append(output_root)
-    roots.sort(key=lambda path: path.stat().st_mtime, reverse=True)
-    return roots
-
-
-def _latest_execution_workspace(paths: ProjectPaths, challenge_id: str) -> Path | None:
-    executions = paths.executions
-    if not executions.exists():
+def _attempt_execution_workspace(
+    paths: ProjectPaths,
+    attempt_id: UUID,
+    challenge_id: str,
+) -> Path | None:
+    attempt_root = paths.executions / str(attempt_id) / "current" / "output"
+    if not attempt_root.is_dir():
         return None
 
     candidate_dirs: list[Path] = []
-    for attempt_dir in executions.iterdir():
-        if not attempt_dir.is_dir():
-            continue
-        output_root = attempt_dir / "current" / "output" / "challenges"
-        if not output_root.is_dir():
-            continue
+    metadata = read_json(attempt_root / "metadata.json", None)
+    if isinstance(metadata, dict) and metadata.get("id") == challenge_id:
+        candidate_dirs.append(attempt_root)
+
+    output_root = attempt_root / "challenges"
+    if output_root.is_dir():
         for category_dir in output_root.iterdir():
             if not category_dir.is_dir():
                 continue
             for challenge_dir in category_dir.iterdir():
                 if not challenge_dir.is_dir():
                     continue
-                if challenge_dir.name == challenge_id or challenge_dir.name.startswith(f"{challenge_id}-"):
+                if (
+                    challenge_dir.name == challenge_id
+                    or challenge_dir.name.startswith(f"{challenge_id}-")
+                ):
                     candidate_dirs.append(challenge_dir)
 
     if not candidate_dirs:

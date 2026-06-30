@@ -763,6 +763,18 @@ def test_plan_candidates_is_deterministic_for_diversity_flags():
     ]
 
 
+
+def test_plan_candidates_titles_are_short_names_not_task_labels():
+    findings = [_fake_finding("heap use after free exploitation")]
+    request = _fake_request({"easy": 1})
+    run = _fake_run()
+
+    [candidate] = planning_module._plan_candidates(request, run, findings)
+
+    assert candidate["title"] == "HeapUseAfter"
+    assert len(candidate["title"]) <= 15
+    assert "task" not in candidate["title"].lower()
+
 def test_generate_replaces_archived_tasks(session_factory: SessionFactory):
     request, _ = _seed(session_factory, target_count=2, distribution={"easy": 1, "medium": 1})
     service = DesignTaskPlanningService(session_factory)

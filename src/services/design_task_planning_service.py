@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -864,8 +865,19 @@ def _evidence_summary(
 
 
 def _title(topic: str, finding: research_dto.ResearchFinding, task_no: int) -> str:
-    base = topic.strip() or finding.label
-    return f"{base} — task {task_no}"
+    """Return a short player-facing challenge name, never a task label."""
+    source = finding.label.strip() or topic.strip() or "challenge"
+    words = re.findall(r"[A-Za-z]+", source)
+    if not words:
+        return f"Chal{task_no}"
+    parts: list[str] = []
+    for word in words:
+        candidate = "".join(parts + [word.title()])
+        if len(candidate) > 15:
+            break
+        parts.append(word.title())
+    title = "".join(parts) or words[0][:15].title()
+    return title[:15]
 
 
 def _challenge_id(category: str, request_id: UUID, task_no: int) -> str:

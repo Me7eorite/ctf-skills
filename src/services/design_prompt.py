@@ -426,6 +426,8 @@ def _render_output_contract(task: DesignTask) -> str:
         "and `writenup/exp.py`. Extensionless native executables and "
         "conventional build files are valid; for example "
         "`attachments/crackme` and `deploy/Makefile`."
+        " `challenges[0].title` MUST be copied exactly from Pinned Values; "
+        "do not invent titles like `<topic> task <n>`."
         " Do not include generated scaffold paths such as "
         "`output/challenges/...`, `src/output/...`, or "
         "`attachments/output/...`; all required evidence files live directly "
@@ -519,6 +521,7 @@ def _render_pinned_values(task: DesignTask) -> str:
         "Any drift (even cosmetic) fails the attempt.",
         "",
         f"- `challenges[0].id` = `{task.challenge_id}`",
+        f"- `challenges[0].title` = `{task.title}` (copy exactly; <=15 ASCII letters; no `task` wording)",
         f"- `challenges[0].category` = `{task.category}`",
         f"- `challenges[0].difficulty` = `{task.difficulty}`",
         f"- `challenges[0].points` = {task.points}",

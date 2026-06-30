@@ -328,7 +328,11 @@ class BuildAttemptRevalidationService:
                 )
             return lookup.directory, lookup.status
 
-        workspace_directory = _latest_execution_workspace(self.paths, challenge_id)
+        workspace_directory = _attempt_execution_workspace(
+            self.paths,
+            attempt.id,
+            challenge_id,
+        )
         if workspace_directory is None:
             return None, lookup.status
         metadata = read_json(workspace_directory / "metadata.json", None)
@@ -515,6 +519,15 @@ def _failure_reason(result: Mapping[str, Any]) -> str:
     error = result.get("validation_error")
     if error:
         return f"{status}: {error}"
+    details = result.get("validation_failure_details") or result.get("failure_details")
+    if isinstance(details, list):
+        for detail in details:
+            if isinstance(detail, Mapping) and detail.get("message"):
+                return f"{status}: {detail['message']}"
+    for key in ("stderr_tail", "stdout_tail", "validation_stderr_tail", "validation_stdout_tail"):
+        text = result.get(key)
+        if isinstance(text, str) and text.strip():
+            return f"{status}: {text.strip().splitlines()[-1]}"
     return status
 
 
@@ -545,7 +558,10 @@ def _canonicalize_challenge_directory(
     if not isinstance(category, str) or not category:
         raise BuildAttemptRevalidationError("challenge metadata category is missing")
     destination_root = paths.challenges / category
-    destination = destination_root / directory.name
+    destination_name = directory.name
+    if destination_name == "output":
+        destination_name = challenge_id
+    destination = destination_root / destination_name
     if destination.exists():
         raise BuildAttemptRevalidationError(
             f"canonical challenge directory already exists: {destination.relative_to(paths.root).as_posix()}"
@@ -554,7 +570,7 @@ def _canonicalize_challenge_directory(
     temporary = destination_root / f".revalidate-{uuid.uuid4().hex}"
     shutil.copytree(directory, temporary, symlinks=False)
     try:
-        temporary.replace(destination)
+        temporary.rename(destination)
     except Exception:
         shutil.rmtree(temporary, ignore_errors=True)
         raise
@@ -578,25 +594,34 @@ def _lock_task(session, task_id: UUID) -> task_model.DesignTask | None:
     ).one_or_none()
 
 
-def _latest_execution_workspace(paths: ProjectPaths, challenge_id: str) -> Path | None:
-    executions = paths.executions
-    if not executions.exists():
+def _attempt_execution_workspace(
+    paths: ProjectPaths,
+    attempt_id: UUID,
+    challenge_id: str,
+) -> Path | None:
+    attempt_root = paths.executions / str(attempt_id) / "current" / "output"
+    if not attempt_root.is_dir():
         return None
 
     candidates: list[Path] = []
-    for attempt_dir in executions.iterdir():
-        if not attempt_dir.is_dir():
-            continue
-        output_root = attempt_dir / "current" / "output" / "challenges"
-        if not output_root.is_dir():
-            continue
+    metadata = read_json(attempt_root / "metadata.json", None)
+    if isinstance(metadata, Mapping) and metadata.get("id") == challenge_id:
+        normalized = _normalize_direct_attempt_output(attempt_root, metadata)
+        if normalized is not None:
+            candidates.append(normalized)
+
+    output_root = attempt_root / "challenges"
+    if output_root.is_dir():
         for category_dir in output_root.iterdir():
             if not category_dir.is_dir():
                 continue
             for challenge_dir in category_dir.iterdir():
                 if not challenge_dir.is_dir():
                     continue
-                if challenge_dir.name == challenge_id or challenge_dir.name.startswith(f"{challenge_id}-"):
+                if (
+                    challenge_dir.name == challenge_id
+                    or challenge_dir.name.startswith(f"{challenge_id}-")
+                ):
                     candidates.append(challenge_dir)
 
     if not candidates:
@@ -604,3 +629,43 @@ def _latest_execution_workspace(paths: ProjectPaths, challenge_id: str) -> Path 
 
     candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
     return candidates[0]
+
+
+_CHALLENGE_ROOT_ENTRIES = {
+    "README.md",
+    "metadata.json",
+    "challenge.yml",
+    "validate.sh",
+    "writenup",
+    "src",
+    "attachments",
+    "deploy",
+    "dist",
+}
+
+
+def _normalize_direct_attempt_output(
+    output_root: Path,
+    metadata: Mapping[str, Any],
+) -> Path | None:
+    challenge_id = metadata.get("id")
+    category = metadata.get("category")
+    if not isinstance(challenge_id, str) or not isinstance(category, str):
+        return None
+    canonical = output_root / "challenges" / category / challenge_id
+    if canonical.is_dir():
+        return canonical
+    direct_entries = [
+        output_root / name
+        for name in _CHALLENGE_ROOT_ENTRIES
+        if (output_root / name).exists()
+    ]
+    if not direct_entries:
+        return None
+    canonical.mkdir(parents=True, exist_ok=True)
+    for source in direct_entries:
+        destination = canonical / source.name
+        if destination.exists():
+            continue
+        source.replace(destination)
+    return canonical

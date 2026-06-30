@@ -48,6 +48,15 @@ class _RaisingValidator:
         raise RuntimeError(f"validator crashed for {challenge_dir.name}")
 
 
+class _RecordingValidator:
+    def __init__(self) -> None:
+        self.paths: list[Path] = []
+
+    def validate_one(self, challenge_dir: Path) -> dict:
+        self.paths.append(challenge_dir)
+        return {"path": str(challenge_dir), "status": "passed", "elapsed": 0.01}
+
+
 @pytest.fixture(scope="module")
 def session_factory() -> SessionFactory:
     url = os.environ.get("TEST_DATABASE_URL")
@@ -199,6 +208,87 @@ def test_revalidate_uses_execution_workspace_when_global_challenge_missing(
         row = session.get(build_model.BuildAttempt, attempt_id)
         assert row is not None
         assert row.status == "succeeded"
+
+
+def test_revalidate_uses_current_attempt_workspace_not_other_attempt(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    paths = ProjectPaths(root=tmp_path, repository=tmp_path)
+    paths.initialize()
+    task_id, attempt_id, basename, challenge_id = _seed_failed_attempt(session_factory)
+    _write_failed_shard(paths, task_id, attempt_id, basename, challenge_id)
+
+    current_workspace = (
+        paths.executions / str(attempt_id) / "current" / "output" / "challenges"
+    )
+    current_challenge = _write_web_challenge(
+        paths,
+        challenge_id,
+        root=current_workspace,
+    )
+    other_workspace = (
+        paths.executions / str(uuid4()) / "current" / "output" / "challenges"
+    )
+    other_challenge = _write_web_challenge(
+        paths,
+        challenge_id,
+        root=other_workspace,
+    )
+    os.utime(other_challenge, None)
+    validator = _RecordingValidator()
+    service = BuildAttemptRevalidationService(
+        paths=paths,
+        progress=PostgresProgressStore(session_factory),
+        session_factory=session_factory,
+        validator=validator,  # type: ignore[arg-type]
+        image_exists=lambda _image: True,
+    )
+
+    service.revalidate(attempt_id)
+
+    assert validator.paths == [current_challenge]
+    with session_factory() as session:
+        row = session.get(build_model.BuildAttempt, attempt_id)
+        assert row is not None
+        assert row.status == "succeeded"
+        assert row.resulting_challenge_dir.endswith(f"{challenge_id}-demo")
+
+
+def test_revalidate_accepts_direct_current_attempt_output_root(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    paths = ProjectPaths(root=tmp_path, repository=tmp_path)
+    paths.initialize()
+    task_id, attempt_id, basename, challenge_id = _seed_failed_attempt(session_factory)
+    _write_failed_shard(paths, task_id, attempt_id, basename, challenge_id)
+    output_root = paths.executions / str(attempt_id) / "current" / "output"
+    _write_web_challenge(paths, challenge_id, root=output_root.parent)
+    challenge = output_root.parent / "web" / f"{challenge_id}-demo"
+    output_root.mkdir()
+    for child in list(challenge.iterdir()):
+        child.replace(output_root / child.name)
+    challenge.rmdir()
+    (output_root.parent / "web").rmdir()
+    validator = _RecordingValidator()
+    service = BuildAttemptRevalidationService(
+        paths=paths,
+        progress=PostgresProgressStore(session_factory),
+        session_factory=session_factory,
+        validator=validator,  # type: ignore[arg-type]
+        image_exists=lambda _image: True,
+    )
+
+    service.revalidate(attempt_id)
+
+    normalized = output_root / "challenges" / "web" / challenge_id
+    assert validator.paths == [normalized]
+    with session_factory() as session:
+        row = session.get(build_model.BuildAttempt, attempt_id)
+        assert row is not None
+        assert row.status == "succeeded"
+        assert row.resulting_challenge_dir == f"work/challenges/web/{challenge_id}"
 
 
 def test_revalidate_rejects_stale_failed_attempt(

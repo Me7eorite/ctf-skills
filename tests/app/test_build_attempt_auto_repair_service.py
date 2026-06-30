@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from core.jsonio import write_json
 from core.paths import ProjectPaths
@@ -95,6 +95,81 @@ def test_auto_repair_copies_re_artifact_and_updates_metadata(tmp_path: Path) -> 
     assert metadata["build_command"] == "preserved existing artifact attachments/vmguard"
 
 
+def test_auto_repair_copies_re_deploy_source_to_src(tmp_path: Path) -> None:
+    challenge = tmp_path / "re-0001-demo"
+    deploy_source = challenge / "deploy" / "src" / "validator.c"
+    deploy_source.parent.mkdir(parents=True)
+    deploy_source.write_text("int main(void) { return 0; }\n", encoding="utf-8")
+    write_json(
+        challenge / "metadata.json",
+        {
+            "id": "re-0001",
+            "category": "re",
+            "artifact": "attachments/chal",
+            "build_status": "passed",
+        },
+    )
+
+    result = auto_repair_challenge(challenge)
+
+    assert result.changed
+    assert (challenge / "src" / "validator.c").read_text(encoding="utf-8") == (
+        "int main(void) { return 0; }\n"
+    )
+
+
+
+def test_auto_repair_prefers_re_executable_artifact_over_data_pack(tmp_path: Path) -> None:
+    challenge = tmp_path / "re-0001-demo"
+    attachments = challenge / "attachments"
+    attachments.mkdir(parents=True)
+    data_pack = attachments / "game_assets.gres"
+    data_pack.write_bytes(b"data")
+    executable = attachments / "gres_viewer"
+    executable.write_bytes(b"\x7fELF" + b"x" * 20)
+    write_json(
+        challenge / "metadata.json",
+        {
+            "id": "re-0001",
+            "category": "re",
+            "artifact": "attachments/game_assets.gres",
+            "artifact_sha256": hashlib.sha256(data_pack.read_bytes()).hexdigest(),
+            "build_status": "passed",
+        },
+    )
+
+    result = auto_repair_challenge(challenge)
+
+    metadata = json.loads((challenge / "metadata.json").read_text(encoding="utf-8"))
+    assert result.changed
+    assert metadata["artifact"] == "attachments/gres_viewer"
+    assert metadata["artifact_sha256"] == hashlib.sha256(executable.read_bytes()).hexdigest()
+
+
+def test_auto_repair_rewrites_re_validate_that_reads_metadata(tmp_path: Path) -> None:
+    challenge = tmp_path / "re-0001-demo"
+    (challenge / "attachments").mkdir(parents=True)
+    (challenge / "attachments" / "chal").write_bytes(b"\x7fELF" + b"x" * 20)
+    (challenge / "writenup").mkdir()
+    (challenge / "writenup" / "exp.py").write_text("print('flag{demo}')\n", encoding="utf-8")
+    (challenge / "validate.sh").write_text("#!/bin/sh\njq -r .flag metadata.json\n", encoding="utf-8")
+    write_json(
+        challenge / "metadata.json",
+        {
+            "id": "re-0001",
+            "category": "re",
+            "artifact": "attachments/chal",
+            "build_status": "passed",
+        },
+    )
+
+    result = auto_repair_challenge(challenge)
+
+    validate_text = (challenge / "validate.sh").read_text(encoding="utf-8")
+    assert result.changed
+    assert "metadata.json" not in validate_text
+    assert "writenup/exp.py ./attachments/chal" in validate_text
+
 def test_auto_repair_is_noop_without_supported_mechanical_issue(tmp_path: Path) -> None:
     challenge = tmp_path / "re-0001-demo"
     (challenge / "attachments").mkdir(parents=True)
@@ -110,7 +185,18 @@ def test_auto_repair_is_noop_without_supported_mechanical_issue(tmp_path: Path) 
             "build_command": "gcc src/chal.c -o attachments/chal",
             "build_status": "passed",
             "target_format": "elf",
+            "solve_status": "pending",
         },
+    )
+    (challenge / "challenge.yml").write_text("name: Demo\n", encoding="utf-8")
+    (challenge / "README.md").write_text(
+        "# Readme\n\n## Build\n" + ("A" * 350) + "\n\n## Solve\n",
+        encoding="utf-8",
+    )
+    (challenge / "writenup").mkdir()
+    (challenge / "writenup" / "wp.md").write_text(
+        "# Writeup\n\n## Build\n" + ("A" * 350) + "\n\n## Solve\n",
+        encoding="utf-8",
     )
 
     result = auto_repair_challenge(challenge)
@@ -198,9 +284,10 @@ def test_repair_challenge_directory_prefers_execution_workspace_when_global_miss
 ) -> None:
     paths = ProjectPaths(root=tmp_path, repository=tmp_path)
     paths.initialize()
+    attempt_id = UUID("00000000-0000-0000-0000-000000000001")
     challenge = (
         paths.executions
-        / "attempt-1"
+        / str(attempt_id)
         / "current"
         / "output"
         / "challenges"
@@ -209,7 +296,7 @@ def test_repair_challenge_directory_prefers_execution_workspace_when_global_miss
     )
     write_json(challenge / "metadata.json", {"id": "web-1234", "category": "web"})
 
-    found = _challenge_directory(paths, "web-1234", None)
+    found = _challenge_directory(paths, attempt_id, "web-1234", None)
 
     assert found == challenge
 
@@ -219,7 +306,8 @@ def test_repair_challenge_directory_normalizes_unclaimed_output_root(
 ) -> None:
     paths = ProjectPaths(root=tmp_path, repository=tmp_path)
     paths.initialize()
-    output_root = paths.executions / "attempt-1" / "current" / "output"
+    attempt_id = UUID("00000000-0000-0000-0000-000000000001")
+    output_root = paths.executions / str(attempt_id) / "current" / "output"
     (output_root / "attachments").mkdir(parents=True)
     (output_root / "attachments" / "chal").write_bytes(b"\x7fELF" + b"x" * 20)
     (output_root / "validate.sh").write_text("#!/bin/sh\n", encoding="utf-8")
@@ -228,7 +316,7 @@ def test_repair_challenge_directory_normalizes_unclaimed_output_root(
         {"id": "re-0001", "category": "re", "build_status": "passed"},
     )
 
-    found = _challenge_directory(paths, "re-0001", None, category="re")
+    found = _challenge_directory(paths, attempt_id, "re-0001", None, category="re")
 
     assert found == output_root / "challenges" / "re" / "re-0001"
     assert (found / "attachments" / "chal").is_file()
