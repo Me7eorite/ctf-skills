@@ -197,6 +197,16 @@ def test_prompt_includes_always_on_references_and_contract(tmp_path):
     assert "deploy/Makefile" in prompt
 
 
+def test_pwn_design_prompt_requires_xinetd_artifact(tmp_path):
+    context = load_design_prompt_context(_paths(tmp_path))
+
+    prompt = build_design_prompt(context, _task("pwn"), _request("pwn"), [], [])
+
+    assert "`deploy/_files/ctf.xinetd` is REQUIRED" in prompt
+    assert "runtime (pwn/xinetd) artifact requires at least one of" in prompt
+    assert "deploy/_files/etc/xinetd.d/ctf" in prompt
+
+
 def test_prompt_includes_previous_validation_error_on_retry(tmp_path):
     context = load_design_prompt_context(_paths(tmp_path))
 

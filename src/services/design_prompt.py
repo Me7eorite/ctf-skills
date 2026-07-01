@@ -276,7 +276,10 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                             "type": "string",
                             "description": (
                                 "A safe challenge-relative file path. Native "
-                                "executables and Makefiles may be extensionless."
+                                "executables and Makefiles may be extensionless. "
+                                "For pwn with runtime_profile=xinetd or an "
+                                "xinetd/chroot service_model, include "
+                                "deploy/_files/ctf.xinetd."
                             ),
                             "pattern": (
                                 r"^(?:README\.md|metadata\.json|validate\.sh|"
@@ -385,15 +388,20 @@ def _render_output_contract(task: DesignTask) -> str:
         container_artifacts_hint = (
             "\n- For pwn, `artifacts` must additionally include "
             "`deploy/Dockerfile`, `deploy/docker-compose.yml`, "
-            "`deploy/_files/start.sh`, and native binary service artifacts. "
+            "`deploy/_files/start.sh`, `deploy/_files/ctf.xinetd`, and "
+            "native binary service artifacts. "
             "Use diverse challenge-specific names under `deploy/src/` or "
             "`src/`, such as `deploy/src/vuln.c`, `deploy/src/menu_service.cpp`, "
             "`deploy/src/heap_lab.c`, `deploy/src/Makefile`, or "
-            "`deploy/src/bin/challenge`. Prefer an xinetd/chroot launcher and "
-            "list `deploy/_files/ctf.xinetd` or "
-            "`deploy/_files/etc/xinetd.d/ctf` when that pattern is selected; "
-            "do not include Python `deploy/src/app.py` unless the pwn service "
-            "is intentionally a Python wrapper around a separate native binary."
+            "`deploy/src/bin/challenge`. If `implementation_plan.runtime_profile` "
+            "is `xinetd`, or `implementation_plan.service_model` mentions "
+            "xinetd/chroot/socket, `deploy/_files/ctf.xinetd` is REQUIRED in "
+            "`artifacts` or validation will reject the design with "
+            "`runtime (pwn/xinetd) artifact requires at least one of: "
+            "deploy/_files/ctf.xinetd, deploy/_files/etc/xinetd.d/ctf, "
+            "deploy/_files/etc/xinetd.d/chal`. Do not include Python "
+            "`deploy/src/app.py` unless the pwn service is intentionally a "
+            "Python wrapper around a separate native binary."
         )
     uniqueness_hint = (
         "\n5. This is a `" + task.difficulty + "` challenge: it MUST have a "
