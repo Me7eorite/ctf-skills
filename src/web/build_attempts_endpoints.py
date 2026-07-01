@@ -15,6 +15,8 @@ from uuid import UUID
 import sqlalchemy as sa
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
+
+from core.clock import beijing_isoformat
 from sqlalchemy.exc import IntegrityError
 
 from core.build_timeout import shard_timeout_policy
@@ -1420,11 +1422,7 @@ def _progress_event_dict(event: ProgressEvent) -> dict[str, Any]:
 
 
 def _isofmt(value: datetime | None) -> str | None:
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    return value.isoformat()
+    return beijing_isoformat(value)
 
 
 def _project_paths(app: FastAPI):
@@ -1472,9 +1470,9 @@ def _build_log_row(name: str, path: Path) -> dict[str, Any]:
     return {
         "name": name,
         "size": stat.st_size,
-        "updated_at": datetime.fromtimestamp(
-            stat.st_mtime, tz=timezone.utc
-        ).isoformat(),
+        "updated_at": beijing_isoformat(
+            datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+        ),
     }
 
 

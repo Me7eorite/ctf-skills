@@ -9,6 +9,7 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
+from core.clock import beijing_isoformat_seconds
 from core.state import (
     ProgressEventInput,
     ProgressStore,
@@ -290,7 +291,5 @@ def _snapshot_dict(snapshot: ProgressSnapshot) -> dict:
 
 def _format_timestamp(value: Any) -> str:
     if isinstance(value, datetime):
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return beijing_isoformat_seconds(value) or ""
     return str(value)

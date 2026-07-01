@@ -385,6 +385,60 @@ class ResearchListTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("unknown category 'crypto'", stderr)
 
+    def test_list_prints_beijing_time(self):
+        request = _make_request(status="researching")
+        repo = SimpleNamespace(
+            list_categories=lambda: [],
+            list_generation_requests=lambda **_kw: [request],
+        )
+
+        @contextlib.contextmanager
+        def _ctx():
+            yield "dummy-session"
+
+        with patch("persistence.session.transaction", _ctx), patch(
+            "persistence.repositories.ResearchRepository", return_value=repo
+        ):
+            code, stdout, _stderr = _capture_run(["research", "list"])
+        self.assertEqual(code, 0)
+        self.assertIn("created=2026-01-01T08:00:00+08:00", stdout)
+        self.assertNotIn("+00:00", stdout)
+
+
+class ResearchShowTests(unittest.TestCase):
+    def test_show_prints_beijing_time(self):
+        request_id = uuid4()
+        run = _make_run(request_id=request_id, status="completed")
+        run = type(run)(
+            **{
+                **{field: getattr(run, field) for field in run.__dataclass_fields__},
+                "started_at": datetime(2026, 1, 1, 1, tzinfo=timezone.utc),
+                "finished_at": datetime(2026, 1, 1, 2, tzinfo=timezone.utc),
+            }
+        )
+        request = _make_request(request_id=request_id, status="researched")
+        repo = SimpleNamespace(
+            get_generation_request=lambda _rid: request,
+            list_categories=lambda: [],
+            list_runs=lambda **_kw: [run],
+            list_sources=lambda _rid: [],
+            list_findings=lambda _rid: [],
+        )
+
+        @contextlib.contextmanager
+        def _ctx():
+            yield "dummy-session"
+
+        with patch("persistence.session.transaction", _ctx), patch(
+            "persistence.repositories.ResearchRepository", return_value=repo
+        ):
+            code, stdout, _stderr = _capture_run(["research", "show", str(request_id)])
+        self.assertEqual(code, 0)
+        self.assertIn("created_at   : 2026-01-01T08:00:00+08:00", stdout)
+        self.assertIn("started=2026-01-01T09:00:00+08:00", stdout)
+        self.assertIn("finished=2026-01-01T10:00:00+08:00", stdout)
+        self.assertNotIn("+00:00", stdout)
+
 
 class ResearchSubmitMoreTests(unittest.TestCase):
     def test_max_attempts_forwarded(self):

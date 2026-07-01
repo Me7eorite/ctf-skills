@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import re
 import subprocess
-import time
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from core.clock import beijing_now_isoformat
 from core.jsonio import read_json, write_json
 from core.paths import ProjectPaths
 
@@ -666,7 +666,7 @@ class ChallengeValidator:
             "total": len(results),
             "status_counts": dict(counts),
             "results": results,
-            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "generated_at": beijing_now_isoformat(),
         }
         write_json(self.paths.reports / "validation.json", summary)
         return summary

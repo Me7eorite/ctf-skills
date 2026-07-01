@@ -8,7 +8,7 @@ Covers:
 - the no-regression rule on a real database
 - `record_batch` atomic rollback
 - fail-loud behavior when the engine raises `OperationalError`
-- UTC `YYYY-MM-DDTHH:MM:SSZ` timestamp serialization
+- Beijing `YYYY-MM-DDTHH:MM:SS+08:00` timestamp serialization
 - `events_for_*` ordering and id-window semantics
 - `latest_claim_event` boundary behavior
 - `reset_snapshots` preserves event history
@@ -34,7 +34,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 pytestmark = pytest.mark.postgres
 
-TS_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+TS_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+08:00$")
 
 
 def _reset_schema(url: str) -> None:
@@ -244,7 +244,7 @@ def test_dashboard_storage_masks_password(store):
     assert "***" in storage["path"]
 
 
-def test_dashboard_event_timestamps_use_utc_z_format(store):
+def test_dashboard_event_timestamps_use_beijing_format(store):
     store.record(shard="s.json", stage="build", status="running")
     events = _records(store)
     assert events, "expected at least one event"

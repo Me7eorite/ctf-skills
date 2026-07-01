@@ -12,6 +12,7 @@ from uuid import UUID, uuid4
 
 import sqlalchemy as sa
 
+from core.clock import beijing_now_isoformat
 from core.jsonio import read_json
 from core.paths import ProjectPaths
 from hermes import process as hermes_process
@@ -230,7 +231,7 @@ class BuildAttemptRepairService:
     def _record_event(path: Path, phase: str, status: str, message: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": beijing_now_isoformat(),
             "phase": phase,
             "status": status,
             "message": message,

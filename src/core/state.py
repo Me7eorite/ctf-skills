@@ -5,11 +5,12 @@
 
 from __future__ import annotations
 
-import time
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
+
+from core.clock import beijing_now_isoformat
 
 # ========== 阶段与状态常量 ==========
 
@@ -137,9 +138,9 @@ class ProgressStore(Protocol):
 
 # ========== 工具函数 ==========
 
-def utc_now() -> str:
-    """返回当前 UTC 时间的 ISO 8601 格式字符串。"""
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+def display_now() -> str:
+    """返回当前北京时间的 ISO 8601 格式字符串，用于看板展示。"""
+    return beijing_now_isoformat()
 
 
 # ========== 内存实现（用于测试和单进程使用）==========
@@ -196,7 +197,7 @@ class InMemoryProgressStore:
           4. 更新对应快照数据
         """
         prepared = [_prepare_event(event) for event in events]
-        timestamp = utc_now()
+        timestamp = display_now()
         results: list[dict] = []
         for event in prepared:
             event_id = self._next_id

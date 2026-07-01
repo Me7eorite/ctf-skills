@@ -1,8 +1,11 @@
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 import core.state as state_module
+from core.clock import beijing_isoformat_seconds
 from core.paths import ProjectPaths
 from core.state import STAGES, STATUSES, InMemoryProgressStore, ProgressEventInput, ProgressStore
 
@@ -43,6 +46,35 @@ class ProgressStoreTests(unittest.TestCase):
         self.assertEqual(len(progress["events"]), 2)
         self.assertEqual(
             progress["events"][0]["message"], "Design passed the quality gate"
+        )
+
+    def test_record_timestamps_use_beijing_time(self):
+        with patch(
+            "core.clock.utcnow",
+            return_value=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        ):
+            result = self.store.record(
+                shard="web-0001-0001.worker.json",
+                challenge_id="web-0001",
+                worker="worker-1",
+                stage="design",
+                status="running",
+            )
+
+        progress = self.store.dashboard()
+
+        self.assertEqual(result["updated_at"], "2026-01-01T08:00:00+08:00")
+        self.assertEqual(
+            progress["snapshots"][0]["updated_at"], "2026-01-01T08:00:00+08:00"
+        )
+        self.assertEqual(
+            progress["events"][0]["created_at"], "2026-01-01T08:00:00+08:00"
+        )
+
+    def test_beijing_isoformat_seconds_converts_utc(self):
+        self.assertEqual(
+            beijing_isoformat_seconds(datetime(2026, 1, 1, tzinfo=timezone.utc)),
+            "2026-01-01T08:00:00+08:00",
         )
 
     def test_rejects_unknown_stage(self):

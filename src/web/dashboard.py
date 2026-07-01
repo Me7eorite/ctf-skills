@@ -7,9 +7,11 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
 
+from core.clock import beijing_isoformat_seconds
 from core.jsonio import read_json
 from core.paths import ProjectPaths
 from core.queue import ShardQueue
@@ -26,6 +28,10 @@ def relative_time(timestamp: float) -> str:
     if seconds < 86400:
         return f"{seconds // 3600}h ago"
     return f"{seconds // 86400}d ago"
+
+
+def beijing_now_display() -> str:
+    return beijing_isoformat_seconds(datetime.now(timezone.utc)) or ""
 
 
 class TaskManager:
@@ -130,7 +136,7 @@ class TaskManager:
         if not lane_batches:
             return False, "多队列至少需要一个构建任务", {}
         pool_id = uuid4().hex[:12]
-        started_at = time.strftime("%Y-%m-%d %H:%M:%S")
+        started_at = beijing_now_display()
         cli_script = Path(__file__).resolve().parents[1] / "cli.py"
         pool = LanePool(
             id=pool_id,
@@ -242,7 +248,7 @@ class TaskManager:
                     text=True,
                 )
             self._kind = kind
-            self._started_at = time.strftime("%Y-%m-%d %H:%M:%S")
+            self._started_at = beijing_now_display()
             process = self._process
 
         if on_started is not None:
@@ -413,7 +419,7 @@ class DashboardService:
             "validation": read_json(self.paths.reports / "validation.json", {}),
             "process": self.tasks.state(),
             "progress": self.store.dashboard(),
-            "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "updated_at": beijing_now_display(),
         }
 
     def ui_state(self) -> dict:
@@ -422,7 +428,7 @@ class DashboardService:
             "process": self.tasks.state(),
             "build_readiness": None,
             "sequential_worker_result": None,
-            "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "updated_at": beijing_now_display(),
         }
 
     def read_log(self, name: str) -> str:

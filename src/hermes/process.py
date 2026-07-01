@@ -16,10 +16,10 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from core.clock import beijing_now_isoformat
 from core.jsonio import write_json
 
 DEFAULT_HERMES_COMMAND = "hermes chat -Q --yolo -q"
@@ -579,7 +579,7 @@ def invoke_capture(
                 break  # 进程正常结束
             if cancel_event is not None and cancel_event.is_set():
                 cancelled = True
-                cancelled_at = datetime.now(tz=timezone.utc).isoformat()
+                cancelled_at = beijing_now_isoformat()
                 _terminate(process)  # SIGTERM → 5s → SIGKILL
                 break
             if time.monotonic() > deadline:

@@ -5,9 +5,9 @@
 
 from __future__ import annotations
 
-import time
 from pathlib import Path
 
+from core.clock import beijing_now_isoformat
 from core.jsonio import read_json, write_json
 from core.state import ProgressStore
 
@@ -62,7 +62,7 @@ def ensure_report(path: Path, shard: Path, worker: str, status: str, returncode:
             "status": status,
             "worker": worker,
             "returncode": returncode,
-            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "updated_at": beijing_now_isoformat(),
         },
     )
 
@@ -82,7 +82,7 @@ def update_report(path: Path, status: str, error: str | None = None) -> None:
         {
             "runner_status": status,
             "runner_error": error,
-            "runner_updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "runner_updated_at": beijing_now_isoformat(),
         }
     )
     write_json(path, report)

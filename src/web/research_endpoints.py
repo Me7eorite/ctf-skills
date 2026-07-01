@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timezone
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any
@@ -21,6 +21,7 @@ from uuid import UUID
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 
+from core.clock import beijing_isoformat
 from core.paths import ProjectPaths
 from domain import challenge_designs as challenge_dto
 from domain import design_tasks as design_dto
@@ -266,7 +267,9 @@ def _register_log_endpoints(app: FastAPI, manager) -> None:
                 {
                     "name": path.name,
                     "size": stat.st_size,
-                    "updated_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                    "updated_at": beijing_isoformat(
+                        datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+                    ),
                 }
             )
         return JSONResponse(rows)
@@ -852,7 +855,7 @@ def _register_binding_detail(app: FastAPI) -> None:
 
 
 def _isofmt(value: datetime | None) -> str | None:
-    return value.isoformat() if value is not None else None
+    return beijing_isoformat(value)
 
 
 def _category_dict(category: dto.ChallengeCategory) -> dict[str, Any]:

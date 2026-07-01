@@ -282,6 +282,8 @@ class RequestsListEndpointTests(unittest.TestCase):
             self.assertEqual(payload[0]["id"], str(req.id))
             self.assertEqual(payload[0]["category"], "web")
             self.assertEqual(payload[0]["topic"], "A")
+            self.assertEqual(payload[0]["created_at"], "2026-01-01T08:00:00+08:00")
+            self.assertNotIn("+00:00", payload[0]["created_at"])
         finally:
             _close(client)
 
@@ -388,6 +390,9 @@ class RequestDetailEndpointTests(unittest.TestCase):
             self.assertEqual(resp.status_code, 200)
             payload = resp.json()
             self.assertEqual(payload["request"]["id"], str(req.id))
+            self.assertEqual(payload["request"]["created_at"], "2026-01-01T08:00:00+08:00")
+            self.assertEqual(payload["latest_run"]["created_at"], "2026-06-01T08:00:00+08:00")
+            self.assertEqual(payload["sources"][0]["fetched_at"], "2026-06-01T08:00:00+08:00")
             self.assertEqual(payload["latest_run"]["id"], str(run_new.id))
             self.assertEqual(payload["latest_completed_run"]["id"], str(run_new.id))
             self.assertEqual(len(payload["runs"]), 2)

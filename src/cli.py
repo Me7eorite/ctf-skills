@@ -16,6 +16,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from uuid import UUID
 
+from core.clock import beijing_isoformat_or_dash
 from core.execution_config import execution_minting_enabled, lease_ttl_seconds
 from core.jsonio import write_json
 from core.paths import ProjectPaths
@@ -773,7 +774,7 @@ def _profile_list() -> None:
         print("(no bindings)")
         return
     for binding in bindings:
-        last_used = binding.last_used_at.isoformat() if binding.last_used_at else "-"
+        last_used = beijing_isoformat_or_dash(binding.last_used_at)
         print(
             f"{binding.role:12s}  {binding.profile_name:20s}  "
             f"{binding.status:8s}  last_used={last_used}"
@@ -806,10 +807,10 @@ def _profile_show(args: argparse.Namespace) -> None:
     print(f"profile_name    : {binding.profile_name}")
     print(f"description     : {binding.description or '-'}")
     print(f"status          : {binding.status}")
-    print(f"last_used_at    : {binding.last_used_at.isoformat() if binding.last_used_at else '-'}")
+    print(f"last_used_at    : {beijing_isoformat_or_dash(binding.last_used_at)}")
     print(f"last_used_run_id: {binding.last_used_run_id or '-'}")
-    print(f"created_at      : {binding.created_at.isoformat()}")
-    print(f"updated_at      : {binding.updated_at.isoformat()}")
+    print(f"created_at      : {beijing_isoformat_or_dash(binding.created_at)}")
+    print(f"updated_at      : {beijing_isoformat_or_dash(binding.updated_at)}")
 
 
 def _profile_bind(args: argparse.Namespace) -> None:
@@ -1070,15 +1071,15 @@ def _research_show(args: argparse.Namespace) -> None:
     print(f"seed_urls    : {list(request.seed_urls)}")
     print(f"max_attempts : {request.max_attempts}")
     print(f"status       : {request.status}")
-    print(f"created_at   : {request.created_at.isoformat()}")
+    print(f"created_at   : {beijing_isoformat_or_dash(request.created_at)}")
     print(f"runs ({len(runs)}):")
     for run in runs:
         last_err = (run.last_error or "")[:80]
         print(
             f"  - {run.id}  attempt={run.attempt}  status={run.status:9s}  "
             f"claimed_by={run.claimed_by or '-'}  "
-            f"started={run.started_at.isoformat() if run.started_at else '-'}  "
-            f"finished={run.finished_at.isoformat() if run.finished_at else '-'}  "
+            f"started={beijing_isoformat_or_dash(run.started_at)}  "
+            f"finished={beijing_isoformat_or_dash(run.finished_at)}  "
             f"error={last_err!r}"
         )
     print(f"latest source count  : {source_count}")
@@ -1109,7 +1110,7 @@ def _research_list(args: argparse.Namespace) -> None:
     for request in requests:
         print(
             f"{request.id}  {request.category:5s}  status={request.status:11s}  "
-            f"count={request.target_count}  created={request.created_at.isoformat()}  "
+            f"count={request.target_count}  created={beijing_isoformat_or_dash(request.created_at)}  "
             f"topic={request.topic!r}"
         )
 

@@ -9,6 +9,7 @@ from uuid import UUID
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
 
+from core.clock import beijing_isoformat
 from domain import challenge_designs as challenge_dto
 from domain import design_tasks as design_dto
 from domain.design.difficulty_review import DesignDifficultyReview
@@ -189,7 +190,7 @@ def register_design_task_read_endpoints(app: FastAPI) -> None:
 
 
 def isofmt(value) -> str | None:
-    return value.isoformat() if value is not None else None
+    return beijing_isoformat(value)
 
 
 def design_task_dict(

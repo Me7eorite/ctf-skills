@@ -18,9 +18,11 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from core.clock import beijing_isoformat_seconds
 from core.paths import ProjectPaths
 
 _DEFAULT_AGENT_ID = "dashboard"
@@ -28,6 +30,10 @@ _DEFAULT_LEASE_SECONDS = 900
 _DEFAULT_HERMES_TIMEOUT_SECONDS = 810
 _DEFAULT_POLL_INTERVAL_SECONDS = 5.0
 _LOG_FILE_NAME = "web-worker.log"
+
+
+def _beijing_now_display() -> str:
+    return beijing_isoformat_seconds(datetime.now(timezone.utc)) or ""
 
 
 class ResearchWorkerManager:
@@ -120,7 +126,7 @@ class ResearchWorkerManager:
             self._process = process
             self._kind = kind
             self._agent_id = agent
-            self._started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            self._started_at = _beijing_now_display()
             self._log_path = log_path
             self._exit_message = None
             self._max_jobs = max_jobs if kind == "once" else None
