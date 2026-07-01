@@ -96,7 +96,8 @@ the host runner will perform and record the authoritative validation again after
 Update documentation and metadata when the repaired implementation changes them.
 
 Before you finish, self-check every challenge you touched with real file searches:
-- Run a search equivalent to `grep -R "metadata.json\\|challenge.yml\\|docker-compose\\|flag{{" validate.sh writenup/exp.py`.
+- Run a search equivalent to
+  `grep -R "metadata.json\\|challenge.yml\\|docker-compose\\|flag{{" validate.sh writenup/exp.py`.
 - For `re`, any `metadata.json` or `challenge.yml` hit in `validate.sh` or `writenup/exp.py`
   is still a failure. `validate.sh` must validate by running the solver and extracting a
   `flag{{...}}` token from solver output, not by reading organizer answers.
@@ -108,7 +109,10 @@ A repair that fixes one diagnostic by violating a different rule above still fai
 
 def _render_repair_plan(diagnostics: Sequence[Mapping[str, object]]) -> str:
     if not diagnostics:
-        return "- No failed challenge diagnostics were supplied; inspect `./input/shard.json` and exit without broad rewrites."
+        return (
+            "- No failed challenge diagnostics were supplied; inspect "
+            "`./input/shard.json` and exit without broad rewrites."
+        )
     lines: list[str] = []
     for item in diagnostics:
         challenge_id = str(item.get("challenge_id") or "unknown")
@@ -142,31 +146,55 @@ def _repair_steps_for_status(
     lower_error = error.lower()
     lower_output = f"{stdout_tail}\n{stderr_tail}".lower()
     if status == "contract_failed":
-        if "references 'metadata.json'" in lower_error or "references 'challenge.yml'" in lower_error:
+        if (
+            "references 'metadata.json'" in lower_error
+            or "references 'challenge.yml'" in lower_error
+        ):
             return [
                 "Root cause: the Re validation path reads organizer files instead of solving the artifact.",
                 "Remove all `metadata.json` / `challenge.yml` reads from both `validate.sh` and `writenup/exp.py`.",
                 "Do not replace a hardcoded flag with metadata reads; that is the same cheat in another form.",
-                "Make `validate.sh` run `writenup/exp.py ./attachments/<artifact>` and extract the final `flag{...}` from solver stdout; do not compare against metadata inside the script.",
-                "Make `writenup/exp.py` parse/decrypt data from the artifact bytes or execute the artifact with a derived input.",
+                (
+                    "Make `validate.sh` run `writenup/exp.py ./attachments/<artifact>` "
+                    "and extract the final `flag{...}` from solver stdout; do not "
+                    "compare against metadata inside the script."
+                ),
+                (
+                    "Make `writenup/exp.py` parse/decrypt data from the artifact "
+                    "bytes or execute the artifact with a derived input."
+                ),
             ]
         if "embeds the literal metadata.flag" in lower_error:
             return [
                 "Root cause: the validator or solver contains the literal flag.",
-                "Edit `validate.sh` / `writenup/exp.py` so they recover the flag from the target or artifact at runtime.",
-                "Do not replace the hardcoded flag with reads from `metadata.json`, `challenge.yml`, or `docker-compose*`; that is the same cheat in another form.",
+                (
+                    "Edit `validate.sh` / `writenup/exp.py` so they recover the "
+                    "flag from the target or artifact at runtime."
+                ),
+                (
+                    "Do not replace the hardcoded flag with reads from "
+                    "`metadata.json`, `challenge.yml`, or `docker-compose*`; "
+                    "that is the same cheat in another form."
+                ),
             ]
         if "metadata.build_status is not passed" in lower_error:
             return [
                 "Root cause: `metadata.json` still reports an incomplete build.",
-                "Run the real build command, verify the artifact/image exists, then set `build_status` to `passed` only after success.",
+                (
+                    "Run the real build command, verify the artifact/image exists, "
+                    "then set `build_status` to `passed` only after success."
+                ),
                 "Update artifact path, compiler/build command, and SHA-256 if the build output changed.",
             ]
         if "implement evidence incomplete" in lower_error:
             if "src missing" in lower_error or "src has no business source" in lower_error:
                 return [
                     "Root cause: the implementation source tree is incomplete.",
-                    "Create real challenge source under `src/` for Re or `deploy/src/` for Web/Pwn; do not leave only metadata/README/validate files.",
+                    (
+                        "Create real challenge source under `src/` for Re or "
+                        "`deploy/src/` for Web/Pwn; do not leave only "
+                        "metadata/README/validate files."
+                    ),
                     "Then rebuild the player artifact and update metadata build fields.",
                 ]
             return [
@@ -177,7 +205,11 @@ def _repair_steps_for_status(
         if "missing deploy/" in lower_error:
             return [
                 "Root cause: required Web/Pwn deployment files are missing.",
-                "Create the missing `deploy/Dockerfile`, `deploy/docker-compose.yml`, and `deploy/src/` files using the existing design.",
+                (
+                    "Create the missing `deploy/Dockerfile`, "
+                    "`deploy/docker-compose.yml`, and `deploy/src/` files using "
+                    "the existing design."
+                ),
                 "For Compose, keep one service and a literal `- FLAG=<metadata.flag>` environment entry.",
             ]
         if "no compiled elf" in lower_error or "no compiled pe" in lower_error:
@@ -214,24 +246,40 @@ def _repair_steps_for_status(
         if "running " in lower_error and "no input prints the flag" in lower_error:
             return [
                 "Root cause: the delivered binary prints the flag without the intended input/path.",
-                "Change the target so it requires the intended exploit, license key, or reverse-engineered input before revealing the flag.",
+                (
+                    "Change the target so it requires the intended exploit, license "
+                    "key, or reverse-engineered input before revealing the flag."
+                ),
                 "Keep the solver deriving that input from the delivered artifact or live service.",
             ]
         return [
             "Root cause: the flag is reachable without the intended technique.",
-            "For Re, remove plaintext flag bytes from `attachments/` and `dist/`; organizer-only `src/` may contain build-time material if not shipped.",
-            "Encode/encrypt delivered flag material and update `writenup/exp.py` to recover it through the declared technique.",
+            (
+                "For Re, remove plaintext flag bytes from `attachments/` and "
+                "`dist/`; organizer-only `src/` may contain build-time material "
+                "if not shipped."
+            ),
+            (
+                "Encode/encrypt delivered flag material and update `writenup/exp.py` "
+                "to recover it through the declared technique."
+            ),
         ]
     if status == "missing_validation":
         return [
             "Root cause: `validate.sh` is missing.",
             "Create `validate.sh` as the single reproducible entrypoint that runs the real solver.",
-            "Its last recovered flag must be printed by the solver; do not read or echo `metadata.flag` inside validation.",
+            (
+                "Its last recovered flag must be printed by the solver; do not "
+                "read or echo `metadata.flag` inside validation."
+            ),
         ]
     if status == "flag_mismatch":
         return [
             "Root cause: `validate.sh` ran but printed a different final flag.",
-            "Fix either the target flag injection/encryption or the solver extraction so they agree with `metadata.flag`.",
+            (
+                "Fix either the target flag injection/encryption or the solver "
+                "extraction so they agree with `metadata.flag`."
+            ),
             "Do not change `metadata.flag` unless the generated target was rebuilt consistently with that new flag.",
         ]
     if status == "nonzero_exit":
@@ -244,7 +292,10 @@ def _repair_steps_for_status(
                 "validation."
             )
         elif "connection refused" in lower_output or "timed out" in lower_output:
-            hint = "Fix service startup/readiness, host/port wiring, and cleanup traps before rerunning the exploit."
+            hint = (
+                "Fix service startup/readiness, host/port wiring, and cleanup "
+                "traps before rerunning the exploit."
+            )
         elif "permission denied" in lower_output:
             hint = "Fix executable bits, ownership, or container user permissions for the artifact and scripts."
         return [
@@ -255,7 +306,10 @@ def _repair_steps_for_status(
     if status == "timeout":
         return [
             "Root cause: validation timed out.",
-            "Add readiness checks, bounded retries, and shorter exploit loops; remove brute force or network dependency from validation.",
+            (
+                "Add readiness checks, bounded retries, and shorter exploit loops; "
+                "remove brute force or network dependency from validation."
+            ),
             "Make the solver deterministic enough to finish within the host timeout.",
         ]
     return [
@@ -297,6 +351,22 @@ Web / Pwn:
 - Rebuild the exact image named by `metadata.docker_image` whenever deploy source,
   Dockerfile, binary, or runtime dependencies change; keep `metadata.artifact_sha256` in sync.
 - Web additionally requires `metadata.runtime` and `metadata.framework`.
+
+Pwn container launcher:
+- Prefer the xinetd + chroot + TCP socket model. Install `xinetd`, copy an xinetd
+  service file into `/etc/xinetd.d/ctf`, expose the assigned service port, and
+  have `/root/start.sh` start xinetd then stay foreground.
+- The xinetd service may run as root only to accept the socket and execute
+  `/usr/sbin/chroot`; it should run the vulnerable binary with
+  `server_args = --userspec=<ctf_uid>:<ctf_gid> /home/ctf ./<binary>` or an
+  equivalent non-root uid/gid drop inside the chroot.
+- Build `/home/ctf` as the chroot root with the vulnerable binary, required
+  runtime libraries, minimal `/dev/null`, `zero`, `random`, `urandom`, and only
+  helper binaries needed by the intended exploit. Write `/home/ctf/flag` from
+  the Compose `FLAG` value at startup, not in the Docker image layer.
+- Harden xinetd with bounded settings such as `per_source`, `rlimit_cpu`, and
+  compatible memory limits. Keep chroot contents owned by `root:ctf` and not
+  writable by the `ctf` runtime user.
 
 Re / Pwn binary target:
 - The compiled player-facing ELF or PE/EXE lives in `attachments/` (pwn may

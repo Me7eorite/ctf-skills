@@ -153,8 +153,12 @@ Container rules for Web and Pwn:
   `[a-z0-9][a-z0-9_.-]`. Use the same identifier for the built image tag,
   validation commands, and `metadata.docker_image`.
 - Apply least privilege by default. Pwn images normally create a fixed
-  non-zero `ctf` user/group, use `WORKDIR /home/ctf`, copy challenge files
-  with `ctf` ownership, and end with `USER ctf`.
+  non-zero `ctf` user/group and use `WORKDIR /home/ctf`. For ordinary
+  foreground services, copy challenge files with `ctf` ownership and end with
+  `USER ctf`. For the preferred xinetd/chroot Pwn pattern, xinetd may start as
+  root only to accept the socket and call `/usr/sbin/chroot`; the vulnerable
+  binary itself MUST run inside the chroot with `--userspec=<ctf_uid>:<ctf_gid>`
+  or an equivalent non-root uid/gid drop.
 - Web images MUST reuse the base image's appropriate non-root service user and
   conventional application directory when available, such as
   `www-data:/var/www/html` for Apache/PHP or the selected Tomcat image's
@@ -168,6 +172,28 @@ Container rules for Web and Pwn:
   entrypoint or command. Keep this wrapper small; it should drop to the
   appropriate service user before starting long-running business processes when
   the selected runtime supports that pattern.
+- Pwn Docker services SHOULD use the xinetd + chroot + TCP socket pattern unless
+  the design explicitly needs a different launcher. Model it after
+  `pwn_docker_example/`: install `xinetd`, copy an xinetd service file from
+  `deploy/_files/ctf.xinetd` or `deploy/_files/etc/xinetd.d/ctf` into
+  `/etc/xinetd.d/ctf`, expose the assigned container port, and make
+  `/root/start.sh` start xinetd then block with `sleep infinity` or an
+  equivalent foreground wait. The xinetd service should use
+  `socket_type = stream`, `protocol = tcp`, `wait = no`, `type = UNLISTED`,
+  `bind = 0.0.0.0`, `server = /usr/sbin/chroot`, and
+  `server_args = --userspec=<ctf_uid>:<ctf_gid> /home/ctf ./<binary>`.
+- For that Pwn chroot layout, construct `/home/ctf` as the runtime root:
+  copy the vulnerable binary and only required runtime files there, copy needed
+  `/lib*` and `/usr/lib*` or explicitly pinned `libc`/loader files, create
+  `/home/ctf/dev/null`, `zero`, `random`, and `urandom`, and include only
+  minimal helper binaries such as `/bin/sh` or `/bin/cat` when the intended
+  exploit requires them. Place the flag at `/home/ctf/flag` from the Compose
+  `FLAG` value during container startup, not in an image layer.
+- Harden Pwn xinetd services with bounded resource settings such as
+  `per_source`, `rlimit_cpu`, and, when compatible with the exploit,
+  `rlimit_as`; include a `banner_fail` file. Keep `/home/ctf` owned by
+  `root:ctf`, directories/binaries non-writable by `ctf`, and the flag readable
+  only as narrowly as the intended solve requires.
 - `deploy/docker-compose.yml` MUST NOT use `volumes` (neither bind mounts nor
   named volumes). Copy all source, configuration, startup assets, and required
   initial data into the image during `docker build`.
@@ -249,6 +275,10 @@ Pwn rules:
   assembler/linker pipeline such as `nasm + ld`.
 - Record the actual mitigation state and distribute the relevant binary.
 - Pin the libc/toolchain where exploit stability depends on it.
+- The deployed service should normally be socket-driven through xinetd and
+  chroot rather than a bare `socat EXEC` or a Python wrapper. Use a different
+  launcher only when required by the challenge mechanism, and document that
+  reason in `metadata.json` and `writenup/wp.md`.
 
 ## 3. Build
 
@@ -258,6 +288,12 @@ Pwn rules:
   defines no `volumes`, and runs with the intended non-root account (`ctf` for
   ordinary Pwn, or the selected Web base image's service user); then build and
   run that exact Compose configuration.
+- Pwn build: when using the default xinetd/chroot socket model, verify the built
+  image contains `/etc/xinetd.d/ctf`, `/usr/sbin/chroot`, `/root/start.sh`, the
+  vulnerable binary under `/home/ctf`, required libraries/dev nodes inside the
+  chroot, and an xinetd `server_args` line that drops to the fixed `ctf`
+  uid/gid. Confirm `/root/start.sh` starts xinetd and does not run the
+  vulnerable binary directly as root.
 - Re/Pwn: run the compiler selected by the declared target/toolchain, then
   inspect the produced artifact with `file`.
 - Record build commands, compiler/runtime versions, and artifact SHA-256 in

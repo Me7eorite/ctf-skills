@@ -183,7 +183,13 @@ RUNTIME_ARTIFACT_RULES: dict[str, dict[str, RuntimeArtifactRule]] = {
             required_service_user="ctf",
         ),
         "xinetd": RuntimeArtifactRule(
-            required_exact=("deploy/_files/etc/xinetd.d/chal",),
+            required_any_exact=(
+                (
+                    "deploy/_files/ctf.xinetd",
+                    "deploy/_files/etc/xinetd.d/ctf",
+                    "deploy/_files/etc/xinetd.d/chal",
+                ),
+            ),
             required_patterns=(
                 _pattern(r"^deploy/src/(?:[A-Za-z0-9_.+/-]+)$"),
             ),

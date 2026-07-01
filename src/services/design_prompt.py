@@ -389,9 +389,11 @@ def _render_output_contract(task: DesignTask) -> str:
             "Use diverse challenge-specific names under `deploy/src/` or "
             "`src/`, such as `deploy/src/vuln.c`, `deploy/src/menu_service.cpp`, "
             "`deploy/src/heap_lab.c`, `deploy/src/Makefile`, or "
-            "`deploy/src/bin/challenge`; do not include Python "
-            "`deploy/src/app.py` unless the pwn service is intentionally a "
-            "Python wrapper around a separate native binary."
+            "`deploy/src/bin/challenge`. Prefer an xinetd/chroot launcher and "
+            "list `deploy/_files/ctf.xinetd` or "
+            "`deploy/_files/etc/xinetd.d/ctf` when that pattern is selected; "
+            "do not include Python `deploy/src/app.py` unless the pwn service "
+            "is intentionally a Python wrapper around a separate native binary."
         )
     uniqueness_hint = (
         "\n5. This is a `" + task.difficulty + "` challenge: it MUST have a "

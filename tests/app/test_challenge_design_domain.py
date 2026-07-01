@@ -547,6 +547,34 @@ def test_validate_design_payload_accepts_cpp_pwn_source_variant_without_app_py()
     assert result.challenge["language"] == "cpp"
 
 
+def test_validate_design_payload_accepts_pwn_xinetd_launcher_artifact():
+    payload = _pwn_payload(
+        artifacts=[
+            "README.md",
+            "metadata.json",
+            "validate.sh",
+            "deploy/Dockerfile",
+            "deploy/docker-compose.yml",
+            "deploy/src/challenge",
+            "deploy/_files/start.sh",
+            "deploy/_files/ctf.xinetd",
+            "writenup/wp.md",
+            "writenup/exp.py",
+        ],
+        implementation_plan={
+            "runtime": "ubuntu:22.04",
+            "service_model": "xinetd chroot TCP socket launcher",
+            "service_user": "root",
+            "runtime_language": "c",
+            "runtime_profile": "xinetd",
+        },
+    )
+
+    result = validate_design_payload(payload, _pwn_task())
+
+    assert "deploy/_files/ctf.xinetd" in result.challenge["artifacts"]
+
+
 @pytest.mark.parametrize(
     "artifact",
     [

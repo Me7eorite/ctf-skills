@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from core.paths import ProjectPaths
 from hermes import HermesRunner
+from hermes.prompt import render_validation_repair_prompt
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -18,6 +19,26 @@ class HermesRunnerTests(unittest.TestCase):
             'docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true',
             prompt,
         )
+
+    def test_shard_prompt_requires_pwn_xinetd_chroot_launcher(self):
+        prompt = (ROOT / "prompts" / "shard_prompt.md").read_text(encoding="utf-8")
+
+        self.assertIn("xinetd + chroot + TCP socket", prompt)
+        self.assertIn("server = /usr/sbin/chroot", prompt)
+        self.assertIn("server_args = --userspec=<ctf_uid>:<ctf_gid>", prompt)
+        self.assertIn("/etc/xinetd.d/ctf", prompt)
+
+    def test_repair_prompt_replays_pwn_xinetd_chroot_contract(self):
+        prompt = render_validation_repair_prompt(
+            attempt=1,
+            max_attempts=3,
+            validation_results=[],
+        )
+
+        self.assertIn("Pwn container launcher", prompt)
+        self.assertIn("xinetd + chroot + TCP socket", prompt)
+        self.assertIn("/usr/sbin/chroot", prompt)
+        self.assertIn("--userspec=<ctf_uid>:<ctf_gid>", prompt)
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
