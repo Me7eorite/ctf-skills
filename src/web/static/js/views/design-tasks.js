@@ -1150,19 +1150,22 @@ function buildProfileReady(category) {
 function renderBuildReadinessWarning(category = null) {
   const readiness = state.data?.build_readiness;
   if (!readiness || readiness.ready) return "";
-  const missing = Object.entries(readiness.categories || {})
+  const unavailable = Object.entries(readiness.categories || {})
     .filter(([itemCategory, item]) => (
       !item.ready && (!category || itemCategory === category)
     ))
     .map(([, item]) => item);
-  if (!missing.length) return "";
+  if (!unavailable.length) return "";
+  const missing = unavailable.filter((item) => item.reason === "missing_profile" || !item.reason);
+  const blocked = unavailable.filter((item) => item.reason && item.reason !== "missing_profile");
   return `
     <div class="dt-readiness-banner" role="alert">
       <i data-lucide="triangle-alert"></i>
       <div>
         <strong>构建环境未就绪，相关题目暂时无法构建</strong>
-        <span>缺少 Hermes Profile：${missing.map((item) => `<code>${escapeHtml(item.profile)}</code>`).join("、")}</span>
-        <span>请先运行：<code>${escapeHtml(missing.map((item) => item.create_command).join(" ; "))}</code></span>
+        ${missing.length ? `<span>缺少 Hermes Profile：${missing.map((item) => `<code>${escapeHtml(item.profile)}</code>`).join("、")}</span>` : ""}
+        ${missing.length ? `<span>请先运行：<code>${escapeHtml(missing.map((item) => item.create_command).join(" ; "))}</code></span>` : ""}
+        ${blocked.map((item) => `<span><code>${escapeHtml(item.profile)}</code>：${escapeHtml(item.message || "Profile 配置未就绪")}</span>`).join("")}
       </div>
     </div>
   `;

@@ -194,6 +194,7 @@ def effective_terminal_backend(
     environment: dict[str, str] | None = None,
     *,
     profile_name: str | None = None,
+    allow_cli_fallback: bool = True,
 ) -> str | None:
     """Return the configured Hermes terminal backend, if it can be determined.
 
@@ -206,8 +207,15 @@ def effective_terminal_backend(
     if raw_env_backend and raw_env_backend.strip():
         return raw_env_backend.strip().lower()
 
+    configured_home = hermes_home
+    raw_hermes_home = env.get("HERMES_HOME")
+    if raw_hermes_home and raw_hermes_home.strip():
+        configured_home = Path(raw_hermes_home.strip()).expanduser()
+    elif not project_hermes_home_is_configured(hermes_home):
+        configured_home = Path("~/.hermes").expanduser()
+
     if profile_name:
-        profile_home = hermes_home / "profiles" / profile_name
+        profile_home = configured_home / "profiles" / profile_name
         profile_dotenv_backend = _terminal_env_from_dotenv(profile_home / ".env")
         if profile_dotenv_backend:
             return profile_dotenv_backend
@@ -215,13 +223,17 @@ def effective_terminal_backend(
         if profile_config_backend:
             return profile_config_backend
 
-    dotenv_backend = _terminal_env_from_dotenv(hermes_home / ".env")
+    dotenv_backend = _terminal_env_from_dotenv(configured_home / ".env")
     if dotenv_backend:
         return dotenv_backend
 
-    config_backend = _terminal_backend_from_config(hermes_home / "config.yaml")
+    config_backend = _terminal_backend_from_config(configured_home / "config.yaml")
     if config_backend:
         return config_backend
+    if profile_name and allow_cli_fallback:
+        cli_backend = _terminal_backend_from_cli(profile_name)
+        if cli_backend:
+            return cli_backend
     return None
 
 
@@ -271,6 +283,64 @@ def _terminal_backend_from_config(config_path: Path) -> str | None:
             continue
         backend = value.strip().strip("'\"")
         return backend.lower() or None
+    return None
+
+
+def _terminal_backend_from_cli(profile_name: str) -> str | None:
+    """Read the effective terminal backend from `hermes -p <profile> config show`.
+
+    This keeps Challenge Factory aligned with Hermes' own profile resolution:
+    a profile may live in the user's default Hermes home even when the project
+    does not have a `.hermes/profiles/<name>/config.yaml` mirror.
+    """
+    base_arguments = hermes_arguments()
+    try:
+        chat_index = base_arguments.index("chat")
+    except ValueError:
+        chat_index = 1 if base_arguments else 0
+    config_arguments = [
+        *base_arguments[:chat_index],
+        "-p",
+        profile_name,
+        "config",
+        "show",
+    ]
+    try:
+        config_process = subprocess.run(
+            config_arguments,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if config_process.returncode != 0:
+        return None
+    return _terminal_backend_from_config_show(config_process.stdout)
+
+
+def _terminal_backend_from_config_show(output: str) -> str | None:
+    in_terminal = False
+    for line in output.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        normalized = stripped.lstrip("◆").strip()
+        if normalized.lower() == "terminal":
+            in_terminal = True
+            continue
+        if normalized.endswith(":") and normalized[:-1].strip().lower() == "terminal":
+            in_terminal = True
+            continue
+        if in_terminal and ":" in normalized:
+            key, value = normalized.split(":", 1)
+            if key.strip().lower() == "backend":
+                backend = value.strip().strip("'\"")
+                return backend.lower() or None
+        if in_terminal and normalized and ":" not in normalized and normalized.lower() != "terminal":
+            continue
     return None
 
 

@@ -19,6 +19,7 @@ def test_readiness_reports_missing_profiles_and_commands() -> None:
     assert readiness["ready"] is False
     assert readiness["missing_profiles"] == ["cf-pwn", "cf-re"]
     assert readiness["categories"]["web"]["ready"] is True
+    assert readiness["categories"]["pwn"]["reason"] == "missing_profile"
     assert readiness["categories"]["pwn"]["create_command"] == (
         "hermes profile create cf-pwn"
     )
@@ -51,6 +52,8 @@ def test_pwn_readiness_requires_isolated_backend_even_when_profile_exists() -> N
     assert readiness["ready"] is False
     assert readiness["missing_profiles"] == ["cf-pwn"]
     assert readiness["categories"]["pwn"]["ready"] is False
+    assert readiness["categories"]["pwn"]["reason"] == "unsafe_terminal_backend"
+    assert readiness["categories"]["pwn"]["backend"] == "local"
     assert "isolated Docker/VM" in readiness["categories"]["pwn"]["message"]
 
 

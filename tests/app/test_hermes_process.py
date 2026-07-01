@@ -253,6 +253,46 @@ class ProjectHermesHomeTests(unittest.TestCase):
 
         self.assertEqual(backend, "docker")
 
+    def test_effective_terminal_backend_uses_explicit_hermes_home_env(self):
+        with tempfile.TemporaryDirectory() as temp:
+            project_home = Path(temp) / "project" / ".hermes"
+            configured_home = Path(temp) / "configured" / ".hermes"
+            profile_home = configured_home / "profiles" / "cf-pwn"
+            profile_home.mkdir(parents=True)
+            (profile_home / "config.yaml").write_text(
+                "terminal:\n  backend: docker\n",
+                encoding="utf-8",
+            )
+
+            backend = effective_terminal_backend(
+                project_home,
+                {"HERMES_HOME": str(configured_home)},
+                profile_name="cf-pwn",
+            )
+
+        self.assertEqual(backend, "docker")
+
+    def test_effective_terminal_backend_falls_back_to_default_home_when_project_home_empty(self):
+        with tempfile.TemporaryDirectory() as temp:
+            project_home = Path(temp) / "project" / ".hermes"
+            default_home = Path(temp) / "default" / ".hermes"
+            profile_home = default_home / "profiles" / "cf-pwn"
+            profile_home.mkdir(parents=True)
+            (profile_home / "config.yaml").write_text(
+                "terminal:\n  backend: docker\n",
+                encoding="utf-8",
+            )
+
+            with patch("hermes.process.Path.home", return_value=Path(temp) / "default"):
+                backend = effective_terminal_backend(
+                    project_home,
+                    {},
+                    profile_name="cf-pwn",
+                    allow_cli_fallback=False,
+                )
+
+        self.assertEqual(backend, "docker")
+
     def test_effective_terminal_backend_reads_config(self):
         with tempfile.TemporaryDirectory() as temp:
             hermes_home = Path(temp) / ".hermes"
@@ -265,6 +305,36 @@ class ProjectHermesHomeTests(unittest.TestCase):
             backend = effective_terminal_backend(hermes_home, {})
 
         self.assertEqual(backend, "docker")
+
+    def test_effective_terminal_backend_falls_back_to_hermes_cli_profile_config(self):
+        captured_command = {}
+
+        def fake_run(arguments, **keyword_args):
+            captured_command["arguments"] = arguments
+            captured_command["keyword_args"] = keyword_args
+
+            class Result:
+                returncode = 0
+                stdout = "◆ Terminal\n  Backend:      docker\n  Working dir:  .\n"
+
+            return Result()
+
+        with tempfile.TemporaryDirectory() as temp:
+            hermes_home = Path(temp) / ".hermes"
+            with patch("hermes.process.hermes_arguments", return_value=["hermes", "chat", "-Q"]):
+                with patch("hermes.process.subprocess.run", side_effect=fake_run):
+                    backend = effective_terminal_backend(
+                        hermes_home,
+                        {"HERMES_HOME": str(hermes_home)},
+                        profile_name="cf-pwn",
+                    )
+
+        self.assertEqual(backend, "docker")
+        self.assertEqual(
+            captured_command["arguments"],
+            ["hermes", "-p", "cf-pwn", "config", "show"],
+        )
+        self.assertEqual(captured_command["keyword_args"]["timeout"], 10)
 
 
 class InvokeLogMarkerTests(unittest.TestCase):

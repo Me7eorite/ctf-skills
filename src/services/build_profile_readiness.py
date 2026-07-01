@@ -33,14 +33,20 @@ def check_build_profile_readiness(
                 paths.hermes_home,
                 profile_name=profile_name,
             )
-        ready = exists(profile_name)
+        profile_present = exists(profile_name)
+        ready = profile_present
+        reason = "" if profile_present else "missing_profile"
         message = ""
         if category == "pwn" and (not profile_backend or profile_backend.lower() == "local"):
             ready = False
+            if profile_present:
+                reason = "unsafe_terminal_backend"
             message = _PWN_LOCAL_BACKEND_MESSAGE
         categories[category] = {
             "ready": ready,
             "profile": profile_name,
+            "reason": reason,
+            "backend": profile_backend or "",
             "create_command": f"hermes profile create {profile_name}",
             "message": message,
         }

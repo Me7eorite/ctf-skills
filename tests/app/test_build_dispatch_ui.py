@@ -39,6 +39,8 @@ def test_build_attempt_actions_use_constrained_endpoints():
     assert "分析并修复" in source
     assert 'attempt.status === "failed"' in source
     assert "重试构建" in source
+    assert 'item.reason && item.reason !== "missing_profile"' in source
+    assert "Profile 配置未就绪" in source
     assert "干净重建" in source
     assert "/clean-rebuild`" in source
     assert "AI 修复记录" in source
