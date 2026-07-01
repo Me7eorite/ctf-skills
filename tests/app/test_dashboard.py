@@ -122,6 +122,27 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(sequence, [first, second])
         self.assertIn("--allow-failed-attempts-exit-zero", command)
 
+    def test_finished_build_workers_reports_exited_dashboard_worker(self):
+        process = Mock()
+        process.poll.return_value = 1
+        tasks = TaskManager(self.paths)
+        tasks._process = process
+        tasks._kind = "worker"
+        tasks._worker_ids = {"dashboard-01"}
+
+        records = tasks.finished_build_workers()
+
+        self.assertEqual(
+            records,
+            [
+                {
+                    "kind": "worker",
+                    "worker_ids": ["dashboard-01"],
+                    "returncode": 1,
+                }
+            ],
+        )
+
     def test_sequential_lanes_split_attempts_round_robin(self):
         first = UUID("11111111-1111-1111-1111-111111111111")
         second = UUID("22222222-2222-2222-2222-222222222222")

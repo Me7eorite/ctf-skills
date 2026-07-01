@@ -154,6 +154,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
         category: str | None = Query(default=None),
         limit: str | None = Query(default=None),
     ) -> JSONResponse:
+        _sync_finished_dashboard_workers(app)
         if status is not None and status not in BuildAttemptStatus:
             raise HTTPException(
                 status_code=HTTPStatus.BAD_REQUEST,
@@ -207,6 +208,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
 
     @app.get("/api/build-attempts/{attempt_id}")
     def get_build_attempt(attempt_id: str) -> JSONResponse:
+        _sync_finished_dashboard_workers(app)
         attempt_uuid = _parse_uuid(attempt_id, "build attempt id", not_found=True)
 
         from persistence.session import transaction
@@ -406,6 +408,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
         ok, message = tasks.stop()
         if not ok:
             raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=message)
+        _sync_finished_dashboard_workers(app)
         state = tasks.state() if hasattr(tasks, "state") else {}
         return JSONResponse(
             {"ok": True, "message": message, "state": state},
@@ -752,6 +755,82 @@ def _submit_batch(app: FastAPI, task_ids: list[UUID]) -> list[UUID]:
             status_code=HTTPStatus.CONFLICT,
             detail="a build is already active for this design task",
         ) from exc
+
+
+def _sync_finished_dashboard_workers(app: FastAPI) -> None:
+    tasks = getattr(app.state, "dashboard_tasks", None)
+    if tasks is None or not hasattr(tasks, "finished_build_workers"):
+        return
+    records = tasks.finished_build_workers()
+    if not records:
+        return
+    worker_errors: dict[str, str] = {}
+    attempt_errors: dict[UUID, str] = {}
+    for record in records:
+        returncode = record.get("returncode")
+        kind = record.get("kind") or "worker"
+        message = f"dashboard {kind} exited before finalizing attempt"
+        if returncode is not None:
+            message = f"{message} (returncode {returncode})"
+        for worker_id in record.get("worker_ids") or []:
+            if isinstance(worker_id, str) and worker_id:
+                worker_errors[worker_id] = message
+        for raw_id in record.get("build_attempt_ids") or []:
+            try:
+                attempt_errors[UUID(str(raw_id))] = message
+            except (TypeError, ValueError):
+                continue
+    if not worker_errors and not attempt_errors:
+        return
+
+    from persistence.session import transaction
+
+    with transaction() as session:
+        filters = [build_model.BuildAttempt.status == "running"]
+        selectors = []
+        if worker_errors:
+            selectors.append(build_model.BuildAttempt.worker.in_(worker_errors))
+        if attempt_errors:
+            selectors.append(build_model.BuildAttempt.id.in_(attempt_errors))
+        if not selectors:
+            return
+        rows = session.scalars(
+            sa.select(build_model.BuildAttempt)
+            .where(*filters, sa.or_(*selectors))
+            .with_for_update()
+        ).all()
+        now = datetime.now(timezone.utc)
+        for row in rows:
+            error = attempt_errors.get(row.id)
+            if error is None and row.worker is not None:
+                error = worker_errors.get(row.worker)
+            error = error or "dashboard worker exited before finalizing attempt"
+            _mark_dashboard_attempt_lost(session, row, now=now, error=error)
+
+
+def _mark_dashboard_attempt_lost(
+    session: Any,
+    row: build_model.BuildAttempt,
+    *,
+    now: datetime,
+    error: str,
+) -> None:
+    if row.latest_execution_id is not None:
+        latest = session.get(exec_model.Execution, row.latest_execution_id)
+        if latest is not None and latest.status in {"claimed", "running"}:
+            latest.status = "lost"
+            latest.exit_class = latest.exit_class or "dashboard_worker_exited"
+            latest.error = latest.error or error
+            latest.finished_at = now
+        if row.current_execution_id == row.latest_execution_id:
+            row.current_execution_id = None
+    row.status = "lost"
+    row.finished_at = now
+    row.error = error
+    task = session.get(task_model.DesignTask, row.design_task_id)
+    if task is not None and task.status == "building":
+        task.status = "build_failed"
+        task.updated_at = now
 
 
 def _normalize_artifact_status(

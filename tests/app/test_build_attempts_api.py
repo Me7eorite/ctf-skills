@@ -39,6 +39,7 @@ class _StubBuildTaskManager:
         self.calls: list[tuple[str, UUID]] = []
         self.lane_batches: list[list[UUID]] = []
         self.pool: dict | None = None
+        self.finished_records: list[dict] = []
 
     def start_worker(self, *, category: str, build_attempt_id: UUID):
         self.calls.append((category, build_attempt_id))
@@ -91,6 +92,9 @@ class _StubBuildTaskManager:
 
     def state(self):
         return {"running": False, "message": self.response[1]}
+
+    def finished_build_workers(self):
+        return self.finished_records
 
 
 @pytest.fixture(scope="module")
@@ -1059,6 +1063,39 @@ def test_stop_build_worker_endpoint_terminates_dashboard_task(
     assert body["ok"] is True
     assert "已结束" in body["message"]
     assert body["state"]["running"] is False
+
+
+def test_list_syncs_finished_dashboard_worker_to_lost(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory, status="building")
+    with transaction(factory=session_factory) as session:
+        attempt = _create_canonical_attempt(BuildAttemptsRepository(session), task_id)
+        row = session.get(build_model.BuildAttempt, attempt.id)
+        row.status = "running"
+        row.worker = "dashboard-01"
+    tasks = _StubBuildTaskManager()
+    tasks.finished_records = [
+        {
+            "kind": "worker",
+            "worker_ids": ["dashboard-01"],
+            "returncode": -9,
+        }
+    ]
+    client.app.state.dashboard_tasks = tasks
+
+    response = client.get("/api/build-attempts")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload[0]["id"] == str(attempt.id)
+    assert payload[0]["status"] == "lost"
+    assert "dashboard worker exited" in payload[0]["error"]
+    with session_factory() as session:
+        row = session.get(build_model.BuildAttempt, attempt.id)
+        assert row.status == "lost"
+        assert session.get(task_model.DesignTask, task_id).status == "build_failed"
 
 
 # ============================================================================

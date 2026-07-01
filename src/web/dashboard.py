@@ -46,6 +46,7 @@ class TaskManager:
         self._kind: str | None = None
         self._started_at: str | None = None
         self._log: str | None = None
+        self._worker_ids: set[str] = set()
         self._lane_pools: dict[str, LanePool] = {}
 
     def start(self, kind: str) -> tuple[bool, str]:
@@ -71,6 +72,7 @@ class TaskManager:
             kind,
             commands[kind],
             require_pending=kind == "worker",
+            worker_ids={"dashboard-01"} if kind == "worker" else set(),
         )
 
     def start_worker(
@@ -94,6 +96,7 @@ class TaskManager:
                 str(build_attempt_id),
             ],
             require_pending=False,
+            worker_ids={"dashboard-01"},
         )
 
     def start_sequential_worker(
@@ -126,6 +129,7 @@ class TaskManager:
             "sequential-worker",
             command,
             require_pending=False,
+            worker_ids={"dashboard-sequential-01"},
         )
 
     def start_sequential_lanes(
@@ -217,6 +221,7 @@ class TaskManager:
         *,
         require_pending: bool,
         on_started=None,
+        worker_ids: set[str] | None = None,
     ) -> tuple[bool, str]:
         if require_pending and not any(
             (self.paths.shards / "pending").glob("*.json")
@@ -253,6 +258,7 @@ class TaskManager:
                 )
             self._kind = kind
             self._started_at = beijing_now_display()
+            self._worker_ids = set(worker_ids or ())
             process = self._process
 
         if on_started is not None:
@@ -316,6 +322,37 @@ class TaskManager:
     def lane_pools_state(self) -> list[dict]:
         with self._lock:
             return self._lane_pools_state_unlocked()
+
+    def finished_build_workers(self) -> list[dict]:
+        """Return dashboard-owned build workers whose process has exited."""
+        records: list[dict] = []
+        with self._lock:
+            if self._process is not None and self._worker_ids:
+                returncode = self._process.poll()
+                if returncode is not None:
+                    records.append(
+                        {
+                            "kind": self._kind,
+                            "worker_ids": sorted(self._worker_ids),
+                            "returncode": returncode,
+                        }
+                    )
+            for pool in self._lane_pools.values():
+                for lane in pool.lanes:
+                    returncode = lane.process.poll()
+                    if returncode is None:
+                        continue
+                    records.append(
+                        {
+                            "kind": "lane",
+                            "worker_ids": [lane.worker],
+                            "returncode": returncode,
+                            "build_attempt_ids": [
+                                str(item) for item in lane.build_attempt_ids
+                            ],
+                        }
+                    )
+        return records
 
     def _process_message(self) -> str:
         if self._process is None:
