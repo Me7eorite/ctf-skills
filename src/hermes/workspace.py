@@ -405,6 +405,7 @@ def materialize_resume_outputs(
         destination = destination_root / source.name
         shutil.copytree(source, destination)
         targets[challenge_id] = destination.relative_to(workspace.root).as_posix()
+    _make_container_writable(workspace.active)
     return targets
 
 

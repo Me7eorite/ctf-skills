@@ -365,7 +365,14 @@ def verify_terminal_workspace_visibility(
             )
     except OSError:
         pass
-
+    try:
+        marker.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        raise TerminalWorkspaceVisibilityError(
+            f"cannot remove terminal workspace probe marker: {exc}"
+        ) from exc
 
 def _terminal_env_from_dotenv(dotenv_path: Path) -> str | None:
     try:
@@ -854,4 +861,3 @@ def _wait_after_terminate(process: "subprocess.Popen[str]") -> None:
         process.wait(timeout=TERMINATION_WAIT_TIMEOUT)
     except subprocess.TimeoutExpired:
         return
-

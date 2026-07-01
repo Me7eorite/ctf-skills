@@ -395,7 +395,7 @@ class TerminalWorkspaceVisibilityTests(unittest.TestCase):
                 timeout=10,
             )
 
-            self.assertTrue((cwd / "state" / "terminal-workspace-probe.json").is_file())
+            self.assertFalse((cwd / "state" / "terminal-workspace-probe.json").exists())
 
     def test_docker_probe_fails_when_marker_is_not_host_visible(self):
         with tempfile.TemporaryDirectory() as tmp:

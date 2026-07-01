@@ -929,6 +929,16 @@ class ExecutionWorkspaceTests(unittest.TestCase):
 
         self.assertTrue((workspace.output / "challenges" / "web" / claimed.name).is_dir())
         self.assertFalse((workspace.output / "challenges" / "web" / "web-9999-keep").exists())
+        if os.name != "nt":
+            for directory in (
+                workspace.output / "challenges",
+                workspace.output / "challenges" / "web",
+                workspace.output / "challenges" / "web" / claimed.name,
+            ):
+                self.assertTrue(
+                    directory.stat().st_mode & 0o002,
+                    f"{directory} should be writable by the Hermes container user",
+                )
 
     def test_report_import_remains_visible_to_merge_reports(self) -> None:
         shard = self._running_shard({"challenges": [{"id": "web-0001", "category": "web"}]})
