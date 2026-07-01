@@ -289,6 +289,14 @@ def test_finalize_prompt_preserves_scope_but_forbids_new_searches():
     assert "algorithm reversing" in prompt
     assert "exactly one valid JSON object" in prompt
     assert "consulted source A" in prompt
+    assert "Do not perform new web searches" in prompt
+    assert "FINALIZE-ONLY mode" in prompt
+    assert "first non-whitespace character must be `{`" in prompt
+    assert "Do not write markdown, prose, code fences" in prompt
+    assert "If no source can be recovered" in prompt
+    assert "{\"sources\":[],\"findings\":[]}" in prompt
+    assert 'a sentence such as "Let me build..."' in prompt
+    assert "Do not prefix it with any words" in prompt
 
 
 def test_legacy_parse_wrapper_still_materializes_raw_text(tmp_path):

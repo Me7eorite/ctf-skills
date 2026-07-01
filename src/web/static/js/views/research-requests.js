@@ -633,7 +633,7 @@ function renderPrimaryAction({ request, latest, qualityPassed, designTaskCount, 
   if (request.status === "researched") {
     return `<button class="btn btn-primary" id="detail-run-once"${workerRunning || !available ? " disabled" : ""}><i data-lucide="plus-circle"></i> 补充研究</button>`;
   }
-  if (request.display_status === "researching") {
+  if (latest && (latest.status === "queued" || latest.status === "running")) {
     return `<button class="btn btn-primary detail-open-runs"><i data-lucide="activity"></i> 查看运行状态</button>`;
   }
   if (request.status === "failed" && latest && Number(latest.attempt) >= Number(request.max_attempts)) {

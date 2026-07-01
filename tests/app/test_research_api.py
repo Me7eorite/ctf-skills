@@ -719,6 +719,47 @@ class RequestScopedWorkerEndpointTests(unittest.TestCase):
         finally:
             _close(client)
 
+    def test_request_scoped_worker_start_failure_keeps_researched_display_contract(self):
+        request = _make_request(status="researched")
+        supplement_run = _make_run(request_id=request.id, status="queued")
+        repo = SimpleNamespace(list_categories=lambda: [])
+        client = _client(repo)
+        calls = {"supplement": 0, "cancel": 0}
+
+        class FakeResearchJobService:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def ensure_supplement_run(self, _request_id):
+                calls["supplement"] += 1
+                return supplement_run
+
+            def cancel_supplement_run(self, _run_id):
+                calls["cancel"] += 1
+                return True
+
+        try:
+            with patch(
+                "services.research_job_service.ResearchJobService",
+                FakeResearchJobService,
+            ), patch(
+                "web.research_worker_manager.ResearchWorkerManager.start",
+                lambda self, **_kwargs: (False, "worker_startup_failed: import failed: boom"),
+            ), patch(
+                "web.research_endpoints._preflight_scoped_research_worker",
+                return_value=(True, 202, {"needs_supplement": True}),
+            ):
+                resp = client.post(
+                    f"/api/research/requests/{request.id}/worker/start",
+                    json={"kind": "once", "max_jobs": 1},
+                )
+            self.assertEqual(resp.status_code, 409)
+            self.assertEqual(resp.json()["code"], "worker_startup_failed")
+            self.assertEqual(calls["supplement"], 1)
+            self.assertEqual(calls["cancel"], 1)
+        finally:
+            _close(client)
+
 
 # ---------------------------------------------------------------------------
 # 10.8 GET /api/research/queue/stats

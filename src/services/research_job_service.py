@@ -411,7 +411,6 @@ class ResearchJobService:
             next_attempt = (latest.attempt if latest is not None else latest_completed.attempt) + 1
             if request.max_attempts < next_attempt:
                 request.max_attempts = next_attempt
-            request.status = "researching"
             request.updated_at = _utcnow()
             run = model.ResearchRun(
                 id=uuid4(),
@@ -424,6 +423,30 @@ class ResearchJobService:
             session.flush()
             session.refresh(run)
             return _run_dto(run)
+
+    def cancel_supplement_run(self, run_id: UUID) -> bool:
+        """Remove a queued supplemental run that never got a chance to start.
+
+        This is used when request-scoped worker startup fails after a supplement
+        run has been pre-created. The revert is intentionally conservative: only
+        an unclaimed queued run can be discarded, and the parent request is
+        restored to `researched` so the UI does not look like a fresh research
+        cycle started.
+        """
+        with transaction(factory=self.repository_factory) as session:
+            run = session.get(model.ResearchRun, run_id)
+            if run is None:
+                return False
+            if run.status != "queued":
+                return False
+            if run.claimed_by is not None or run.claim_token is not None:
+                return False
+            request = _get_request(session, run.generation_request_id)
+            session.delete(run)
+            request.status = "researched"
+            request.updated_at = _utcnow()
+            session.flush()
+            return True
 
     def _get_owned_running_run(
         self,

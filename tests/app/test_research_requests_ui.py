@@ -36,6 +36,9 @@ def test_request_detail_exposes_quality_gate_and_runtime_constraints() -> None:
     assert "可继续补充研究" in source
     assert "生成设计任务" in source
     assert "暂停 Worker 可能影响正在执行的其他研究需求" in source
+    assert 'if (latest && (latest.status === "queued" || latest.status === "running"))' in source
+    assert "补充研究" in source
+    assert "启动研究" in source
 
 
 def test_research_submit_supports_search_keywords() -> None:

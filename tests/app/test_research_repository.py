@@ -585,6 +585,10 @@ def test_supplement_run_preserves_parent_findings_when_output_is_empty(
     )
 
     supplement = service.ensure_supplement_run(request.id)
+    with session_factory() as session:
+        request_row = session.get(model.GenerationRequest, request.id)
+        assert request_row is not None
+        assert request_row.status == "researched"
     claimed = service.claim_next_run("w2", 60, generation_request_id=request.id)
     assert claimed is not None
     assert claimed.id == supplement.id

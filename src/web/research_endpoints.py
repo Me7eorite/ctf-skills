@@ -128,6 +128,8 @@ def _register_worker_endpoints(app: FastAPI, manager) -> None:
                 detail=f"worker parameters must be integers: {exc}",
             ) from exc
 
+        supplement_run_id = None
+        supplement_service = None
         if generation_request_id is not None:
             ok, status_code, body = _preflight_scoped_research_worker(generation_request_id)
             if not ok:
@@ -136,7 +138,11 @@ def _register_worker_endpoints(app: FastAPI, manager) -> None:
                 from services.research_job_service import ResearchJobService
 
                 try:
-                    ResearchJobService().ensure_supplement_run(UUID(generation_request_id))
+                    supplement_service = ResearchJobService()
+                    supplement_run = supplement_service.ensure_supplement_run(
+                        UUID(generation_request_id)
+                    )
+                    supplement_run_id = supplement_run.id
                 except ResearchValidationError as exc:
                     return JSONResponse({"code": str(exc)}, status_code=HTTPStatus.CONFLICT)
 
@@ -149,6 +155,11 @@ def _register_worker_endpoints(app: FastAPI, manager) -> None:
             generation_request_id=generation_request_id,
         )
         if not ok:
+            if supplement_run_id is not None and supplement_service is not None:
+                try:
+                    supplement_service.cancel_supplement_run(supplement_run_id)
+                except Exception:
+                    pass
             if str(message).startswith("worker_startup_failed:"):
                 return JSONResponse(
                     {
