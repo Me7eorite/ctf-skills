@@ -76,8 +76,9 @@ How to read `validation_error`:
   `build-evidence.json`, `evidence.json`, or any other side-car file — the host validator
   only reads `metadata.json` and the on-disk artifacts.
 - `"build evidence incomplete: docker image '<NAME>' not present on host"` means the
-  image is missing or differs from `metadata.docker_image`. Rebuild that exact image tag
-  (`docker build -t <NAME> ...`) and do not rename the tag.
+  image is missing or differs from `metadata.docker_image`. Do NOT run Docker yourself;
+  fix `metadata.docker_image`, `deploy/Dockerfile`, and `deploy/docker-compose.yml`
+  so the host runner can rebuild that exact image tag.
 - `"build evidence incomplete: metadata.artifact_sha256 does not match artifact contents"`
   means the file at `metadata.artifact` was rebuilt without updating its `artifact_sha256`.
   Recompute the SHA-256 and write it back to `metadata.json`.
@@ -89,10 +90,11 @@ How to read `validation_error`:
   encoded/encrypted material in the player artifact and update `writenup/exp.py` so
   it derives the flag through the declared reversing technique.
 {_VALIDATION_CONTRACT_CHECKLIST}{non_regression}
-Run `validate.sh` yourself and iterate until it exits 0 and its last recovered flag equals
-`metadata.flag`. Do not hardcode or merely echo the expected flag in the exploit. The exploit
-must recover it through the intended vulnerability. Do not write `validate/*` progress events;
-the host runner will perform and record the authoritative validation again after you return.
+Do not run Docker, Docker Compose, or `validate.sh` yourself during repair. Fix the
+source, deploy files, metadata, `validate.sh`, and solver so the host runner can perform
+the controlled build and authoritative validation after you return. Do not hardcode or
+merely echo the expected flag in the exploit. The exploit must recover it through the
+intended vulnerability. Do not write `validate/*` progress events.
 Update documentation and metadata when the repaired implementation changes them.
 
 Before you finish, self-check every challenge you touched with real file searches:
@@ -181,10 +183,14 @@ def _repair_steps_for_status(
             return [
                 "Root cause: `metadata.json` still reports an incomplete build.",
                 (
-                    "Run the real build command, verify the artifact/image exists, "
-                    "then set `build_status` to `passed` only after success."
+                    "For Web/Pwn, fix the buildable `deploy/` files and "
+                    "`metadata.docker_image`; the host runner will run the "
+                    "controlled Docker build and set `build_status` after success."
                 ),
-                "Update artifact path, compiler/build command, and SHA-256 if the build output changed.",
+                (
+                    "For Re artifacts, update artifact path, compiler/build "
+                    "command, and SHA-256 if the build output changed."
+                ),
             ]
         if "implement evidence incomplete" in lower_error:
             if "src missing" in lower_error or "src has no business source" in lower_error:
@@ -348,8 +354,12 @@ Web / Pwn:
   equal to `metadata.flag`, and the service code MUST read `FLAG`.
 - The exploit recovers the flag from the live service via `CHAL_HOST`/`CHAL_PORT`,
   never from the compose file that injects it.
-- Rebuild the exact image named by `metadata.docker_image` whenever deploy source,
-  Dockerfile, binary, or runtime dependencies change; keep `metadata.artifact_sha256` in sync.
+- Do not run Docker from Hermes. The host runner rebuilds the exact image named by
+  `metadata.docker_image` with `docker build -t <metadata.docker_image> -f deploy/Dockerfile .`
+  after deploy source, Dockerfile, binary, or runtime dependencies change.
+- `validate.sh` MUST print bounded service diagnostics to stderr on failure:
+  `docker compose ps`, recent `docker compose logs --no-color --tail=120`, and
+  solver stdout/stderr tails. The host runner forwards those tails into repair prompts.
 - Web additionally requires `metadata.runtime` and `metadata.framework`.
 
 Pwn container launcher:
@@ -393,9 +403,9 @@ Re:
   `metadata.json` or `challenge.yml`.
 - `metadata.artifact` MUST point at the primary player-facing artifact under
   `attachments/`, and `metadata.artifact_sha256` MUST match that exact file.
-- `metadata.build_command` MUST be populated with the command actually used to
-  create that artifact; after every rebuild, strip, or copy, recompute the hash
-  from the final file in `attachments/`.
+- `metadata.build_command` MUST describe the command used to create that artifact;
+  after every rebuild, strip, or copy, recompute the hash from the final file in
+  `attachments/`.
 - `writenup/exp.py` MUST be offline-capable on the host: use the standard
   library, existing system tools such as `openssl`, or helper modules vendored
   under `writenup/`; do not depend on undeclared packages like `Crypto`

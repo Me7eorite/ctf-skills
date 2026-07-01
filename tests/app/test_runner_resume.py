@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 
 from core.jsonio import read_json, write_json
 from core.state import InMemoryProgressStore, ProgressStore
+from hermes.host_build import HostBuildError, NoopHostBuilder
 from hermes.runner import HermesRunner
 from persistence import PersistenceConnectionError
 
@@ -231,6 +232,7 @@ class RunnerRealRunTests(unittest.TestCase):
             paths,
             progress=progress,
             image_exists=lambda _: image_exists_value,
+            host_builder=NoopHostBuilder(),
             profile_exists=lambda _: True,
         )  # type: ignore[arg-type]
 
@@ -249,6 +251,9 @@ class RunnerRealRunTests(unittest.TestCase):
             }
 
         runner.validator.validate_challenge = fake_validate  # type: ignore[assignment]
+        runner.validator.validate_path = (  # type: ignore[method-assign]
+            lambda _path, *, expected_challenge_id: fake_validate(expected_challenge_id)
+        )
         return runner
 
     def test_first_run_writes_design_pending_and_marks_complete(self):
@@ -523,6 +528,7 @@ class RunnerRealRunTests(unittest.TestCase):
                 },
             )
             runner = self._make_runner_with_fake_invoke(paths)
+            runner.validation_repair_attempts = 0
 
             def invoke(_prompt, log, dry_run=False, **kwargs):
                 del dry_run
@@ -537,15 +543,11 @@ class RunnerRealRunTests(unittest.TestCase):
             outcome = runner.process_one("worker-resume", dry_run=False)
 
             self.assertEqual(outcome["status"], "failed")
-            self.assertEqual(outcome["failure_type"], "infrastructure")
+            self.assertEqual(outcome["failure_type"], "validation")
             self.assertTrue((paths.shards / "failed" / "web-current.json").exists())
             self.assertTrue((paths.challenges / "web" / "web-0001-old").is_dir())
             workspace = next((paths.root / "work" / "executions").iterdir())
-            manifest = read_json(workspace / "input" / "manifest.json", {})
-            self.assertEqual(
-                manifest["resume_output_targets"]["web-0001"],
-                "output/challenges/web/web-0001-old",
-            )
+            self.assertFalse((workspace / "quarantine" / "web" / "web-0001-old").exists())
 
     def test_resume_source_field_is_optional_for_first_run(self):
         with TemporaryDirectory() as tmp:
@@ -718,6 +720,7 @@ class RunnerRealRunTests(unittest.TestCase):
             _make_web_challenge(paths, "web-0001")
             _make_shard(paths, "web-0001-0001.json", ["web-0001"])
             runner = self._make_runner_with_fake_invoke(paths, validator_status="flag_mismatch")
+            runner.validation_repair_attempts = 0
 
             outcome = runner.process_one("worker-01", dry_run=False)
             self.assertEqual(outcome["status"], "failed")
@@ -726,7 +729,7 @@ class RunnerRealRunTests(unittest.TestCase):
             files = sorted(p.name for p in failed_path.glob("*.json"))
             self.assertTrue(any("web-0001-0001" in name for name in files))
             workspace = next((paths.root / "work" / "executions").iterdir())
-            self.assertTrue((workspace / "quarantine" / "web" / "web-0001-demo").is_dir())
+            self.assertFalse((workspace / "quarantine" / "web" / "web-0001-demo").is_dir())
             self.assertTrue((paths.challenges / "web" / "web-0001-demo").is_dir())
 
     def test_failed_validation_is_fed_back_to_hermes_and_retried(self):
@@ -822,8 +825,58 @@ class RunnerRealRunTests(unittest.TestCase):
             self.assertEqual(len(prompts), 2)
             self.assertIn("Focused repair plan:", prompts[1])
             self.assertIn("Root cause: `metadata.json` still reports an incomplete build.", prompts[1])
-            self.assertIn("Run the real build command", prompts[1])
+            self.assertIn("the host runner will run the controlled Docker build", prompts[1])
             self.assertIn("metadata.build_status is not passed", prompts[1])
+
+    def test_host_build_failure_is_forwarded_to_validation_repair_prompt(self):
+        class FailingHostBuilder:
+            def build_workspace(self, _workspace, _validation_set):
+                raise HostBuildError(
+                    "web-0001: docker build failed with exit 1",
+                    challenge_id="web-0001",
+                    command=[
+                        "docker",
+                        "build",
+                        "-t",
+                        "web-0001-demo:latest",
+                        "-f",
+                        "deploy/Dockerfile",
+                        ".",
+                    ],
+                    log_path="/tmp/build.log",
+                    stdout_tail="COPY failed\n",
+                    stderr_tail="missing deploy/src/app.py\n",
+                )
+
+        with TemporaryDirectory() as tmp:
+            paths = _Paths(root=Path(tmp))
+            paths.initialize()
+            _copy_real_prompt(paths)
+            _make_web_challenge(paths, "web-0001")
+            _make_shard(paths, "web-0001-0001.json", ["web-0001"])
+            runner = HermesRunner(
+                paths,
+                image_exists=lambda _: True,
+                host_builder=FailingHostBuilder(),
+                profile_exists=lambda _: True,
+                validation_repair_attempts=1,
+            )  # type: ignore[arg-type]
+            prompts: list[str] = []
+
+            def invoke(prompt: str, log: Path, dry_run: bool, *, timeout=None, **_kwargs) -> int:
+                prompts.append(prompt)
+                log.parent.mkdir(parents=True, exist_ok=True)
+                log.write_text("fake invoke\n", encoding="utf-8")
+                return 0
+
+            runner._invoke = invoke  # type: ignore[assignment]
+
+            outcome = runner.process_one("worker-01", dry_run=False)
+
+            self.assertEqual(outcome["status"], "failed")
+            self.assertGreaterEqual(len(prompts), 2)
+            self.assertIn("missing deploy/src/app.py", prompts[1])
+            self.assertIn("host build command", prompts[1])
 
     def test_validation_repair_uses_capped_timeout(self):
         with TemporaryDirectory() as tmp:
@@ -893,11 +946,17 @@ class RunnerRealRunTests(unittest.TestCase):
                 progress=RaisingWriteProgressStore(),
                 progress_write_exceptions=(PersistenceConnectionError,),
                 image_exists=lambda _: True,
+                host_builder=NoopHostBuilder(),
                 profile_exists=lambda _: True,
             )  # type: ignore[arg-type]
             runner._invoke = lambda prompt, log, dry_run, *, timeout=None, **_kwargs: 0  # type: ignore[assignment]
             runner.validator.validate_challenge = lambda cid: {  # type: ignore[assignment]
                 "challenge_id": cid,
+                "status": "passed",
+                "elapsed": 0.0,
+            }
+            runner.validator.validate_path = lambda _path, *, expected_challenge_id: {  # type: ignore[method-assign]
+                "challenge_id": expected_challenge_id,
                 "status": "passed",
                 "elapsed": 0.0,
             }
@@ -924,6 +983,7 @@ class RunnerRealRunTests(unittest.TestCase):
                 progress=RaisingReadProgressStore(),
                 progress_write_exceptions=(PersistenceConnectionError,),
                 image_exists=lambda _: True,
+                host_builder=NoopHostBuilder(),
                 profile_exists=lambda _: True,
             )  # type: ignore[arg-type]
             called = {"invoke": False}
@@ -951,6 +1011,7 @@ class ShardNameNormalizationTests(unittest.TestCase):
             runner = HermesRunner(
                 paths,
                 image_exists=lambda _: True,
+                host_builder=NoopHostBuilder(),
                 profile_exists=lambda _: True,
             )  # type: ignore[arg-type]
 
@@ -962,6 +1023,11 @@ class ShardNameNormalizationTests(unittest.TestCase):
             runner._invoke = fake_invoke  # type: ignore[assignment]
             runner.validator.validate_challenge = lambda cid: {  # type: ignore[assignment]
                 "challenge_id": cid,
+                "status": "passed",
+                "elapsed": 0.0,
+            }
+            runner.validator.validate_path = lambda _path, *, expected_challenge_id: {  # type: ignore[method-assign]
+                "challenge_id": expected_challenge_id,
                 "status": "passed",
                 "elapsed": 0.0,
             }

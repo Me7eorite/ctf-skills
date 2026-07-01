@@ -42,7 +42,7 @@ Example:
 
 ```text
 {progress_command} --challenge web-0001 --stage build \
-  --status running --message "Building the pinned Docker image"
+  --status running --message "Writing buildable Docker deployment files"
 ```
 
 **Do not write `validate` stage progress events yourself.** The runner owns
@@ -50,8 +50,8 @@ all `validate/*` events and writes them after invoking the host-side
 validator. Generate and test `validate.sh` and `writenup/exp.py` as part of Stage 4,
 but do not emit authoritative validation progress yourself.
 
-Do not report `passed` until the corresponding work or command has actually
-succeeded. On failure, report `failed` with the failing command or reason
+Do not report `passed` until the corresponding files have actually been written
+and self-checked. On failure, report `failed` with the concrete reason
 before attempting a repair. Progress reporting is part of the authoring
 contract, not optional narration.
 If `./bin/progress` exits non-zero, stop immediately and return a non-zero
@@ -290,33 +290,40 @@ Pwn rules:
 
 ## 3. Build
 
-- Run the real build command.
-- Web/Pwn: run `docker build` and record the image tag.
-- Web/Pwn: confirm Compose resolves the literal `FLAG=flag{...}`, `image`, and `container_name`,
-  defines no `volumes`, and runs with the intended non-root account (`ctf` for
-  ordinary Pwn, or the selected Web base image's service user); then build and
-  run that exact Compose configuration.
-- Pwn build: when using the default xinetd/chroot socket model, verify the built
-  image contains `/etc/xinetd.d/ctf`, `/usr/sbin/chroot`, `/root/start.sh`, the
-  vulnerable binary under `/home/ctf`, required libraries/dev nodes inside the
-  chroot, and an xinetd `server_args` line that drops to the fixed `ctf`
-  uid/gid. Confirm the generated `deploy/` files are derived from
-  `scaffolds/pwn/xinetd-chroot/`, `/root/start.sh` starts xinetd, and it does
-  not run the vulnerable binary directly as root.
-- Pwn build safety boundary: host-side commands may run `docker build`,
-  `docker compose config`, `docker compose up`, `docker image inspect`, `file`,
-  and checksum tools. Host-side commands MUST NOT run `/home/ctf` chroot setup
-  commands directly (`cp -R /lib* /home/ctf`, `cp -R /usr/lib* /home/ctf`,
-  `mknod /home/ctf/dev/...`, `cp /bin/sh /home/ctf/bin`, etc.); those are image
-  construction steps and belong only in `deploy/Dockerfile`.
-- Re/Pwn: run the compiler selected by the declared target/toolchain, then
-  inspect the produced artifact with `file`.
-- Record build commands, compiler/runtime versions, and artifact SHA-256 in
-  `metadata.json`.
-- `metadata.build_command` must be the actual command that produced the
-  published artifact or image. For Re/Pwn file artifacts,
-  `metadata.artifact_sha256` must be recomputed from the exact file named by
-  `metadata.artifact` after every rebuild or strip/copy step.
+- Generate a complete buildable artifact, but do not execute container builds.
+- Web/Pwn: write `deploy/Dockerfile`, `deploy/docker-compose.yml`,
+  `deploy/src/`, startup files, metadata, and validation scripts. The host
+  runner will execute the only allowed image build command after you return:
+  `docker build -t <metadata.docker_image> -f deploy/Dockerfile .` from the
+  challenge root.
+- Web/Pwn: statically self-check that Compose has the literal
+  `FLAG=flag{...}`, `image`, and `container_name`, defines no `volumes`, and is
+  wired to the intended non-root account (`ctf` for ordinary Pwn, or the
+  selected Web base image's service user). Do not run `docker compose up`.
+- Pwn build: when using the default xinetd/chroot socket model, ensure the
+  generated `deploy/Dockerfile` installs `/etc/xinetd.d/ctf`,
+  `/usr/sbin/chroot`, `/root/start.sh`, the vulnerable binary under
+  `/home/ctf`, required libraries/dev nodes inside the chroot, and an xinetd
+  `server_args` line that drops to the fixed `ctf` uid/gid. Confirm by reading
+  generated files, not by building or starting Docker.
+- Pwn build safety boundary: commands such as `cp -R /lib* /home/ctf`,
+  `cp -R /usr/lib* /home/ctf`, `mknod /home/ctf/dev/...`, and
+  `cp /bin/sh /home/ctf/bin` are image construction steps and belong only in
+  `deploy/Dockerfile`. They MUST NOT be executed directly in the Hermes
+  workspace and MUST NOT appear in `validate.sh`, `metadata.build_command`,
+  `deploy/_files/start.sh`, or xinetd config files.
+- Re/Pwn file artifacts: use the compiler selected by the declared
+  target/toolchain when it is available in this sandbox, then inspect the
+  produced artifact with `file`. If the compiler is not available, write all
+  source/build files and mark `build_status` failed with the missing toolchain
+  reason rather than substituting a generic target.
+- Record intended compiler/runtime versions and artifact SHA-256 in
+  `metadata.json` when an artifact file is produced.
+- For Web/Pwn Docker images, set `metadata.docker_image` to the stable image tag
+  the host runner should build. `metadata.build_command` may be the fixed host
+  command above; the runner will overwrite it with the authoritative command
+  and set `metadata.build_status` to `passed` only after Docker build succeeds.
+  Do not claim that a Docker image was built by Hermes.
 - Re builds must verify the artifact architecture against the matrix
   `target_platform`. `file attachments/<artifact>` must report a matching
   artifact: `linux/amd64` → Linux ELF x86-64, `linux/arm64` → Linux ELF
@@ -328,16 +335,15 @@ Pwn rules:
   project tool. If the exact requested target cannot be built in the current
   environment, mark build/report status failed with the missing toolchain reason.
 
-Do not mark `build_status` as passed unless the command succeeded.
+For Web/Pwn, do not use Docker to prove `build_status`; the host runner owns
+the authoritative Docker build result.
 
 ## 4. Exploit Validation
 
-Your responsibility in this stage is to generate and test validation artifacts.
-Execute `validate.sh` yourself and iteratively repair the implementation,
-container, and exploit until it exits 0 and recovers the exact `metadata.flag`.
-Do not write `validate/*` progress events: after you return, the host runner
-will independently execute `validate.sh`, observe its exit code and recovered
-flag, and write the authoritative `validate/passed` or `validate/failed` event.
+Your responsibility in this stage is to generate validation artifacts, not to
+execute host validation. Do not run `validate.sh`; the host runner will run it
+after it has performed the controlled Docker build and will write the
+authoritative `validate/passed` or `validate/failed` event.
 
 - Write `writenup/exp.py` as a real reference exploit/solver.
 - Write `validate.sh` as the single reproducible validation entrypoint.
@@ -354,8 +360,8 @@ flag, and write the authoritative `validate/passed` or `validate/failed` event.
 
 For Web/Pwn, `validate.sh` MUST consume an already-built image and MUST NOT
 attempt to build it. The Docker image is part of Stage 3's deliverable: by
-the time `build/passed` is recorded, the image MUST already be present in the
-local Docker daemon. Place this fail-fast gate before `docker compose up`:
+the time host validation starts, the runner has already built the image on the
+host. Place this fail-fast gate before `docker compose up`:
 
 ```bash
 docker image inspect "$IMAGE" >/dev/null 2>&1 || {
@@ -371,6 +377,11 @@ After that gate, `validate.sh` must start the service, wait for
 health/readiness, run `writenup/exp.py`, and always clean up with a shell trap.
 The fixed flag comes from `deploy/docker-compose.yml`; `validate.sh` must not
 override it with a host-side `FLAG` environment variable.
+When readiness or the exploit fails, `validate.sh` MUST emit bounded diagnostic
+evidence to stderr before exiting non-zero: the relevant `docker compose ps`
+state, recent `docker compose logs --no-color --tail=120` output, and the
+solver stdout/stderr tail. This is how the host runner feeds container/runtime
+failures back into repair prompts without giving Hermes Docker daemon access.
 Every command and diagnostic in a function invoked by an `EXIT` or `ERR` trap
 MUST redirect its output to stderr (`>&2`); cleanup must never write to stdout.
 Before starting a container named `"$CONTAINER_NAME"`, remove a stale

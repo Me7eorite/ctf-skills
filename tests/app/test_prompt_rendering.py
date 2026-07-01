@@ -232,7 +232,7 @@ class RenderPromptTests(unittest.TestCase):
             self.assertNotIn("Never leave the service running as root", rendered)
             self.assertNotIn("Do not use root execution", rendered)
 
-    def test_prompt_requires_hermes_validation_iterations(self):
+    def test_prompt_requires_host_owned_validation(self):
         with TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             paths = _seed_paths(tmp_path)
@@ -245,7 +245,7 @@ class RenderPromptTests(unittest.TestCase):
                 worker="dry-01",
                 original_shard_name="s.json",
             )
-            self.assertIn("Execute `validate.sh` yourself", rendered)
+            self.assertIn("Do not run `validate.sh`", rendered)
             self.assertIn("host runner", rendered)
             self.assertIn("- FLAG=flag{xxxx}", rendered)
             # Progress reporting must list four stages only.

@@ -50,6 +50,7 @@ from hermes.build_publisher import (
     publish_workspace_output,
     record_workspace_terminal,
 )
+from hermes.host_build import HostBuilder, HostBuildError
 from hermes.process import (
     DEFAULT_HERMES_COMMAND,
     DEFAULT_HERMES_TIMEOUT,
@@ -222,6 +223,7 @@ class HermesRunner:
         progress: ProgressStore | None = None,
         progress_write_exceptions: tuple[type[Exception], ...] = (),
         image_exists: Callable[[str], bool] | None = None,
+        host_builder: Any | None = None,
         profile_exists: Callable[[str], bool] | None = None,
         validation_repair_attempts: int | None = None,
     ):
@@ -237,6 +239,7 @@ class HermesRunner:
         )
         self.validator = ChallengeValidator(paths)
         self._image_exists = image_exists or default_image_exists
+        self._host_builder = host_builder or HostBuilder()
         self._profile_exists = profile_exists or hermes_process.profile_exists
         configured_repairs = validation_repair_attempts
         if configured_repairs is None:
@@ -1240,6 +1243,15 @@ class HermesRunner:
                     for challenge_id in challenge_ids
                 ]
             return results, None
+        build_failures = self._run_host_build(
+            workspace,
+            validation_set,
+            original_shard_name=original_shard_name,
+            worker=worker,
+            challenge_ids=challenge_ids,
+        )
+        if build_failures is not None:
+            return build_failures, validation_set
         results = self._run_validation(
             original_shard_name,
             worker,
@@ -1255,6 +1267,74 @@ class HermesRunner:
             contract=contract,
         )
         return results, post_validation_set
+
+    def _run_host_build(
+        self,
+        workspace: ExecutionWorkspace,
+        validation_set: WorkspaceValidationSet,
+        *,
+        original_shard_name: str,
+        worker: str,
+        challenge_ids: list[str],
+    ) -> list[dict[str, Any]] | None:
+        try:
+            results = self._host_builder.build_workspace(workspace, validation_set)
+        except HostBuildError as exc:
+            error = f"host build failed: {exc}"
+            failed_ids = {exc.challenge_id} if exc.challenge_id else set(challenge_ids)
+            for challenge_id in challenge_ids:
+                if challenge_id not in failed_ids:
+                    continue
+                self._progress.record(
+                    shard=original_shard_name,
+                    challenge_id=challenge_id,
+                    worker=worker,
+                    stage="build",
+                    status="failed",
+                    message=error,
+                )
+            results: list[dict[str, Any]] = []
+            for challenge_id in challenge_ids:
+                if challenge_id not in failed_ids:
+                    continue
+                result = {
+                    "challenge_id": challenge_id,
+                    "solve_status": "failed",
+                    "validation_status": "contract_failed",
+                    "validation_error": error,
+                    "validation_contract_errors": [
+                        item
+                        for item in (
+                            error,
+                            (
+                                "host build command: "
+                                + " ".join(exc.command)
+                                if exc.command
+                                else None
+                            ),
+                            f"host build log: {exc.log_path}" if exc.log_path else None,
+                        )
+                        if item
+                    ],
+                }
+                if exc.stdout_tail:
+                    result["validation_stdout_tail"] = exc.stdout_tail
+                if exc.stderr_tail:
+                    result["validation_stderr_tail"] = exc.stderr_tail
+                results.append(result)
+            return results
+        for result in results:
+            if result.skipped:
+                continue
+            self._progress.record(
+                shard=original_shard_name,
+                challenge_id=result.challenge_id,
+                worker=worker,
+                stage="build",
+                status="passed",
+                message=f"host build passed: {' '.join(result.command or [])}",
+            )
+        return None
 
     @staticmethod
     def _record_validation_round(
