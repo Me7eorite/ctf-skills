@@ -219,6 +219,9 @@ def _seed_designed_task(
                         "id": task.challenge_id,
                         "category": category,
                         "deployment": "docker",
+                        "primary_technique": "boolean blind sqli",
+                        "techniques": ["boolean blind sqli"],
+                        "intended_path": ["Infer the flag through boolean response differences."],
                         "implementation_plan": {"runtime": "python:3.11-slim"},
                     }
                 ],
@@ -434,6 +437,37 @@ def test_detail_exposes_siblings_and_progress_events(
     assert any(event["message"].startswith("carry-forward:") for event in payload["progress_events"])
 
 
+def test_detail_exposes_execution_iterations(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory)
+    service = build_attempts_endpoints.BuildOrchestrationService(
+        paths=client.app.state.project_paths
+    )
+    attempt_id = service.submit_single(task_id)
+    with transaction(factory=session_factory) as session:
+        repo = ExecutionsRepository(session)
+        [initial] = repo.list_for_attempt(attempt_id)
+        _, token = repo.claim_queued(
+            attempt_id,
+            worker_id="worker-01",
+            lease_ttl_seconds=300,
+        )
+        repo.update_to_terminal(initial.id, claim_token=token, status="failed")
+        session.get(task_model.DesignTask, task_id).status = "build_failed"
+    service.retry(attempt_id)
+
+    response = client.get(f"/api/build-attempts/{attempt_id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["shard_basename"] == f"{attempt_id}.iter-002.json"
+    assert [item["iteration_no"] for item in payload["executions"]] == [1, 2]
+    assert payload["executions"][1]["execution_kind"] == "retry"
+    assert payload["executions"][1]["status"] == "queued"
+
+
 def test_retry_rejects_stale_sibling(
     client: TestClient,
     session_factory: SessionFactory,
@@ -451,6 +485,38 @@ def test_retry_rejects_stale_sibling(
 
     assert response.status_code == 409
     assert "latest" in response.json()["detail"]
+
+
+def test_retry_response_identifies_new_execution_iteration(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory)
+    service = build_attempts_endpoints.BuildOrchestrationService(
+        paths=client.app.state.project_paths
+    )
+    attempt_id = service.submit_single(task_id)
+    with transaction(factory=session_factory) as session:
+        repo = ExecutionsRepository(session)
+        [initial] = repo.list_for_attempt(attempt_id)
+        _, token = repo.claim_queued(
+            attempt_id,
+            worker_id="worker-01",
+            lease_ttl_seconds=300,
+        )
+        repo.update_to_terminal(initial.id, claim_token=token, status="failed")
+        session.get(task_model.DesignTask, task_id).status = "build_failed"
+
+    response = client.post(f"/api/build-attempts/{attempt_id}/retry")
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["build_attempt_id"] == str(attempt_id)
+    assert payload["shard_basename"] == f"{attempt_id}.iter-002.json"
+    assert payload["iteration_no"] == 2
+    assert payload["execution_status"] == "queued"
+    assert payload["execution_kind"] == "retry"
+    assert UUID(payload["execution_id"])
 
 
 def test_repair_endpoint_runs_attempt_scoped_ai_repair(

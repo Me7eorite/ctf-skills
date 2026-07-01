@@ -15,11 +15,10 @@ from uuid import UUID
 import sqlalchemy as sa
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
-
-from core.clock import beijing_isoformat
 from sqlalchemy.exc import IntegrityError
 
 from core.build_timeout import shard_timeout_policy
+from core.clock import beijing_isoformat
 from core.jsonio import read_json
 from core.queue import SUPPORTED_CATEGORIES
 from domain.build_attempts import BuildAttempt, BuildAttemptListItem, BuildAttemptStatus
@@ -30,6 +29,7 @@ from persistence.models import executions as exec_model
 from persistence.models.progress import ProgressEvent
 from persistence.repositories import (
     BuildAttemptsRepository,
+    ExecutionsRepository,
 )
 from services import BuildOrchestrationError, BuildOrchestrationService
 from services.build_attempt_repair_service import (
@@ -239,6 +239,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
                 .where(ProgressEvent.shard == attempt.shard_basename)
                 .order_by(ProgressEvent.id.asc())
             ).all()
+            executions = ExecutionsRepository(session).list_for_attempt(attempt.id)
 
         event_payloads = [_progress_event_dict(row) for row in events]
         body = _attempt_dict(
@@ -256,6 +257,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
                 body["timeout_source"] = timeout_manifest.get("timeout_source")
         body["sibling_attempts"] = [_attempt_dict(row) for row in siblings]
         body["progress_events"] = event_payloads
+        body["executions"] = [_execution_dict(row) for row in executions]
         body["repair_runs"] = _repair_runs(_project_paths(app), attempt.id)
         return JSONResponse(body)
 
@@ -470,10 +472,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
                 status_code=HTTPStatus.CONFLICT,
                 detail="a build is already active for this design task",
             ) from exc
-        return JSONResponse(
-            {"build_attempt_id": str(new_id)},
-            status_code=HTTPStatus.CREATED,
-        )
+        return JSONResponse(_retry_response_payload(new_id), status_code=HTTPStatus.CREATED)
 
     @app.post("/api/build-attempts/{attempt_id}/repair")
     def repair_build_attempt(attempt_id: str) -> JSONResponse:
@@ -1241,6 +1240,54 @@ def _attempt_dict(
     if failure_summary:
         payload["failure_summary"] = failure_summary
     return payload
+
+
+def _execution_dict(execution) -> dict[str, Any]:
+    return {
+        "id": str(execution.id),
+        "build_attempt_id": str(execution.build_attempt_id),
+        "parent_execution_id": (
+            str(execution.parent_execution_id)
+            if execution.parent_execution_id is not None
+            else None
+        ),
+        "iteration_no": execution.iteration_no,
+        "execution_kind": execution.execution_kind,
+        "execution_mode": execution.execution_mode,
+        "worker_id": execution.worker_id,
+        "status": execution.status,
+        "exit_class": execution.exit_class,
+        "error": execution.error,
+        "created_at": _isofmt(execution.created_at),
+        "started_at": _isofmt(execution.started_at),
+        "finished_at": _isofmt(execution.finished_at),
+        "heartbeat_at": _isofmt(execution.heartbeat_at),
+        "lease_expires_at": _isofmt(execution.lease_expires_at),
+    }
+
+
+def _retry_response_payload(attempt_id: UUID) -> dict[str, Any]:
+    from persistence.session import transaction
+
+    with transaction() as session:
+        attempt = session.get(build_model.BuildAttempt, attempt_id)
+        if attempt is None:
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND,
+                detail="build attempt not found after retry",
+            )
+        latest = ExecutionsRepository(session).latest_for_attempt(attempt_id)
+        payload = {
+            "build_attempt_id": str(attempt.id),
+            "status": attempt.status,
+            "shard_basename": attempt.shard_basename,
+        }
+        if latest is not None:
+            payload["execution_id"] = str(latest.id)
+            payload["iteration_no"] = latest.iteration_no
+            payload["execution_status"] = latest.status
+            payload["execution_kind"] = latest.execution_kind
+        return payload
 
 
 def _list_item_dict(

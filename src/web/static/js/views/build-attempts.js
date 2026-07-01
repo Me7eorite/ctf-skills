@@ -377,11 +377,30 @@ async function retryAttempt(attemptId) {
   initIcons();
   try {
     const result = await postJson(`/api/build-attempts/${attemptId}/retry`, {});
-    showToast(`已排队重试构建 ${shortId(result.build_attempt_id)}`);
     state.detailId = result.build_attempt_id;
     state.detail = null;
     state.list = null;
     await ensureDetail(state.detailId);
+    const iterationLabel = result.iteration_no ? `第 ${result.iteration_no} 轮` : "新一轮";
+    try {
+      const startResult = await postJson(
+        `/api/build-attempts/${encodeURIComponent(state.detailId)}/worker/start`,
+        {},
+      );
+      showToast(
+        `已排队并启动${iterationLabel}重试 ${shortId(result.build_attempt_id)}（超时 ${startResult.effective_timeout_seconds}s）`,
+      );
+      state.detail = null;
+      state.list = null;
+      await ensureDetail(state.detailId);
+      schedulePoll(START_REFRESH_MS);
+    } catch (startErr) {
+      showToast(
+        `已排队${iterationLabel}重试 ${shortId(result.build_attempt_id)}，但未能立即启动：${startErr.message}`,
+        true,
+      );
+      schedulePoll(START_REFRESH_MS);
+    }
   } catch (err) {
     showToast(err.message, true);
   } finally {
@@ -839,6 +858,14 @@ function renderDetail(root) {
 
     <section class="card ba-section-card">
       <div class="card-header">
+        <div><div class="card-title">执行轮次</div></div>
+        <span class="pill">${(attempt.executions || []).length}</span>
+      </div>
+      ${renderExecutions(attempt.executions || [])}
+    </section>
+
+    <section class="card ba-section-card">
+      <div class="card-header">
         <div><div class="card-title">AI 修复记录</div></div>
         <span class="pill">${(attempt.repair_runs || []).length}</span>
       </div>
@@ -904,6 +931,29 @@ function renderSiblingAttempts(attempt) {
               <td>${artifactPill(row.artifact_status)}</td>
               <td>${escapeHtml(row.worker || "-")}</td>
               <td class="table-cell-time">${escapeHtml(formatDateTime(row.started_at))}</td>
+              <td class="table-cell-time">${escapeHtml(formatDateTime(row.finished_at))}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderExecutions(rows) {
+  if (!rows.length) return `<div class="empty card-body">没有执行轮次</div>`;
+  return `
+    <div class="table-container">
+      <table class="table">
+        <thead><tr><th>轮次</th><th>状态</th><th>类型</th><th>Worker</th><th>创建</th><th>完成</th></tr></thead>
+        <tbody>
+          ${rows.map((row) => `
+            <tr>
+              <td>#${escapeHtml(String(row.iteration_no || "-"))}</td>
+              <td>${buildStatusIndicator(row.status)}</td>
+              <td>${escapeHtml(row.execution_kind || "-")}</td>
+              <td>${escapeHtml(row.worker_id || "-")}</td>
+              <td class="table-cell-time">${escapeHtml(formatDateTime(row.created_at))}</td>
               <td class="table-cell-time">${escapeHtml(formatDateTime(row.finished_at))}</td>
             </tr>
           `).join("")}

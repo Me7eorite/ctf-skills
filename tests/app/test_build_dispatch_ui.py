@@ -45,6 +45,10 @@ def test_build_attempt_actions_use_constrained_endpoints():
     assert "/clean-rebuild`" in source
     assert "AI 修复记录" in source
     assert "renderRepairRuns(attempt.repair_runs || [])" in source
+    assert "执行轮次" in source
+    assert "renderExecutions(attempt.executions || [])" in source
+    assert "result.iteration_no" in source
+    assert "/worker/start`" in source[source.index("async function retryAttempt") :]
     assert "crypto.randomUUID()" in source
     assert "confirmed: true" in source
     assert '["failed", "lost", "succeeded"].includes(attempt.status)' in source
