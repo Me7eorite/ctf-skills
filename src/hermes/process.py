@@ -1,4 +1,4 @@
-"""可复用的 Hermes 子进程基础能力。
+﻿"""可复用的 Hermes 子进程基础能力。
 
 分片执行路径（`hermes.runner.HermesRunner`）和 research 路径（第 7 节新增的
 `hermes.research`）共用这里的子进程逻辑。这里不依赖 `ProjectPaths`，
@@ -217,7 +217,7 @@ def effective_terminal_backend(
     if raw_hermes_home and raw_hermes_home.strip():
         configured_home = Path(raw_hermes_home.strip()).expanduser()
     elif not project_hermes_home_is_configured(hermes_home):
-        configured_home = Path("~/.hermes").expanduser()
+        configured_home = Path.home() / ".hermes"
 
     if profile_name:
         profile_home = configured_home / "profiles" / profile_name
@@ -252,15 +252,34 @@ def configure_terminal_workspace(
 
     ``subprocess.run(cwd=...)`` only controls the outer Hermes CLI process. For
     container backends, Hermes terminal/file tools have their own runtime cwd.
-    The Docker backend can bind-mount a host cwd into ``/workspace`` when these
-    environment variables are set; without them, generated files can remain in
-    the container's private home and never reach the runner workspace.
+    The Docker backend treats host paths under ``/root`` as container-internal,
+    so per-attempt cwd passthrough is unreliable there. Mount the stable
+    ``work/executions`` root and point the container cwd at the matching path.
     """
     backend = terminal_backend.strip().lower() if isinstance(terminal_backend, str) else ""
     if backend != "docker":
         return
-    environment["TERMINAL_CWD"] = str(cwd)
-    environment["TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE"] = "1"
+    container_cwd, volumes = _docker_workspace_mapping(cwd)
+    environment["_HERMES_GATEWAY"] = "1"
+    environment["TERMINAL_CWD"] = container_cwd
+    environment["TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE"] = "0"
+    environment["TERMINAL_DOCKER_VOLUMES"] = json.dumps(volumes)
+    # A persisted Hermes docker terminal container can keep the mount set from a
+    # previous attempt. Build workspaces are per-attempt, so force the backend to
+    # start with the current cwd/mount contract instead of reusing stale state.
+    environment["TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES"] = "false"
+
+
+def _docker_workspace_mapping(cwd: Path) -> tuple[str, list[str]]:
+    resolved = cwd.resolve()
+    parts = resolved.parts
+    for index in range(len(parts) - 1):
+        if parts[index] == "work" and parts[index + 1] == "executions":
+            host_root = Path(*parts[: index + 2])
+            relative = resolved.relative_to(host_root).as_posix()
+            container_root = "/workspace/executions"
+            return f"{container_root}/{relative}", [f"{host_root}:{container_root}"]
+    return "/workspace", [f"{resolved}:/workspace"]
 
 
 def verify_terminal_workspace_visibility(
@@ -311,12 +330,20 @@ def verify_terminal_workspace_visibility(
         )
     if not marker.is_file():
         backend_label = backend or "unknown"
+        env_detail = (
+            f"TERMINAL_CWD={environment.get('TERMINAL_CWD', '')!r}, "
+            "TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE="
+            f"{environment.get('TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE', '')!r}, "
+            "TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES="
+            f"{environment.get('TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES', '')!r}"
+        )
         raise TerminalWorkspaceVisibilityError(
             f"Hermes terminal backend ({backend_label}) did not write to the host execution workspace. "
+            f"cwd={cwd}; expected marker={marker}; {env_detail}. "
             "It likely wrote inside the container private cwd such as /home/hermes. "
-            "Mount the host project work/executions directory into the Hermes "
-            "terminal backend at the same in-container path with rw access, or "
-            "use a terminal backend that writes directly to the host workspace."
+            "Stop stale hermes-* docker containers and ensure the backend starts "
+            "with TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE=1, or use a terminal "
+            "backend that writes directly to the host workspace."
         )
     try:
         parsed = json.loads(marker.read_text(encoding="utf-8"))
@@ -827,3 +854,4 @@ def _wait_after_terminate(process: "subprocess.Popen[str]") -> None:
         process.wait(timeout=TERMINATION_WAIT_TIMEOUT)
     except subprocess.TimeoutExpired:
         return
+

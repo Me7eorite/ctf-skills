@@ -1,4 +1,4 @@
-"""Focused AI repair for an existing failed build attempt."""
+﻿"""Focused AI repair for an existing failed build attempt."""
 
 from __future__ import annotations
 
@@ -107,17 +107,18 @@ class BuildAttemptRepairService:
         prompt_path.write_text(prompt, encoding="utf-8")
         self._record_event(events_path, "solve", "running", "AI repair running")
         arguments = _hermes_arguments(context["category"])
+        cwd = self.paths.executions / str(attempt_id) / "current"
         environment = _hermes_environment(
             self.paths,
             arguments,
-            cwd=self.paths.root,
+            cwd=cwd,
             profile_name=f"cf-{context['category']}",
         )
         returncode = hermes_process.invoke(
             prompt,
             arguments=arguments,
             log_path=log_path,
-            cwd=self.paths.root,
+            cwd=cwd,
             environment=environment,
             timeout=self.timeout_seconds,
         )
@@ -512,3 +513,6 @@ def _middle_truncate(text: str, limit: int) -> str:
     head = limit // 2
     tail = limit - head
     return f"{text[:head]}\n... <truncated> ...\n{text[-tail:]}"
+
+
+

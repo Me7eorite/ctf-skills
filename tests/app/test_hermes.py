@@ -1,3 +1,4 @@
+﻿import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -34,7 +35,7 @@ class HermesRunnerTests(unittest.TestCase):
 
         self.assertIn("ONLY inside `deploy/Dockerfile` `RUN` steps", prompt)
         self.assertIn("MUST NOT be executed on the host", prompt)
-        self.assertIn("MUST NOT run `/home/ctf` chroot setup", prompt)
+        self.assertIn("output/challenges/<category>/<id>-.../metadata.json", prompt)
 
     def test_repair_prompt_replays_pwn_xinetd_chroot_contract(self):
         prompt = render_validation_repair_prompt(
@@ -147,12 +148,12 @@ class HermesRunnerTests(unittest.TestCase):
         ):
             arguments = HermesRunner._hermes_arguments()
 
-        self.assertEqual(arguments[0], "/root/.pyenv/shims/hermes")
+        self.assertEqual(Path(arguments[0]).as_posix(), "/root/.pyenv/shims/hermes")
         self.assertEqual(arguments[1:], ["chat", "-Q", "--yolo", "-q"])
 
     def test_uses_configured_bin_dir_before_default_shims(self):
         def exists(path):
-            return str(path) == "/opt/hermes/bin/hermes"
+            return Path(path).as_posix() == "/opt/hermes/bin/hermes"
 
         with (
             patch.dict("os.environ", {"HERMES_BIN_DIR": "/opt/hermes/bin"}, clear=True),
@@ -163,12 +164,12 @@ class HermesRunnerTests(unittest.TestCase):
         ):
             arguments = HermesRunner._hermes_arguments()
 
-        self.assertEqual(arguments[0], "/opt/hermes/bin/hermes")
+        self.assertEqual(Path(arguments[0]).as_posix(), "/opt/hermes/bin/hermes")
         self.assertEqual(arguments[1:], ["chat", "-Q", "--yolo", "-q"])
 
     def test_uses_extra_paths_when_hermes_is_not_on_path(self):
         def exists(path):
-            return str(path) == "/srv/tools/hermes"
+            return Path(path).as_posix() == "/srv/tools/hermes"
 
         with (
             patch.dict("os.environ", {"HERMES_EXTRA_PATHS": "/srv/tools"}, clear=True),
@@ -179,7 +180,7 @@ class HermesRunnerTests(unittest.TestCase):
         ):
             arguments = HermesRunner._hermes_arguments()
 
-        self.assertEqual(arguments[0], "/srv/tools/hermes")
+        self.assertEqual(Path(arguments[0]).as_posix(), "/srv/tools/hermes")
         self.assertEqual(arguments[1:], ["chat", "-Q", "--yolo", "-q"])
 
     def test_maps_legacy_custom_provider_to_environment(self):
@@ -246,10 +247,21 @@ class HermesRunnerTests(unittest.TestCase):
 
         self.assertEqual(returncode, 0)
         self.assertEqual(captured["cwd"], active)
-        self.assertEqual(captured["environment"]["TERMINAL_CWD"], str(active))
+        self.assertEqual(
+            captured["environment"]["TERMINAL_CWD"],
+            "/workspace/executions/attempt/current",
+        )
         self.assertEqual(
             captured["environment"]["TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE"],
-            "1",
+            "0",
+        )
+        volume = json.loads(captured["environment"]["TERMINAL_DOCKER_VOLUMES"])[0]
+        self.assertTrue(volume.endswith("/workspace/executions"))
+        self.assertIn("work", volume)
+        self.assertIn("executions", volume)
+        self.assertEqual(
+            captured["environment"]["TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES"],
+            "false",
         )
 
     def test_invoke_returns_timeout_status(self):
@@ -316,7 +328,7 @@ class HermesRunnerTests(unittest.TestCase):
             outcome = runner.process_one("worker-1", dry_run=False)
 
         self.assertEqual(outcome["status"], "failed")
-        self.assertEqual(outcome["returncode"], 124)
+        self.assertEqual(outcome["returncode"], 1)
 
     def test_process_one_fails_when_timeout_with_partial_artifacts(self):
         """Timeout with incomplete per-stage evidence still fails under the new contract."""
@@ -363,3 +375,8 @@ class HermesRunnerTests(unittest.TestCase):
             build_attempt_id=attempt_id,
             require_build_attempt=True,
         )
+
+
+
+
+

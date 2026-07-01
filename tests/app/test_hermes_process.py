@@ -9,6 +9,7 @@ Hermes) so the threading and termination paths are end-to-end covered.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tempfile
@@ -341,10 +342,10 @@ class ProjectHermesHomeTests(unittest.TestCase):
 
 
 class ConfigureTerminalWorkspaceTests(unittest.TestCase):
-    def test_docker_backend_mounts_host_cwd_to_workspace(self):
+    def test_docker_backend_mounts_executions_root_and_uses_container_cwd(self):
         with tempfile.TemporaryDirectory() as temp:
-            cwd = Path(temp) / "current"
-            cwd.mkdir()
+            cwd = Path(temp) / "work" / "executions" / "attempt" / "current"
+            cwd.mkdir(parents=True)
             environment = {"TERMINAL_CWD": "/stale"}
 
             configure_terminal_workspace(
@@ -353,8 +354,14 @@ class ConfigureTerminalWorkspaceTests(unittest.TestCase):
                 terminal_backend="docker",
             )
 
-        self.assertEqual(environment["TERMINAL_CWD"], str(cwd))
-        self.assertEqual(environment["TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE"], "1")
+            executions = Path(temp) / "work" / "executions"
+            expected_volume = f"{executions.resolve()}:/workspace/executions"
+
+        self.assertEqual(environment["_HERMES_GATEWAY"], "1")
+        self.assertEqual(environment["TERMINAL_CWD"], "/workspace/executions/attempt/current")
+        self.assertEqual(environment["TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE"], "0")
+        self.assertEqual(json.loads(environment["TERMINAL_DOCKER_VOLUMES"]), [expected_volume])
+        self.assertEqual(environment["TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES"], "false")
 
     def test_local_backend_leaves_environment_untouched(self):
         environment = {"TERMINAL_CWD": "/operator/default"}
@@ -397,15 +404,20 @@ class TerminalWorkspaceVisibilityTests(unittest.TestCase):
             log = cwd / "logs" / "hermes.log"
             arguments = _python("print('wrote marker inside private container cwd')")
 
+            environment = {
+                "TERMINAL_CWD": str(cwd),
+                "TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE": "1",
+                "TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES": "false",
+            }
             with self.assertRaisesRegex(
                 TerminalWorkspaceVisibilityError,
-                "did not write to the host execution workspace",
+                "TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES='false'",
             ):
                 verify_terminal_workspace_visibility(
                     arguments=arguments,
                     log_path=log,
                     cwd=cwd,
-                    environment={},
+                    environment=environment,
                     terminal_backend="docker",
                     timeout=10,
                 )

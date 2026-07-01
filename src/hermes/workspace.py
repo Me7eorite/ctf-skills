@@ -194,9 +194,34 @@ def prepare_workspace(
         ],
     }
     write_json(active / "input" / "manifest.json", manifest)
+    _make_container_writable(active)
     return ExecutionWorkspace(
         workspace_id=workspace_id, root=root, active_dir=active_dir
     )
+
+
+def _make_container_writable(active: Path) -> None:
+    """Allow the Hermes docker user to write model-owned workspace outputs.
+
+    The host runner creates workspaces as its own user, while the Hermes docker
+    terminal normally writes as a non-root user. Only model-owned mutable
+    directories are relaxed; immutable inputs and references stay host-owned.
+    """
+    if os.name == "nt":
+        return
+    for directory in (active / "output", active / "logs", active / "state"):
+        try:
+            directory.chmod(0o777)
+        except OSError:
+            continue
+        for child in directory.rglob("*"):
+            try:
+                if child.is_dir():
+                    child.chmod(0o777)
+                else:
+                    child.chmod(0o666)
+            except OSError:
+                continue
 
 
 _CURRENT_LAYOUT = ("input", "output", "logs", "bin", "state")
