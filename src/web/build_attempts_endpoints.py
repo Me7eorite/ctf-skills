@@ -1420,6 +1420,7 @@ _FAILURE_REASON_TRANSLATIONS: dict[str, str] = {
     "no compiled ELF artifact found in attachments/": "未找到编译后的 ELF 产物（请放到 attachments/ 下）",
     "shard execution failed": "Hermes 执行阶段失败",
     "Workspace preflight failed": "执行 workspace 预检失败",
+    "Terminal workspace visibility failed": "Docker 终端 workspace 挂载不可见",
     "Workspace materialization failed": "执行 workspace 物化失败",
     "Workspace shim materialization failed": "进度蜘蛛生成失败",
     "attributed shard disappeared from all queue states": (

@@ -226,6 +226,7 @@ class HermesRunner:
         host_builder: Any | None = None,
         profile_exists: Callable[[str], bool] | None = None,
         validation_repair_attempts: int | None = None,
+        terminal_workspace_probe: Callable[..., None] | None = None,
     ):
         self.paths = paths
         # 分片队列（管理 pending/running/done/failed 目录）
@@ -241,6 +242,10 @@ class HermesRunner:
         self._image_exists = image_exists or default_image_exists
         self._host_builder = host_builder or HostBuilder()
         self._profile_exists = profile_exists or hermes_process.profile_exists
+        self._terminal_workspace_probe = (
+            terminal_workspace_probe
+            or hermes_process.verify_terminal_workspace_visibility
+        )
         configured_repairs = validation_repair_attempts
         if configured_repairs is None:
             raw_repairs = os.environ.get(
@@ -788,8 +793,37 @@ class HermesRunner:
         )
         root_output_snapshot = _project_root_output_snapshot(self.paths.root)
         tailer = WorkspaceProgressTailer(workspace, self._progress.record)
-        tailer.start()
         invoke_started = time.monotonic()
+        try:
+            self._verify_terminal_workspace(
+                log=log,
+                timeout=effective_timeout,
+                workspace=workspace,
+                profile_name=profile_name,
+            )
+        except hermes_process.TerminalWorkspaceVisibilityError as exc:
+            failure_elapsed = max(0.0, time.monotonic() - invoke_started)
+            message = f"Terminal workspace visibility failed: {exc}"
+            self._mark_shard_failed(
+                shard,
+                original_shard_name,
+                worker,
+                challenge_ids,
+                report,
+                message,
+                1,
+                hermes_phase="terminal_workspace",
+                elapsed_seconds=failure_elapsed,
+                workspace=workspace,
+            )
+            return fail_outcome(
+                hermes_phase="terminal_workspace",
+                returncode=1,
+                error=message,
+                elapsed_seconds=failure_elapsed,
+                workspace=workspace,
+            )
+        tailer.start()
         try:
             returncode = self._invoke(
                 prompt,
@@ -1496,6 +1530,26 @@ class HermesRunner:
             log.write_text(prompt + "\n", encoding="utf-8")
             return 0
 
+        effective_timeout = timeout if timeout is not None else DEFAULT_HERMES_TIMEOUT
+        arguments, environment, cwd, _terminal_backend = self._invoke_context(
+            workspace=workspace,
+            profile_name=profile_name,
+        )
+        return hermes_process.invoke(
+            prompt,
+            arguments=arguments,
+            log_path=log,
+            cwd=cwd,
+            environment=environment,
+            timeout=effective_timeout,
+        )
+
+    def _invoke_context(
+        self,
+        *,
+        workspace,
+        profile_name: str | None,
+    ) -> tuple[list[str], dict[str, str], Path, str | None]:
         arguments = (
             hermes_process.inject_profile_argument(profile_name)
             if profile_name is not None
@@ -1512,7 +1566,6 @@ class HermesRunner:
             query_index = arguments.index("-q") if "-q" in arguments else len(arguments)
             arguments[query_index:query_index] = ["--provider", "custom"]
 
-        effective_timeout = timeout if timeout is not None else DEFAULT_HERMES_TIMEOUT
         cwd = workspace.active if workspace is not None else self.paths.root
         terminal_backend = hermes_process.effective_terminal_backend(
             self.paths.hermes_home,
@@ -1524,13 +1577,27 @@ class HermesRunner:
             cwd=cwd,
             terminal_backend=terminal_backend,
         )
-        return hermes_process.invoke(
-            prompt,
+        return arguments, environment, cwd, terminal_backend
+
+    def _verify_terminal_workspace(
+        self,
+        *,
+        log: Path,
+        timeout: int,
+        workspace=None,
+        profile_name: str | None = None,
+    ) -> None:
+        arguments, environment, cwd, terminal_backend = self._invoke_context(
+            workspace=workspace,
+            profile_name=profile_name,
+        )
+        self._terminal_workspace_probe(
             arguments=arguments,
             log_path=log,
             cwd=cwd,
             environment=environment,
-            timeout=effective_timeout,
+            terminal_backend=terminal_backend,
+            timeout=min(timeout, hermes_process.TERMINAL_WORKSPACE_PROBE_TIMEOUT),
         )
 
     def _apply_legacy_custom_provider(self, environment: dict[str, str]) -> bool:

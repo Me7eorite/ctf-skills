@@ -23,6 +23,7 @@ from hermes.process import (
     HERMES_TIMEOUT_RETURNCODE,
     TERMINATION_WAIT_TIMEOUT,
     HermesProcessResult,
+    TerminalWorkspaceVisibilityError,
     _wait_after_terminate,
     configure_terminal_workspace,
     effective_terminal_backend,
@@ -30,6 +31,7 @@ from hermes.process import (
     invoke,
     invoke_capture,
     project_hermes_home_is_configured,
+    verify_terminal_workspace_visibility,
 )
 
 
@@ -364,6 +366,66 @@ class ConfigureTerminalWorkspaceTests(unittest.TestCase):
         )
 
         self.assertEqual(environment, {"TERMINAL_CWD": "/operator/default"})
+
+
+class TerminalWorkspaceVisibilityTests(unittest.TestCase):
+    def test_docker_probe_requires_marker_visible_on_host(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            (cwd / "state").mkdir()
+            log = cwd / "logs" / "hermes.log"
+            arguments = _python(
+                "from pathlib import Path",
+                "Path('state/terminal-workspace-probe.json').write_text('{\"ok\": true}', encoding='utf-8')",
+            )
+
+            verify_terminal_workspace_visibility(
+                arguments=arguments,
+                log_path=log,
+                cwd=cwd,
+                environment={},
+                terminal_backend="docker",
+                timeout=10,
+            )
+
+            self.assertTrue((cwd / "state" / "terminal-workspace-probe.json").is_file())
+
+    def test_docker_probe_fails_when_marker_is_not_host_visible(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            (cwd / "state").mkdir()
+            log = cwd / "logs" / "hermes.log"
+            arguments = _python("print('wrote marker inside private container cwd')")
+
+            with self.assertRaisesRegex(
+                TerminalWorkspaceVisibilityError,
+                "did not write to the host execution workspace",
+            ):
+                verify_terminal_workspace_visibility(
+                    arguments=arguments,
+                    log_path=log,
+                    cwd=cwd,
+                    environment={},
+                    terminal_backend="docker",
+                    timeout=10,
+                )
+
+    def test_non_docker_backend_still_requires_host_visible_marker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            (cwd / "state").mkdir()
+            arguments = _python(
+                "from pathlib import Path",
+                "Path('state/terminal-workspace-probe.json').write_text('{\"ok\": true}', encoding='utf-8')",
+            )
+            verify_terminal_workspace_visibility(
+                arguments=arguments,
+                log_path=cwd / "logs" / "hermes.log",
+                cwd=cwd,
+                environment={},
+                terminal_backend="local",
+                timeout=10,
+            )
 
 
 class InvokeLogMarkerTests(unittest.TestCase):

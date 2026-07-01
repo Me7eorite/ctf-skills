@@ -28,6 +28,11 @@ DEFAULT_HERMES_TIMEOUT = 1500  # 默认超时秒数（25 分钟）
 HERMES_TIMEOUT_RETURNCODE = 124  # 超时返回码（与 timeout 命令兼容）
 TERMINATION_WAIT_TIMEOUT = 10
 _ERROR_MARKER_MAX_BYTES = 64 * 1024
+TERMINAL_WORKSPACE_PROBE_TIMEOUT = 90
+
+
+class TerminalWorkspaceVisibilityError(RuntimeError):
+    """Raised when a container terminal cannot write to the host workspace."""
 
 
 @dataclass(frozen=True)
@@ -256,6 +261,83 @@ def configure_terminal_workspace(
         return
     environment["TERMINAL_CWD"] = str(cwd)
     environment["TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE"] = "1"
+
+
+def verify_terminal_workspace_visibility(
+    *,
+    arguments: list[str],
+    log_path: Path,
+    cwd: Path,
+    environment: dict[str, str],
+    terminal_backend: str | None,
+    timeout: int = TERMINAL_WORKSPACE_PROBE_TIMEOUT,
+) -> None:
+    """Fail fast when the Hermes terminal backend cannot see the host cwd.
+
+    Hermes CLI stdout/stderr is host-captured, so logs can exist even when
+    terminal/file tools write into a private container filesystem. The runner
+    publishes only from the host-owned execution workspace; we therefore prove
+    visibility with a tiny marker before the expensive build prompt runs.
+    """
+    backend = terminal_backend.strip().lower() if isinstance(terminal_backend, str) else ""
+    marker = cwd / "state" / "terminal-workspace-probe.json"
+    try:
+        marker.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        raise TerminalWorkspaceVisibilityError(
+            f"cannot reset terminal workspace probe marker: {exc}"
+        ) from exc
+    prompt = (
+        "This is a filesystem visibility probe. Do not inspect other files. "
+        "Create or overwrite exactly ./state/terminal-workspace-probe.json "
+        "with this JSON object and then stop: "
+        '{"ok":true,"probe":"terminal_workspace"}'
+    )
+    probe_log = log_path.with_name(log_path.name + ".terminal_probe.log")
+    returncode = invoke(
+        prompt,
+        arguments=arguments,
+        log_path=probe_log,
+        cwd=cwd,
+        environment=environment,
+        timeout=timeout,
+    )
+    if returncode != 0:
+        raise TerminalWorkspaceVisibilityError(
+            f"Hermes terminal workspace probe failed with return code {returncode}; "
+            f"see {probe_log}"
+        )
+    if not marker.is_file():
+        backend_label = backend or "unknown"
+        raise TerminalWorkspaceVisibilityError(
+            f"Hermes terminal backend ({backend_label}) did not write to the host execution workspace. "
+            "It likely wrote inside the container private cwd such as /home/hermes. "
+            "Mount the host project work/executions directory into the Hermes "
+            "terminal backend at the same in-container path with rw access, or "
+            "use a terminal backend that writes directly to the host workspace."
+        )
+    try:
+        parsed = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise TerminalWorkspaceVisibilityError(
+            f"Hermes terminal workspace probe marker is unreadable: {exc}"
+        ) from exc
+    if not isinstance(parsed, dict) or parsed.get("ok") is not True:
+        raise TerminalWorkspaceVisibilityError(
+            "Hermes terminal workspace probe marker has unexpected content"
+        )
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as output:
+            backend_label = backend or "unknown"
+            output.write(
+                "terminal workspace probe passed "
+                f"(backend={backend_label}, marker={marker})\n"
+            )
+    except OSError:
+        pass
 
 
 def _terminal_env_from_dotenv(dotenv_path: Path) -> str | None:

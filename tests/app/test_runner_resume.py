@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 
 from core.jsonio import read_json, write_json
 from core.state import InMemoryProgressStore, ProgressStore
+from hermes import process as hermes_process
 from hermes.host_build import HostBuildError, NoopHostBuilder
 from hermes.runner import HermesRunner
 from persistence import PersistenceConnectionError
@@ -234,6 +235,7 @@ class RunnerRealRunTests(unittest.TestCase):
             image_exists=lambda _: image_exists_value,
             host_builder=NoopHostBuilder(),
             profile_exists=lambda _: True,
+            terminal_workspace_probe=lambda **_kwargs: None,
         )  # type: ignore[arg-type]
 
         def fake_invoke(prompt: str, log: Path, dry_run: bool, *, timeout=None, **_kwargs) -> int:
@@ -281,6 +283,34 @@ class RunnerRealRunTests(unittest.TestCase):
             # Final complete events.
             self.assertIn(("complete", "passed", "web-0001"), stage_status)
             self.assertIn(("complete", "passed", ""), stage_status)
+
+    def test_docker_terminal_visibility_failure_stops_before_build_prompt(self):
+        with TemporaryDirectory() as tmp:
+            paths = _Paths(root=Path(tmp))
+            paths.initialize()
+            _copy_real_prompt(paths)
+            _make_shard(paths, "web-0001-0001.json", ["web-0001"])
+            runner = self._make_runner_with_fake_invoke(paths)
+            invoked = {"build": False}
+
+            def fail_probe(**_kwargs):
+                raise hermes_process.TerminalWorkspaceVisibilityError(
+                    "Docker terminal backend did not write to the host execution workspace"
+                )
+
+            def build_invoke(*_args, **_kwargs):
+                invoked["build"] = True
+                return 0
+
+            runner._verify_terminal_workspace = fail_probe  # type: ignore[method-assign]
+            runner._invoke = build_invoke  # type: ignore[assignment]
+
+            outcome = runner.process_one("worker-01", dry_run=False)
+
+            self.assertEqual(outcome["status"], "failed")
+            self.assertEqual(outcome["hermes_phase"], "terminal_workspace")
+            self.assertIn("Docker terminal backend", outcome["error"])
+            self.assertFalse(invoked["build"])
 
     def test_first_run_validates_directory_created_by_hermes(self):
         with TemporaryDirectory() as tmp:
@@ -860,6 +890,7 @@ class RunnerRealRunTests(unittest.TestCase):
                 host_builder=FailingHostBuilder(),
                 profile_exists=lambda _: True,
                 validation_repair_attempts=1,
+                terminal_workspace_probe=lambda **_kwargs: None,
             )  # type: ignore[arg-type]
             prompts: list[str] = []
 
@@ -948,6 +979,7 @@ class RunnerRealRunTests(unittest.TestCase):
                 image_exists=lambda _: True,
                 host_builder=NoopHostBuilder(),
                 profile_exists=lambda _: True,
+                terminal_workspace_probe=lambda **_kwargs: None,
             )  # type: ignore[arg-type]
             runner._invoke = lambda prompt, log, dry_run, *, timeout=None, **_kwargs: 0  # type: ignore[assignment]
             runner.validator.validate_challenge = lambda cid: {  # type: ignore[assignment]
@@ -985,6 +1017,7 @@ class RunnerRealRunTests(unittest.TestCase):
                 image_exists=lambda _: True,
                 host_builder=NoopHostBuilder(),
                 profile_exists=lambda _: True,
+                terminal_workspace_probe=lambda **_kwargs: None,
             )  # type: ignore[arg-type]
             called = {"invoke": False}
 
@@ -1013,6 +1046,7 @@ class ShardNameNormalizationTests(unittest.TestCase):
                 image_exists=lambda _: True,
                 host_builder=NoopHostBuilder(),
                 profile_exists=lambda _: True,
+                terminal_workspace_probe=lambda **_kwargs: None,
             )  # type: ignore[arg-type]
 
             def fake_invoke(prompt: str, log: Path, dry_run: bool, *, timeout=None, **_kwargs) -> int:

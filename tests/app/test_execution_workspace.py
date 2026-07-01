@@ -512,6 +512,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
             self.paths,
             image_exists=lambda _: False,
             profile_exists=lambda _: True,
+            terminal_workspace_probe=lambda **_kwargs: None,
         )
         observed: dict[str, object] = {}
 
@@ -544,6 +545,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
             self.paths,
             profile_exists=lambda _: True,
             validation_repair_attempts=0,
+            terminal_workspace_probe=lambda **_kwargs: None,
         )
 
         def invoke(_prompt, _log, *, workspace, **_kwargs):
@@ -606,6 +608,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
             self.paths,
             profile_exists=lambda _: True,
             validation_repair_attempts=0,
+            terminal_workspace_probe=lambda **_kwargs: None,
         )
 
         def invoke(_prompt, _log, *, workspace, **_kwargs):
@@ -639,6 +642,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
             self.paths,
             profile_exists=lambda _: True,
             validation_repair_attempts=0,
+            terminal_workspace_probe=lambda **_kwargs: None,
         )
 
         def invoke(_prompt, _log, *, workspace, **_kwargs):

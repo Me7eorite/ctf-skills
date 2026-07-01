@@ -10,6 +10,7 @@ from hermes.process import HERMES_TIMEOUT_RETURNCODE
 
 BuildFailureCategory = Literal[
     "preflight_workspace",
+    "terminal_workspace",
     "materialize",
     "contract_prepare",
     "hermes_auth",
