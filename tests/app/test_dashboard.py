@@ -1,13 +1,15 @@
+import signal
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 from uuid import UUID
 
 from core.jsonio import write_json
 from core.paths import ProjectPaths
 from core.state import InMemoryProgressStore
-from web.dashboard import DashboardService, TaskManager
+from web.dashboard import DashboardService, LanePool, LaneProcess, TaskManager
 
 
 class DashboardTests(unittest.TestCase):
@@ -155,3 +157,56 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(commands[1][4], "dashboard-lane-02-abcdef12")
         self.assertIn("--allow-failed-attempts-exit-zero", commands[0])
         self.assertIn("--allow-failed-attempts-exit-zero", commands[1])
+
+    def test_stop_terminates_single_worker(self):
+        tasks = TaskManager(self.paths)
+        process = Mock()
+        process.pid = 12345
+        process.poll.side_effect = [None, None, 0]
+        tasks._process = process
+        tasks._kind = "worker"
+
+        with patch("web.dashboard.os.killpg") as killpg:
+            ok, message = tasks.stop()
+
+        self.assertTrue(ok)
+        self.assertIn("已结束 worker", message)
+        killpg.assert_called_once_with(12345, signal.SIGTERM)
+        process.terminate.assert_not_called()
+        process.kill.assert_not_called()
+
+    def test_stop_kills_stubborn_lane_process(self):
+        first = UUID("11111111-1111-1111-1111-111111111111")
+        process = Mock()
+        process.pid = 23456
+        process.poll.return_value = None
+        process.wait.side_effect = [subprocess.TimeoutExpired(cmd="lane", timeout=5), 0]
+        tasks = TaskManager(self.paths)
+        tasks._lane_pools["pool"] = LanePool(
+            id="pool",
+            started_at="2026-01-01 00:00:00",
+            lanes=[
+                LaneProcess(
+                    lane=1,
+                    worker="lane-01",
+                    build_attempt_ids=[first],
+                    log="lane.log",
+                    process=process,
+                )
+            ],
+        )
+
+        with patch("web.dashboard.os.killpg") as killpg:
+            ok, message = tasks.stop()
+
+        self.assertTrue(ok)
+        self.assertIn("强制结束", message)
+        self.assertEqual(
+            killpg.call_args_list,
+            [
+                call(23456, signal.SIGTERM),
+                call(23456, signal.SIGKILL),
+            ],
+        )
+        process.terminate.assert_not_called()
+        process.kill.assert_not_called()

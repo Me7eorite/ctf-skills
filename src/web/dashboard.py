@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import signal
 import subprocess
 import sys
 import threading
@@ -172,6 +174,7 @@ class TaskManager:
                             stdout=output,
                             stderr=subprocess.STDOUT,
                             text=True,
+                            start_new_session=True,
                         )
                     lane = LaneProcess(
                         lane=index,
@@ -246,6 +249,7 @@ class TaskManager:
                     stdout=output,
                     stderr=subprocess.STDOUT,
                     text=True,
+                    start_new_session=True,
                 )
             self._kind = kind
             self._started_at = beijing_now_display()
@@ -263,6 +267,36 @@ class TaskManager:
                 message = f"{message}: {detail}"
             return False, message
         return True, f"{kind} 已启动"
+
+    def stop(self) -> tuple[bool, str]:
+        """Terminate the active dashboard build worker or lane pool."""
+        with self._lock:
+            single = self._process if self._process and self._process.poll() is None else None
+            single_kind = self._kind
+            lanes = [
+                lane
+                for pool in self._lane_pools.values()
+                for lane in pool.lanes
+                if lane.process.poll() is None
+            ]
+        if single is None and not lanes:
+            return False, "没有正在运行的构建任务"
+
+        stopped = 0
+        killed = 0
+        if single is not None:
+            was_killed = _terminate_process(single)
+            stopped += 1
+            killed += 1 if was_killed else 0
+        for lane in lanes:
+            was_killed = _terminate_process(lane.process)
+            stopped += 1
+            killed += 1 if was_killed else 0
+
+        label = single_kind or ("lane pool" if lanes else "worker")
+        if killed:
+            return True, f"已结束 {label}（{stopped} 个进程，{killed} 个强制结束）"
+        return True, f"已结束 {label}（{stopped} 个进程）"
 
     def state(self) -> dict:
         with self._lock:
@@ -377,6 +411,31 @@ class LanePool:
     id: str
     started_at: str
     lanes: list[LaneProcess]
+
+
+def _terminate_process(process: subprocess.Popen, *, timeout: float = 5.0) -> bool:
+    if process.poll() is not None:
+        return False
+    _signal_process_tree(process, signal.SIGTERM)
+    try:
+        process.wait(timeout=timeout)
+        return False
+    except subprocess.TimeoutExpired:
+        _signal_process_tree(process, signal.SIGKILL)
+        process.wait(timeout=timeout)
+        return True
+
+
+def _signal_process_tree(process: subprocess.Popen, signum: int) -> None:
+    try:
+        os.killpg(process.pid, signum)
+    except ProcessLookupError:
+        return
+    except OSError:
+        if signum == signal.SIGTERM:
+            process.terminate()
+        else:
+            process.kill()
 
 
 class DashboardService:

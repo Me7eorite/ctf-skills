@@ -247,6 +247,21 @@ async function startBuildWorker() {
   }
 }
 
+async function stopBuildWorker() {
+  try {
+    const result = await postJson("/api/build-attempts/worker/stop", {});
+    showToast(result.message || "构建任务已结束");
+    state.detail = null;
+    state.list = null;
+    state.lanePools = null;
+    if (state.detailId) await ensureDetail(state.detailId);
+    else await ensureList();
+    schedulePoll(START_REFRESH_MS);
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
 async function startCurrentQueue() {
   const payload = {};
   if (state.filters.category) payload.category = state.filters.category;
@@ -527,6 +542,7 @@ function renderList(root) {
   pruneSelection(rows);
   const selectedCount = state.selection.size;
   const summary = summarizeBuildRows(rows);
+  const hasActiveWorker = rows.some((row) => row.status === "running") || (state.lanePools || []).some((pool) => pool.running);
   const focusSnapshot = captureFilterFocus(root);
   root.innerHTML = `
     ${renderBuildReadinessWarning()}
@@ -552,6 +568,11 @@ function renderList(root) {
           title="按当前的分类/生成请求筛选，启动全部 queued 题目（按创建时间从早到晚，最多 100 条）">
           <i data-lucide="list-ordered"></i>启动全部待运行
         </button>
+        ${hasActiveWorker
+          ? `<button id="ba-stop-worker" class="btn btn-danger btn-sm" title="结束当前构建 worker">
+              <i data-lucide="square"></i>结束运行中
+            </button>`
+          : ""}
       </div>
     </div>
 
@@ -794,6 +815,9 @@ function renderDetail(root) {
         </button>
         ${attempt.status === "queued" && buildProfileReady(attempt.category)
           ? `<button id="ba-worker" class="btn btn-primary btn-sm"><i data-lucide="play"></i>运行</button>`
+          : ""}
+        ${attempt.status === "running"
+          ? `<button id="ba-stop-worker" class="btn btn-danger btn-sm"><i data-lucide="square"></i>结束</button>`
           : ""}
         ${attempt.status === "failed"
           ? `<button class="btn btn-secondary btn-sm ba-revalidate" data-build-attempt-id="${escapeHtml(attempt.id)}"><i data-lucide="shield-check"></i>重新校验</button>`
@@ -1161,6 +1185,10 @@ export function bind() {
     }
     if (event.target.closest("#ba-worker")) {
       startBuildWorker();
+      return;
+    }
+    if (event.target.closest("#ba-stop-worker")) {
+      stopBuildWorker();
       return;
     }
     if (event.target.closest("#ba-back")) {

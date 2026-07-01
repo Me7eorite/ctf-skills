@@ -22,6 +22,7 @@ def test_build_attempt_actions_use_constrained_endpoints():
     assert "/api/build-attempts/worker/start-sequential" in source
     assert "/api/build-attempts/worker/start-sequential-lanes" in source
     assert "/api/build-attempts/worker/pools" in source
+    assert "/api/build-attempts/worker/stop" in source
     assert "const LIST_LIMIT = 200;" in source
     assert 'params.set("limit", String(LIST_LIMIT));' in source
     assert "filterDraft" in source
@@ -35,6 +36,8 @@ def test_build_attempt_actions_use_constrained_endpoints():
     assert 'runAction("validate")' not in source
     assert 'id="ba-validate"' not in source
     assert 'id="ba-worker"' in source
+    assert 'id="ba-stop-worker"' in source
+    assert "结束运行中" in source
     assert "重新校验" in source
     assert "分析并修复" in source
     assert 'attempt.status === "failed"' in source

@@ -395,6 +395,23 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
             return JSONResponse({"pools": []})
         return JSONResponse({"pools": tasks.lane_pools_state()})
 
+    @app.post("/api/build-attempts/worker/stop")
+    def stop_build_worker() -> JSONResponse:
+        tasks = app.state.dashboard_tasks
+        if not hasattr(tasks, "stop"):
+            raise HTTPException(
+                status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+                detail="build worker manager is not configured",
+            )
+        ok, message = tasks.stop()
+        if not ok:
+            raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=message)
+        state = tasks.state() if hasattr(tasks, "state") else {}
+        return JSONResponse(
+            {"ok": True, "message": message, "state": state},
+            status_code=HTTPStatus.ACCEPTED,
+        )
+
     @app.post("/api/build-attempts/queue/start")
     async def start_build_attempt_queue(request: Request) -> JSONResponse:
         try:

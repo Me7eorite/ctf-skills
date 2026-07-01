@@ -85,6 +85,13 @@ class _StubBuildTaskManager:
     def lane_pools_state(self):
         return [self.pool] if self.pool else []
 
+    def stop(self):
+        self.calls.append(("stop", uuid4()))
+        return self.response
+
+    def state(self):
+        return {"running": False, "message": self.response[1]}
+
 
 @pytest.fixture(scope="module")
 def session_factory() -> SessionFactory:
@@ -1037,6 +1044,21 @@ def test_exact_worker_accepts_iteration_shard_basename(
 
     assert response.status_code == 202
     assert tasks.calls == [("web", attempt.id)]
+
+
+def test_stop_build_worker_endpoint_terminates_dashboard_task(
+    client: TestClient,
+):
+    tasks = _StubBuildTaskManager((True, "已结束 worker（1 个进程）"))
+    client.app.state.dashboard_tasks = tasks
+
+    response = client.post("/api/build-attempts/worker/stop")
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["ok"] is True
+    assert "已结束" in body["message"]
+    assert body["state"]["running"] is False
 
 
 # ============================================================================
