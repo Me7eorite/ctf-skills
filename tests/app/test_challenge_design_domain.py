@@ -419,6 +419,134 @@ def test_validate_design_payload_accepts_rust_web_runtime_without_app_py():
     assert result.challenge["implementation_plan"]["framework"] == "Axum"
 
 
+def _pwn_task(**overrides):
+    return _parent_task(
+        challenge_id="pwn-0001",
+        title="Echo Canyon",
+        category="pwn",
+        difficulty="medium",
+        primary_technique="ret2libc stack overflow",
+        learning_objective="Build a leak to ret2libc exploit against a TCP service",
+        points=300,
+        port=9001,
+        scenario="A legacy echo daemon is exposed for compatibility testing.",
+        **overrides,
+    )
+
+
+def _pwn_payload(**challenge_overrides):
+    payload = _payload(
+        id="pwn-0001",
+        title="Echo Canyon",
+        category="pwn",
+        difficulty="medium",
+        points=300,
+        deployment="single docker compose tcp service on port 9001",
+        port=9001,
+        primary_technique="ret2libc stack overflow",
+        secondary_technique="GOT leak with ROP chain",
+        techniques=["ret2libc stack overflow", "GOT leak with ROP chain"],
+        learning_objective="Build a leak to ret2libc exploit against a TCP service",
+        prompt=(
+            "The operations team exposed a legacy echo daemon for remote "
+            "compatibility checks; recover the runtime flag from the service."
+        ),
+        intended_path=[
+            "Connect to the TCP service and identify the overflowing input",
+            "Use the PLT to leak a libc address through the GOT",
+            "Return into system('/bin/sh') and read the runtime flag file",
+        ],
+        artifacts=[
+            "README.md",
+            "metadata.json",
+            "validate.sh",
+            "deploy/Dockerfile",
+            "deploy/docker-compose.yml",
+            "deploy/src/vuln.c",
+            "deploy/src/Makefile",
+            "deploy/_files/start.sh",
+            "writenup/wp.md",
+            "writenup/exp.py",
+        ],
+        flag_location="/flag in the running container",
+        validation="Run writenup/exp.py against 127.0.0.1:9001 after docker compose up.",
+        implementation_plan={
+            "runtime": "debian:bookworm-slim",
+            "service_model": "socat TCP listener launching compiled ELF",
+            "service_user": "ctf",
+            "runtime_language": "c",
+        },
+        hints=[
+            "Check the binary protections before building the payload.",
+            "A reusable PLT call can disclose libc through the GOT.",
+            "Return to main after the leak, then send the final ret2libc chain.",
+        ],
+        asset_flow=[
+            {
+                "stage": 1,
+                "player_input_or_capability": "Overflow offset and ROP control",
+                "technique": "ret2libc stack overflow",
+                "produced_asset_or_capability": "Leaked libc base address",
+                "why_next_stage_requires_it": "The final system address depends on libc base.",
+            },
+            {
+                "stage": 2,
+                "player_input_or_capability": "Leaked libc base address",
+                "technique": "GOT leak with ROP chain",
+                "produced_asset_or_capability": "Reliable system('/bin/sh') chain",
+                "why_next_stage_requires_it": "The flag is only readable from the live service.",
+            },
+        ],
+        shortcut_closure=[
+            "No win function is linked into the binary.",
+            "The flag is mounted at runtime and is not embedded in the ELF or image source.",
+            "ASLR is enabled so the exploit must leak libc instead of hardcoding addresses.",
+        ],
+        fingerprint={
+            "entrypoint_type": "tcp binary service",
+            "asset_flow_shape": "overflow_control -> libc_leak -> ret2libc_shell -> flag",
+            "flag_access_model": "runtime-only container file",
+            "scenario_type": "legacy echo daemon",
+        },
+        actual_solution_type=["ret2libc", "got_leak"],
+    )
+    payload["challenges"][0].update(challenge_overrides)
+    return payload
+
+
+def test_validate_design_payload_accepts_c_pwn_runtime_without_app_py():
+    result = validate_design_payload(_pwn_payload(), _pwn_task())
+
+    assert result.challenge["implementation_plan"]["runtime_language"] == "c"
+
+
+def test_validate_design_payload_accepts_cpp_pwn_source_variant_without_app_py():
+    payload = _pwn_payload(
+        artifacts=[
+            "README.md",
+            "metadata.json",
+            "validate.sh",
+            "deploy/Dockerfile",
+            "deploy/docker-compose.yml",
+            "src/menu_service.cpp",
+            "deploy/src/Makefile",
+            "deploy/_files/start.sh",
+            "writenup/wp.md",
+            "writenup/exp.py",
+        ],
+        language="cpp",
+        implementation_plan={
+            "runtime": "ubuntu:24.04",
+            "service_model": "socat TCP listener launching compiled ELF",
+            "service_user": "ctf",
+        },
+    )
+
+    result = validate_design_payload(payload, _pwn_task())
+
+    assert result.challenge["language"] == "cpp"
+
+
 @pytest.mark.parametrize(
     "artifact",
     [

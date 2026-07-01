@@ -241,9 +241,9 @@ def _enforce_runtime_artifact_rule(
                 f"{label_prefix} missing required file: {entry}"
             )
 
-    for group in rule.required_any_exact:
-        if not any(item in normalized_set for item in group):
-            options = ", ".join(group)
+    for exact_group in rule.required_any_exact:
+        if not any(item in normalized_set for item in exact_group):
+            options = ", ".join(exact_group)
             raise ChallengeDesignValidationError(
                 f"{label_prefix} requires at least one of: {options}"
             )
@@ -254,11 +254,11 @@ def _enforce_runtime_artifact_rule(
                 f"{label_prefix} requires file matching pattern: {pattern.pattern}"
             )
 
-    for group in rule.required_any_patterns:
+    for pattern_group in rule.required_any_patterns:
         if not any(
-            pattern.search(item) for pattern in group for item in normalized
+            pattern.search(item) for pattern in pattern_group for item in normalized
         ):
-            patterns = ", ".join(p.pattern for p in group)
+            patterns = ", ".join(p.pattern for p in pattern_group)
             raise ChallengeDesignValidationError(
                 f"{label_prefix} requires files matching at least one of: {patterns}"
             )

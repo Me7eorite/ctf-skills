@@ -367,20 +367,32 @@ def _render_output_contract(task: DesignTask) -> str:
     scanning a wall of prose rules.
     """
     schema_text = json.dumps(_OUTPUT_SCHEMA, ensure_ascii=False, indent=2)
-    container_artifacts_hint = (
-        "\n- For web/pwn, `artifacts` must additionally include "
-        "`deploy/Dockerfile`, `deploy/docker-compose.yml`, "
-        "`deploy/_files/start.sh`, and runtime-specific source files. "
-        "Examples: Python `deploy/src/app.py`; Node `deploy/src/package.json` "
-        "plus `deploy/src/server.js`/`app.js`/`index.js`; PHP "
-        "`deploy/src/index.php`; Go `deploy/src/main.go`; Java jar "
-        "`deploy/src/Main.java` or `deploy/src/src/main/java/...` plus a "
-        "build file; Tomcat `deploy/src/src/main/webapp/WEB-INF/web.xml` "
-        "plus a Servlet/JSP; Rust `deploy/src/Cargo.toml` plus "
-        "`deploy/src/src/main.rs` or `deploy/src/main.rs`."
-        if task.category in {"web", "pwn"}
-        else ""
-    )
+    container_artifacts_hint = ""
+    if task.category == "web":
+        container_artifacts_hint = (
+            "\n- For web, `artifacts` must additionally include "
+            "`deploy/Dockerfile`, `deploy/docker-compose.yml`, "
+            "`deploy/_files/start.sh`, and runtime-specific source files. "
+            "Examples: Python `deploy/src/app.py`; Node `deploy/src/package.json` "
+            "plus `deploy/src/server.js`/`app.js`/`index.js`; PHP "
+            "`deploy/src/index.php`; Go `deploy/src/main.go`; Java jar "
+            "`deploy/src/Main.java` or `deploy/src/src/main/java/...` plus a "
+            "build file; Tomcat `deploy/src/src/main/webapp/WEB-INF/web.xml` "
+            "plus a Servlet/JSP; Rust `deploy/src/Cargo.toml` plus "
+            "`deploy/src/src/main.rs` or `deploy/src/main.rs`."
+        )
+    elif task.category == "pwn":
+        container_artifacts_hint = (
+            "\n- For pwn, `artifacts` must additionally include "
+            "`deploy/Dockerfile`, `deploy/docker-compose.yml`, "
+            "`deploy/_files/start.sh`, and native binary service artifacts. "
+            "Use diverse challenge-specific names under `deploy/src/` or "
+            "`src/`, such as `deploy/src/vuln.c`, `deploy/src/menu_service.cpp`, "
+            "`deploy/src/heap_lab.c`, `deploy/src/Makefile`, or "
+            "`deploy/src/bin/challenge`; do not include Python "
+            "`deploy/src/app.py` unless the pwn service is intentionally a "
+            "Python wrapper around a separate native binary."
+        )
     uniqueness_hint = (
         "\n5. This is a `" + task.difficulty + "` challenge: it MUST have a "
         "SINGLE intended solve path. Populate `unintended_solutions` with a "

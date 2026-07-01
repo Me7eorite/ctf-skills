@@ -143,12 +143,19 @@ RUNTIME_ARTIFACT_RULES: dict[str, dict[str, RuntimeArtifactRule]] = {
     "pwn": {
         "binary": RuntimeArtifactRule(
             required_patterns=(
-                _pattern(r"^deploy/src/(?:[A-Za-z0-9_.-]+)$"),
+                _pattern(r"^deploy/src/(?:[A-Za-z0-9_.+/-]+)$"),
             ),
             required_any_patterns=(
                 (
-                    _pattern(r"^deploy/src/(?:pwn|chal{1,2}|challenge)$"),
+                    _pattern(
+                        r"^deploy/src/(?:pwn|chal{1,2}|challenge|vuln|"
+                        r"service|server)(?:\.[A-Za-z0-9_+.-]+)?$"
+                    ),
                     _pattern(r"^deploy/src/bin/.*"),
+                    _pattern(
+                        r"^deploy/src/.*\.(?:c|cc|cpp|cxx|h|hpp|s|S|asm|rs|go)$"
+                    ),
+                    _pattern(r"^src/.*\.(?:c|cc|cpp|cxx|h|hpp|s|S|asm|rs|go)$"),
                 ),
             ),
             required_any_exact=(
@@ -159,10 +166,26 @@ RUNTIME_ARTIFACT_RULES: dict[str, dict[str, RuntimeArtifactRule]] = {
             ),
             required_service_user="ctf",
         ),
+        "kernel": RuntimeArtifactRule(
+            required_any_exact=(
+                (
+                    "deploy/_files/run.sh",
+                    "deploy/_files/start.sh",
+                ),
+            ),
+            required_any_patterns=(
+                (
+                    _pattern(r"^deploy/src/.*\.(?:c|h|ko)$"),
+                    _pattern(r"^deploy/src/(?:bzImage|vmlinux|initramfs\.cpio(?:\.gz)?)$"),
+                    _pattern(r"^attachments/(?:bzImage|vmlinux|initramfs\.cpio(?:\.gz)?)$"),
+                ),
+            ),
+            required_service_user="ctf",
+        ),
         "xinetd": RuntimeArtifactRule(
             required_exact=("deploy/_files/etc/xinetd.d/chal",),
             required_patterns=(
-                _pattern(r"^deploy/src/(?:[A-Za-z0-9_.-]+)$"),
+                _pattern(r"^deploy/src/(?:[A-Za-z0-9_.+/-]+)$"),
             ),
             allowed_service_users=("root", "xinetd"),
         ),
@@ -233,6 +256,7 @@ def extract_runtime_requirements(challenge: Mapping[str, Any]) -> RuntimeArtifac
             language = _infer_runtime_language(runtime.get("runtime"))
         if not profile:
             profile = _infer_runtime_profile(runtime.get("runtime"), runtime.get("framework"))
+    language = challenge.get("language", language)
     language = challenge.get("runtime_language", language)
     profile = challenge.get("runtime_profile", profile)
     service_user = challenge.get("service_user", service_user)
@@ -240,11 +264,84 @@ def extract_runtime_requirements(challenge: Mapping[str, Any]) -> RuntimeArtifac
         language = _infer_runtime_language(challenge.get("runtime"))
     if not profile:
         profile = _infer_runtime_profile(challenge.get("runtime"), challenge.get("framework"))
+    category = str(challenge.get("category") or "").strip().lower()
+    language, profile = _normalize_category_runtime(
+        category=category,
+        language=language,
+        profile=profile,
+        runtime=runtime,
+        challenge=challenge,
+    )
     return RuntimeArtifactRequirements(
         language=language if isinstance(language, str) else None,
         profile=profile if isinstance(profile, str) else None,
         service_user=service_user if isinstance(service_user, str) else None,
     )
+
+
+def _normalize_category_runtime(
+    *,
+    category: str,
+    language: Any,
+    profile: Any,
+    runtime: Any,
+    challenge: Mapping[str, Any],
+) -> tuple[Any, Any]:
+    """Normalize category-specific runtime aliases before rule lookup."""
+
+    if category != "pwn":
+        return language, profile
+
+    normalized_language = language.strip().lower() if isinstance(language, str) else ""
+    native_aliases = {
+        "",
+        "pwn",
+        "binary",
+        "native",
+        "c",
+        "c11",
+        "c17",
+        "gcc",
+        "clang",
+        "cpp",
+        "c++",
+        "cxx",
+        "g++",
+        "asm",
+        "assembly",
+        "nasm",
+        "rust",
+        "rustc",
+        "go",
+        "golang",
+        "zig",
+    }
+    if normalized_language in native_aliases:
+        language = "pwn"
+
+    normalized_profile = profile.strip().lower() if isinstance(profile, str) else ""
+    if normalized_profile in {"", "default", "native", "tcp", "socat"}:
+        profile = None
+
+    profile_text = " ".join(
+        value.strip().lower()
+        for value in (
+            runtime.get("runtime") if isinstance(runtime, Mapping) else None,
+            runtime.get("runtime_profile") if isinstance(runtime, Mapping) else None,
+            runtime.get("service_model") if isinstance(runtime, Mapping) else None,
+            runtime.get("framework") if isinstance(runtime, Mapping) else None,
+            challenge.get("runtime"),
+            challenge.get("target_format"),
+            challenge.get("deployment"),
+        )
+        if isinstance(value, str)
+    )
+    if not profile and any(token in profile_text for token in ("kernel", "qemu", "bzimage", "initramfs")):
+        profile = "kernel"
+    if not profile and "xinetd" in profile_text:
+        profile = "xinetd"
+
+    return language, profile
 
 
 def _infer_runtime_language(value: Any) -> str | None:
