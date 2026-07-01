@@ -16,6 +16,7 @@ from hermes.workspace import ExecutionWorkspace
 
 _DEFAULT_BUILD_TIMEOUT_SECONDS = 900
 _IMAGE_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]*(?::[A-Za-z0-9_.-]+)?$")
+_DOCKER_STEP_RE = re.compile(r"Step (\d+)/(?:\d+) : (.+)")
 _FORBIDDEN_DOCKERFILE_RE = re.compile(
     r"(?im)^\s*(?:RUN\s+)?(?:docker|docker-compose)\b"
 )
@@ -36,6 +37,9 @@ class HostBuildError(ValueError):
         log_path: str | None = None,
         stdout_tail: str | None = None,
         stderr_tail: str | None = None,
+        failure_kind: str | None = None,
+        failure_hint: str | None = None,
+        failed_step: str | None = None,
     ) -> None:
         super().__init__(message)
         self.challenge_id = challenge_id
@@ -43,6 +47,9 @@ class HostBuildError(ValueError):
         self.log_path = log_path
         self.stdout_tail = stdout_tail
         self.stderr_tail = stderr_tail
+        self.failure_kind = failure_kind
+        self.failure_hint = failure_hint
+        self.failed_step = failed_step
 
 
 @dataclass(frozen=True)
@@ -151,6 +158,9 @@ class HostBuilder:
                 log_path=str(log_path),
                 stdout_tail=_tail_text(_decode_output(exc.stdout)),
                 stderr_tail=_tail_text(_decode_output(exc.stderr)),
+                failure_kind="timeout",
+                failure_hint="Docker build timed out; split the failing RUN step and shorten the expensive command.",
+                failed_step=_infer_docker_step(_decode_output(exc.stdout), _decode_output(exc.stderr)),
             ) from exc
         elapsed = max(0.0, time.monotonic() - started)
         _write_build_log(
@@ -162,13 +172,23 @@ class HostBuilder:
             timed_out=False,
         )
         if process.returncode != 0:
+            stdout_text = _decode_output(process.stdout)
+            stderr_text = _decode_output(process.stderr)
+            failure_kind, failure_hint = _classify_docker_failure(
+                stdout_text,
+                stderr_text,
+                returncode=process.returncode,
+            )
             raise HostBuildError(
                 f"{challenge_id}: docker build failed with exit {process.returncode}",
                 challenge_id=challenge_id,
                 command=command,
                 log_path=str(log_path),
-                stdout_tail=_tail_text(process.stdout),
-                stderr_tail=_tail_text(process.stderr),
+                stdout_tail=_tail_text(stdout_text),
+                stderr_tail=_tail_text(stderr_text),
+                failure_kind=failure_kind,
+                failure_hint=failure_hint,
+                failed_step=_infer_docker_step(stdout_text, stderr_text),
             )
         image_id = _inspect_image_id(image, timeout=min(10.0, float(self.timeout_seconds)))
         _stamp_metadata(
@@ -298,6 +318,64 @@ def _decode_output(value: str | bytes | None) -> str:
 
 def _tail_text(value: str, *, limit: int = 4000) -> str:
     return value[-limit:] if len(value) > limit else value
+
+
+def _infer_docker_step(stdout: str, stderr: str) -> str | None:
+    combined = f"{stdout}\n{stderr}"
+    matches = list(_DOCKER_STEP_RE.finditer(combined))
+    if not matches:
+        return None
+    step_no = matches[-1].group(1)
+    command = matches[-1].group(2).strip()
+    return f"Step {step_no}: {command}"
+
+
+def _classify_docker_failure(
+    stdout: str,
+    stderr: str,
+    *,
+    returncode: int,
+) -> tuple[str, str | None]:
+    text = f"{stdout}\n{stderr}".lower()
+    if returncode == 127 or "not found" in text:
+        if "make: not found" in text or "make: command not found" in text:
+            return (
+                "missing_dependency",
+                "The image is missing `make`; add it to the Dockerfile apt install list before the build step.",
+            )
+        if "gcc: not found" in text or "g++: not found" in text:
+            return (
+                "missing_dependency",
+                "The image is missing the compiler toolchain; install the required compiler package in the Dockerfile.",
+            )
+        return (
+            "missing_dependency",
+            "A build command is missing from the image; install the required package or adjust the RUN step.",
+        )
+    if "cannot overwrite non-directory" in text:
+        return (
+            "filesystem_conflict",
+            "The chroot copy layout collides with an existing path; avoid copying multiple library roots into the same destination without pre-creating the directory tree.",
+        )
+    if "copy failed" in text and "deploy/src" in text:
+        return (
+            "missing_source",
+            "The build context or COPY path does not match the generated tree; verify the deploy/src files exist and the Dockerfile uses the right relative paths.",
+        )
+    if "permission denied" in text and ("mknod" in text or "chmod" in text):
+        return (
+            "permission_denied",
+            "This step needs to run during Docker build as root; keep filesystem setup in the Dockerfile, not in start.sh.",
+        )
+    if "no such file or directory" in text:
+        return (
+            "missing_build_input",
+            "A referenced file is missing from the build context; verify the Dockerfile COPY sources and filenames.",
+        )
+    return (
+        "docker_exit_nonzero",
+        "Docker exited non-zero; inspect the last failed step and the build log tails for the exact missing file or command.",
+    )
 
 
 def _inspect_image_id(image: str, *, timeout: float) -> str | None:

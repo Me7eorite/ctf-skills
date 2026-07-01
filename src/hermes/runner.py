@@ -1336,6 +1336,9 @@ class HermesRunner:
                     "solve_status": "failed",
                     "validation_status": "contract_failed",
                     "validation_error": error,
+                    "failure_kind": exc.failure_kind,
+                    "failure_hint": exc.failure_hint,
+                    "failed_step": exc.failed_step,
                     "validation_contract_errors": [
                         item
                         for item in (

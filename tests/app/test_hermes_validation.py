@@ -223,6 +223,29 @@ def test_validation_repair_prompt_classifies_nonzero_exit() -> None:
     assert "Remove the missing dependency" in prompt
 
 
+def test_validation_repair_prompt_describes_host_build_failure() -> None:
+    prompt = render_validation_repair_prompt(
+        attempt=1,
+        max_attempts=2,
+        validation_results=[
+            {
+                "challenge_id": "pwn-0001",
+                "solve_status": "failed",
+                "validation_status": "contract_failed",
+                "validation_error": "host build failed: pwn-0001: docker build failed with exit 1",
+                "failure_kind": "missing_dependency",
+                "failure_hint": "The image is missing `make`; add it to the Dockerfile apt install list before the build step.",
+                "failed_step": "Step 7: RUN make",
+            }
+        ],
+    )
+
+    assert "Root cause: the host Docker build failed before validation could start." in prompt
+    assert "missing_dependency" in prompt
+    assert "Step 7: RUN make" in prompt
+    assert "keep `ubuntu:20.04`" in prompt
+
+
 def test_validation_repair_prompt_blocks_metadata_replacement_cheat() -> None:
     prompt = render_validation_repair_prompt(
         attempt=2,

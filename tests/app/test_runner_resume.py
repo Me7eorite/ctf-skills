@@ -876,6 +876,9 @@ class RunnerRealRunTests(unittest.TestCase):
                     log_path="/tmp/build.log",
                     stdout_tail="COPY failed\n",
                     stderr_tail="missing deploy/src/app.py\n",
+                    failure_kind="missing_source",
+                    failure_hint="The build context or COPY path does not match the generated tree; verify the deploy/src files exist and the Dockerfile uses the right relative paths.",
+                    failed_step="Step 7: RUN cp -R /lib* /home/ctf",
                 )
 
         with TemporaryDirectory() as tmp:
@@ -907,7 +910,9 @@ class RunnerRealRunTests(unittest.TestCase):
             self.assertEqual(outcome["status"], "failed")
             self.assertGreaterEqual(len(prompts), 2)
             self.assertIn("missing deploy/src/app.py", prompts[1])
-            self.assertIn("host build command", prompts[1])
+            self.assertIn("missing_source", prompts[1])
+            self.assertIn("Step 7: RUN cp -R /lib* /home/ctf", prompts[1])
+            self.assertIn("deploy/src files exist", prompts[1])
 
     def test_validation_repair_uses_capped_timeout(self):
         with TemporaryDirectory() as tmp:

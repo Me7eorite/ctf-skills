@@ -2,10 +2,8 @@
 
 This scaffold is the default deployment skeleton for ordinary Pwn TCP services.
 Copy the `deploy/` tree into the generated challenge, then replace only the
-documented placeholders such as `{{BINARY_NAME}}`, `{{SERVICE_PORT}}`,
-`{{CTF_UID}}`, and `{{CTF_GID}}`. The default runtime identity is
-`ctf:ctf` with uid/gid `1000:1000`; keep that default unless a challenge has a
-specific reason to override it through Docker build args.
+documented placeholder `{{SERVICE_PORT}}`.
+The runtime identity is fixed to `ctf:ctf` with uid/gid `1000:1000`.
 
 Host boundary:
 
@@ -24,7 +22,7 @@ deploy/Dockerfile
 deploy/docker-compose.yml
 deploy/_files/start.sh
 deploy/_files/ctf.xinetd
-deploy/src/{{BINARY_NAME}}
+deploy/src/pwn
 ```
 
 The generated `docker-compose.yml` must inject the literal `FLAG=flag{...}`

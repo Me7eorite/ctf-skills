@@ -16,6 +16,7 @@ venv/
 .uv-cache/
 .ruff_cache/
 
+pwn_docker_example/
 # Editors
 .vscode/
 .idea/

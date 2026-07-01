@@ -146,3 +146,30 @@ def test_host_builder_failure_exposes_log_tails(tmp_path: Path) -> None:
     ]
     assert "COPY failed" in (error.value.stdout_tail or "")
     assert "missing deploy/src/app.py" in (error.value.stderr_tail or "")
+
+
+def test_host_builder_classifies_common_docker_failures(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    challenge = _web_challenge(workspace)
+    validation_set = WorkspaceValidationSet(
+        candidates={"web-0001": challenge},
+        output_manifest_hash="sha256:before",
+    )
+
+    def fake_run(command, **_kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            stdout="Step 7/10 : RUN make\n",
+            stderr="make: not found\n",
+        )
+
+    with (
+        patch("hermes.host_build.subprocess.run", side_effect=fake_run),
+        pytest.raises(HostBuildError) as error,
+    ):
+        HostBuilder().build_workspace(workspace, validation_set)
+
+    assert error.value.failure_kind == "missing_dependency"
+    assert error.value.failed_step == "Step 7: RUN make"
+    assert "make" in (error.value.failure_hint or "")

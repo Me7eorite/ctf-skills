@@ -1,7 +1,26 @@
-## Build
-docker build -t "pwn:training-hacknote" .
+# Pwn Docker Example
 
-## Run
-docker run -d -p "0.0.0.0:pub_port:9999" -h "pwn:training-hacknote" --name="training-hacknote" pwn:training-hacknote
+This is a cleaned-up xinetd + chroot template for modern pwn challenges.
 
-pub_port替换成未使用的端口，建议使用较大的端口
+## Layout
+
+- `deploy/Dockerfile`
+- `deploy/docker-compose.yml`
+- `deploy/_files/start.sh`
+- `deploy/_files/ctf.xinetd`
+- `deploy/src/Makefile`
+- `deploy/src/pwn.c`
+
+## Notes
+
+- The Dockerfile is the only place that should do image-building work.
+- `start.sh` only prepares runtime state and starts xinetd.
+- `ctf.xinetd` runs the service through `/usr/sbin/chroot`.
+- `Makefile` is included so the Dockerfile can build the challenge binary.
+
+## Quick start
+
+```bash
+cd pwn_docker_example/deploy
+docker compose up --build
+```

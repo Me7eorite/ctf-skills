@@ -48,6 +48,9 @@ def render_validation_repair_prompt(
                     "validation_stderr_tail",
                     "validation_contract_errors",
                     "validation_elapsed",
+                    "failure_kind",
+                    "failure_hint",
+                    "failed_step",
                 )
                 if result.get(key) not in (None, "", [])
             }
@@ -126,6 +129,9 @@ def _render_repair_plan(diagnostics: Sequence[Mapping[str, object]]) -> str:
         stdout_tail = str(item.get("validation_stdout_tail") or "")
         stderr_tail = str(item.get("validation_stderr_tail") or "")
         lines.append(f"- `{challenge_id}`: status=`{status}`")
+        failure_kind = str(item.get("failure_kind") or "").strip()
+        failure_hint = str(item.get("failure_hint") or "").strip()
+        failed_step = str(item.get("failed_step") or "").strip()
         lines.extend(
             f"  - {step}"
             for step in _repair_steps_for_status(
@@ -133,6 +139,9 @@ def _render_repair_plan(diagnostics: Sequence[Mapping[str, object]]) -> str:
                 error=error,
                 stdout_tail=stdout_tail,
                 stderr_tail=stderr_tail,
+                failure_kind=failure_kind,
+                failure_hint=failure_hint,
+                failed_step=failed_step,
             )
         )
     return "\n".join(lines)
@@ -144,10 +153,33 @@ def _repair_steps_for_status(
     error: str,
     stdout_tail: str,
     stderr_tail: str,
+    failure_kind: str,
+    failure_hint: str,
+    failed_step: str,
 ) -> list[str]:
     lower_error = error.lower()
     lower_output = f"{stdout_tail}\n{stderr_tail}".lower()
     if status == "contract_failed":
+        if failure_kind or failed_step or failure_hint:
+            return [
+                "Root cause: the host Docker build failed before validation could start.",
+                (
+                    f"Failure kind: `{failure_kind or 'docker_exit_nonzero'}`; "
+                    f"failed step: `{failed_step or '(unknown)'}`"
+                ),
+                (
+                    "Use the provided failure hint to fix the exact Dockerfile, "
+                    "Compose file, or scaffold file that triggered the build error."
+                ),
+                (
+                    "For the pwn xinetd scaffold, keep `ubuntu:20.04`, the fixed "
+                    "`pwn` binary at `/home/ctf/pwn`, and UID/GID `1000:1000`."
+                ),
+                (
+                    "If the error came from the scaffold, edit "
+                    "`scaffolds/pwn/xinetd-chroot/` and then let Hermes rebuild."
+                ),
+            ] + ([f"Host hint: {failure_hint}"] if failure_hint else [])
         if (
             "references 'metadata.json'" in lower_error
             or "references 'challenge.yml'" in lower_error
