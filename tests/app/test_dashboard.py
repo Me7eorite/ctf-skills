@@ -231,3 +231,22 @@ class DashboardTests(unittest.TestCase):
         )
         process.terminate.assert_not_called()
         process.kill.assert_not_called()
+
+    def test_terminate_timeout_uses_repair_budget_when_unset(self):
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch("web.dashboard.validation_repair_timeout_cap", return_value=300),
+        ):
+            timeout = TaskManager._terminate_timeout_seconds()
+
+        self.assertEqual(timeout, 720.0)
+
+    def test_terminate_timeout_env_override_wins(self):
+        with patch.dict(
+            "os.environ",
+            {"DASHBOARD_WORKER_TERMINATE_TIMEOUT": "45"},
+            clear=True,
+        ):
+            timeout = TaskManager._terminate_timeout_seconds()
+
+        self.assertEqual(timeout, 45.0)

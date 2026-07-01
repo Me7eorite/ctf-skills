@@ -16,6 +16,7 @@ from core.clock import beijing_now_isoformat
 from core.jsonio import read_json
 from core.paths import ProjectPaths
 from hermes import process as hermes_process
+from hermes.runner import validation_repair_timeout_cap
 from persistence.models import build_attempts as build_model
 from persistence.models import design_tasks as task_model
 from persistence.models.progress import ProgressEvent
@@ -53,12 +54,14 @@ class BuildAttemptRepairService:
         paths: ProjectPaths | None = None,
         progress,
         session_factory: SessionFactory | None = None,
-        timeout_seconds: int = hermes_process.DEFAULT_HERMES_TIMEOUT,
+        timeout_seconds: int | None = None,
     ) -> None:
         self.paths = paths or ProjectPaths.discover()
         self.progress = progress
         self.session_factory = session_factory or SessionFactory()
-        self.timeout_seconds = timeout_seconds
+        self.timeout_seconds = (
+            timeout_seconds if timeout_seconds is not None else _default_timeout_seconds()
+        )
 
     def repair(self, attempt_id: UUID) -> BuildAttemptRepairResult:
         context = self._prepare(attempt_id)
@@ -507,12 +510,23 @@ def _file_context(challenge_dir: Path) -> str:
     return "\n\n".join(snippets)
 
 
+def _default_timeout_seconds() -> int:
+    raw = os.environ.get("BUILD_ATTEMPT_REPAIR_TIMEOUT_SECONDS")
+    if raw is not None and raw.strip():
+        try:
+            configured = int(raw)
+        except ValueError:
+            configured = 0
+        if configured > 0:
+            return configured
+    return max(60, validation_repair_timeout_cap() * 2 + 120)
+
+
 def _middle_truncate(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     head = limit // 2
     tail = limit - head
     return f"{text[:head]}\n... <truncated> ...\n{text[-tail:]}"
-
 
 

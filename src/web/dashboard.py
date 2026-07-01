@@ -18,6 +18,7 @@ from core.jsonio import read_json
 from core.paths import ProjectPaths
 from core.queue import ShardQueue
 from core.state import InMemoryProgressStore, ProgressStore
+from hermes.runner import validation_repair_timeout_cap
 from domain.seeds import SeedStore
 
 
@@ -38,6 +39,8 @@ def beijing_now_display() -> str:
 
 class TaskManager:
     """Runs at most one local background CLI task."""
+
+    _DEFAULT_REPAIR_SAFETY_TIMEOUT = 60
 
     def __init__(self, paths: ProjectPaths):
         self.paths = paths
@@ -291,11 +294,17 @@ class TaskManager:
         stopped = 0
         killed = 0
         if single is not None:
-            was_killed = _terminate_process(single)
+            was_killed = _terminate_process(
+                single,
+                timeout=self._terminate_timeout_seconds(),
+            )
             stopped += 1
             killed += 1 if was_killed else 0
         for lane in lanes:
-            was_killed = _terminate_process(lane.process)
+            was_killed = _terminate_process(
+                lane.process,
+                timeout=self._terminate_timeout_seconds(),
+            )
             stopped += 1
             killed += 1 if was_killed else 0
 
@@ -303,6 +312,13 @@ class TaskManager:
         if killed:
             return True, f"已结束 {label}（{stopped} 个进程，{killed} 个强制结束）"
         return True, f"已结束 {label}（{stopped} 个进程）"
+
+    @staticmethod
+    def _terminate_timeout_seconds() -> float:
+        configured = _env_positive_int("DASHBOARD_WORKER_TERMINATE_TIMEOUT")
+        if configured is not None:
+            return float(configured)
+        return float(_repair_timeout_budget_seconds())
 
     def state(self) -> dict:
         with self._lock:
@@ -461,6 +477,32 @@ def _terminate_process(process: subprocess.Popen, *, timeout: float = 5.0) -> bo
         _signal_process_tree(process, signal.SIGKILL)
         process.wait(timeout=timeout)
         return True
+
+
+def _repair_timeout_budget_seconds() -> int:
+    """Budget a dashboard worker enough time to finish a repair/finalize cycle.
+
+    We use the repair-round cap as the basic unit, then leave room for the
+    finalization write and one more retry window. The point is to keep the
+    worker alive long enough for the repair flow to either succeed or fail
+    deterministically, rather than getting marked lost mid-iteration.
+    """
+    round_cap = validation_repair_timeout_cap()
+    return max(
+        TaskManager._DEFAULT_REPAIR_SAFETY_TIMEOUT,
+        int(round_cap * 2 + 120),
+    )
+
+
+def _env_positive_int(name: str) -> int | None:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
 
 
 def _signal_process_tree(process: subprocess.Popen, signum: int) -> None:

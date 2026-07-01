@@ -123,12 +123,13 @@ def _iteration_from_shard_name(original_shard_name: str | None) -> int:
 _LOGGER = logging.getLogger(__name__)
 DEFAULT_VALIDATION_REPAIR_ATTEMPTS = 2
 _VALIDATION_REPAIR_TIMEOUT_ENV = "HERMES_VALIDATION_REPAIR_TIMEOUT"
+_DEFAULT_REPAIR_TIMEOUT_CAP = 600
 
 
 def _resolve_validation_repair_timeout(effective_timeout: int) -> int:
     raw_timeout = os.environ.get(_VALIDATION_REPAIR_TIMEOUT_ENV)
     if raw_timeout is None or not raw_timeout.strip():
-        return min(effective_timeout, 600)
+        return min(effective_timeout, _DEFAULT_REPAIR_TIMEOUT_CAP)
     try:
         configured = int(raw_timeout)
     except ValueError:
@@ -137,15 +138,20 @@ def _resolve_validation_repair_timeout(effective_timeout: int) -> int:
             _VALIDATION_REPAIR_TIMEOUT_ENV,
             raw_timeout,
         )
-        return min(effective_timeout, 600)
+        return min(effective_timeout, _DEFAULT_REPAIR_TIMEOUT_CAP)
     if configured <= 0:
         _LOGGER.warning(
             "invalid %s=%r; using capped default",
             _VALIDATION_REPAIR_TIMEOUT_ENV,
             raw_timeout,
         )
-        return min(effective_timeout, 600)
+        return min(effective_timeout, _DEFAULT_REPAIR_TIMEOUT_CAP)
     return min(configured, effective_timeout)
+
+
+def validation_repair_timeout_cap() -> int:
+    """Return the default upper bound applied to one repair round."""
+    return _DEFAULT_REPAIR_TIMEOUT_CAP
 
 
 class _BestEffortProgressStore:

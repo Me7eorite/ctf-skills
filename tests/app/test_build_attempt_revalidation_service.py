@@ -32,6 +32,7 @@ from services.build_attempt_revalidation_service import (
     BuildAttemptRevalidationError,
     BuildAttemptRevalidationService,
 )
+from services.build_attempt_repair_service import _default_timeout_seconds
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -252,6 +253,22 @@ def test_revalidate_uses_current_attempt_workspace_not_other_attempt(
         row = session.get(build_model.BuildAttempt, attempt_id)
         assert row is not None
         assert row.status == "succeeded"
+
+
+def test_repair_timeout_default_scales_with_repair_cap(monkeypatch):
+    monkeypatch.delenv("BUILD_ATTEMPT_REPAIR_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setattr(
+        "services.build_attempt_repair_service.validation_repair_timeout_cap",
+        lambda: 300,
+    )
+
+    assert _default_timeout_seconds() == 720
+
+
+def test_repair_timeout_env_override_wins(monkeypatch):
+    monkeypatch.setenv("BUILD_ATTEMPT_REPAIR_TIMEOUT_SECONDS", "1500")
+
+    assert _default_timeout_seconds() == 1500
         assert row.resulting_challenge_dir.endswith(f"{challenge_id}-demo")
 
 
@@ -666,5 +683,4 @@ def _write_web_challenge(paths: ProjectPaths, challenge_id: str, *, root: Path |
     (challenge / "writenup" / "wp.md").write_text(body, encoding="utf-8")
     (challenge / "README.md").write_text(body, encoding="utf-8")
     return challenge
-
 
