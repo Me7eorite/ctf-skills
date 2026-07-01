@@ -218,6 +218,40 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertNotIn("custom:old", payload["credential_pool"])
         self.assertIn("openrouter", payload["credential_pool"])
 
+    def test_invoke_mounts_workspace_for_docker_backend(self):
+        runner = HermesRunner(self.paths)
+        log = self.paths.logs / "docker.log"
+        active = self.paths.root / "work" / "executions" / "attempt" / "current"
+        workspace = type("Workspace", (), {"active": active})()
+        captured = {}
+
+        def fake_invoke(_prompt, **kwargs):
+            captured.update(kwargs)
+            return 0
+
+        with (
+            patch.object(runner, "_apply_legacy_custom_provider", return_value=False),
+            patch("hermes.process.hermes_arguments", return_value=["hermes", "chat", "-Q", "-q"]),
+            patch("hermes.process.effective_terminal_backend", return_value="docker"),
+            patch("hermes.process.invoke", side_effect=fake_invoke),
+        ):
+            returncode = runner._invoke(
+                "prompt",
+                log,
+                dry_run=False,
+                timeout=1,
+                workspace=workspace,
+                profile_name="cf-pwn",
+            )
+
+        self.assertEqual(returncode, 0)
+        self.assertEqual(captured["cwd"], active)
+        self.assertEqual(captured["environment"]["TERMINAL_CWD"], str(active))
+        self.assertEqual(
+            captured["environment"]["TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE"],
+            "1",
+        )
+
     def test_invoke_returns_timeout_status(self):
         runner = HermesRunner(self.paths)
         log = self.paths.logs / "timeout.log"

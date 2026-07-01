@@ -1433,11 +1433,22 @@ class HermesRunner:
             arguments[query_index:query_index] = ["--provider", "custom"]
 
         effective_timeout = timeout if timeout is not None else DEFAULT_HERMES_TIMEOUT
+        cwd = workspace.active if workspace is not None else self.paths.root
+        terminal_backend = hermes_process.effective_terminal_backend(
+            self.paths.hermes_home,
+            environment,
+            profile_name=profile_name,
+        )
+        hermes_process.configure_terminal_workspace(
+            environment,
+            cwd=cwd,
+            terminal_backend=terminal_backend,
+        )
         return hermes_process.invoke(
             prompt,
             arguments=arguments,
             log_path=log,
-            cwd=workspace.active if workspace is not None else self.paths.root,
+            cwd=cwd,
             environment=environment,
             timeout=effective_timeout,
         )

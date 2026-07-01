@@ -24,6 +24,7 @@ from hermes.process import (
     TERMINATION_WAIT_TIMEOUT,
     HermesProcessResult,
     _wait_after_terminate,
+    configure_terminal_workspace,
     effective_terminal_backend,
     hermes_profile_health,
     invoke,
@@ -335,6 +336,34 @@ class ProjectHermesHomeTests(unittest.TestCase):
             ["hermes", "-p", "cf-pwn", "config", "show"],
         )
         self.assertEqual(captured_command["keyword_args"]["timeout"], 10)
+
+
+class ConfigureTerminalWorkspaceTests(unittest.TestCase):
+    def test_docker_backend_mounts_host_cwd_to_workspace(self):
+        with tempfile.TemporaryDirectory() as temp:
+            cwd = Path(temp) / "current"
+            cwd.mkdir()
+            environment = {"TERMINAL_CWD": "/stale"}
+
+            configure_terminal_workspace(
+                environment,
+                cwd=cwd,
+                terminal_backend="docker",
+            )
+
+        self.assertEqual(environment["TERMINAL_CWD"], str(cwd))
+        self.assertEqual(environment["TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE"], "1")
+
+    def test_local_backend_leaves_environment_untouched(self):
+        environment = {"TERMINAL_CWD": "/operator/default"}
+
+        configure_terminal_workspace(
+            environment,
+            cwd=Path("/tmp/workspace"),
+            terminal_backend="local",
+        )
+
+        self.assertEqual(environment, {"TERMINAL_CWD": "/operator/default"})
 
 
 class InvokeLogMarkerTests(unittest.TestCase):

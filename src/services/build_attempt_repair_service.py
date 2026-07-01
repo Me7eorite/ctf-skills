@@ -107,7 +107,12 @@ class BuildAttemptRepairService:
         prompt_path.write_text(prompt, encoding="utf-8")
         self._record_event(events_path, "solve", "running", "AI repair running")
         arguments = _hermes_arguments(context["category"])
-        environment = _hermes_environment(self.paths, arguments)
+        environment = _hermes_environment(
+            self.paths,
+            arguments,
+            cwd=self.paths.root,
+            profile_name=f"cf-{context['category']}",
+        )
         returncode = hermes_process.invoke(
             prompt,
             arguments=arguments,
@@ -449,7 +454,13 @@ def _hermes_arguments(category: str) -> list[str]:
     return hermes_process.inject_profile_argument(profile_name)
 
 
-def _hermes_environment(paths: ProjectPaths, arguments: list[str]) -> dict[str, str]:
+def _hermes_environment(
+    paths: ProjectPaths,
+    arguments: list[str],
+    *,
+    cwd: Path,
+    profile_name: str,
+) -> dict[str, str]:
     environment = os.environ.copy()
     if (
         hermes_process.project_hermes_home_is_configured(paths.hermes_home)
@@ -460,6 +471,16 @@ def _hermes_environment(paths: ProjectPaths, arguments: list[str]) -> dict[str, 
         hermes_process.remove_conflicting_custom_pool(paths.hermes_home)
         query_index = arguments.index("-q") if "-q" in arguments else len(arguments)
         arguments[query_index:query_index] = ["--provider", "custom"]
+    terminal_backend = hermes_process.effective_terminal_backend(
+        paths.hermes_home,
+        environment,
+        profile_name=profile_name,
+    )
+    hermes_process.configure_terminal_workspace(
+        environment,
+        cwd=cwd,
+        terminal_backend=terminal_backend,
+    )
     return environment
 
 

@@ -237,6 +237,27 @@ def effective_terminal_backend(
     return None
 
 
+def configure_terminal_workspace(
+    environment: dict[str, str],
+    *,
+    cwd: Path,
+    terminal_backend: str | None,
+) -> None:
+    """Align Hermes terminal tool cwd with the host-owned execution workspace.
+
+    ``subprocess.run(cwd=...)`` only controls the outer Hermes CLI process. For
+    container backends, Hermes terminal/file tools have their own runtime cwd.
+    The Docker backend can bind-mount a host cwd into ``/workspace`` when these
+    environment variables are set; without them, generated files can remain in
+    the container's private home and never reach the runner workspace.
+    """
+    backend = terminal_backend.strip().lower() if isinstance(terminal_backend, str) else ""
+    if backend != "docker":
+        return
+    environment["TERMINAL_CWD"] = str(cwd)
+    environment["TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE"] = "1"
+
+
 def _terminal_env_from_dotenv(dotenv_path: Path) -> str | None:
     try:
         lines = dotenv_path.read_text(encoding="utf-8").splitlines()
