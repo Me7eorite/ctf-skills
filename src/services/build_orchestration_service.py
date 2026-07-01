@@ -135,6 +135,7 @@ class _PreparedSubmission:
     execution_kind: str = "initial"
     repair_requested: bool = False
     repair_context: dict[str, Any] | None = None
+    retry_context: dict[str, Any] | None = None
     repair_mode: bool = False
     difficulty_review: DifficultyReviewResult | None = None
 
@@ -182,10 +183,12 @@ class BuildOrchestrationService:
                 raise BuildOrchestrationError("only the latest build attempt can be retried")
             if source.status not in {"failed", "lost"}:
                 raise BuildOrchestrationError("only failed or lost attempts can be retried")
+            retry_context = self._retry_context(session, source)
         return self._submit(
             [source.design_task_id],
             retry_sources={source.design_task_id: source.id},
             execution_mode="resume",
+            retry_contexts={source.design_task_id: retry_context},
         )[0]
 
     def repair(self, build_attempt_id: UUID) -> UUID:
@@ -288,6 +291,7 @@ class BuildOrchestrationService:
         execution_mode: str = "resume",
         repair_requested: bool = False,
         repair_context: Mapping[str, Any] | None = None,
+        retry_context: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Render one attributed shard without filesystem or database effects."""
         challenge = _design_challenge(latest_design.payload)
@@ -314,6 +318,8 @@ class BuildOrchestrationService:
             payload["repair_requested"] = True
             if repair_context:
                 payload["repair_context"] = dict(repair_context)
+        if retry_context:
+            payload["retry_context"] = dict(retry_context)
         return payload
 
     def recover_staging(self, *, now: float | None = None) -> set[UUID]:
@@ -367,6 +373,7 @@ class BuildOrchestrationService:
         execution_mode: str = "resume",
         idempotency_key: str | None = None,
         repair_sources: Mapping[UUID, Mapping[str, Any]] | None = None,
+        retry_contexts: Mapping[UUID, Mapping[str, Any]] | None = None,
     ) -> list[UUID]:
         prepared = self._prepare(
             design_task_ids,
@@ -374,6 +381,7 @@ class BuildOrchestrationService:
             execution_mode=execution_mode,
             idempotency_key=idempotency_key,
             repair_sources=repair_sources or {},
+            retry_contexts=retry_contexts or {},
         )
         self.paths.initialize()
         staged_paths: list[Path] = []
@@ -406,6 +414,7 @@ class BuildOrchestrationService:
         execution_mode: str = "resume",
         idempotency_key: str | None = None,
         repair_sources: Mapping[UUID, Mapping[str, Any]] | None = None,
+        retry_contexts: Mapping[UUID, Mapping[str, Any]] | None = None,
     ) -> list[_PreparedSubmission]:
         if execution_mode not in {"resume", "clean"}:
             raise BuildOrchestrationError(f"unsupported execution_mode {execution_mode!r}")
@@ -489,6 +498,7 @@ class BuildOrchestrationService:
                     execution_mode=execution_mode,
                     repair_requested=task_id in (repair_sources or {}),
                     repair_context=(repair_sources or {}).get(task_id),
+                    retry_context=(retry_contexts or {}).get(task_id),
                 )
                 prepared.append(
                     _PreparedSubmission(
@@ -506,6 +516,7 @@ class BuildOrchestrationService:
                         execution_kind=execution_kind,
                         repair_requested=task_id in (repair_sources or {}),
                         repair_context=dict((repair_sources or {}).get(task_id) or {}),
+                        retry_context=dict((retry_contexts or {}).get(task_id) or {}),
                         repair_mode=task_id in (repair_sources or {}),
                         difficulty_review=difficulty_review,
                     )
@@ -719,6 +730,17 @@ class BuildOrchestrationService:
             return source.error[:2000]
         return None
 
+    def _retry_context(self, session: Session, source) -> dict[str, Any]:
+        context: dict[str, Any] = {
+            "source_build_attempt_id": str(source.id),
+            "source_shard_basename": source.shard_basename,
+        }
+        failure_summary = self._repair_failure_summary(session, source) or source.error
+        if failure_summary:
+            context["failure_summary"] = failure_summary
+        context.update(_read_retry_diagnostics(self.paths, source.id))
+        return context
+
 
 def _design_challenge(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     challenges = payload.get("challenges")
@@ -728,6 +750,61 @@ def _design_challenge(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     if not isinstance(challenge, Mapping):
         raise BuildOrchestrationError("validated design challenge must be an object")
     return challenge
+
+
+def _read_retry_diagnostics(paths: ProjectPaths, attempt_id: UUID) -> dict[str, Any]:
+    workspace_state = paths.executions / str(attempt_id) / "current" / "state"
+    diagnostics: dict[str, Any] = {}
+    first_failure = _summarize_validation_entry(
+        read_json(workspace_state / "first-validation-failure.json", None)
+    )
+    if first_failure:
+        diagnostics["first_failure"] = first_failure
+    history_payload = read_json(workspace_state / "validation-history.json", None)
+    if isinstance(history_payload, list):
+        latest_failure = None
+        for entry in reversed(history_payload):
+            latest_failure = _summarize_validation_entry(entry)
+            if latest_failure:
+                break
+        if latest_failure:
+            diagnostics["latest_failure"] = latest_failure
+    return diagnostics
+
+
+def _summarize_validation_entry(entry: Any) -> dict[str, Any] | None:
+    if not isinstance(entry, Mapping):
+        return None
+    results = entry.get("results")
+    if not isinstance(results, list):
+        return None
+    for result in results:
+        if not isinstance(result, Mapping):
+            continue
+        if result.get("solve_status") != "failed":
+            continue
+        summary = {
+            "round": entry.get("round"),
+            "challenge_id": result.get("challenge_id"),
+            "validation_status": result.get("validation_status"),
+            "validation_error": _trim_retry_text(result.get("validation_error")),
+            "failure_kind": result.get("failure_kind"),
+            "failure_hint": _trim_retry_text(result.get("failure_hint")),
+            "failed_step": _trim_retry_text(result.get("failed_step")),
+        }
+        return {key: value for key, value in summary.items() if value not in (None, "", [])}
+    return None
+
+
+def _trim_retry_text(value: Any, limit: int = 400) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
 
 
 def _matrix_values(

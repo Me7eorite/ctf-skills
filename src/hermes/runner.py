@@ -433,6 +433,7 @@ class HermesRunner:
             shard_payload = read_json(shard, {})
             repair_requested = isinstance(shard_payload, dict) and bool(shard_payload.get("repair_requested"))
             repair_context = shard_payload.get("repair_context") if isinstance(shard_payload, dict) else None
+            retry_context = shard_payload.get("retry_context") if isinstance(shard_payload, dict) else None
             plan = None if repair_requested else compute_resume_plan(
                 state=self.state,
                 paths=self.paths,
@@ -450,6 +451,7 @@ class HermesRunner:
                 resume_plan=plan,
                 repair_requested=repair_requested,
                 repair_context=repair_context if isinstance(repair_context, Mapping) else None,
+                retry_context=retry_context if isinstance(retry_context, Mapping) else None,
             )
             # 写入日志文件（prompt 内容）
             log.parent.mkdir(parents=True, exist_ok=True)
@@ -785,6 +787,7 @@ class HermesRunner:
         log = workspace.hermes_log
         repair_requested = bool(payload.get("repair_requested"))
         repair_context = payload.get("repair_context") if isinstance(payload.get("repair_context"), Mapping) else None
+        retry_context = payload.get("retry_context") if isinstance(payload.get("retry_context"), Mapping) else None
         prompt = self.render_prompt(
             workspace.input / "shard.json",
             report,
@@ -796,6 +799,7 @@ class HermesRunner:
             resume_output_targets=resume_targets,
             repair_requested=repair_requested,
             repair_context=repair_context,
+            retry_context=retry_context,
         )
         root_output_snapshot = _project_root_output_snapshot(self.paths.root)
         tailer = WorkspaceProgressTailer(workspace, self._progress.record)

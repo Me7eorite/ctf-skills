@@ -144,6 +144,31 @@ class RenderPromptTests(unittest.TestCase):
             self.assertIn("Do not use carry-forward instructions", rendered)
             self.assertIn("metadata.json missing field", rendered)
 
+    def test_retry_section_appears_when_context_is_present(self):
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            paths = _seed_paths(tmp_path)
+            running_shard = tmp_path / "running.json"
+            running_shard.write_text("{}", encoding="utf-8")
+            rendered = render_prompt(
+                paths,  # type: ignore[arg-type]
+                running_shard,
+                tmp_path / "retry-report.json",
+                worker="dry-01",
+                original_shard_name="web-0001.json",
+                retry_context={
+                    "failure_summary": "build: docker build failed",
+                    "first_failure": {
+                        "failure_kind": "missing_dependency",
+                        "failure_hint": "Install make in the Dockerfile.",
+                    },
+                },
+            )
+
+            self.assertIn("Retry carry-forward is enabled.", rendered)
+            self.assertIn("non-regression constraints", rendered)
+            self.assertIn("Install make in the Dockerfile.", rendered)
+
     def test_first_run_resume_plan_renders_fallback(self):
         with TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

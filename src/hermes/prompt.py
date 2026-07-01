@@ -505,16 +505,18 @@ def _render_resume_plan_section(
 def _render_repair_section(
     repair_requested: bool,
     repair_context: Mapping[str, object] | None = None,
+    retry_context: Mapping[str, object] | None = None,
 ) -> str:
-    if not repair_requested:
-        return ""
-    rendered = json.dumps(
-        dict(repair_context or {}),
-        ensure_ascii=False,
-        sort_keys=True,
-        indent=2,
-    )
-    return f"""
+    sections: list[str] = []
+    if repair_requested:
+        rendered = json.dumps(
+            dict(repair_context or {}),
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
+        )
+        sections.append(
+            f"""
 Repair mode is enabled.
 - Treat the current workspace and the failure diagnostics below as the source of truth.
 - Do not infer skipped design/implement/build/document work from historical progress events.
@@ -526,6 +528,28 @@ Repair context:
 {rendered}
 ```
 """
+        )
+    elif retry_context:
+        rendered = json.dumps(
+            dict(retry_context),
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
+        )
+        sections.append(
+            f"""
+Retry carry-forward is enabled.
+- The previous failed execution below is authoritative host-validation context.
+- Treat the listed failure kinds, hints, and failed steps as non-regression constraints.
+- Reuse valid work, but do not recreate the prior Dockerfile, build-context, or runtime mistakes.
+
+Retry context:
+```json
+{rendered}
+```
+"""
+        )
+    return "".join(sections)
 
 
 def render_prompt(
@@ -541,6 +565,7 @@ def render_prompt(
     resume_output_targets: Mapping[str, str] | None = None,
     repair_requested: bool = False,
     repair_context: Mapping[str, object] | None = None,
+    retry_context: Mapping[str, object] | None = None,
 ) -> str:
     # 中文注释：读取分片执行模板，并替换路径、worker、进度命令等运行上下文。
     prompt_text = paths.prompt_template.read_text(encoding="utf-8")
@@ -576,7 +601,11 @@ def render_prompt(
         "{worker}": worker,
         "{shard_name}": progress_shard_name,
         "{resume_plan}": _render_resume_plan_section(resume_plan, resume_output_targets),
-        "{repair_section}": _render_repair_section(repair_requested, repair_context),
+        "{repair_section}": _render_repair_section(
+            repair_requested,
+            repair_context,
+            retry_context,
+        ),
         "{design_context_instruction}": design_context_instruction,
         "{build_contract_section}": build_contract_section,
     }

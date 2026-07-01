@@ -312,6 +312,81 @@ def _host_chroot_setup_errors(challenge_dir: Path, metadata: dict) -> list[str]:
     return errors
 
 
+def _pwn_dockerfile_scaffold_errors(challenge_dir: Path) -> list[str]:
+    dockerfile = challenge_dir / "deploy" / "Dockerfile"
+    text = _read_text(dockerfile)
+    if not text:
+        return []
+
+    errors: list[str] = []
+    if (challenge_dir / "deploy" / "src" / "Makefile").is_file():
+        if _dockerfile_uses_make(text) and not _dockerfile_install_block_contains_package(
+            text, "make"
+        ):
+            errors.append(
+                "deploy/Dockerfile runs make but does not install the make package"
+            )
+    copy_sources = _dockerfile_copy_sources(text)
+    if any(source.startswith("src/") for source in copy_sources):
+        errors.append(
+            "deploy/Dockerfile COPY sources must be relative to the challenge root; "
+            "use deploy/src/... when host build runs `docker build -f deploy/Dockerfile .`"
+        )
+    if any(source.startswith("_files/") for source in copy_sources):
+        errors.append(
+            "deploy/Dockerfile COPY sources must use deploy/_files/... under the challenge-root build context"
+        )
+    if (
+        "cp -R /lib* /home/ctf" in text
+        and "cp -R /usr/lib* /home/ctf" in text
+    ):
+        errors.append(
+            "deploy/Dockerfile copies both /lib* and /usr/lib* into /home/ctf; "
+            "this collides on Ubuntu 22.04 where /lib points at /usr/lib"
+        )
+    return errors
+
+
+def _dockerfile_uses_make(text: str) -> bool:
+    current_run: list[str] = []
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("RUN "):
+            current_run = [stripped]
+        elif current_run and (line.startswith(" ") or line.startswith("\t")):
+            current_run.append(stripped)
+        else:
+            current_run = []
+        if current_run and re.search(r"(?<![\w.-])make(?![\w.-])", " ".join(current_run)):
+            return True
+    return False
+
+
+def _dockerfile_install_block_contains_package(text: str, package: str) -> bool:
+    for match in re.finditer(
+        r"apt-get\s+install\b(?P<body>.*?)(?:&&|\n\s*(?:run|copy|cmd|entrypoint|workdir|from)\b|$)",
+        text,
+        flags=re.I | re.S,
+    ):
+        body = match.group("body")
+        if re.search(rf"(?<![\w.-]){re.escape(package)}(?![\w.-])", body):
+            return True
+    return False
+
+
+def _dockerfile_copy_sources(text: str) -> list[str]:
+    sources: list[str] = []
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if not stripped.startswith("COPY "):
+            continue
+        parts = stripped.split()
+        if len(parts) < 3:
+            continue
+        sources.extend(parts[1:-1])
+    return sources
+
+
 # When the intended technique IS recovering the flag via strings/static reading,
 # a plaintext flag in the artifact is by design; otherwise it is a defect.
 _STRINGS_TECHNIQUE_HINTS = ("strings", "字符串")
@@ -979,6 +1054,7 @@ class ChallengeValidator:
                 errors.append("Web metadata must record runtime and framework")
             if category == "pwn":
                 errors.extend(_host_chroot_setup_errors(challenge_dir, metadata))
+                errors.extend(_pwn_dockerfile_scaffold_errors(challenge_dir))
 
         target_format = metadata.get("target_format", "elf")
         if category in {"re", "pwn"} and target_format == "elf":

@@ -16,7 +16,7 @@ def _write_root_start_contract(deploy: Path) -> None:
     (deploy / "_files").mkdir(parents=True, exist_ok=True)
     (deploy / "_files" / "start.sh").write_text("#!/bin/sh\nexec \"$@\"\n")
     (deploy / "Dockerfile").write_text(
-        "FROM scratch\nCOPY _files/start.sh /root/start.sh\n"
+        "FROM scratch\nCOPY deploy/_files/start.sh /root/start.sh\n"
     )
 
 
@@ -175,14 +175,49 @@ class ValidationTests(unittest.TestCase):
         metadata = _write_minimal_pwn_contract(challenge)
         (challenge / "deploy" / "Dockerfile").write_text(
             "FROM ubuntu:22.04\n"
-            "COPY _files/start.sh /root/start.sh\n"
-            "RUN cp -R /lib* /home/ctf && cp -R /usr/lib* /home/ctf\n"
+            "COPY deploy/_files/start.sh /root/start.sh\n"
+            "RUN mkdir -p /home/ctf/lib64 /home/ctf/lib/x86_64-linux-gnu\n"
+            "RUN cp -L /lib64/ld-linux-x86-64.so.2 /home/ctf/lib64/\n"
             "RUN mkdir -p /home/ctf/dev && mknod /home/ctf/dev/null c 1 3\n"
             "RUN mkdir -p /home/ctf/bin && cp /bin/sh /home/ctf/bin\n",
             encoding="utf-8",
         )
 
         self.assertEqual(self.validator.contract_errors(challenge, metadata), [])
+
+    def test_pwn_dockerfile_conflicting_library_copy_is_rejected(self):
+        challenge = self.paths.challenges / "pwn" / "pwn-dockerfile-conflict-001"
+        metadata = _write_minimal_pwn_contract(challenge)
+        (challenge / "deploy" / "Dockerfile").write_text(
+            "FROM ubuntu:22.04\n"
+            "COPY deploy/_files/start.sh /root/start.sh\n"
+            "RUN cp -R /lib* /home/ctf && cp -R /usr/lib* /home/ctf\n",
+            encoding="utf-8",
+        )
+
+        errors = self.validator.contract_errors(challenge, metadata)
+
+        self.assertTrue(any("/lib*" in error and "/usr/lib*" in error for error in errors))
+
+    def test_pwn_dockerfile_make_and_copy_root_context_are_validated(self):
+        challenge = self.paths.challenges / "pwn" / "pwn-dockerfile-make-001"
+        metadata = _write_minimal_pwn_contract(challenge)
+        (challenge / "deploy" / "src" / "Makefile").write_text("all:\n\ttrue\n", encoding="utf-8")
+        (challenge / "deploy" / "Dockerfile").write_text(
+            "FROM ubuntu:22.04\n"
+            "COPY src/vuln.c src/Makefile ./\n"
+            "RUN apt-get update && apt-get install -y gcc xinetd && rm -rf /var/lib/apt/lists/*\n"
+            "RUN make clean && make\n",
+            encoding="utf-8",
+        )
+
+        errors = self.validator.contract_errors(challenge, metadata)
+
+        self.assertIn(
+            "deploy/Dockerfile runs make but does not install the make package",
+            errors,
+        )
+        self.assertTrue(any("challenge root" in error for error in errors))
 
     def test_pwn_chroot_setup_in_start_script_is_rejected(self):
         challenge = self.paths.challenges / "pwn" / "pwn-start-001"

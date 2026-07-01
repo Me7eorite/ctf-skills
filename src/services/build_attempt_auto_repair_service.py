@@ -36,6 +36,7 @@ def auto_repair_challenge(
     actions.extend(_repair_source_evidence(challenge_dir, metadata))
     actions.extend(_repair_artifact_metadata(challenge_dir, metadata))
     actions.extend(_repair_validate_wrapper(challenge_dir, metadata))
+    actions.extend(_repair_deploy_dockerfile(challenge_dir, metadata))
 
     if actions:
         write_json(challenge_dir / "metadata.json", metadata)
@@ -271,6 +272,56 @@ def _repair_validate_wrapper(challenge_dir: Path, metadata: dict[str, Any]) -> l
     return ["rewrote validate.sh to check solver flag output without organizer files"]
 
 
+def _repair_deploy_dockerfile(challenge_dir: Path, metadata: dict[str, Any]) -> list[str]:
+    if metadata.get("category") not in {"web", "pwn"}:
+        return []
+    dockerfile = challenge_dir / "deploy" / "Dockerfile"
+    if not dockerfile.is_file():
+        return []
+    try:
+        original = dockerfile.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return []
+
+    lines = original.splitlines(keepends=True)
+    actions: list[str] = []
+    updated_lines: list[str] = []
+    for line in lines:
+        updated = line
+        stripped = updated.lstrip()
+        if stripped.startswith("COPY "):
+            updated = _normalize_dockerfile_copy_sources(updated)
+        updated_lines.append(updated)
+    text = "".join(updated_lines)
+    if text != original:
+        actions.append("normalized Dockerfile COPY sources to challenge-root build context")
+
+    if _dockerfile_needs_make_install(text, challenge_dir):
+        text = _inject_make_install_layer(text)
+        actions.append("added Dockerfile layer installing make before build steps")
+
+    replaced = re.sub(
+        r"cp -R /lib\* /home/ctf/?(?: 2>/dev/null \|\| true)?\s*&&\s*cp -R /usr/lib\* /home/ctf/?(?: 2>/dev/null \|\| true)?",
+        (
+            "mkdir -p /home/ctf/lib64 /home/ctf/lib/x86_64-linux-gnu && "
+            "cp -L /lib64/ld-linux-x86-64.so.2 /home/ctf/lib64/ 2>/dev/null || "
+            "cp /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 /home/ctf/lib64/ld-linux-x86-64.so.2 && "
+            "cp -a /lib/x86_64-linux-gnu/*.so* /home/ctf/lib/x86_64-linux-gnu/ 2>/dev/null || true"
+        ),
+        text,
+        count=1,
+        flags=re.S,
+    )
+    if replaced != text:
+        text = replaced
+        actions.append("replaced conflicting /lib and /usr/lib chroot copy pattern")
+
+    if not actions:
+        return []
+    dockerfile.write_text(text, encoding="utf-8")
+    return actions
+
+
 def _business_source_files(root: Path):
     if not root.is_dir():
         return
@@ -324,6 +375,78 @@ def _preferred_artifact(challenge_dir: Path, metadata: dict[str, Any]) -> Path |
         )
     )
     return executables[0]
+
+
+def _dockerfile_needs_make_install(text: str, challenge_dir: Path) -> bool:
+    if not (challenge_dir / "deploy" / "src" / "Makefile").is_file():
+        return False
+    if not re.search(r"(?im)^\s*from\s+(ubuntu|debian)(?::|\s)", text):
+        return False
+    if not _dockerfile_uses_make(text):
+        return False
+    return not _dockerfile_install_block_contains_package(text, "make")
+
+
+def _dockerfile_uses_make(text: str) -> bool:
+    current_run: list[str] = []
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("RUN "):
+            current_run = [stripped]
+        elif current_run and (line.startswith(" ") or line.startswith("\t")):
+            current_run.append(stripped)
+        else:
+            current_run = []
+        if current_run and re.search(r"(?<![\w.-])make(?![\w.-])", " ".join(current_run)):
+            return True
+    return False
+
+
+def _dockerfile_install_block_contains_package(text: str, package: str) -> bool:
+    for match in re.finditer(
+        r"apt-get\s+install\b(?P<body>.*?)(?:&&|\n\s*(?:run|copy|cmd|entrypoint|workdir|from)\b|$)",
+        text,
+        flags=re.I | re.S,
+    ):
+        body = match.group("body")
+        if re.search(rf"(?<![\w.-]){re.escape(package)}(?![\w.-])", body):
+            return True
+    return False
+
+
+def _inject_make_install_layer(text: str) -> str:
+    lines = text.splitlines(keepends=True)
+    install_line = "RUN apt-get update && apt-get install -y make && rm -rf /var/lib/apt/lists/*\n"
+    run_start = None
+    for index, line in enumerate(lines):
+        stripped = line.lstrip()
+        if stripped.startswith("RUN "):
+            run_start = index
+        if run_start is not None and re.search(r"(?<![\w.-])make(?![\w.-])", stripped):
+            lines.insert(run_start, install_line)
+            return "".join(lines)
+    lines.append(install_line)
+    return "".join(lines)
+
+
+def _normalize_dockerfile_copy_sources(line: str) -> str:
+    newline = "\n" if line.endswith("\n") else ""
+    body = line[:-1] if newline else line
+    indent_len = len(body) - len(body.lstrip())
+    indent = body[:indent_len]
+    stripped = body[indent_len:]
+    parts = stripped.split()
+    if len(parts) < 3 or parts[0] != "COPY":
+        return line
+    normalized = [parts[0]]
+    sources = parts[1:-1]
+    destination = parts[-1]
+    for token in sources:
+        token = re.sub(r"^src/", "deploy/src/", token)
+        token = re.sub(r"^_files/", "deploy/_files/", token)
+        normalized.append(token)
+    normalized.append(destination)
+    return indent + " ".join(normalized) + newline
 
 
 def _detect_target_format(path: Path) -> str | None:

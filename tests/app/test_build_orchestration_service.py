@@ -794,6 +794,95 @@ def test_repair_lost_attempt_uses_progress_failure_instead_of_lease_error(
     assert "lease expired" not in summary
 
 
+def test_retry_carries_forward_workspace_failure_context(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+    monkeypatch,
+):
+    monkeypatch.delenv("EXECUTION_MINTING", raising=False)
+    task = _seed_designed_task(session_factory)
+    service = _service(tmp_path, session_factory)
+
+    [container_id] = service.submit_batch([task])
+    workspace_state = service.paths.executions / str(container_id) / "current" / "state"
+    write_json(
+        workspace_state / "first-validation-failure.json",
+        {
+            "round": 0,
+            "results": [
+                {
+                    "challenge_id": "web-0001",
+                    "solve_status": "failed",
+                    "validation_status": "contract_failed",
+                    "validation_error": "docker build failed with exit 127",
+                    "failure_kind": "missing_dependency",
+                    "failure_hint": "Install make in the Dockerfile.",
+                    "failed_step": "Step 7: RUN make",
+                }
+            ],
+        },
+    )
+    write_json(
+        workspace_state / "validation-history.json",
+        [
+            {
+                "round": 0,
+                "results": [
+                    {
+                        "challenge_id": "web-0001",
+                        "solve_status": "failed",
+                        "validation_status": "contract_failed",
+                        "validation_error": "docker build failed with exit 127",
+                        "failure_kind": "missing_dependency",
+                        "failure_hint": "Install make in the Dockerfile.",
+                        "failed_step": "Step 7: RUN make",
+                    }
+                ],
+            },
+            {
+                "round": 1,
+                "results": [
+                    {
+                        "challenge_id": "web-0001",
+                        "solve_status": "failed",
+                        "validation_status": "contract_failed",
+                        "validation_error": "COPY failed: file not found in build context",
+                        "failure_kind": "missing_source",
+                        "failure_hint": "Use deploy/src paths in Dockerfile COPY commands.",
+                        "failed_step": "Step 5: COPY src/app.py /app/app.py",
+                    }
+                ],
+            },
+        ],
+    )
+    with session_factory() as session:
+        repo = ExecutionsRepository(session)
+        [initial] = repo.list_for_attempt(container_id)
+        _, token = repo.claim_queued(
+            container_id, worker_id="w", lease_ttl_seconds=300
+        )
+        repo.update_to_terminal(
+            initial.id,
+            claim_token=token,
+            status="failed",
+            error="contract_failed: docker build failed",
+        )
+        session.get(task_model.DesignTask, task).status = "build_failed"
+        session.commit()
+
+    retry_id = service.retry(container_id)
+
+    assert retry_id == container_id
+    payload = read_json(
+        service.paths.shards / "pending" / f"{container_id}.iter-002.json",
+        {},
+    )
+    assert payload["retry_context"]["source_build_attempt_id"] == str(container_id)
+    assert payload["retry_context"]["first_failure"]["failure_hint"] == "Install make in the Dockerfile."
+    assert payload["retry_context"]["latest_failure"]["failure_kind"] == "missing_source"
+    assert "repair_requested" not in payload
+
+
 def test_legacy_retry_still_mints_new_attempt_when_explicitly_disabled(
     tmp_path: Path,
     session_factory: SessionFactory,
