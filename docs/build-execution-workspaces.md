@@ -37,6 +37,21 @@ hermes -p cf-re config set terminal.cwd "."
 
 The runner does not mutate operator-owned profile configuration.
 
+## Pwn backend safety
+
+Pwn build agents are not allowed to run on the local terminal backend by
+default. They must use an isolated Docker or VM terminal backend because pwn
+generation naturally runs compilers, patchers, shells, exploit scripts, and
+debuggers; a mistaken local command can damage host system tools such as
+`/bin/ls` or `/bin/bash`.
+
+The workspace preflight fails closed for pwn when the backend is `local` or
+cannot be determined. `ALLOW_UNSAFE_LOCAL_PWN=1` bypasses this only for a
+disposable host or throwaway VM.
+
+The safety check is profile-aware: a Docker backend configured on `cf-pwn`
+is enough even when the project/default backend remains local.
+
 ## Docker terminal backend
 
 The local backend can read the workspace directly. A Docker terminal backend

@@ -277,9 +277,11 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                             "description": (
                                 "A safe challenge-relative file path. Native "
                                 "executables and Makefiles may be extensionless. "
-                                "For pwn with runtime_profile=xinetd or an "
-                                "xinetd/chroot service_model, include "
-                                "deploy/_files/ctf.xinetd."
+                            "For pwn with runtime_profile=xinetd or an "
+                            "xinetd/chroot service_model, include "
+                            "deploy/_files/ctf.xinetd and set the template "
+                            "or implementation_plan scaffold to "
+                            "pwn/xinetd-chroot."
                             ),
                             "pattern": (
                                 r"^(?:README\.md|metadata\.json|validate\.sh|"
@@ -399,9 +401,11 @@ def _render_output_contract(task: DesignTask) -> str:
             "`artifacts` or validation will reject the design with "
             "`runtime (pwn/xinetd) artifact requires at least one of: "
             "deploy/_files/ctf.xinetd, deploy/_files/etc/xinetd.d/ctf, "
-            "deploy/_files/etc/xinetd.d/chal`. Do not include Python "
-            "`deploy/src/app.py` unless the pwn service is intentionally a "
-            "Python wrapper around a separate native binary."
+            "deploy/_files/etc/xinetd.d/chal`. Also declare the deployment "
+            "template/scaffold as `pwn/xinetd-chroot`, which maps to "
+            "`scaffolds/pwn/xinetd-chroot/` in the build stage. Do not include "
+            "Python `deploy/src/app.py` unless the pwn service is intentionally "
+            "a Python wrapper around a separate native binary."
         )
     uniqueness_hint = (
         "\n5. This is a `" + task.difficulty + "` challenge: it MUST have a "

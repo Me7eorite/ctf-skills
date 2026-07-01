@@ -189,6 +189,91 @@ def project_hermes_home_is_configured(hermes_home: Path) -> bool:
     )
 
 
+def effective_terminal_backend(
+    hermes_home: Path,
+    environment: dict[str, str] | None = None,
+    *,
+    profile_name: str | None = None,
+) -> str | None:
+    """Return the configured Hermes terminal backend, if it can be determined.
+
+    ``TERMINAL_ENV`` wins over profile/project ``.env`` and ``config.yaml`` in
+    Hermes. A missing backend is intentionally reported as ``None`` so callers
+    can fail closed for high-risk workloads.
+    """
+    env = os.environ if environment is None else environment
+    raw_env_backend = env.get("TERMINAL_ENV")
+    if raw_env_backend and raw_env_backend.strip():
+        return raw_env_backend.strip().lower()
+
+    if profile_name:
+        profile_home = hermes_home / "profiles" / profile_name
+        profile_dotenv_backend = _terminal_env_from_dotenv(profile_home / ".env")
+        if profile_dotenv_backend:
+            return profile_dotenv_backend
+        profile_config_backend = _terminal_backend_from_config(profile_home / "config.yaml")
+        if profile_config_backend:
+            return profile_config_backend
+
+    dotenv_backend = _terminal_env_from_dotenv(hermes_home / ".env")
+    if dotenv_backend:
+        return dotenv_backend
+
+    config_backend = _terminal_backend_from_config(hermes_home / "config.yaml")
+    if config_backend:
+        return config_backend
+    return None
+
+
+def _terminal_env_from_dotenv(dotenv_path: Path) -> str | None:
+    try:
+        lines = dotenv_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        if key.strip() != "TERMINAL_ENV":
+            continue
+        backend = value.strip().strip("'\"")
+        return backend.lower() or None
+    return None
+
+
+def _terminal_backend_from_config(config_path: Path) -> str | None:
+    try:
+        lines = config_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+
+    in_terminal = False
+    terminal_indent: int | None = None
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if not line[0].isspace():
+            in_terminal = stripped == "terminal:"
+            terminal_indent = indent if in_terminal else None
+            continue
+        if not in_terminal:
+            continue
+        if terminal_indent is not None and indent <= terminal_indent:
+            in_terminal = False
+            continue
+        if ":" not in stripped:
+            continue
+        key, value = stripped.split(":", 1)
+        if key.strip() != "backend":
+            continue
+        backend = value.strip().strip("'\"")
+        return backend.lower() or None
+    return None
+
+
 def invoke(
     prompt: str,
     *,

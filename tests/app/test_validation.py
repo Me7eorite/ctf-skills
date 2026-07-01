@@ -20,6 +20,30 @@ def _write_root_start_contract(deploy: Path) -> None:
     )
 
 
+def _write_minimal_pwn_contract(challenge: Path) -> dict:
+    (challenge / "attachments").mkdir(parents=True, exist_ok=True)
+    header = bytearray(b"\x7fELF" + b"\x00" * 16)
+    header[18:20] = (0x3E).to_bytes(2, "little")
+    (challenge / "attachments" / "pwn_task").write_bytes(header)
+    deploy = challenge / "deploy"
+    (deploy / "src").mkdir(parents=True, exist_ok=True)
+    (deploy / "src" / "challenge.c").write_text("int main(void) { return 0; }\n")
+    _write_root_start_contract(deploy)
+    (deploy / "docker-compose.yml").write_text(
+        "services:\n  challenge:\n    environment:\n      - FLAG=flag{demo}\n"
+    )
+    return {
+        "id": "pwn-attach-001",
+        "title": "Demo",
+        "category": "pwn",
+        "difficulty": "easy",
+        "build_status": "passed",
+        "flag": "flag{demo}",
+        "target_format": "elf",
+        "target_platform": "linux/amd64",
+    }
+
+
 class ValidationTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -137,31 +161,61 @@ class ValidationTests(unittest.TestCase):
     def test_pwn_contract_accepts_elf_in_attachments_with_libc(self):
         """Pwn typically ships challenge ELF + libc + ld together under attachments/."""
         challenge = self.paths.challenges / "pwn" / "pwn-attach-001"
-        (challenge / "attachments").mkdir(parents=True)
+        metadata = _write_minimal_pwn_contract(challenge)
         x86_64 = (0x3E).to_bytes(2, "little")
-        for name in ("pwn_task", "libc.so.6", "ld-linux-x86-64.so.2"):
+        for name in ("libc.so.6", "ld-linux-x86-64.so.2"):
             header = bytearray(b"\x7fELF" + b"\x00" * 16)
             header[18:20] = x86_64
             (challenge / "attachments" / name).write_bytes(header)
-        deploy = challenge / "deploy"
-        (deploy / "src").mkdir(parents=True)
-        (deploy / "src" / "challenge.c").write_text("int main(void) { return 0; }\n")
-        _write_root_start_contract(deploy)
-        (deploy / "docker-compose.yml").write_text(
-            "services:\n  challenge:\n    environment:\n      - FLAG=flag{demo}\n"
-        )
-        metadata = {
-            "id": "pwn-attach-001",
-            "title": "Demo",
-            "category": "pwn",
-            "difficulty": "easy",
-            "build_status": "passed",
-            "flag": "flag{demo}",
-            "target_format": "elf",
-            "target_platform": "linux/amd64",
-        }
 
         self.assertEqual(self.validator.contract_errors(challenge, metadata), [])
+
+    def test_pwn_dockerfile_only_chroot_setup_allowed_in_dockerfile(self):
+        challenge = self.paths.challenges / "pwn" / "pwn-dockerfile-001"
+        metadata = _write_minimal_pwn_contract(challenge)
+        (challenge / "deploy" / "Dockerfile").write_text(
+            "FROM ubuntu:22.04\n"
+            "COPY _files/start.sh /root/start.sh\n"
+            "RUN cp -R /lib* /home/ctf && cp -R /usr/lib* /home/ctf\n"
+            "RUN mkdir -p /home/ctf/dev && mknod /home/ctf/dev/null c 1 3\n"
+            "RUN mkdir -p /home/ctf/bin && cp /bin/sh /home/ctf/bin\n",
+            encoding="utf-8",
+        )
+
+        self.assertEqual(self.validator.contract_errors(challenge, metadata), [])
+
+    def test_pwn_chroot_setup_in_start_script_is_rejected(self):
+        challenge = self.paths.challenges / "pwn" / "pwn-start-001"
+        metadata = _write_minimal_pwn_contract(challenge)
+        (challenge / "deploy" / "_files" / "start.sh").write_text(
+            "#!/bin/sh\ncp -R /lib* /home/ctf\nexec /etc/init.d/xinetd start\n",
+            encoding="utf-8",
+        )
+
+        errors = self.validator.contract_errors(challenge, metadata)
+
+        self.assertTrue(any("Dockerfile-only /home/ctf chroot setup" in e for e in errors))
+
+    def test_pwn_chroot_setup_in_validate_script_is_rejected(self):
+        challenge = self.paths.challenges / "pwn" / "pwn-validate-001"
+        metadata = _write_minimal_pwn_contract(challenge)
+        (challenge / "validate.sh").write_text(
+            "#!/bin/sh\nmkdir -p /home/ctf/dev && mknod /home/ctf/dev/null c 1 3\n",
+            encoding="utf-8",
+        )
+
+        errors = self.validator.contract_errors(challenge, metadata)
+
+        self.assertTrue(any("Dockerfile-only /home/ctf chroot setup" in e for e in errors))
+
+    def test_pwn_chroot_setup_in_metadata_build_command_is_rejected(self):
+        challenge = self.paths.challenges / "pwn" / "pwn-build-command-001"
+        metadata = _write_minimal_pwn_contract(challenge)
+        metadata["build_command"] = "cp -R /usr/lib* /home/ctf && docker build -t pwn deploy"
+
+        errors = self.validator.contract_errors(challenge, metadata)
+
+        self.assertTrue(any("metadata.build_command contains Dockerfile-only" in e for e in errors))
 
     def test_web_contract_requires_literal_compose_flag_matching_metadata(self):
         challenge = self.paths.challenges / "web" / "web-flag-001"

@@ -232,7 +232,7 @@ def serve(paths: ProjectPaths, host: str, port: int) -> None:
 
     paths.initialize()
     service = DashboardService(paths, progress=make_postgres_progress_store())
-    build_readiness = check_build_profile_readiness()
+    build_readiness = check_build_profile_readiness(paths=paths)
     if not build_readiness["ready"]:
         missing = ", ".join(build_readiness["missing_profiles"])
         commands = "; ".join(

@@ -23,6 +23,8 @@ from core.queue import SUPPORTED_CATEGORIES
 _LOGGER = logging.getLogger(__name__)
 _MANUAL_PREFIX = "manual-"
 _MANUAL_RETENTION = timedelta(days=7)
+_PWN_LOCAL_BACKEND_BYPASS_ENV = "ALLOW_UNSAFE_LOCAL_PWN"
+_UNSAFE_LOCAL_TRUE_VALUES = {"1", "true", "yes", "on"}
 _LAYOUT = ("input", "references", "output", "logs", "bin", "state")
 # Phase 1 (9-references → 3): the design skill is now a single core file
 # (`design-core.md` — output shape, spec template, quality gate, safety) plus
@@ -247,6 +249,8 @@ def preflight_workspace(
     *,
     profile_name: str,
     profile_exists: Callable[[str], bool],
+    terminal_backend: str | None = None,
+    allow_unsafe_local_pwn: bool | None = None,
 ) -> dict[str, Any]:
     """Validate a materialized workspace before any model invocation."""
     if not profile_exists(profile_name):
@@ -268,6 +272,11 @@ def preflight_workspace(
     expected_profile = f"cf-{category}"
     if profile_name != expected_profile:
         raise WorkspacePreflightError(f"profile/category mismatch: {profile_name!r} != {expected_profile!r}")
+    _verify_pwn_backend_policy(
+        category,
+        terminal_backend=terminal_backend,
+        allow_unsafe_local_pwn=allow_unsafe_local_pwn,
+    )
 
     manifest = read_json(workspace.manifest, None)
     if not isinstance(manifest, dict):
@@ -280,6 +289,31 @@ def preflight_workspace(
     _reject_unrelated_artifacts(workspace.root, challenge_ids)
     _verify_reference_symlinks(workspace.references, manifest)
     return payload
+
+
+def _verify_pwn_backend_policy(
+    category: str,
+    *,
+    terminal_backend: str | None,
+    allow_unsafe_local_pwn: bool | None,
+) -> None:
+    if category != "pwn":
+        return
+    if allow_unsafe_local_pwn is None:
+        raw_bypass = os.environ.get(_PWN_LOCAL_BACKEND_BYPASS_ENV, "")
+        allow_unsafe_local_pwn = raw_bypass.strip().lower() in _UNSAFE_LOCAL_TRUE_VALUES
+    if allow_unsafe_local_pwn:
+        return
+    backend = terminal_backend.strip().lower() if isinstance(terminal_backend, str) else None
+    if backend not in {None, "", "local"}:
+        return
+    backend_label = backend or "unknown"
+    raise WorkspacePreflightError(
+        "unsafe PWN execution backend: "
+        f"{backend_label}. PWN build agents must run in an isolated Docker/VM "
+        "backend because local execution can modify host tools such as /bin/ls "
+        f"or /bin/bash. Set {_PWN_LOCAL_BACKEND_BYPASS_ENV}=1 only for a disposable host."
+    )
 
 
 def _verify_progress_shim(workspace: ExecutionWorkspace) -> None:

@@ -23,10 +23,18 @@ class HermesRunnerTests(unittest.TestCase):
     def test_shard_prompt_requires_pwn_xinetd_chroot_launcher(self):
         prompt = (ROOT / "prompts" / "shard_prompt.md").read_text(encoding="utf-8")
 
+        self.assertIn("scaffolds/pwn/xinetd-chroot/", prompt)
         self.assertIn("xinetd + chroot + TCP socket", prompt)
         self.assertIn("server = /usr/sbin/chroot", prompt)
-        self.assertIn("server_args = --userspec=<ctf_uid>:<ctf_gid>", prompt)
+        self.assertIn("server_args = --userspec=1000:1000", prompt)
         self.assertIn("/etc/xinetd.d/ctf", prompt)
+
+    def test_shard_prompt_keeps_pwn_chroot_setup_inside_dockerfile(self):
+        prompt = (ROOT / "prompts" / "shard_prompt.md").read_text(encoding="utf-8")
+
+        self.assertIn("ONLY inside `deploy/Dockerfile` `RUN` steps", prompt)
+        self.assertIn("MUST NOT be executed on the host", prompt)
+        self.assertIn("MUST NOT run `/home/ctf` chroot setup", prompt)
 
     def test_repair_prompt_replays_pwn_xinetd_chroot_contract(self):
         prompt = render_validation_repair_prompt(
@@ -36,9 +44,32 @@ class HermesRunnerTests(unittest.TestCase):
         )
 
         self.assertIn("Pwn container launcher", prompt)
+        self.assertIn("scaffolds/pwn/xinetd-chroot/", prompt)
         self.assertIn("xinetd + chroot + TCP socket", prompt)
         self.assertIn("/usr/sbin/chroot", prompt)
-        self.assertIn("--userspec=<ctf_uid>:<ctf_gid>", prompt)
+        self.assertIn("--userspec=1000:1000", prompt)
+        self.assertIn("MUST appear only as `RUN` steps in", prompt)
+
+    def test_pwn_xinetd_chroot_scaffold_has_container_only_setup(self):
+        scaffold = ROOT / "scaffolds" / "pwn" / "xinetd-chroot"
+        dockerfile = (scaffold / "deploy" / "Dockerfile").read_text(encoding="utf-8")
+        compose = (scaffold / "deploy" / "docker-compose.yml").read_text(encoding="utf-8")
+        start_sh = (scaffold / "deploy" / "_files" / "start.sh").read_text(encoding="utf-8")
+        xinetd = (scaffold / "deploy" / "_files" / "ctf.xinetd").read_text(encoding="utf-8")
+
+        self.assertIn("RUN cp -R /lib* /home/ctf", dockerfile)
+        self.assertIn("cp /bin/ls /home/ctf/bin", dockerfile)
+        self.assertIn("Every absolute path below", dockerfile)
+        self.assertIn("- FLAG={{FLAG}}", compose)
+        self.assertNotIn("volumes:", compose)
+        self.assertNotIn("cp -R /lib* /home/ctf", start_sh)
+        self.assertNotIn("mknod /home/ctf", start_sh)
+        self.assertIn("server      = /usr/sbin/chroot", xinetd)
+        self.assertIn("server_args = --userspec={{CTF_UID}}:{{CTF_GID}}", xinetd)
+        self.assertIn("ARG CTF_UID=1000", dockerfile)
+        self.assertIn("ARG CTF_GID=1000", dockerfile)
+        self.assertIn('CTF_UID: "1000"', compose)
+        self.assertIn('CTF_GID: "1000"', compose)
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

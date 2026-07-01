@@ -52,6 +52,18 @@ _FORBIDDEN_DOCKER_CLEANUP_RE = re.compile(
 _ROOT_START_INSTALL_RE = re.compile(
     r"(?im)^\s*(?:COPY|ADD)\s+(?:--[^\r\n]+\s+)*[^\r\n#]*start\.sh\s+/root/start\.sh\b"
 )
+_HOST_CHROOT_SETUP_RE = re.compile(
+    r"(?:\bcp\s+-R\s+/(?:lib\*|usr/lib\*)\s+/home/ctf\b|"
+    r"\bmknod\s+/home/ctf/dev/(?:null|zero|random|urandom)\b|"
+    r"\bmkdir\s+(?:-[^\r\n;&|]+\s+)?/home/ctf/(?:dev|bin)\b|"
+    r"\bcp\s+/bin/(?:sh|ls|cat)\s+/home/ctf/bin\b|"
+    r"\bchmod\s+666\s+/home/ctf/dev/\*)"
+)
+_HOST_CHROOT_SETUP_TEXT_FIELDS = (
+    "build_command",
+    "validation",
+    "run_command",
+)
 
 
 def validation_failure_detail(
@@ -265,6 +277,39 @@ def _dockerfile_installs_root_start(dockerfile: Path) -> bool:
     if not text:
         return False
     return bool(_ROOT_START_INSTALL_RE.search(text))
+
+
+def _host_chroot_setup_errors(challenge_dir: Path, metadata: dict) -> list[str]:
+    """Reject Dockerfile-only chroot setup commands in host/runtime scripts."""
+
+    errors: list[str] = []
+    scanned_paths = (
+        challenge_dir / "validate.sh",
+        challenge_dir / "deploy" / "_files" / "start.sh",
+        challenge_dir / "deploy" / "_files" / "ctf.xinetd",
+        challenge_dir / "deploy" / "_files" / "etc" / "xinetd.d" / "ctf",
+        challenge_dir / "deploy" / "_files" / "etc" / "xinetd.d" / "chal",
+    )
+    for path in scanned_paths:
+        text = _read_text(path)
+        if text and _HOST_CHROOT_SETUP_RE.search(text):
+            rel = path.relative_to(challenge_dir).as_posix()
+            errors.append(
+                f"{rel} contains Dockerfile-only /home/ctf chroot setup commands; "
+                "copying /lib*, creating /home/ctf/dev nodes, and copying /bin helpers "
+                "must only appear as RUN steps inside deploy/Dockerfile, never in "
+                "host validation or runtime scripts"
+            )
+
+    for field in _HOST_CHROOT_SETUP_TEXT_FIELDS:
+        value = metadata.get(field)
+        if isinstance(value, str) and _HOST_CHROOT_SETUP_RE.search(value):
+            errors.append(
+                f"metadata.{field} contains Dockerfile-only /home/ctf chroot setup "
+                "commands; record `docker build -t <image> deploy` as the host build "
+                "command and keep chroot filesystem initialization inside deploy/Dockerfile"
+            )
+    return errors
 
 
 # When the intended technique IS recovering the flag via strings/static reading,
@@ -932,6 +977,8 @@ class ChallengeValidator:
                 not metadata.get("runtime") or not metadata.get("framework")
             ):
                 errors.append("Web metadata must record runtime and framework")
+            if category == "pwn":
+                errors.extend(_host_chroot_setup_errors(challenge_dir, metadata))
 
         target_format = metadata.get("target_format", "elf")
         if category in {"re", "pwn"} and target_format == "elf":

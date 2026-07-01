@@ -382,6 +382,58 @@ class ExecutionWorkspaceTests(unittest.TestCase):
                 profile_exists=lambda _: True,
             )
 
+    def test_preflight_rejects_pwn_on_unknown_backend(self) -> None:
+        shard = self._running_shard({"challenges": [{"id": "pwn-0001", "category": "pwn"}]})
+        workspace = prepare_workspace(
+            self.paths,
+            shard=shard,
+            original_shard_name="pwn.json",
+            worker="worker-1",
+        )
+
+        with self.assertRaisesRegex(WorkspacePreflightError, "unsafe PWN execution backend"):
+            preflight_workspace(
+                workspace,
+                profile_name="cf-pwn",
+                profile_exists=lambda _: True,
+            )
+
+    def test_preflight_rejects_pwn_on_local_backend(self) -> None:
+        shard = self._running_shard({"challenges": [{"id": "pwn-0001", "category": "pwn"}]})
+        workspace = prepare_workspace(
+            self.paths,
+            shard=shard,
+            original_shard_name="pwn.json",
+            worker="worker-1",
+        )
+
+        with self.assertRaisesRegex(WorkspacePreflightError, "local"):
+            preflight_workspace(
+                workspace,
+                profile_name="cf-pwn",
+                profile_exists=lambda _: True,
+                terminal_backend="local",
+            )
+
+    def test_preflight_allows_pwn_on_isolated_backend(self) -> None:
+        shard = self._running_shard({"challenges": [{"id": "pwn-0001", "category": "pwn"}]})
+        workspace = prepare_workspace(
+            self.paths,
+            shard=shard,
+            original_shard_name="pwn.json",
+            worker="worker-1",
+        )
+        materialize_progress_shim(workspace)
+
+        payload = preflight_workspace(
+            workspace,
+            profile_name="cf-pwn",
+            profile_exists=lambda _: True,
+            terminal_backend="docker",
+        )
+
+        self.assertEqual(payload["challenges"][0]["category"], "pwn")
+
     def test_preflight_rejects_unrelated_challenge_artifact(self) -> None:
         shard = self._running_shard({"challenges": [{"id": "web-0001", "category": "web"}]})
         workspace = prepare_workspace(

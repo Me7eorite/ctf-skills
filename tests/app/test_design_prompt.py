@@ -205,6 +205,8 @@ def test_pwn_design_prompt_requires_xinetd_artifact(tmp_path):
     assert "`deploy/_files/ctf.xinetd` is REQUIRED" in prompt
     assert "runtime (pwn/xinetd) artifact requires at least one of" in prompt
     assert "deploy/_files/etc/xinetd.d/ctf" in prompt
+    assert "pwn/xinetd-chroot" in prompt
+    assert "scaffolds/pwn/xinetd-chroot/" in prompt
 
 
 def test_prompt_includes_previous_validation_error_on_retry(tmp_path):

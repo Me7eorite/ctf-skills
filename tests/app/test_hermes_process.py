@@ -24,6 +24,7 @@ from hermes.process import (
     TERMINATION_WAIT_TIMEOUT,
     HermesProcessResult,
     _wait_after_terminate,
+    effective_terminal_backend,
     hermes_profile_health,
     invoke,
     invoke_capture,
@@ -199,6 +200,71 @@ class ProjectHermesHomeTests(unittest.TestCase):
             (hermes_home / "profiles" / "cf-re").mkdir(parents=True)
 
             self.assertTrue(project_hermes_home_is_configured(hermes_home))
+
+    def test_effective_terminal_backend_prefers_terminal_env(self):
+        with tempfile.TemporaryDirectory() as temp:
+            hermes_home = Path(temp) / ".hermes"
+            hermes_home.mkdir()
+            (hermes_home / "config.yaml").write_text(
+                "terminal:\n  backend: local\n",
+                encoding="utf-8",
+            )
+
+            backend = effective_terminal_backend(
+                hermes_home,
+                {"TERMINAL_ENV": "docker"},
+            )
+
+        self.assertEqual(backend, "docker")
+
+    def test_effective_terminal_backend_reads_project_dotenv_before_config(self):
+        with tempfile.TemporaryDirectory() as temp:
+            hermes_home = Path(temp) / ".hermes"
+            hermes_home.mkdir()
+            (hermes_home / ".env").write_text("TERMINAL_ENV=docker\n", encoding="utf-8")
+            (hermes_home / "config.yaml").write_text(
+                "terminal:\n  backend: local\n",
+                encoding="utf-8",
+            )
+
+            backend = effective_terminal_backend(hermes_home, {})
+
+        self.assertEqual(backend, "docker")
+
+    def test_effective_terminal_backend_reads_profile_before_project(self):
+        with tempfile.TemporaryDirectory() as temp:
+            hermes_home = Path(temp) / ".hermes"
+            profile_home = hermes_home / "profiles" / "cf-pwn"
+            profile_home.mkdir(parents=True)
+            (hermes_home / "config.yaml").write_text(
+                "terminal:\n  backend: local\n",
+                encoding="utf-8",
+            )
+            (profile_home / "config.yaml").write_text(
+                "terminal:\n  backend: docker\n",
+                encoding="utf-8",
+            )
+
+            backend = effective_terminal_backend(
+                hermes_home,
+                {},
+                profile_name="cf-pwn",
+            )
+
+        self.assertEqual(backend, "docker")
+
+    def test_effective_terminal_backend_reads_config(self):
+        with tempfile.TemporaryDirectory() as temp:
+            hermes_home = Path(temp) / ".hermes"
+            hermes_home.mkdir()
+            (hermes_home / "config.yaml").write_text(
+                "model:\n  provider: custom\nterminal:\n  cwd: .\n  backend: docker\n",
+                encoding="utf-8",
+            )
+
+            backend = effective_terminal_backend(hermes_home, {})
+
+        self.assertEqual(backend, "docker")
 
 
 class InvokeLogMarkerTests(unittest.TestCase):

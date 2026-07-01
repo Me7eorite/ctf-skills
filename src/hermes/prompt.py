@@ -353,16 +353,30 @@ Web / Pwn:
 - Web additionally requires `metadata.runtime` and `metadata.framework`.
 
 Pwn container launcher:
-- Prefer the xinetd + chroot + TCP socket model. Install `xinetd`, copy an xinetd
-  service file into `/etc/xinetd.d/ctf`, expose the assigned service port, and
-  have `/root/start.sh` start xinetd then stay foreground.
+- Prefer the fixed xinetd + chroot + TCP socket scaffold
+  `scaffolds/pwn/xinetd-chroot/`. Copy its `deploy/` tree into the challenge and
+  replace placeholders such as `{{BINARY_NAME}}` and `{{SERVICE_PORT}}`; keep the
+  scaffold's default `CTF_UID=1000` and `CTF_GID=1000` build args unless a
+  special runtime identity is required. Do not invent a fresh Docker/chroot layout.
+  The scaffold installs `xinetd`, copies an xinetd service file into
+  `/etc/xinetd.d/ctf`, exposes the assigned service port, and has
+  `/root/start.sh` start xinetd then stay foreground.
 - The xinetd service may run as root only to accept the socket and execute
   `/usr/sbin/chroot`; it should run the vulnerable binary with
-  `server_args = --userspec=<ctf_uid>:<ctf_gid> /home/ctf ./<binary>` or an
-  equivalent non-root uid/gid drop inside the chroot.
+  `server_args = --userspec=1000:1000 /home/ctf ./<binary>` by default, or an
+  equivalent non-root uid/gid drop inside the chroot. Override uid/gid only
+  through explicit Docker build args when the challenge needs a special value.
 - Build `/home/ctf` as the chroot root with the vulnerable binary, required
   runtime libraries, minimal `/dev/null`, `zero`, `random`, `urandom`, and only
-  helper binaries needed by the intended exploit. Write `/home/ctf/flag` from
+  helper binaries needed by the intended exploit. This construction is
+  Dockerfile-only: commands such as `cp -R /lib* /home/ctf`,
+  `cp -R /usr/lib* /home/ctf`, `mknod /home/ctf/dev/null ...`, and
+  `cp /bin/ls /home/ctf/bin` MUST appear only as `RUN` steps in
+  `deploy/Dockerfile`. In that Dockerfile they copy from the Docker build
+  container into the image's chroot, not from the host. They MUST NOT appear in
+  `validate.sh`,
+  `metadata.build_command`, `deploy/_files/start.sh`, or xinetd config files,
+  and MUST NOT be executed directly on the host. Write `/home/ctf/flag` from
   the Compose `FLAG` value at startup, not in the Docker image layer.
 - Harden xinetd with bounded settings such as `per_source`, `rlimit_cpu`, and
   compatible memory limits. Keep chroot contents owned by `root:ctf` and not

@@ -153,12 +153,14 @@ Container rules for Web and Pwn:
   `[a-z0-9][a-z0-9_.-]`. Use the same identifier for the built image tag,
   validation commands, and `metadata.docker_image`.
 - Apply least privilege by default. Pwn images normally create a fixed
-  non-zero `ctf` user/group and use `WORKDIR /home/ctf`. For ordinary
+  non-zero `ctf` user/group, defaulting to uid/gid `1000:1000`, and use
+  `WORKDIR /home/ctf`. For ordinary
   foreground services, copy challenge files with `ctf` ownership and end with
   `USER ctf`. For the preferred xinetd/chroot Pwn pattern, xinetd may start as
   root only to accept the socket and call `/usr/sbin/chroot`; the vulnerable
-  binary itself MUST run inside the chroot with `--userspec=<ctf_uid>:<ctf_gid>`
-  or an equivalent non-root uid/gid drop.
+  binary itself MUST run inside the chroot with `--userspec=1000:1000` by
+  default, or an equivalent non-root uid/gid drop. Override the uid/gid only
+  through explicit Docker build args when the challenge needs a special value.
 - Web images MUST reuse the base image's appropriate non-root service user and
   conventional application directory when available, such as
   `www-data:/var/www/html` for Apache/PHP or the selected Tomcat image's
@@ -172,23 +174,28 @@ Container rules for Web and Pwn:
   entrypoint or command. Keep this wrapper small; it should drop to the
   appropriate service user before starting long-running business processes when
   the selected runtime supports that pattern.
-- Pwn Docker services SHOULD use the xinetd + chroot + TCP socket pattern unless
-  the design explicitly needs a different launcher. Model it after
-  `pwn_docker_example/`: install `xinetd`, copy an xinetd service file from
-  `deploy/_files/ctf.xinetd` or `deploy/_files/etc/xinetd.d/ctf` into
-  `/etc/xinetd.d/ctf`, expose the assigned container port, and make
-  `/root/start.sh` start xinetd then block with `sleep infinity` or an
-  equivalent foreground wait. The xinetd service should use
+- Pwn Docker services SHOULD use the fixed xinetd + chroot + TCP socket scaffold
+  `scaffolds/pwn/xinetd-chroot/` unless the design explicitly needs a different
+  launcher. Copy its `deploy/` tree into the challenge and replace placeholders
+  such as `{{BINARY_NAME}}` and `{{SERVICE_PORT}}`; keep the scaffold's default
+  `CTF_UID=1000` and `CTF_GID=1000` build args unless a special runtime
+  identity is required. Do not invent a fresh Docker/chroot layout. The scaffold
+  installs `xinetd`, copies `deploy/_files/ctf.xinetd` into `/etc/xinetd.d/ctf`,
+  exposes the assigned container port, and makes `/root/start.sh` start xinetd
+  then block with `sleep infinity`. The xinetd service should use
   `socket_type = stream`, `protocol = tcp`, `wait = no`, `type = UNLISTED`,
   `bind = 0.0.0.0`, `server = /usr/sbin/chroot`, and
-  `server_args = --userspec=<ctf_uid>:<ctf_gid> /home/ctf ./<binary>`.
+  `server_args = --userspec=1000:1000 /home/ctf ./<binary>` by default.
 - For that Pwn chroot layout, construct `/home/ctf` as the runtime root:
-  copy the vulnerable binary and only required runtime files there, copy needed
-  `/lib*` and `/usr/lib*` or explicitly pinned `libc`/loader files, create
-  `/home/ctf/dev/null`, `zero`, `random`, and `urandom`, and include only
-  minimal helper binaries such as `/bin/sh` or `/bin/cat` when the intended
-  exploit requires them. Place the flag at `/home/ctf/flag` from the Compose
-  `FLAG` value during container startup, not in an image layer.
+  do this ONLY inside `deploy/Dockerfile` `RUN` steps executed by
+  `docker build`. Dockerfile-only commands such as `cp -R /lib* /home/ctf`,
+  `cp -R /usr/lib* /home/ctf`, `mknod /home/ctf/dev/null ...`, and
+  `cp /bin/ls /home/ctf/bin` MUST NOT be executed on the host and MUST NOT
+  appear in `validate.sh`, `metadata.build_command`, `deploy/_files/start.sh`,
+  or xinetd config files. In the scaffold Dockerfile those commands copy from
+  the Docker build container into the image's `/home/ctf` chroot, not from the
+  host. Place the flag at `/home/ctf/flag` from the Compose `FLAG` value during
+  container startup, not in an image layer.
 - Harden Pwn xinetd services with bounded resource settings such as
   `per_source`, `rlimit_cpu`, and, when compatible with the exploit,
   `rlimit_as`; include a `banner_fail` file. Keep `/home/ctf` owned by
@@ -276,9 +283,10 @@ Pwn rules:
 - Record the actual mitigation state and distribute the relevant binary.
 - Pin the libc/toolchain where exploit stability depends on it.
 - The deployed service should normally be socket-driven through xinetd and
-  chroot rather than a bare `socat EXEC` or a Python wrapper. Use a different
-  launcher only when required by the challenge mechanism, and document that
-  reason in `metadata.json` and `writenup/wp.md`.
+  chroot using `scaffolds/pwn/xinetd-chroot/`, rather than a bare `socat EXEC`
+  or a Python wrapper. Use a different launcher only when required by the
+  challenge mechanism, and document that reason in `metadata.json` and
+  `writenup/wp.md`.
 
 ## 3. Build
 
@@ -292,8 +300,15 @@ Pwn rules:
   image contains `/etc/xinetd.d/ctf`, `/usr/sbin/chroot`, `/root/start.sh`, the
   vulnerable binary under `/home/ctf`, required libraries/dev nodes inside the
   chroot, and an xinetd `server_args` line that drops to the fixed `ctf`
-  uid/gid. Confirm `/root/start.sh` starts xinetd and does not run the
-  vulnerable binary directly as root.
+  uid/gid. Confirm the generated `deploy/` files are derived from
+  `scaffolds/pwn/xinetd-chroot/`, `/root/start.sh` starts xinetd, and it does
+  not run the vulnerable binary directly as root.
+- Pwn build safety boundary: host-side commands may run `docker build`,
+  `docker compose config`, `docker compose up`, `docker image inspect`, `file`,
+  and checksum tools. Host-side commands MUST NOT run `/home/ctf` chroot setup
+  commands directly (`cp -R /lib* /home/ctf`, `cp -R /usr/lib* /home/ctf`,
+  `mknod /home/ctf/dev/...`, `cp /bin/sh /home/ctf/bin`, etc.); those are image
+  construction steps and belong only in `deploy/Dockerfile`.
 - Re/Pwn: run the compiler selected by the declared target/toolchain, then
   inspect the produced artifact with `file`.
 - Record build commands, compiler/runtime versions, and artifact SHA-256 in

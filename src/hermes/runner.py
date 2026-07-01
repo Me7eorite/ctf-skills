@@ -644,6 +644,10 @@ class HermesRunner:
                 workspace,
                 profile_name=profile_name,
                 profile_exists=self._profile_exists,
+                terminal_backend=hermes_process.effective_terminal_backend(
+                    self.paths.hermes_home,
+                    profile_name=profile_name,
+                ),
             )
         except WorkspacePreflightError as exc:
             message = f"Workspace preflight failed: {exc}"

@@ -927,9 +927,13 @@ def _require_build_profiles(app: FastAPI, categories) -> None:
         return
     profiles = ", ".join(item["profile"] for item in unavailable)
     commands = "; ".join(item["create_command"] for item in unavailable)
+    messages = "; ".join(item["message"] for item in unavailable if item.get("message"))
+    detail = f"构建环境未就绪：Hermes Profile 或安全策略不可用：{profiles}；请先运行：{commands}"
+    if messages:
+        detail += f"；{messages}"
     raise HTTPException(
         status_code=HTTPStatus.SERVICE_UNAVAILABLE,
-        detail=(f"构建环境未就绪：缺少 Hermes Profile {profiles}；请先运行：{commands}"),
+        detail=detail,
     )
 
 
