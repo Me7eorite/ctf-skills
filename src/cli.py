@@ -124,14 +124,19 @@ def _finalize_build_attempt(
     attempt_id: UUID, worker: str, item: dict, *, session_factory=None
 ) -> None:
     """Write the build-attempt terminal state and advance the parent task."""
-    from persistence.repositories import BuildAttemptsRepository, ExecutionsRepository
+    from persistence.models import build_attempts as build_model
+    from persistence.models import design_tasks as task_model
+    from persistence.repositories import ExecutionsRepository
     from persistence.session import transaction
 
     try:
         with transaction(factory=session_factory) as session:
             exec_repo = ExecutionsRepository(session)
-            latest = exec_repo.latest_for_attempt(attempt_id)
-            if latest is None or latest.status not in {"claimed", "running"}:
+            container = session.get(build_model.BuildAttempt, attempt_id)
+            if container is None or container.current_execution_id is None:
+                return
+            execution = exec_repo.get(container.current_execution_id)
+            if execution is None or execution.status not in {"claimed", "running"}:
                 return
             failed = int(item.get("failed", 0))
             processed = int(item.get("processed", 0))
@@ -141,18 +146,20 @@ def _finalize_build_attempt(
                 outcomes = item.get("outcomes") or []
                 last = outcomes[-1] if outcomes else {}
                 error = (last.get("error") or last.get("status") or "build failed")[:2000]
-            BuildAttemptsRepository(session).finalize_attempt(
-                attempt_id,
-                status=status,
-                worker=worker,
-                error=error,
-            )
             exec_repo.update_to_terminal(
-                latest.id,
-                claim_token=latest.claim_token,
+                execution.id,
+                claim_token=execution.claim_token,
                 status=status,
                 error=error,
             )
+            session.flush()
+            container = session.get(build_model.BuildAttempt, attempt_id)
+            if container is not None and container.latest_execution_id == execution.id:
+                container.worker = worker
+                task = session.get(task_model.DesignTask, container.design_task_id)
+                if task is not None:
+                    task.status = "built" if status == "succeeded" else "build_failed"
+                    task.updated_at = container.finished_at
     except Exception as exc:  # never break the worker loop on bookkeeping
         print(
             f"build attempt finalization skipped for {attempt_id}: {exc}",

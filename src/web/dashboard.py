@@ -97,6 +97,7 @@ class TaskManager:
                 category,
                 "--build-attempt",
                 str(build_attempt_id),
+                "--allow-failed-attempts-exit-zero",
             ],
             require_pending=False,
             worker_ids={"dashboard-01"},

@@ -181,6 +181,42 @@ def test_records_failed_outcome_with_error(session_factory, monkeypatch):
         assert container.status == "failed"
 
 
+def test_finalize_build_attempt_records_failed_attempt_and_execution(session_factory, monkeypatch):
+    monkeypatch.setenv("EXECUTION_MINTING", "1")
+    with session_factory() as session:
+        attempt_id, execution_id = _seed_scheduled(session)
+        task_id = session.get(build_model.BuildAttempt, attempt_id).design_task_id
+        session.commit()
+
+    cli._mark_attempt_running(
+        attempt_id,
+        "worker-1",
+        session_factory=session_factory,
+    )
+    cli._finalize_build_attempt(
+        attempt_id,
+        "worker-1",
+        {
+            "processed": 1,
+            "failed": 1,
+            "outcomes": [
+                {"error": "host build failed: docker build failed with exit 127"}
+            ],
+        },
+        session_factory=session_factory,
+    )
+
+    with session_factory() as session:
+        row = session.get(exec_model.Execution, execution_id)
+        assert row.status == "failed"
+        assert row.error == "host build failed: docker build failed with exit 127"
+        container = session.get(build_model.BuildAttempt, attempt_id)
+        assert container.status == "failed"
+        assert container.current_execution_id is None
+        assert container.error == "host build failed: docker build failed with exit 127"
+        assert session.get(task_model.DesignTask, task_id).status == "build_failed"
+
+
 def test_recorded_failed_outcome_is_not_reaped_to_lost(session_factory, monkeypatch):
     monkeypatch.setenv("EXECUTION_MINTING", "1")
     with session_factory() as session:

@@ -122,6 +122,23 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(sequence, [first, second])
         self.assertIn("--allow-failed-attempts-exit-zero", command)
 
+    def test_single_attempt_worker_exits_zero_for_build_failures(self):
+        attempt_id = UUID("11111111-1111-1111-1111-111111111111")
+        with (
+            patch("web.dashboard.subprocess.Popen") as popen,
+            patch("web.dashboard.time.sleep"),
+        ):
+            popen.return_value.poll.return_value = None
+
+            ok, _message = TaskManager(self.paths).start_worker(
+                category="pwn",
+                build_attempt_id=attempt_id,
+            )
+
+        self.assertTrue(ok)
+        command = popen.call_args.args[0]
+        self.assertIn("--allow-failed-attempts-exit-zero", command)
+
     def test_finished_build_workers_reports_exited_dashboard_worker(self):
         process = Mock()
         process.poll.return_value = 1
