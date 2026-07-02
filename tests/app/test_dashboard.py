@@ -155,6 +155,7 @@ class DashboardTests(unittest.TestCase):
                 {
                     "kind": "worker",
                     "worker_ids": ["dashboard-01"],
+                    "build_attempt_ids": [],
                     "returncode": 1,
                 }
             ],

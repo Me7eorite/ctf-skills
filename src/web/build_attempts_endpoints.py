@@ -788,7 +788,7 @@ def _sync_finished_dashboard_workers(app: FastAPI) -> None:
     with transaction() as session:
         filters = [build_model.BuildAttempt.status == "running"]
         selectors = []
-        if worker_errors:
+        if worker_errors and not attempt_errors:
             selectors.append(build_model.BuildAttempt.worker.in_(worker_errors))
         if attempt_errors:
             selectors.append(build_model.BuildAttempt.id.in_(attempt_errors))
@@ -1212,13 +1212,29 @@ def _start_constrained_worker(
 ) -> JSONResponse:
     effective_timeout, timeout_source = _effective_timeout_for_attempt(_project_paths(app), attempt_id)
     tasks = app.state.dashboard_tasks
+    from persistence.session import transaction
+
+    with transaction() as session:
+        existing = session.scalar(
+            sa.select(sa.func.count())
+            .select_from(build_model.BuildAttempt)
+            .where(
+                build_model.BuildAttempt.status == "running",
+                build_model.BuildAttempt.worker == "dashboard-01",
+                build_model.BuildAttempt.id != attempt_id,
+            )
+        )
+        if existing:
+            raise HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail="dashboard worker dashboard-01 is already running another build attempt",
+            )
     ok, message = tasks.start_worker(
         category=category,
         build_attempt_id=attempt_id,
     )
     if not ok:
         raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=message)
-    from persistence.session import transaction
 
     with transaction() as session:
         attempt = session.get(build_model.BuildAttempt, attempt_id)

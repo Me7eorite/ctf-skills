@@ -1026,6 +1026,30 @@ def test_exact_worker_start_leaves_execution_backed_attempt_queued_until_cli_cla
     assert tasks.calls == [("web", attempt.id)]
 
 
+def test_exact_worker_start_rejects_existing_dashboard_worker_attempt(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    first_task = _seed_designed_task(session_factory, status="building", task_no=1)
+    second_task = _seed_designed_task(session_factory, task_no=2)
+    with transaction(factory=session_factory) as session:
+        repo = BuildAttemptsRepository(session)
+        running = _create_canonical_attempt(repo, first_task)
+        queued = _create_canonical_attempt(repo, second_task)
+        row = session.get(build_model.BuildAttempt, running.id)
+        row.status = "running"
+        row.worker = "dashboard-01"
+    _write_pending_attempt(client, queued)
+    tasks = _StubBuildTaskManager()
+    client.app.state.dashboard_tasks = tasks
+
+    response = client.post(f"/api/build-attempts/{queued.id}/worker/start")
+
+    assert response.status_code == 409
+    assert "dashboard-01 is already running" in response.json()["detail"]
+    assert tasks.calls == []
+
+
 def test_exact_worker_accepts_iteration_shard_basename(
     client: TestClient,
     session_factory: SessionFactory,
@@ -1096,6 +1120,41 @@ def test_list_syncs_finished_dashboard_worker_to_lost(
         row = session.get(build_model.BuildAttempt, attempt.id)
         assert row.status == "lost"
         assert session.get(task_model.DesignTask, task_id).status == "build_failed"
+
+
+def test_finished_dashboard_worker_with_attempt_id_does_not_mark_sibling_lost(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    first_task = _seed_designed_task(session_factory, status="building", task_no=1)
+    second_task = _seed_designed_task(session_factory, status="building", task_no=2)
+    with transaction(factory=session_factory) as session:
+        repo = BuildAttemptsRepository(session)
+        failed_process_attempt = _create_canonical_attempt(repo, first_task)
+        sibling = _create_canonical_attempt(repo, second_task)
+        for attempt in (failed_process_attempt, sibling):
+            row = session.get(build_model.BuildAttempt, attempt.id)
+            row.status = "running"
+            row.worker = "dashboard-01"
+    tasks = _StubBuildTaskManager()
+    tasks.finished_records = [
+        {
+            "kind": "worker",
+            "worker_ids": ["dashboard-01"],
+            "build_attempt_ids": [str(failed_process_attempt.id)],
+            "returncode": 1,
+        }
+    ]
+    client.app.state.dashboard_tasks = tasks
+
+    response = client.get("/api/build-attempts")
+
+    assert response.status_code == 200
+    with session_factory() as session:
+        failed_row = session.get(build_model.BuildAttempt, failed_process_attempt.id)
+        sibling_row = session.get(build_model.BuildAttempt, sibling.id)
+        assert failed_row.status == "lost"
+        assert sibling_row.status == "running"
 
 
 # ============================================================================

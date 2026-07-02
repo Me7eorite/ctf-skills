@@ -50,6 +50,7 @@ class TaskManager:
         self._started_at: str | None = None
         self._log: str | None = None
         self._worker_ids: set[str] = set()
+        self._build_attempt_ids: set[UUID] = set()
         self._lane_pools: dict[str, LanePool] = {}
 
     def start(self, kind: str) -> tuple[bool, str]:
@@ -101,6 +102,7 @@ class TaskManager:
             ],
             require_pending=False,
             worker_ids={"dashboard-01"},
+            build_attempt_ids={build_attempt_id},
         )
 
     def start_sequential_worker(
@@ -134,6 +136,7 @@ class TaskManager:
             command,
             require_pending=False,
             worker_ids={"dashboard-sequential-01"},
+            build_attempt_ids=set(build_attempt_ids),
         )
 
     def start_sequential_lanes(
@@ -226,6 +229,7 @@ class TaskManager:
         require_pending: bool,
         on_started=None,
         worker_ids: set[str] | None = None,
+        build_attempt_ids: set[UUID] | None = None,
     ) -> tuple[bool, str]:
         if require_pending and not any(
             (self.paths.shards / "pending").glob("*.json")
@@ -263,6 +267,7 @@ class TaskManager:
             self._kind = kind
             self._started_at = beijing_now_display()
             self._worker_ids = set(worker_ids or ())
+            self._build_attempt_ids = set(build_attempt_ids or ())
             process = self._process
 
         if on_started is not None:
@@ -351,6 +356,9 @@ class TaskManager:
                         {
                             "kind": self._kind,
                             "worker_ids": sorted(self._worker_ids),
+                            "build_attempt_ids": [
+                                str(item) for item in sorted(self._build_attempt_ids)
+                            ],
                             "returncode": returncode,
                         }
                     )
