@@ -87,7 +87,10 @@ How to read `validation_error`:
 - `"build evidence incomplete: docker image '<NAME>' not present on host"` means the
   image is missing or differs from `metadata.docker_image`. Do NOT run Docker yourself;
   fix `metadata.docker_image`, `deploy/Dockerfile`, and `deploy/docker-compose.yml`
-  so the host runner can rebuild that exact image tag.
+  so the host runner can rebuild that exact image tag. For Pwn, the host runner
+  owns the final tag and rewrites it to
+  `pwn-{{workspace_id[:6]}}-{{challenge_name}}:latest`; do not change it back to a
+  generic value such as `pwn-demo:latest`.
 - `"build evidence incomplete: metadata.artifact_sha256 does not match artifact contents"`
   means the file at `metadata.artifact` was rebuilt without updating its `artifact_sha256`.
   Recompute the SHA-256 and write it back to `metadata.json`.
@@ -155,7 +158,8 @@ Terminal tool usage:
     WORKSPACE_ROOT="$(dirname "$WORKSPACE_ROOT")"
   done
   test -f "$WORKSPACE_ROOT/input/shard.json" || exit 1
-  CHAL_ROOT="$(find "$WORKSPACE_ROOT/output/challenges/<category>" -mindepth 1 -maxdepth 1 -type d -name '<challenge-id>-*' | head -n 1)"
+  CHAL_ROOT="$(find "$WORKSPACE_ROOT/output/challenges/<category>" \
+    -mindepth 1 -maxdepth 1 -type d -name '<challenge-id>-*' | head -n 1)"
   test -n "$CHAL_ROOT" || exit 1
   cd "$CHAL_ROOT" || exit 1
   ```
@@ -573,27 +577,35 @@ def _pwn_repair_steps_from_failure_details(
     ]
     if "pwn_prompt_eof" in codes:
         steps.append(
-            "Fix service readiness and menu synchronization: wait for the real banner/menu prompt on a fresh connection, then align recv/send calls."
+            "Fix service readiness and menu synchronization: wait for the real "
+            "banner/menu prompt on a fresh connection, then align recv/send calls."
         )
     if "pwn_service_readiness_failed" in codes or "pwn_bad_readiness_probe" in codes:
         steps.append(
-            "Fix the service readiness probe before exploit tuning: check that `validate.sh` exports or directly uses `CHAL_HOST`/`CHAL_PORT`, starts only this challenge's `docker-compose` service, and reads a real banner/menu prompt such as `Choice:` from a fresh TCP connection."
+            "Fix the service readiness probe before exploit tuning: check that "
+            "`validate.sh` exports or directly uses `CHAL_HOST`/`CHAL_PORT`, "
+            "starts only this challenge's `docker-compose` service, and reads "
+            "a real banner/menu prompt such as `Choice:` from a fresh TCP connection."
         )
     if "pwn_canary_leak_failed" in codes:
         steps.append(
-            "Rescan stack leaks across a broad bounded `%n$p` range; choose stable low-byte-zero canary candidates and remove any `2^48` filter."
+            "Rescan stack leaks across a broad bounded `%n$p` range; choose "
+            "stable low-byte-zero canary candidates and remove any `2^48` filter."
         )
     if "pwn_chroot_flag_path" in codes:
         steps.append(
-            "For xinetd chroot, keep startup writing `/home/ctf/flag` but make challenge code read `/flag` inside the chroot."
+            "For xinetd chroot, keep startup writing `/home/ctf/flag` but make "
+            "challenge code read `/flag` inside the chroot."
         )
     if "pwn_bad_offset" in codes:
         steps.append(
-            "Recompute the overflow offset with cyclic/core/headless gdb against the actual shipped ELF, then update padding and saved frame layout."
+            "Recompute the overflow offset with cyclic/core/headless gdb against "
+            "the actual shipped ELF, then update padding and saved frame layout."
         )
     if "pwn_rop_missing_gadget" in codes:
         steps.append(
-            "Rediscover ROP gadgets from the actual ELF/libc with pwntools ROP, ROPgadget, ropper, or objdump; do not reuse guessed addresses."
+            "Rediscover ROP gadgets from the actual ELF/libc with pwntools ROP, "
+            "ROPgadget, ropper, or objdump; do not reuse guessed addresses."
         )
     if "pwn_rop_stack_alignment" in codes:
         steps.append(
@@ -601,11 +613,13 @@ def _pwn_repair_steps_from_failure_details(
         )
     if "pwn_libc_leak_failed" in codes:
         steps.append(
-            "Repair the first-stage leak: verify GOT/PLT symbols, parse the full leaked pointer, and rerun stage two only after the leak is plausible."
+            "Repair the first-stage leak: verify GOT/PLT symbols, parse the full "
+            "leaked pointer, and rerun stage two only after the leak is plausible."
         )
     if "pwn_bad_libc_base" in codes:
         steps.append(
-            "Use the matching libc/ld from the container or attachments; check that computed libc base is plausible and page-aligned."
+            "Use the matching libc/ld from the container or attachments; check "
+            "that computed libc base is plausible and page-aligned."
         )
     if "pwn_pie_base_failed" in codes:
         steps.append(
@@ -613,14 +627,19 @@ def _pwn_repair_steps_from_failure_details(
         )
     if "pwn_shell_no_flag" in codes:
         steps.append(
-            "After control-flow success, explicitly run the intended flag read command or function and verify a `flag{...}` token reaches stdout."
+            "After control-flow success, explicitly run the intended flag read "
+            "command or function and verify a `flag{...}` token reaches stdout."
         )
     if "pwn_remote_local_mismatch" in codes:
         steps.append(
-            "Compare local process and container remote environment: libc/ld, PIE, ASLR assumptions, newline timing, chroot paths, and prompt text."
+            "Compare local process and container remote environment: libc/ld, PIE, "
+            "ASLR assumptions, newline timing, chroot paths, and prompt text."
         )
     steps.extend(f"Host hint: {hint}" for hint in hints[:3])
-    steps.append("Rerun `validate.sh` after each targeted fix; repair is not complete until the real exploit prints the metadata flag.")
+    steps.append(
+        "Rerun `validate.sh` after each targeted fix; repair is not complete "
+        "until the real exploit prints the metadata flag."
+    )
     return steps
 
 
@@ -659,6 +678,13 @@ Web / Pwn:
 - Do not run Docker from Hermes. The host runner rebuilds the exact image named by
   `metadata.docker_image` with `docker build -t <metadata.docker_image> -f deploy/Dockerfile .`
   after deploy source, Dockerfile, binary, or runtime dependencies change.
+- For Pwn, the host runner normalizes image identity before the build:
+  `metadata.docker_image`, Compose `image`, and Compose `container_name` are
+  synchronized to `pwn-{workspace_id[:6]}-{challenge_name}:latest`.
+- The host runner labels managed images with `ctf-factory.*` metadata and
+  prunes workspace-scoped dangling managed images after successful Docker
+  builds. Do not run broad `docker image prune` or `docker builder prune`
+  commands from Hermes.
 - `validate.sh` MUST print bounded service diagnostics to stderr on failure:
   `docker-compose ps`, recent `docker-compose logs --no-color --tail=120`, and
   solver stdout/stderr tails. The host runner forwards those tails into repair prompts.

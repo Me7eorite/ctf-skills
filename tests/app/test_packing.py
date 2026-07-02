@@ -418,6 +418,57 @@ class SaveDockerTests(unittest.TestCase):
         self.assertEqual(len(warnings), 1)
         self.assertIn("image not pruned", warnings[0])
 
+    def test_saves_workspace_scoped_pwn_image(self):
+        from packing.docker import _save_docker
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            errors: list = []
+            warnings: list = []
+            metadata = {
+                "id": "pwn-0001",
+                "port": 31337,
+                "docker_image": "pwn-exec12-pwn-0001-baby-stack:latest",
+            }
+            expected = output / "pwn-0001-baby-stack[31337]-20260628.tar"
+
+            def fake_run(cmd, *args, **kwargs):
+                if cmd[:2] == ["docker", "save"]:
+                    self._image_tar(expected, ["pwn-exec12-pwn-0001-baby-stack:latest"])
+                return self._completed()
+
+            with patch("packing.docker.subprocess.run", side_effect=fake_run) as run:
+                tar_path, image_row = _save_docker(
+                    "docker",
+                    metadata,
+                    "pwn-0001-baby-stack",
+                    output,
+                    date(2026, 6, 28),
+                    errors,
+                    warnings,
+                    require_docker=True,
+                )
+
+        self.assertEqual(tar_path, expected)
+        self.assertEqual(image_row[1], "pwn-0001-baby-stack[31337]-20260628.tar")
+        self.assertEqual(errors, [])
+        self.assertEqual(warnings, [])
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertEqual(
+            commands,
+            [
+                ["docker", "image", "inspect", "pwn-exec12-pwn-0001-baby-stack:latest"],
+                [
+                    "docker",
+                    "save",
+                    "-o",
+                    str(expected),
+                    "pwn-exec12-pwn-0001-baby-stack:latest",
+                ],
+                ["docker", "image", "rm", "pwn-exec12-pwn-0001-baby-stack:latest"],
+            ],
+        )
+
     def test_refuses_image_belonging_to_another_challenge(self):
         from packing.docker import _save_docker
 

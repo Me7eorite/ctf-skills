@@ -23,6 +23,10 @@ _FORBIDDEN_DOCKERFILE_RE = re.compile(
 _FORBIDDEN_COMPOSE_RE = re.compile(
     r"(?im)^\s*(?:volumes|privileged|network_mode|pid|ipc|devices)\s*:"
 )
+_MANAGED_IMAGE_LABEL = "ctf-factory.managed=true"
+_WORKSPACE_LABEL_KEY = "ctf-factory.workspace_id"
+_CHALLENGE_LABEL_KEY = "ctf-factory.challenge_id"
+_CATEGORY_LABEL_KEY = "ctf-factory.category"
 
 
 class HostBuildError(ValueError):
@@ -96,6 +100,7 @@ class HostBuilder:
                 self._build_challenge(
                     challenge_id,
                     challenge_dir,
+                    workspace_id=workspace.workspace_id,
                     metadata=metadata,
                     log_dir=log_dir,
                 )
@@ -107,7 +112,8 @@ class HostBuilder:
         challenge_id: str,
         challenge_dir: Path,
         *,
-        metadata: Mapping[str, Any],
+        workspace_id: str,
+        metadata: dict[str, Any],
         log_dir: Path,
     ) -> HostBuildResult:
         dockerfile = _safe_child(challenge_dir, "deploy/Dockerfile")
@@ -122,9 +128,17 @@ class HostBuilder:
                 f"{challenge_id}: deploy/docker-compose.yml missing",
                 challenge_id=challenge_id,
             )
+        if metadata.get("category") == "pwn":
+            _prepare_pwn_image(challenge_id, challenge_dir, workspace_id, metadata, compose)
         _reject_unsafe_build_files(challenge_id, dockerfile=dockerfile, compose=compose)
+        category = str(metadata.get("category") or "")
         image = _metadata_image(challenge_id, metadata)
-        command = ["docker", "build", "-t", image, "-f", "deploy/Dockerfile", "."]
+        command = _docker_build_command(
+            image,
+            workspace_id=workspace_id,
+            challenge_id=challenge_id,
+            category=category,
+        )
         log_path = log_dir / f"{challenge_id}.docker-build.log"
         started = time.monotonic()
         try:
@@ -191,11 +205,16 @@ class HostBuilder:
                 failed_step=_infer_docker_step(stdout_text, stderr_text),
             )
         image_id = _inspect_image_id(image, timeout=min(10.0, float(self.timeout_seconds)))
+        prune_warning = _prune_workspace_dangling_images(
+            workspace_id,
+            timeout=min(60.0, float(self.timeout_seconds)),
+        )
         _stamp_metadata(
             challenge_dir,
             command=command,
             image_id=image_id,
             log_path=_workspace_relative(log_path, challenge_dir),
+            prune_warning=prune_warning,
         )
         return HostBuildResult(
             challenge_id=challenge_id,
@@ -215,18 +234,26 @@ class NoopHostBuilder:
         workspace: ExecutionWorkspace,
         validation_set: WorkspaceValidationSet,
     ) -> list[HostBuildResult]:
-        del workspace
         results: list[HostBuildResult] = []
         for challenge_id, challenge_dir in validation_set.candidates.items():
             metadata = _read_metadata(challenge_dir)
             if metadata.get("category") in {"web", "pwn"}:
+                if metadata.get("category") == "pwn":
+                    compose = _safe_child(challenge_dir, "deploy/docker-compose.yml")
+                    _prepare_pwn_image(challenge_id, challenge_dir, workspace.workspace_id, metadata, compose)
                 image = _metadata_image(challenge_id, metadata)
-                command = ["docker", "build", "-t", image, "-f", "deploy/Dockerfile", "."]
+                command = _docker_build_command(
+                    image,
+                    workspace_id=workspace.workspace_id,
+                    challenge_id=challenge_id,
+                    category=str(metadata.get("category") or ""),
+                )
                 _stamp_metadata(
                     challenge_dir,
                     command=command,
                     image_id="sha256:test",
                     log_path=None,
+                    prune_warning=None,
                 )
                 results.append(
                     HostBuildResult(
@@ -262,6 +289,123 @@ def _metadata_image(challenge_id: str, metadata: Mapping[str, Any]) -> str:
     if not _IMAGE_RE.fullmatch(image):
         raise HostBuildError(f"{challenge_id}: metadata.docker_image is not an allowed tag")
     return image
+
+
+def _docker_build_command(
+    image: str,
+    *,
+    workspace_id: str,
+    challenge_id: str,
+    category: str,
+) -> list[str]:
+    command = ["docker", "build"]
+    for label in _host_build_labels(
+        workspace_id=workspace_id,
+        challenge_id=challenge_id,
+        category=category,
+    ):
+        command.extend(["--label", label])
+    command.extend(["-t", image, "-f", "deploy/Dockerfile", "."])
+    return command
+
+
+def _host_build_labels(
+    *,
+    workspace_id: str,
+    challenge_id: str,
+    category: str,
+) -> tuple[str, ...]:
+    return (
+        _MANAGED_IMAGE_LABEL,
+        f"{_WORKSPACE_LABEL_KEY}={workspace_id}",
+        f"{_CHALLENGE_LABEL_KEY}={challenge_id}",
+        f"{_CATEGORY_LABEL_KEY}={category}",
+    )
+
+
+def _prune_workspace_dangling_images(workspace_id: str, *, timeout: float) -> str | None:
+    command = [
+        "docker",
+        "image",
+        "prune",
+        "-f",
+        "--filter",
+        f"label={_MANAGED_IMAGE_LABEL}",
+        "--filter",
+        f"label={_WORKSPACE_LABEL_KEY}={workspace_id}",
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except FileNotFoundError:
+        return "docker CLI is not available; managed dangling image cleanup skipped"
+    except subprocess.TimeoutExpired:
+        return "managed dangling image cleanup timed out"
+    except OSError as exc:
+        return f"managed dangling image cleanup failed: {exc}"
+    if result.returncode != 0:
+        return (
+            "managed dangling image cleanup failed: "
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )
+    return None
+
+
+def _prepare_pwn_image(
+    challenge_id: str,
+    challenge_dir: Path,
+    workspace_id: str,
+    metadata: dict[str, Any],
+    compose: Path,
+) -> None:
+    image = _pwn_workspace_image(workspace_id, challenge_dir.name or challenge_id)
+    metadata["docker_image"] = image
+    write_json(challenge_dir / "metadata.json", metadata)
+    _rewrite_compose_image(compose, image)
+
+
+def _pwn_workspace_image(workspace_id: str, challenge_name: str) -> str:
+    workspace_prefix = _docker_component(workspace_id)[:6] or "local"
+    safe_name = _docker_component(challenge_name) or "challenge"
+    return f"pwn-{workspace_prefix}-{safe_name}:latest"
+
+
+def _docker_component(value: str) -> str:
+    return re.sub(r"[^a-z0-9_.-]+", "-", value.lower()).strip(".-")
+
+
+def _rewrite_compose_image(compose: Path, image: str) -> None:
+    text = compose.read_text(encoding="utf-8", errors="replace")
+    container_name = image.split(":", 1)[0]
+    rewritten_lines: list[str] = []
+    changed = False
+    image_seen = False
+    for line in text.splitlines(keepends=True):
+        newline = "\n" if line.endswith("\n") else ""
+        body = line[:-1] if newline else line
+        if re.match(r"^\s*image\s*:", body):
+            indent = body[: len(body) - len(body.lstrip())]
+            replacement = f"{indent}image: {image}{newline}"
+            rewritten_lines.append(replacement)
+            changed = changed or replacement != line
+            image_seen = True
+            continue
+        if re.match(r"^\s*container_name\s*:", body):
+            indent = body[: len(body) - len(body.lstrip())]
+            replacement = f"{indent}container_name: {container_name}{newline}"
+            rewritten_lines.append(replacement)
+            changed = changed or replacement != line
+            continue
+        rewritten_lines.append(line)
+    if not image_seen:
+        raise HostBuildError(f"{compose.parent.parent.name}: pwn compose file must declare a service image")
+    if changed:
+        compose.write_text("".join(rewritten_lines), encoding="utf-8")
 
 
 def _safe_child(root: Path, relative: str) -> Path:
@@ -417,6 +561,7 @@ def _stamp_metadata(
     command: list[str],
     image_id: str | None,
     log_path: str | None,
+    prune_warning: str | None = None,
 ) -> None:
     metadata_path = challenge_dir / "metadata.json"
     metadata = read_json(metadata_path, {})
@@ -429,6 +574,10 @@ def _stamp_metadata(
         metadata["docker_image_id"] = image_id
     if log_path:
         metadata["host_build_log"] = log_path
+    if prune_warning:
+        metadata["host_build_prune_warning"] = prune_warning
+    else:
+        metadata.pop("host_build_prune_warning", None)
     write_json(metadata_path, metadata)
 
 

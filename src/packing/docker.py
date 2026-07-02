@@ -38,16 +38,24 @@ def _image_belongs_to_challenge(
 ) -> bool:
     """镜像是否属于这道题本身（防止 docker save 偏移到其它题/基础镜像）。
 
-    build 阶段约定镜像名为归一化后的 ``<id>-<slug>``，题目 id 是稳定前缀，
-    因此仓库名必须等于、或以 ``<id>-`` / ``<delivery_name>-`` 开头才算归属本题。
+    build 阶段约定镜像名包含归一化后的题目身份：历史格式是 ``<id>-<slug>``；
+    pwn host build 格式是 ``pwn-<workspace>-<delivery_name>``。因此仓库名必须
+    等于、以题目 id/交付名开头，或以完整交付名结尾才算归属本题。
     """
     repo = _docker_safe(_image_repo(image))
     if not repo:
         return False
-    candidates = {_docker_safe(challenge_id), _docker_safe(delivery_name)}
-    return any(
-        candidate and (repo == candidate or repo.startswith(f"{candidate}-"))
-        for candidate in candidates
+    challenge = _docker_safe(challenge_id)
+    delivery = _docker_safe(delivery_name)
+    if challenge and (repo == challenge or repo.startswith(f"{challenge}-")):
+        return True
+    return bool(
+        delivery
+        and (
+            repo == delivery
+            or repo.startswith(f"{delivery}-")
+            or repo.endswith(f"-{delivery}")
+        )
     )
 
 

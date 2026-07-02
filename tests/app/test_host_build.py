@@ -20,6 +20,26 @@ def _workspace(tmp_path: Path) -> ExecutionWorkspace:
     return ExecutionWorkspace("exec", root)
 
 
+def _expected_build_command(image: str, *, category: str, challenge_id: str) -> list[str]:
+    return [
+        "docker",
+        "build",
+        "--label",
+        "ctf-factory.managed=true",
+        "--label",
+        "ctf-factory.workspace_id=exec",
+        "--label",
+        f"ctf-factory.challenge_id={challenge_id}",
+        "--label",
+        f"ctf-factory.category={category}",
+        "-t",
+        image,
+        "-f",
+        "deploy/Dockerfile",
+        ".",
+    ]
+
+
 def _web_challenge(workspace: ExecutionWorkspace, *, compose: str | None = None) -> Path:
     challenge = workspace.output / "challenges" / "web" / "web-0001-demo"
     deploy = challenge / "deploy"
@@ -55,6 +75,39 @@ def _web_challenge(workspace: ExecutionWorkspace, *, compose: str | None = None)
     return challenge
 
 
+def _pwn_challenge(workspace: ExecutionWorkspace) -> Path:
+    challenge = workspace.output / "challenges" / "pwn" / "pwn-0001-baby-stack"
+    deploy = challenge / "deploy"
+    (deploy / "src").mkdir(parents=True)
+    (deploy / "src" / "vuln.c").write_text("int main(){return 0;}\n", encoding="utf-8")
+    (deploy / "Dockerfile").write_text(
+        "FROM alpine\nCOPY deploy/src/vuln.c /tmp/vuln.c\n",
+        encoding="utf-8",
+    )
+    (deploy / "docker-compose.yml").write_text(
+        "services:\n"
+        "  challenge:\n"
+        "    image: pwn-demo:latest\n"
+        "    container_name: pwn-demo\n"
+        "    environment:\n"
+        "      - FLAG=flag{demo}\n",
+        encoding="utf-8",
+    )
+    (challenge / "metadata.json").write_text(
+        json.dumps(
+            {
+                "id": "pwn-0001",
+                "category": "pwn",
+                "docker_image": "pwn-demo:latest",
+                "build_status": "pending",
+                "flag": "flag{demo}",
+            }
+        ),
+        encoding="utf-8",
+    )
+    return challenge
+
+
 def test_host_builder_runs_fixed_docker_build_and_stamps_metadata(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     challenge = _web_challenge(workspace)
@@ -68,27 +121,70 @@ def test_host_builder_runs_fixed_docker_build_and_stamps_metadata(tmp_path: Path
         calls.append(command)
         if command[:3] == ["docker", "image", "inspect"]:
             return subprocess.CompletedProcess(command, 0, stdout="sha256:image\n", stderr="")
+        if command[:3] == ["docker", "image", "prune"]:
+            return subprocess.CompletedProcess(command, 0, stdout="Total reclaimed space: 0B\n", stderr="")
         assert kwargs["cwd"] == challenge
         return subprocess.CompletedProcess(command, 0, stdout="built\n", stderr="")
 
     with patch("hermes.host_build.subprocess.run", side_effect=fake_run):
         results = HostBuilder().build_workspace(workspace, validation_set)
 
-    assert calls[0] == [
-        "docker",
-        "build",
-        "-t",
+    assert calls[0] == _expected_build_command(
         "web-0001-demo:latest",
+        category="web",
+        challenge_id="web-0001",
+    )
+    assert calls[2] == [
+        "docker",
+        "image",
+        "prune",
         "-f",
-        "deploy/Dockerfile",
-        ".",
+        "--filter",
+        "label=ctf-factory.managed=true",
+        "--filter",
+        "label=ctf-factory.workspace_id=exec",
     ]
     assert results[0].image == "web-0001-demo:latest"
     metadata = read_json(challenge / "metadata.json")
     assert metadata["build_status"] == "passed"
-    assert metadata["build_command"] == "docker build -t web-0001-demo:latest -f deploy/Dockerfile ."
+    assert metadata["host_build_command"] == calls[0]
     assert metadata["docker_image_id"] == "sha256:image"
     assert metadata["host_build_log"] == "logs/host-build/web-0001.docker-build.log"
+
+
+def test_host_builder_rewrites_pwn_image_to_workspace_scoped_tag(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    challenge = _pwn_challenge(workspace)
+    validation_set = WorkspaceValidationSet(
+        candidates={"pwn-0001": challenge},
+        output_manifest_hash="sha256:before",
+    )
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[:3] == ["docker", "image", "inspect"]:
+            return subprocess.CompletedProcess(command, 0, stdout="sha256:image\n", stderr="")
+        if command[:3] == ["docker", "image", "prune"]:
+            return subprocess.CompletedProcess(command, 0, stdout="Total reclaimed space: 0B\n", stderr="")
+        assert kwargs["cwd"] == challenge
+        return subprocess.CompletedProcess(command, 0, stdout="built\n", stderr="")
+
+    with patch("hermes.host_build.subprocess.run", side_effect=fake_run):
+        results = HostBuilder().build_workspace(workspace, validation_set)
+
+    expected_image = "pwn-exec-pwn-0001-baby-stack:latest"
+    assert calls[0] == _expected_build_command(
+        expected_image,
+        category="pwn",
+        challenge_id="pwn-0001",
+    )
+    assert results[0].image == expected_image
+    metadata = read_json(challenge / "metadata.json")
+    compose = (challenge / "deploy" / "docker-compose.yml").read_text(encoding="utf-8")
+    assert metadata["docker_image"] == expected_image
+    assert f"image: {expected_image}" in compose
+    assert "container_name: pwn-exec-pwn-0001-baby-stack" in compose
 
 
 def test_host_builder_rejects_compose_volumes(tmp_path: Path) -> None:
@@ -135,15 +231,11 @@ def test_host_builder_failure_exposes_log_tails(tmp_path: Path) -> None:
         HostBuilder().build_workspace(workspace, validation_set)
 
     assert error.value.challenge_id == "web-0001"
-    assert error.value.command == [
-        "docker",
-        "build",
-        "-t",
+    assert error.value.command == _expected_build_command(
         "web-0001-demo:latest",
-        "-f",
-        "deploy/Dockerfile",
-        ".",
-    ]
+        category="web",
+        challenge_id="web-0001",
+    )
     assert "COPY failed" in (error.value.stdout_tail or "")
     assert "missing deploy/src/app.py" in (error.value.stderr_tail or "")
 

@@ -31,6 +31,10 @@ def test_build_attempt_repair_prompt_anchors_terminal_to_allowed_root() -> None:
     assert "If `pwd` prints `/`, immediately `cd \"$CHAL_ROOT\"`" in prompt
     assert "may contain the required literal `FLAG=<metadata.flag>`" in prompt
     assert "under `environment:` (singular)" in prompt
+    assert "pwn-{workspace_id[:6]}-{challenge_name}:latest" in prompt
+    assert "do not invent or restore generic image names" in prompt
+    assert "ctf-factory.*" in prompt
+    assert "Do not run broad `docker image prune`" in prompt
     normalized = " ".join(prompt.split())
     assert "Do not replace it with `${FLAG}`" in normalized
     assert "forbidden in player-facing `attachments/`" in normalized

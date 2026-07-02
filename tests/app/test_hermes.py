@@ -51,6 +51,10 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertIn("server = /usr/sbin/chroot", prompt)
         self.assertIn("server_args = --userspec=1000:1000", prompt)
         self.assertIn("/etc/xinetd.d/ctf", prompt)
+        self.assertIn("pwn-{workspace_id[:6]}-{challenge_name}:latest", prompt)
+        self.assertIn("do not fight this\n  rewrite", prompt)
+        self.assertIn("ctf-factory.*", prompt)
+        self.assertIn("workspace-scoped dangling managed images", prompt)
 
     def test_shard_prompt_guides_pwntools_exp_debugging(self):
         prompt = (ROOT / "prompts" / "shard_prompt.md").read_text(encoding="utf-8")
@@ -121,6 +125,8 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertIn("read `deploy/Dockerfile`, not", prompt)
         self.assertIn("/output/...", prompt)
         self.assertIn("/attachments/...", prompt)
+        self.assertIn("pwn-{workspace_id[:6]}-{challenge_name}:latest", prompt)
+        self.assertIn("ctf-factory.*", prompt)
 
     def test_shard_prompt_enforces_workspace_path_discipline(self):
         prompt = (ROOT / "prompts" / "shard_prompt.md").read_text(encoding="utf-8")

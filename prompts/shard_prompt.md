@@ -228,7 +228,12 @@ Container rules for Web and Pwn:
   configuration, not the player attachment. Do not use `${FLAG}` interpolation.
   Do not write the plaintext flag into the Dockerfile, image layer, business
   source, or any file under `attachments/`.
-- Set both Compose `image` and `container_name` to the challenge name,
+- For Pwn, the host runner owns final image naming and will normalize
+  `metadata.docker_image`, Compose `image`, and Compose `container_name` to
+  `pwn-{workspace_id[:6]}-{challenge_name}:latest` before the authoritative
+  build. Use a reasonable placeholder while authoring, but do not fight this
+  rewrite or change it back to a generic name such as `pwn-demo:latest`.
+- For Web, set both Compose `image` and `container_name` to the challenge name,
   normalized to a stable lowercase Docker-safe identifier using only
   `[a-z0-9][a-z0-9_.-]`. Use the same identifier for the built image tag,
   validation commands, and `metadata.docker_image`.
@@ -381,6 +386,13 @@ Pwn rules:
   runner will execute the only allowed image build command after you return:
   `docker build -t <metadata.docker_image> -f deploy/Dockerfile .` from the
   challenge root.
+- Pwn: before that build, the host runner rewrites the image identity to
+  `pwn-{workspace_id[:6]}-{challenge_name}:latest` and synchronizes
+  `metadata.docker_image`, Compose `image`, and Compose `container_name`.
+- The host runner labels managed images with `ctf-factory.*` metadata and
+  prunes workspace-scoped dangling managed images after successful Docker
+  builds. Do not run broad `docker image prune` or `docker builder prune`
+  commands from Hermes.
 - Web/Pwn: statically self-check that Compose has the literal
   `FLAG=flag{...}`, `image`, and `container_name`, defines no `volumes`, and is
   wired to the intended non-root account (`ctf` for ordinary Pwn, or the
@@ -405,10 +417,12 @@ Pwn rules:
 - Record intended compiler/runtime versions and artifact SHA-256 in
   `metadata.json` when an artifact file is produced.
 - For Web/Pwn Docker images, set `metadata.docker_image` to the stable image tag
-  the host runner should build. `metadata.build_command` may be the fixed host
-  command above; the runner will overwrite it with the authoritative command
-  and set `metadata.build_status` to `passed` only after Docker build succeeds.
-  Do not claim that a Docker image was built by Hermes.
+  the host runner should build. For Pwn, this value is only an authoring
+  placeholder because the runner will replace it with
+  `pwn-{workspace_id[:6]}-{challenge_name}:latest`. `metadata.build_command`
+  may be the fixed host command above; the runner will overwrite it with the
+  authoritative command and set `metadata.build_status` to `passed` only after
+  Docker build succeeds. Do not claim that a Docker image was built by Hermes.
 - Re builds must verify the artifact architecture against the matrix
   `target_platform`. `file attachments/<artifact>` must report a matching
   artifact: `linux/amd64` → Linux ELF x86-64, `linux/arm64` → Linux ELF

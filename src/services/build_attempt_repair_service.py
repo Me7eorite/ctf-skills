@@ -454,6 +454,15 @@ Rules:
   injection logic. Plaintext flag material is forbidden in player-facing
   `attachments/`, solver hardcoding, and published artifacts, not in the
   required Compose injection entry.
+- For Pwn repairs, do not invent or restore generic image names such as
+  `pwn-demo:latest`. The host runner owns final image identity and rewrites
+  `metadata.docker_image`, Compose `image`, and Compose `container_name` to
+  `pwn-{{workspace_id[:6]}}-{{challenge_name}}:latest` before the controlled
+  Docker build.
+- The host runner labels managed images with `ctf-factory.*` metadata and
+  prunes workspace-scoped dangling managed images after successful Docker
+  builds. Do not run broad `docker image prune` or `docker builder prune`
+  commands from this repair.
 - Do not call `./bin/progress` or `$WORKSPACE_ROOT/bin/progress`; this repair
   service records repair progress outside Hermes.
 
