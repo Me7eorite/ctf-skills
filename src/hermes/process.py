@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import shutil
 import signal
@@ -319,8 +320,8 @@ def verify_terminal_workspace_visibility(
         '{"ok":true,"probe":"terminal_workspace"}'
     )
     probe_log = log_path.with_name(log_path.name + ".terminal_probe.log")
-    returncode = invoke(
-        prompt,
+    returncode = _invoke_terminal_workspace_probe(
+        prompt=prompt,
         arguments=arguments,
         log_path=probe_log,
         cwd=cwd,
@@ -328,10 +329,95 @@ def verify_terminal_workspace_visibility(
         timeout=timeout,
     )
     if returncode != 0:
+        if backend == "docker":
+            cleanup = cleanup_hermes_terminal_containers(arguments=arguments)
+            _append_probe_recovery_log(probe_log, cleanup)
+            try:
+                marker.unlink()
+            except FileNotFoundError:
+                pass
+            returncode = _invoke_terminal_workspace_probe(
+                prompt=prompt,
+                arguments=arguments,
+                log_path=probe_log,
+                cwd=cwd,
+                environment=environment,
+                timeout=timeout,
+            )
+            if returncode == 0:
+                _append_probe_recovery_log(
+                    probe_log,
+                    "terminal workspace probe recovered after cleaning stale Hermes Docker containers",
+                )
+            else:
+                raise TerminalWorkspaceVisibilityError(
+                    "Hermes terminal workspace probe failed after cleaning stale "
+                    f"Docker terminal containers (return code {returncode}); see {probe_log}"
+                )
+        else:
+            raise TerminalWorkspaceVisibilityError(
+                f"Hermes terminal workspace probe failed with return code {returncode}; "
+                f"see {probe_log}"
+            )
+    if returncode != 0:
         raise TerminalWorkspaceVisibilityError(
             f"Hermes terminal workspace probe failed with return code {returncode}; "
             f"see {probe_log}"
         )
+    if not marker.is_file():
+        if backend == "docker":
+            cleanup = cleanup_hermes_terminal_containers(arguments=arguments)
+            _append_probe_recovery_log(probe_log, cleanup)
+            returncode = _invoke_terminal_workspace_probe(
+                prompt=prompt,
+                arguments=arguments,
+                log_path=probe_log,
+                cwd=cwd,
+                environment=environment,
+                timeout=timeout,
+            )
+            if returncode == 0 and marker.is_file():
+                _append_probe_recovery_log(
+                    probe_log,
+                    "terminal workspace probe recovered after marker-miss cleanup",
+                )
+            elif returncode != 0:
+                raise TerminalWorkspaceVisibilityError(
+                    "Hermes terminal workspace probe failed after marker-miss cleanup "
+                    f"(return code {returncode}); see {probe_log}"
+                )
+            if marker.is_file():
+                pass
+            else:
+                backend_label = backend or "unknown"
+                env_detail = (
+                    f"TERMINAL_CWD={environment.get('TERMINAL_CWD', '')!r}, "
+                    "TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE="
+                    f"{environment.get('TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE', '')!r}, "
+                    "TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES="
+                    f"{environment.get('TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES', '')!r}"
+                )
+                raise TerminalWorkspaceVisibilityError(
+                    f"Hermes terminal backend ({backend_label}) did not write to the host execution workspace "
+                    f"after stale-container cleanup. cwd={cwd}; expected marker={marker}; {env_detail}."
+                )
+        else:
+            backend_label = backend or "unknown"
+            env_detail = (
+                f"TERMINAL_CWD={environment.get('TERMINAL_CWD', '')!r}, "
+                "TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE="
+                f"{environment.get('TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE', '')!r}, "
+                "TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES="
+                f"{environment.get('TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES', '')!r}"
+            )
+            raise TerminalWorkspaceVisibilityError(
+                f"Hermes terminal backend ({backend_label}) did not write to the host execution workspace. "
+                f"cwd={cwd}; expected marker={marker}; {env_detail}. "
+                "It likely wrote inside the container private cwd such as /home/hermes. "
+                "Stop stale hermes-* docker containers and ensure the backend starts "
+                "with TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE=1, or use a terminal "
+                "backend that writes directly to the host workspace."
+            )
     if not marker.is_file():
         backend_label = backend or "unknown"
         env_detail = (
@@ -377,6 +463,103 @@ def verify_terminal_workspace_visibility(
         raise TerminalWorkspaceVisibilityError(
             f"cannot remove terminal workspace probe marker: {exc}"
         ) from exc
+
+
+def _invoke_terminal_workspace_probe(
+    *,
+    prompt: str,
+    arguments: list[str],
+    log_path: Path,
+    cwd: Path,
+    environment: dict[str, str],
+    timeout: int,
+) -> int:
+    return invoke(
+        prompt,
+        arguments=arguments,
+        log_path=log_path,
+        cwd=cwd,
+        environment=environment,
+        timeout=timeout,
+    )
+
+
+def cleanup_hermes_terminal_containers(*, arguments: list[str]) -> str:
+    """Remove Hermes-managed Docker terminal containers for the active profile.
+
+    This is deliberately narrow: only containers labeled both
+    ``hermes-agent=1`` and the current ``hermes-profile`` are removed. It is
+    used after a probe timeout because a stuck terminal process can otherwise
+    poison subsequent retries for the same profile.
+    """
+
+    profile = _profile_from_arguments(arguments)
+    if not profile:
+        return "skipped stale Hermes Docker cleanup: profile is unknown"
+    docker = shutil.which("docker")
+    if not docker:
+        return "skipped stale Hermes Docker cleanup: docker is unavailable"
+    filters = [
+        "--filter",
+        "label=hermes-agent=1",
+        "--filter",
+        f"label=hermes-profile={_sanitize_docker_label(profile)}",
+    ]
+    try:
+        ps = subprocess.run(
+            [docker, "ps", "-aq", *filters],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            stdin=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"stale Hermes Docker cleanup skipped: docker ps failed: {exc}"
+    if ps.returncode != 0:
+        return f"stale Hermes Docker cleanup skipped: docker ps exited {ps.returncode}: {ps.stderr.strip()}"
+    ids = [line.strip() for line in ps.stdout.splitlines() if line.strip()]
+    if not ids:
+        return f"stale Hermes Docker cleanup found no containers for profile {profile!r}"
+    try:
+        rm = subprocess.run(
+            [docker, "rm", "-f", *ids],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+            stdin=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"stale Hermes Docker cleanup failed: docker rm failed: {exc}"
+    if rm.returncode != 0:
+        return f"stale Hermes Docker cleanup failed: docker rm exited {rm.returncode}: {rm.stderr.strip()}"
+    return f"removed {len(ids)} stale Hermes Docker terminal container(s) for profile {profile!r}: {', '.join(ids)}"
+
+
+def _profile_from_arguments(arguments: list[str]) -> str | None:
+    for index, value in enumerate(arguments):
+        if value in {"-p", "--profile"} and index + 1 < len(arguments):
+            profile = arguments[index + 1].strip()
+            return profile or None
+        if value.startswith("--profile="):
+            profile = value.split("=", 1)[1].strip()
+            return profile or None
+    return None
+
+
+def _sanitize_docker_label(value: str) -> str:
+    sanitized = re.sub(r"[^A-Za-z0-9_.-]", "_", value)
+    return sanitized or "default"
+
+
+def _append_probe_recovery_log(path: Path, message: str) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(f"\n[probe-recovery] {message}\n")
+    except OSError:
+        pass
 
 def _terminal_env_from_dotenv(dotenv_path: Path) -> str | None:
     try:
