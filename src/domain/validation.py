@@ -810,9 +810,24 @@ def _plaintext_flag_locations(
         if not root.exists():
             continue
         for path in root.rglob("*"):
+            if _is_allowed_plaintext_flag_location(challenge_dir, path, category):
+                continue
             if path.is_file() and _file_contains_bytes(path, flag):
                 hits.append(path.relative_to(challenge_dir).as_posix())
     return sorted(set(hits))
+
+
+def _is_allowed_plaintext_flag_location(
+    challenge_dir: Path, path: Path, category: str | None
+) -> bool:
+    """Return True for organizer-only flag carriers required by contracts."""
+    if category not in {"web", "pwn"}:
+        return False
+    try:
+        relative = path.relative_to(challenge_dir).as_posix()
+    except ValueError:
+        return False
+    return relative == "deploy/docker-compose.yml"
 
 
 

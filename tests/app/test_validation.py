@@ -171,6 +171,44 @@ class ValidationTests(unittest.TestCase):
 
         self.assertEqual(self.validator.contract_errors(challenge, metadata), [])
 
+    def test_pwn_compose_literal_flag_does_not_make_intended_path_unnecessary(self):
+        challenge = self.paths.challenges / "pwn" / "pwn-compose-flag-001"
+        metadata = _write_minimal_pwn_contract(challenge)
+
+        reason = self.validator._intended_path_unnecessary(
+            challenge, metadata, metadata["flag"]
+        )
+
+        self.assertIsNone(reason)
+
+    def test_pwn_plaintext_flag_in_attachment_still_rejects_intended_path(self):
+        challenge = self.paths.challenges / "pwn" / "pwn-attachment-flag-001"
+        metadata = _write_minimal_pwn_contract(challenge)
+        (challenge / "attachments" / "note.txt").write_text(
+            f"debug flag: {metadata['flag']}\n",
+            encoding="utf-8",
+        )
+
+        reason = self.validator._intended_path_unnecessary(
+            challenge, metadata, metadata["flag"]
+        )
+
+        self.assertIsNotNone(reason)
+        self.assertIn("attachments/note.txt", reason)
+
+    def test_pwn_exp_reading_compose_for_flag_is_rejected(self):
+        challenge = self.paths.challenges / "pwn" / "pwn-exp-compose-001"
+        metadata = _write_minimal_pwn_contract(challenge)
+        (challenge / "writenup").mkdir(parents=True, exist_ok=True)
+        (challenge / "writenup" / "exp.py").write_text(
+            "print(open('deploy/docker-compose.yml').read())\n",
+            encoding="utf-8",
+        )
+
+        errors = self.validator.contract_errors(challenge, metadata)
+
+        self.assertTrue(any("docker-compose" in error for error in errors))
+
     def test_pwn_dockerfile_only_chroot_setup_allowed_in_dockerfile(self):
         challenge = self.paths.challenges / "pwn" / "pwn-dockerfile-001"
         metadata = _write_minimal_pwn_contract(challenge)
