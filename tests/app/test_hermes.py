@@ -83,7 +83,7 @@ class HermesRunnerTests(unittest.TestCase):
         self.paths.initialize()
         self.paths.prompt_template.parent.mkdir(parents=True, exist_ok=True)
         self.paths.prompt_template.write_text(
-            "{design_skill}\n{progress_command}\n{shard_name}\n{worker}\n",
+            "{design_skill}\n{progress_command}\n{shard_name}\n{worker}\n{repair_section}\n",
             encoding="utf-8",
         )
         self.paths.generation_profile.write_text("{}\n", encoding="utf-8")
@@ -111,6 +111,19 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertIn("progress", prompt)
         self.assertIn(shard.name, prompt)
         self.assertIn("worker-1", prompt)
+
+    def test_runner_prompt_accepts_retry_context(self):
+        shard = self.paths.shards / "running" / "web-0001-0001.worker.json"
+        report = self.paths.reports / "web.report.json"
+
+        prompt = HermesRunner(self.paths).render_prompt(
+            shard,
+            report,
+            "worker-1",
+            retry_context={"previous_error": "host build failed"},
+        )
+
+        self.assertIn("host build failed", prompt)
 
     def test_uses_uvx_fallback_when_hermes_is_not_on_path(self):
         with (
@@ -375,7 +388,6 @@ class HermesRunnerTests(unittest.TestCase):
             build_attempt_id=attempt_id,
             require_build_attempt=True,
         )
-
 
 
 

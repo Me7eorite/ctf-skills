@@ -283,6 +283,7 @@ class HermesRunner:
         resume_output_targets: Mapping[str, str] | None = None,
         repair_requested: bool = False,
         repair_context: Mapping[str, Any] | None = None,
+        retry_context: Mapping[str, Any] | None = None,
     ) -> str:
         """渲染送给 Hermes 的完整 prompt（含断点恢复计划）。"""
         return render_prompt(
@@ -297,6 +298,7 @@ class HermesRunner:
             resume_output_targets=resume_output_targets,
             repair_requested=repair_requested,
             repair_context=repair_context,
+            retry_context=retry_context,
         )
 
     def run(
