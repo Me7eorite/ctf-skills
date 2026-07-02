@@ -131,6 +131,10 @@ Directory discipline:
 - To enter a challenge from the workspace root, use the exact path reported in
   `logs/report.json` or discover it with `find ./output/challenges -name metadata.json`;
   never concatenate `./output/challenges/...` onto an already-entered challenge root.
+- The same path rule applies to file tools (`read_file`, `write_file`, patch):
+  if you are already in a challenge root, read `deploy/Dockerfile`, not
+  `./output/challenges/<category>/<id>-<slug>/deploy/Dockerfile`; if you need a
+  workspace-root path, first verify `./input/shard.json` exists from that root.
 - Do not use absolute synthetic paths such as `/output/...`, `/attachments/...`,
   `/writenup/...`, or `/workspace/executions/...` in write tools. Use paths
   relative to the workspace root or the exact challenge root you have entered.

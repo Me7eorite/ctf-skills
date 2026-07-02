@@ -117,6 +117,8 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertIn("A bare\n  `./bin/progress` call is always wrong", prompt)
         self.assertIn("already contains `metadata.json`, `validate.sh`", prompt)
         self.assertIn("never concatenate `./output/challenges/...`", prompt)
+        self.assertIn("The same path rule applies to file tools", prompt)
+        self.assertIn("read `deploy/Dockerfile`, not", prompt)
         self.assertIn("/output/...", prompt)
         self.assertIn("/attachments/...", prompt)
 
@@ -129,6 +131,8 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertIn("CHAL_ROOT=\"$(find \"$WORKSPACE_ROOT/output/challenges/<category>\"", prompt)
         self.assertIn("\"$WORKSPACE_ROOT/bin/progress\" --challenge <challenge-id>", prompt)
         self.assertIn("Never call only `{progress_command}` or `./bin/progress` by itself", prompt)
+        self.assertIn("The same path rule applies to file tools", prompt)
+        self.assertIn("read `deploy/Dockerfile`, not", prompt)
         self.assertIn("Do not use absolute synthetic paths", prompt)
         self.assertIn("/output/...", prompt)
         self.assertIn("/attachments/...", prompt)

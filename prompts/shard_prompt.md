@@ -125,6 +125,10 @@ confirming `test -f ./input/shard.json`.
 - From inside a challenge root, `metadata.json`, `validate.sh`, `writenup/`,
   `attachments/`, `src/`, and/or `deploy/` are direct children. Do not append
   `./output/challenges/...` again from that directory.
+- The same path rule applies to file tools (`read_file`, `write_file`, patch):
+  if you are already in a challenge root, read `deploy/Dockerfile`, not
+  `./output/challenges/<category>/<id>-<slug>/deploy/Dockerfile`; if you need a
+  workspace-root path, first verify `./input/shard.json` exists from that root.
 - Do not use absolute synthetic paths such as `/output/...`, `/attachments/...`,
   `/writenup/...`, or `/workspace/executions/...` in write tools. Use paths
   relative to the workspace root or the exact challenge root you have entered.

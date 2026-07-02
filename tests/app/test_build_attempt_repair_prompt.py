@@ -26,6 +26,8 @@ def test_build_attempt_repair_prompt_anchors_terminal_to_allowed_root() -> None:
     assert "Do not call `./bin/progress`" in prompt
     assert "do not use relative guesses" in prompt
     assert "Never prepend `output/challenges/...`" in prompt
+    assert "The same rule applies to file tools" in prompt
+    assert "use `deploy/Dockerfile`, not" in prompt
     assert "If `pwd` prints `/`, immediately `cd \"$CHAL_ROOT\"`" in prompt
     assert "may contain the required literal `FLAG=<metadata.flag>`" in prompt
     assert "under `environment:` (singular)" in prompt

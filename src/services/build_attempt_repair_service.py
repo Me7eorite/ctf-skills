@@ -472,6 +472,9 @@ Terminal tool usage:
   `metadata.json`, `deploy/docker-compose.yml`, `attachments/`, `src/`, and
   `writenup/wp.md`. Never prepend `output/challenges/...` once inside
   `$CHAL_ROOT`.
+- The same rule applies to file tools (`read_file`, `write_file`, patch): once
+  the allowed repair root is the challenge root, use `deploy/Dockerfile`, not
+  `./output/challenges/<category>/<id>-<slug>/deploy/Dockerfile`.
 - Before reading optional files, list the containing directory first, for
   example `ls -la deploy src attachments writenup 2>/dev/null || true`.
 - Do not use `eval`, ad-hoc quoted command strings, or long shell one-liners
