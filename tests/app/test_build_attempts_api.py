@@ -392,13 +392,23 @@ def test_list_backfills_unknown_artifact_status_from_existing_output(
         / f"{challenge_id}-demo"
     )
     challenge_dir.mkdir(parents=True)
-    write_json(challenge_dir / "metadata.json", {"id": challenge_id, "category": "web"})
+    write_json(
+        challenge_dir / "metadata.json",
+        {
+            "id": challenge_id,
+            "category": "web",
+            "solve_status": "passed",
+            "validation_status": "passed",
+        },
+    )
 
     response = client.get("/api/build-attempts")
 
     assert response.status_code == 200
     [row] = response.json()
     assert row["artifact_status"] == "present"
+    assert row["solve_status"] == "passed"
+    assert row["validation_status"] == "passed"
     assert row["resulting_challenge_dir"].endswith(f"{challenge_id}-demo")
     with transaction(factory=session_factory) as session:
         stored = session.get(build_model.BuildAttempt, UUID(row["id"]))

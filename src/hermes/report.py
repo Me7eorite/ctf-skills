@@ -77,6 +77,25 @@ def merge_validation_into_report(
         if target["solve_status"] == "failed":
             any_failed = True
 
+    summary = raw.get("execution_summary")
+    if isinstance(summary, dict):
+        total = len([entry for entry in challenges_list if isinstance(entry, dict)])
+        passed = sum(
+            1
+            for entry in challenges_list
+            if isinstance(entry, dict) and entry.get("solve_status") == "passed"
+        )
+        failed = sum(
+            1
+            for entry in challenges_list
+            if isinstance(entry, dict) and entry.get("solve_status") == "failed"
+        )
+        pending = max(total - passed - failed, 0)
+        summary["total_challenges"] = total
+        summary["passed"] = passed
+        summary["failed"] = failed
+        summary["pending_validation"] = pending
+
     # 设置报告级别的元数据（仅在不存在时设置，不覆盖已有值）
     if shard is not None:
         raw.setdefault("shard", str(shard))

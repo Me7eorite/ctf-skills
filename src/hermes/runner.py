@@ -124,6 +124,51 @@ def _validation_result_has_compose_cli_failure(result: Mapping[str, Any]) -> boo
     )
 
 
+def _stamp_validation_results_into_outputs(
+    candidates: Mapping[str, Path],
+    per_results: list[dict[str, Any]],
+) -> bool:
+    """Persist host validation outcomes into generated challenge artifacts."""
+    changed = False
+    for result in per_results:
+        challenge_id = result.get("challenge_id")
+        if not isinstance(challenge_id, str):
+            continue
+        challenge_dir = candidates.get(challenge_id)
+        if challenge_dir is None:
+            continue
+
+        metadata_path = challenge_dir / "metadata.json"
+        metadata = read_json(metadata_path, {})
+        if isinstance(metadata, dict):
+            updates: dict[str, Any] = {
+                "solve_status": result.get("solve_status", "failed"),
+                "validation_status": result.get("validation_status", ""),
+            }
+            if result.get("validation_elapsed") is not None:
+                updates["validation_elapsed"] = result.get("validation_elapsed")
+            if result.get("validation_error"):
+                updates["solve_note"] = result.get("validation_error")
+            before = dict(metadata)
+            metadata.update(updates)
+            if metadata != before:
+                write_json(metadata_path, metadata)
+                changed = True
+
+        report_path = challenge_dir / "logs" / "report.json"
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        before_report = (
+            report_path.read_text(encoding="utf-8") if report_path.exists() else None
+        )
+        merge_validation_into_report(report_path, [result])
+        after_report = (
+            report_path.read_text(encoding="utf-8") if report_path.exists() else None
+        )
+        if after_report != before_report:
+            changed = True
+    return changed
+
+
 def _bind_resume_targets_to_plan(
     plan: ShardResumePlan,
     *,
@@ -1228,6 +1273,14 @@ class HermesRunner:
 
         # 校验通过后重新捕获精确候选及 hash；任何校验后的修改都会阻止发布。
         try:
+            if validated_set is not None and _stamp_validation_results_into_outputs(
+                validated_set.candidates,
+                per_results,
+            ):
+                validated_set = prepare_workspace_validation(
+                    workspace,
+                    contract=publication_contract,
+                )
             publish_validation_set = prepare_workspace_validation(
                 workspace,
                 contract=publication_contract,
@@ -1442,9 +1495,9 @@ class HermesRunner:
             plan_by_id,
             validation_targets=dict(validation_set.candidates),
         )
-        # ChallengeValidator records solve_status/solve_note in metadata.json.
-        # Capture the approved hash after those host-owned mutations so the
-        # final publish fence compares against the actual validated tree.
+        _stamp_validation_results_into_outputs(validation_set.candidates, results)
+        # Capture the approved hash after host-owned validation mutations so
+        # the final publish fence compares against the actual validated tree.
         post_validation_set = prepare_workspace_validation(
             workspace,
             contract=contract,

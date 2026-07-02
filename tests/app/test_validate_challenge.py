@@ -260,6 +260,44 @@ class MergeValidationIntoReportTests(unittest.TestCase):
             self.assertEqual(entry["title"], "Existing")
             self.assertEqual(entry["solve_status"], "passed")
 
+    def test_updates_execution_summary_counts(self):
+        with TemporaryDirectory() as tmp:
+            report = Path(tmp) / "report.json"
+            report.write_text(
+                json.dumps(
+                    {
+                        "challenges": [
+                            {
+                                "id": "web-0001",
+                                "solve_status": "pending",
+                            }
+                        ],
+                        "execution_summary": {
+                            "total_challenges": 1,
+                            "passed": 0,
+                            "failed": 0,
+                            "pending_validation": 1,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            merge_validation_into_report(
+                report,
+                [
+                    {
+                        "challenge_id": "web-0001",
+                        "solve_status": "passed",
+                        "validation_status": "passed",
+                    }
+                ],
+            )
+
+            raw = json.loads(report.read_text(encoding="utf-8"))
+            self.assertEqual(raw["execution_summary"]["passed"], 1)
+            self.assertEqual(raw["execution_summary"]["failed"], 0)
+            self.assertEqual(raw["execution_summary"]["pending_validation"], 0)
+
     def test_any_failure_flips_runner_status(self):
         with TemporaryDirectory() as tmp:
             report = Path(tmp) / "report.json"

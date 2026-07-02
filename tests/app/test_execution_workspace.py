@@ -575,7 +575,28 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         )
 
         def invoke(_prompt, _log, *, workspace, **_kwargs):
-            self._artifact(workspace.output / "challenges")
+            artifact = self._artifact(workspace.output / "challenges")
+            metadata = json.loads((artifact / "metadata.json").read_text(encoding="utf-8"))
+            metadata["solve_status"] = "pending"
+            write_json(artifact / "metadata.json", metadata)
+            (artifact / "logs").mkdir()
+            write_json(
+                artifact / "logs" / "report.json",
+                {
+                    "challenges": [
+                        {
+                            "id": "web-0001",
+                            "solve_status": "pending",
+                        }
+                    ],
+                    "execution_summary": {
+                        "total_challenges": 1,
+                        "passed": 0,
+                        "failed": 0,
+                        "pending_validation": 1,
+                    },
+                },
+            )
             return 0
 
         def validate(_shard, _worker, _ids, _plans, workspace, contract):
@@ -672,7 +693,28 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         )
 
         def invoke(_prompt, _log, *, workspace, **_kwargs):
-            self._artifact(workspace.output / "challenges")
+            artifact = self._artifact(workspace.output / "challenges")
+            metadata = json.loads((artifact / "metadata.json").read_text(encoding="utf-8"))
+            metadata["solve_status"] = "pending"
+            write_json(artifact / "metadata.json", metadata)
+            (artifact / "logs").mkdir()
+            write_json(
+                artifact / "logs" / "report.json",
+                {
+                    "challenges": [
+                        {
+                            "id": "web-0001",
+                            "solve_status": "pending",
+                        }
+                    ],
+                    "execution_summary": {
+                        "total_challenges": 1,
+                        "passed": 0,
+                        "failed": 0,
+                        "pending_validation": 1,
+                    },
+                },
+            )
             return 0
 
         def validate(_shard, _worker, _ids, _plans, workspace, contract):
@@ -700,6 +742,18 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         self.assertTrue(
             (self.paths.challenges / "web" / "web-0001-demo").exists()
         )
+        published = self.paths.challenges / "web" / "web-0001-demo"
+        published_metadata = json.loads(
+            (published / "metadata.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(published_metadata["solve_status"], "passed")
+        self.assertEqual(published_metadata["validation_status"], "passed")
+        published_report = json.loads(
+            (published / "logs" / "report.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(published_report["challenges"][0]["solve_status"], "passed")
+        self.assertEqual(published_report["execution_summary"]["passed"], 1)
+        self.assertEqual(published_report["execution_summary"]["pending_validation"], 0)
 
     def test_timeout_policy_by_category_and_expert_difficulty(self) -> None:
         def payload(category: str, difficulty: str | None = None) -> dict:

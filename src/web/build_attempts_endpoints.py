@@ -202,7 +202,14 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
         if capped != requested_limit:
             headers["X-Limit-Capped"] = str(capped)
         return JSONResponse(
-            [_list_item_dict(row, summaries=summaries) for row in rows],
+            [
+                _list_item_dict(
+                    row,
+                    project_root=_project_paths(app).root,
+                    summaries=summaries,
+                )
+                for row in rows
+            ],
             headers=headers,
         )
 
@@ -246,6 +253,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
         event_payloads = [_progress_event_dict(row) for row in events]
         body = _attempt_dict(
             attempt,
+            project_root=_project_paths(app).root,
             failure_summary=_derive_failure_summary(event_payloads, attempt.error),
         )
         body["category"] = category
@@ -257,7 +265,10 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
             if isinstance(timeout_manifest.get("effective_timeout_seconds"), int):
                 body["effective_timeout_seconds"] = timeout_manifest["effective_timeout_seconds"]
                 body["timeout_source"] = timeout_manifest.get("timeout_source")
-        body["sibling_attempts"] = [_attempt_dict(row) for row in siblings]
+        body["sibling_attempts"] = [
+            _attempt_dict(row, project_root=_project_paths(app).root)
+            for row in siblings
+        ]
         body["progress_events"] = event_payloads
         body["executions"] = [_execution_dict(row) for row in executions]
         body["repair_runs"] = _repair_runs(_project_paths(app), attempt.id)
@@ -710,7 +721,9 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
                     status_code=HTTPStatus.NOT_FOUND,
                     detail="build attempt not found",
                 )
-            return JSONResponse(_attempt_dict(attempt))
+            return JSONResponse(
+                _attempt_dict(attempt, project_root=_project_paths(app).root)
+            )
 
     @app.delete("/api/build-attempts/{attempt_id}")
     def delete_build_attempt(
@@ -1333,8 +1346,10 @@ def _parse_optional_uuid(value: str | None, label: str) -> UUID | None:
 def _attempt_dict(
     attempt: BuildAttempt,
     *,
+    project_root: Path,
     failure_summary: str | None = None,
 ) -> dict[str, Any]:
+    artifact_metadata = _attempt_artifact_metadata(attempt, project_root=project_root)
     payload = {
         "id": str(attempt.id),
         "design_task_id": str(attempt.design_task_id),
@@ -1349,9 +1364,26 @@ def _attempt_dict(
         "started_at": _isofmt(attempt.started_at),
         "finished_at": _isofmt(attempt.finished_at),
     }
+    if artifact_metadata:
+        payload["solve_status"] = artifact_metadata.get("solve_status")
+        payload["validation_status"] = artifact_metadata.get("validation_status")
     if failure_summary:
         payload["failure_summary"] = failure_summary
     return payload
+
+
+def _attempt_artifact_metadata(
+    attempt: BuildAttempt,
+    *,
+    project_root: Path,
+) -> dict[str, Any] | None:
+    if not attempt.resulting_challenge_dir:
+        return None
+    metadata = read_json(
+        project_root / attempt.resulting_challenge_dir / "metadata.json",
+        None,
+    )
+    return metadata if isinstance(metadata, dict) else None
 
 
 def _execution_dict(execution) -> dict[str, Any]:
@@ -1405,10 +1437,12 @@ def _retry_response_payload(attempt_id: UUID) -> dict[str, Any]:
 def _list_item_dict(
     item: BuildAttemptListItem,
     *,
+    project_root: Path,
     summaries: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     row = _attempt_dict(
         item,
+        project_root=project_root,
         failure_summary=(summaries or {}).get(item.shard_basename) or _derive_failure_summary([], item.error),
     )
     row.update(
