@@ -47,7 +47,7 @@ function metricCard(label, value, icon, tone) {
 
 function rowsHtml(rows) {
   if (!rows.length) {
-    return `<tr><td colspan="8" class="table-empty">没有匹配的题目</td></tr>`;
+    return `<tr><td colspan="9" class="table-empty">没有匹配的题目</td></tr>`;
   }
   return rows.map((item) => `
     <tr>
@@ -61,6 +61,7 @@ function rowsHtml(rows) {
       <td>${statusBadge(item.build_status, "build")}</td>
       <td>${statusBadge(item.solve_status, "solve")}</td>
       <td>${deliveryBadge(item)}</td>
+      <td>${rowActions(item)}</td>
       <td class="table-cell-time">${escapeHtml(item.updated)}</td>
     </tr>
   `).join("");
@@ -87,6 +88,7 @@ function cardsHtml(rows) {
         <div><dt>技术栈</dt><dd>${escapeHtml(stackLabel(item))}</dd></div>
         <div><dt>更新</dt><dd>${escapeHtml(item.updated)}</dd></div>
       </dl>
+      <div class="ch-card-actions">${rowActions(item)}</div>
     </article>
   `).join("");
 }
@@ -119,6 +121,20 @@ function deliveryBadge(item) {
   return isDeliveryReady(item)
     ? softPill("可交付", "text-emerald-700 bg-emerald-50")
     : softPill("未就绪", "text-ink-700 bg-ink-100");
+}
+
+function rowActions(item) {
+  const ready = isDeliveryReady(item);
+  const busy = appState.challengeDeliveryDownloadingId === item.id;
+  if (!ready) {
+    return softPill("未就绪", "text-ink-700 bg-ink-100");
+  }
+  const disabled = busy;
+  return `
+    <button class="btn btn-secondary btn-sm ch-download-btn" data-challenge-id="${escapeHtml(item.id)}"${disabled ? " disabled" : ""}>
+      <i data-lucide="download"></i>${busy ? "打包中" : "下载"}
+    </button>
+  `;
 }
 
 function difficultyLabel(value) {
@@ -176,6 +192,37 @@ async function downloadDelivery() {
   }
 }
 
+async function downloadSingleDelivery(challengeId) {
+  if (!challengeId || appState.challengeDeliveryDownloadingId) return;
+  appState.challengeDeliveryDownloadingId = challengeId;
+  render(appState.data);
+  initIcons();
+  try {
+    const response = await fetch(`/api/challenges/${encodeURIComponent(challengeId)}/delivery/download`);
+    if (!response.ok) {
+      let payload = {};
+      try { payload = await response.json(); } catch { /* ignore parse */ }
+      throw new Error(payload.detail || payload.message || `下载失败 (${response.status})`);
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${challengeId}-交付包.zip`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    showToast("单题交付包已生成");
+  } catch (err) {
+    showToast(err.message, true);
+  } finally {
+    appState.challengeDeliveryDownloadingId = null;
+    render(appState.data);
+    initIcons();
+  }
+}
+
 export function render(data) {
   const root = document.querySelector('[data-view="challenges"]');
   if (!root) return;
@@ -208,7 +255,7 @@ export function render(data) {
       <div class="ch-list-summary">
         <div>
           <div class="card-title">题目清单</div>
-          <div class="card-subtitle">筛选内可交付 ${filteredStats.delivery} 题</div>
+          <div class="card-subtitle">筛选内可交付 ${filteredStats.delivery} 题 · 单题可直接下载</div>
         </div>
         <span class="pill">Web ${stats.categories.web} · Pwn ${stats.categories.pwn} · RE ${stats.categories.re}</span>
       </div>
@@ -232,11 +279,12 @@ export function render(data) {
             <tr>
               <th>题目</th>
               <th>类别</th>
-              <th>难度</th>
-              <th>技术栈</th>
+          <th>难度</th>
+          <th>技术栈</th>
               <th>构建</th>
               <th>EXP</th>
               <th>交付</th>
+              <th>操作</th>
               <th>更新</th>
             </tr>
           </thead>
@@ -255,6 +303,11 @@ export function bind() {
       downloadDelivery();
       return;
     }
+    const singleDownload = event.target.closest(".ch-download-btn");
+    if (singleDownload) {
+      downloadSingleDelivery(singleDownload.dataset.challengeId);
+      return;
+    }
     const button = event.target.closest(".filter-button");
     if (!button) return;
     appState.category = button.dataset.category;
@@ -269,4 +322,8 @@ export function bind() {
     initIcons();
     document.querySelector("#challengeSearch")?.focus();
   });
+}
+
+export function activate() {
+  appState.category = "all";
 }

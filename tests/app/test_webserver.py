@@ -174,6 +174,24 @@ class WebserverTests(unittest.TestCase):
         self.assertEqual(response.status_code, 409)
         self.assertIn("没有可交付题目", response.json()["detail"])
 
+    def test_single_delivery_download_returns_zip_for_one_challenge(self):
+        self._write_deliverable_challenge()
+
+        with self._client() as client:
+            response = client.get("/api/challenges/re-0001/delivery/download")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "application/zip")
+        archive_path = self.paths.work / "single-download-fixture.zip"
+        archive_path.write_bytes(response.content)
+        with zipfile.ZipFile(archive_path) as archive:
+            names = set(archive.namelist())
+        self.assertIn("题库资源/ctf-overview.xlsx", names)
+        self.assertEqual(
+            [name for name in names if name.startswith("工具/")],
+            ["工具/js-reverse-re-0001exp.zip"],
+        )
+
     def test_worker_action_returns_accepted_on_ok(self):
         tasks = _StubTaskManager(self.paths, (True, "worker 已启动"))
         with self._client(tasks=tasks) as client:

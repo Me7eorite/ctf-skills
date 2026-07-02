@@ -185,6 +185,28 @@ class PackingTests(unittest.TestCase):
         )
         self.assertEqual(images.max_row, 1)
 
+    def test_pack_can_scope_to_single_challenge_id(self):
+        self._challenge("re-0001", "re")
+        self._challenge("re-0002", "re")
+
+        summary = Packer(
+            self.paths,
+            PackerOptions(
+                skip_docker=True,
+                generated_on=date(2026, 6, 9),
+                include_ids={"re-0002"},
+            ),
+        ).pack(self.output)
+
+        self.assertEqual(summary["challenges"], 1)
+        overview_book = load_workbook(
+            self.output / "题库资源" / "ctf-overview.xlsx", read_only=True
+        )
+        self.addCleanup(overview_book.close)
+        overview = overview_book.active
+        self.assertEqual(overview.max_row, 2)
+        self.assertEqual(overview["A2"].value, "re-0002")
+
     def test_pack_replaces_stale_output(self):
         stale = self.output / "工具" / "old.txt"
         stale.parent.mkdir(parents=True)

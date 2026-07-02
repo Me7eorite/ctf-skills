@@ -2,7 +2,7 @@ import { appState, scheduleRefresh } from "./state.js";
 import { api } from "./api.js";
 import { showToast } from "./ui/toast.js";
 import { initIcons } from "./ui/icons.js";
-import { registerViews, setView, jumpTo } from "./router.js";
+import { registerViews, registerViewHooks, setView, jumpTo } from "./router.js";
 
 import * as overview from "./views/overview.js";
 import * as workerPool from "./views/worker-pool.js";
@@ -42,6 +42,10 @@ registerViews({
   "research-logs": researchLogs.render,
   "design-tasks": designTasks.render,
   "build-attempts": buildAttempts.render,
+});
+registerViewHooks({
+  challengesEnter: () => challenges.activate?.(),
+  "build-attemptsEnter": () => buildAttempts.activate?.(),
 });
 
 function routeFromHash() {

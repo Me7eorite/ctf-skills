@@ -1,86 +1,89 @@
-import {
-  dotTone,
-  escapeHtml,
-  formatDateTime,
-  runStatusLabel,
-  stageLabel,
-  statusIndicator,
-} from "../ui/format.js";
+import { api } from "../api.js";
+import { escapeHtml, formatDateTime, statusIndicator } from "../ui/format.js";
 
-const ACTIVE_STATUSES = new Set(["running", "queued"]);
-const FINISHED_STATUSES = new Set(["passed", "done", "completed", "failed"]);
+const LIMIT = 120;
+const ACTIVE_STATUSES = new Set(["queued", "running"]);
+const TERMINAL_STATUSES = new Set(["succeeded", "failed", "lost"]);
 
-function clampPercent(value) {
-  return Math.max(0, Math.min(100, Number(value || 0)));
+let cached = {
+  attempts: [],
+  lanes: [],
+  loading: false,
+  error: "",
+};
+
+function compareUpdatedDesc(a, b) {
+  return String(b.updated_at || b.created_at || "").localeCompare(String(a.updated_at || a.created_at || ""));
 }
 
-function snapshotsOf(progress) {
-  return Array.isArray(progress?.snapshots) ? progress.snapshots : [];
+function compareAttemptDesc(a, b) {
+  return String(b.created_at || "").localeCompare(String(a.created_at || ""));
 }
 
-function eventsOf(progress) {
-  return Array.isArray(progress?.events) ? progress.events : [];
+function attemptKey(item) {
+  return String(item.design_task_id || item.challenge_id || item.id || "");
 }
 
-function shortId(value) {
-  return String(value || "").slice(0, 8) || "-";
+function attemptLabel(item) {
+  const task = item.task_no ? `第 ${item.task_no} 题` : "";
+  const title = item.title || item.challenge_id || item.id || "-";
+  return task ? `${task} · ${title}` : title;
 }
 
-function shortQueueName(value) {
-  const name = String(value || "");
-  if (!name) return "-";
-  const match = name.match(/^([a-f0-9]{8})[a-f0-9-]*(?:\.iter-(\d+))?\.json$/i);
-  if (match) return match[2] ? `${match[1]} · ${match[2]}` : match[1];
-  return name.length > 28 ? `${name.slice(0, 18)}...${name.slice(-7)}` : name;
+function attemptSubLabel(item) {
+  return [
+    item.category || "",
+    item.difficulty || "",
+    item.worker || "",
+    item.shard_basename || "",
+  ].filter(Boolean).join(" · ");
 }
 
-function itemTitle(item) {
-  return item.challenge_id || shortQueueName(item.shard) || "-";
+function normalizeAttempts(rows) {
+  const grouped = new Map();
+  for (const item of rows || []) {
+    const key = attemptKey(item);
+    if (!key) continue;
+    const current = grouped.get(key);
+    if (!current || compareAttemptDesc(item, current) < 0) {
+      grouped.set(key, item);
+    }
+  }
+  return [...grouped.values()].sort(compareUpdatedDesc);
 }
 
-function itemSubTitle(item) {
-  const queue = shortQueueName(item.shard);
-  const worker = item.worker ? ` · ${item.worker}` : "";
-  return `${stageLabel(item.stage)} · ${queue}${worker}`;
+async function refreshData() {
+  if (cached.loading) return;
+  cached.loading = true;
+  cached.error = "";
+  try {
+    const [list, poolResult] = await Promise.all([
+      api(`/api/build-attempts?limit=${LIMIT}`),
+      api("/api/build-attempts/worker/pools"),
+    ]);
+    cached.attempts = normalizeAttempts(Array.isArray(list) ? list : []);
+    cached.lanes = Array.isArray(poolResult.pools) ? poolResult.pools : [];
+  } catch (err) {
+    cached.error = err.message;
+    cached.attempts = [];
+    cached.lanes = [];
+  } finally {
+    cached.loading = false;
+  }
 }
 
-function activitySummary(proc, snapshots) {
-  const lanePools = Array.isArray(proc.lane_pools) ? proc.lane_pools : [];
-  const lanes = lanePools.flatMap((pool) => Array.isArray(pool.lanes) ? pool.lanes : []);
+function summaryStats() {
   return {
-    running: snapshots.filter((item) => item.status === "running").length,
-    queued: snapshots.filter((item) => item.status === "queued").length,
-    failed: snapshots.filter((item) => item.status === "failed").length,
-    finished: snapshots.filter((item) => FINISHED_STATUSES.has(item.status)).length,
-    activeLanes: lanes.filter((lane) => lane.running).length,
-    totalLanes: lanes.length,
-    activePools: lanePools.filter((pool) => pool.running).length,
-    totalPools: lanePools.length,
+    total: cached.attempts.length,
+    active: cached.attempts.filter((item) => ACTIVE_STATUSES.has(item.status)).length,
+    succeeded: cached.attempts.filter((item) => item.status === "succeeded").length,
+    failed: cached.attempts.filter((item) => item.status === "failed").length,
+    lost: cached.attempts.filter((item) => item.status === "lost").length,
+    runningPools: cached.lanes.filter((pool) => pool.running).length,
   };
 }
 
-function renderHero(proc, snapshots) {
-  const summary = activitySummary(proc, snapshots);
-  const running = Boolean(proc.running || summary.activeLanes || summary.running);
-  const message = proc.message || (running ? "任务正在执行" : "暂无运行中的执行器");
-  return `
-    <section class="rp-hero">
-      <div class="rp-hero-main">
-        <span class="rp-eyebrow">实时进度</span>
-        <h2>${running ? "执行中" : "当前空闲"}</h2>
-        <p>${escapeHtml(message)}</p>
-      </div>
-      <div class="rp-hero-metrics">
-        ${metricItem("运行任务", summary.running, "activity")}
-        ${metricItem("等待执行", summary.queued, "clock")}
-        ${metricItem("活动队列", summary.activeLanes || summary.activePools, "git-branch")}
-        ${metricItem("失败记录", summary.failed, "triangle-alert")}
-      </div>
-    </section>
-  `;
-}
-
-function metricItem(label, value, icon) {
+function renderMetric(label, value, icon) {
   return `
     <div class="rp-metric">
       <i data-lucide="${icon}"></i>
@@ -90,275 +93,179 @@ function metricItem(label, value, icon) {
   `;
 }
 
-function renderActiveBoard(proc, snapshots, events) {
-  const active = snapshots
-    .filter((item) => ACTIVE_STATUSES.has(item.status))
-    .sort(compareUpdatedDesc)
-    .slice(0, 8);
-  const lanes = activeLanes(proc, snapshots, events);
-
+function renderHero() {
+  const stats = summaryStats();
   return `
-    <section class="rp-panel rp-active-panel">
-      <div class="rp-panel-head">
-        <div>
-          <h3>正在执行</h3>
-          <p>按实际进度聚合，不再区分单 worker 或多队列入口。</p>
-        </div>
-        ${proc.log ? `
-          <button class="btn btn-secondary btn-sm rp-open-log" data-log="${escapeHtml(proc.log)}">
-            <i data-lucide="file-text"></i>运行日志
-          </button>
-        ` : ""}
+    <section class="rp-hero">
+      <div class="rp-hero-main">
+        <span class="rp-eyebrow">实时进度</span>
+        <h2>构建任务总览</h2>
+        <p>按设计任务去重后的最新构建尝试，只保留最后态，不再把失败重试拆成多条任务。</p>
       </div>
-      <div class="rp-active-grid">
-        ${active.length
-          ? active.map(renderProgressCard).join("")
-          : `<div class="rp-empty">暂无进行中的任务</div>`}
+      <div class="rp-hero-metrics">
+        ${renderMetric("总任务", stats.total, "layout-grid")}
+        ${renderMetric("运行中", stats.active, "activity")}
+        ${renderMetric("已完成", stats.succeeded, "check-circle-2")}
+        ${renderMetric("失败 / 丢失", stats.failed + stats.lost, "triangle-alert")}
+        ${renderMetric("活跃队列", stats.runningPools, "git-branch")}
       </div>
-      ${lanes.length ? `
-        <div class="rp-lane-summary">
-          ${lanes.map(renderLaneCompact).join("")}
-        </div>
-      ` : ""}
     </section>
   `;
 }
 
 function renderProgressCard(item) {
-  const percent = clampPercent(item.percent);
+  const isActive = ACTIVE_STATUSES.has(item.status);
+  const isTerminal = TERMINAL_STATUSES.has(item.status);
+  const detail = item.failure_summary || item.error || item.message || (isActive ? "进行中" : isTerminal ? "已结束" : "");
   return `
     <article class="rp-task-card">
       <div class="rp-task-head">
         <div>
-          <strong>${escapeHtml(itemTitle(item))}</strong>
-          <span>${escapeHtml(itemSubTitle(item))}</span>
+          <strong>${escapeHtml(attemptLabel(item))}</strong>
+          <span>${escapeHtml(attemptSubLabel(item))}</span>
         </div>
         ${statusIndicator(item.status)}
       </div>
       <div class="rp-progress-line">
         <div class="rp-progress-track">
-          <i class="${item.status === "failed" ? "failed" : ""}" style="width:${percent}%"></i>
+          <i class="${item.status === "failed" || item.status === "lost" ? "failed" : ""}" style="width:${Number(item.percent || 0)}%"></i>
         </div>
-        <span>${percent}%</span>
+        <span>${Number(item.percent || 0)}%</span>
       </div>
-      ${item.message ? `<p>${escapeHtml(item.message)}</p>` : ""}
-      <time>${escapeHtml(formatDateTime(item.updated_at))}</time>
+      <div class="rp-task-meta">
+        <span>${escapeHtml(item.shard_basename || "-")}</span>
+        <span>${escapeHtml(formatDateTime(item.updated_at || item.created_at))}</span>
+      </div>
+      <p>${escapeHtml(detail)}</p>
     </article>
   `;
 }
 
-function activeLanes(proc, snapshots, events) {
-  const pools = Array.isArray(proc.lane_pools) ? proc.lane_pools : [];
-  return pools.flatMap((pool) => {
-    const lanes = Array.isArray(pool.lanes) ? pool.lanes : [];
-    return lanes.map((lane) => ({
-      ...lane,
-      pool,
-      progress: laneProgress(lane, snapshots, events),
-    }));
-  });
-}
-
-function laneProgress(lane, snapshots, events) {
-  const attempts = Array.isArray(lane.build_attempt_ids) ? lane.build_attempt_ids : [];
-  const relatedSnapshots = snapshots.filter((item) => attempts.some((id) => String(item.shard || "").includes(String(id))));
-  if (relatedSnapshots.length) {
-    return relatedSnapshots.slice().sort((a, b) => clampPercent(b.percent) - clampPercent(a.percent))[0];
-  }
-  const relatedEvents = events.filter((item) => attempts.some((id) => String(item.shard || "").includes(String(id))));
-  if (relatedEvents.length) {
-    const latest = relatedEvents[relatedEvents.length - 1];
-    return { ...latest, updated_at: latest.created_at, percent: latest.percent || 0 };
-  }
-  return {
-    stage: lane.running ? "queued" : "complete",
-    status: lane.running ? "running" : (lane.returncode === 0 ? "completed" : "failed"),
-    percent: lane.running ? 5 : 100,
-    message: lane.message || "",
-  };
-}
-
-function renderLaneCompact(lane) {
-  const status = lane.running ? "running" : (lane.returncode === 0 ? "completed" : "failed");
-  const percent = clampPercent(lane.progress?.percent);
+function renderProgressPanel() {
+  const activeRows = cached.attempts.filter((item) => ACTIVE_STATUSES.has(item.status));
+  const recentRows = cached.attempts.slice(0, 8);
   return `
-    <article class="rp-lane-card">
-      <div class="rp-lane-top">
-        <div>
-          <strong>队列 ${escapeHtml(lane.lane)}</strong>
-          <span>${escapeHtml(lane.worker || "-")} · ${lane.queue_length || 0} 个任务</span>
-        </div>
-        ${statusIndicator(status)}
-      </div>
-      <div class="rp-progress-line">
-        <div class="rp-progress-track">
-          <i class="${status === "failed" ? "failed" : ""}" style="width:${percent}%"></i>
-        </div>
-        <span>${percent}%</span>
-      </div>
-      <p>${escapeHtml(lane.progress?.message || lane.message || "")}</p>
-    </article>
-  `;
-}
-
-function renderQueuePanel(proc, snapshots, events) {
-  const queued = snapshots
-    .filter((item) => item.status === "queued")
-    .sort(compareUpdatedDesc)
-    .slice(0, 10);
-  const lanes = activeLanes(proc, snapshots, events);
-  const waitingLanes = lanes.filter((lane) => lane.running && !lane.progress?.challenge_id);
-  return `
-    <section class="rp-panel">
+    <section class="rp-panel rp-active-panel">
       <div class="rp-panel-head">
         <div>
-          <h3>等待队列</h3>
-          <p>只展示待执行项和队列容量，避免把执行形态重复堆叠。</p>
+          <h3>最新构建</h3>
+          <p>每个设计任务只显示最新一次尝试，重试不会重复计数。</p>
         </div>
       </div>
-      <div class="rp-queue-list">
-        ${queued.length
-          ? queued.map(renderQueueItem).join("")
-          : waitingLanes.length
-            ? waitingLanes.map(renderWaitingLane).join("")
-            : `<div class="rp-empty compact">暂无等待中的任务</div>`}
+      <div class="rp-active-grid">
+        ${activeRows.length ? activeRows.map(renderProgressCard).join("") : `<div class="rp-empty">暂无进行中的构建</div>`}
+      </div>
+      <div class="rp-lane-summary">
+        ${recentRows.length ? recentRows.map(renderProgressCard).join("") : ""}
       </div>
     </section>
   `;
 }
 
-function renderQueueItem(item) {
+function renderLanePool(pool) {
+  const laneCount = Array.isArray(pool.lanes) ? pool.lanes.length : 0;
   return `
-    <div class="rp-queue-item">
-      <span class="dot ${dotTone(item.status)}"></span>
-      <div>
-        <strong>${escapeHtml(itemTitle(item))}</strong>
-        <span>${escapeHtml(itemSubTitle(item))}</span>
+    <article class="rp-lane-card">
+      <div class="rp-lane-top">
+        <div>
+          <strong>队列池 ${escapeHtml(pool.id || "-")}</strong>
+          <span>${escapeHtml(pool.started_at || "-")} · ${laneCount} 条 lane</span>
+        </div>
+        ${statusIndicator(pool.running ? "running" : "completed")}
       </div>
-      <em>${escapeHtml(formatDateTime(item.updated_at))}</em>
-    </div>
+      <div class="rp-task-meta">
+        <span>活动 lane ${Number(pool.active_lanes || 0)}</span>
+        <span>成功 ${Number(pool.succeeded_lanes || 0)}</span>
+        <span>失败 ${Number(pool.failed_lanes || 0)}</span>
+      </div>
+    </article>
   `;
 }
 
-function renderWaitingLane(lane) {
+function renderPoolPanel() {
+  const runningPools = cached.lanes.filter((pool) => pool.running);
   return `
-    <div class="rp-queue-item">
-      <span class="dot dot-warn"></span>
-      <div>
-        <strong>队列 ${escapeHtml(lane.lane)}</strong>
-        <span>${escapeHtml(lane.worker || "-")} · ${lane.queue_length || 0} 个任务等待执行</span>
+    <section class="rp-panel">
+      <div class="rp-panel-head">
+        <div>
+          <h3>当前队列池</h3>
+          <p>只展示当前还活着的 lane pool。</p>
+        </div>
       </div>
-      <em>${escapeHtml(runStatusLabel("running"))}</em>
-    </div>
+      <div class="rp-lane-summary">
+        ${runningPools.length ? runningPools.map(renderLanePool).join("") : `<div class="rp-empty compact">暂无运行中的队列池</div>`}
+      </div>
+    </section>
   `;
 }
 
-function renderRecentPanel(snapshots) {
-  const rows = snapshots
-    .filter((item) => FINISHED_STATUSES.has(item.status))
-    .sort(compareUpdatedDesc)
-    .slice(0, 8);
+function renderRecentPanel() {
+  const rows = cached.attempts.filter((item) => TERMINAL_STATUSES.has(item.status)).slice(0, 8);
   return `
     <section class="rp-panel">
       <div class="rp-panel-head">
         <div>
           <h3>最近结果</h3>
-          <p>最近完成或失败的进度快照。</p>
+          <p>按最新尝试后的终态展示。</p>
         </div>
       </div>
       <div class="rp-result-list">
-        ${rows.length ? rows.map(renderResultItem).join("") : `<div class="rp-empty compact">暂无完成记录</div>`}
+        ${rows.length ? rows.map(renderProgressCard).join("") : `<div class="rp-empty compact">暂无终态记录</div>`}
       </div>
     </section>
   `;
 }
 
-function renderResultItem(item) {
-  return `
-    <div class="rp-result-item">
-      <div>
-        <strong>${escapeHtml(itemTitle(item))}</strong>
-        <span>${escapeHtml(itemSubTitle(item))}</span>
-      </div>
-      <div>
-        ${statusIndicator(item.status)}
-        <time>${escapeHtml(formatDateTime(item.updated_at))}</time>
-      </div>
-    </div>
-  `;
+function renderError() {
+  return cached.error ? `<div class="rp-warning">${escapeHtml(cached.error)}</div>` : "";
 }
 
-function renderEventStream(events) {
-  const recent = events.slice(-16).reverse();
-  return `
-    <aside class="rp-panel rp-events">
-      <div class="rp-panel-head">
-        <div>
-          <h3>事件流</h3>
-          <p>最近 16 条系统上报。</p>
-        </div>
-      </div>
-      <div class="rp-event-list">
-        ${recent.length ? recent.map(renderEvent).join("") : `<div class="rp-empty compact">暂无事件</div>`}
-      </div>
-    </aside>
-  `;
-}
-
-function renderEvent(item) {
-  return `
-    <div class="rp-event">
-      <span class="dot ${dotTone(item.status)}"></span>
-      <div>
-        <div>
-          <strong>${escapeHtml(item.challenge_id || shortQueueName(item.shard))}</strong>
-          <time>${escapeHtml(formatDateTime(item.created_at))}</time>
-        </div>
-        <span>${escapeHtml(stageLabel(item.stage))} · ${escapeHtml(runStatusLabel(item.status) || item.status)}</span>
-        ${item.message ? `<p>${escapeHtml(item.message)}</p>` : ""}
-      </div>
-    </div>
-  `;
-}
-
-function renderStorageWarning(progress) {
-  const warning = progress?.storage?.warning || "";
-  if (!warning) return "";
-  return `<div class="rp-warning">${escapeHtml(warning)}</div>`;
-}
-
-function compareUpdatedDesc(a, b) {
-  return String(b.updated_at || b.created_at || "").localeCompare(String(a.updated_at || a.created_at || ""));
-}
-
-export function render(data) {
+async function repaint() {
   const root = document.querySelector('[data-view="worker-pool"]');
   if (!root) return;
-  const proc = data.process || {};
-  const progress = data.progress || {};
-  const snapshots = snapshotsOf(progress);
-  const events = eventsOf(progress);
-
   root.innerHTML = `
-    ${renderStorageWarning(progress)}
-    ${renderHero(proc, snapshots)}
+    ${renderError()}
+    ${renderHero()}
     <div class="rp-layout">
       <main class="rp-main">
-        ${renderActiveBoard(proc, snapshots, events)}
-        ${renderQueuePanel(proc, snapshots, events)}
-        ${renderRecentPanel(snapshots)}
+        ${renderProgressPanel()}
+        ${renderPoolPanel()}
+        ${renderRecentPanel()}
       </main>
-      ${renderEventStream(events)}
+      <aside class="rp-panel rp-events">
+        <div class="rp-panel-head">
+          <div>
+            <h3>实时说明</h3>
+            <p>当前页用最新尝试推导任务状态，避免重复统计。</p>
+          </div>
+        </div>
+        <div class="rp-event-list">
+          <div class="rp-empty compact">当前只展示最新构建态与队列池，不再叠加历史事件。</div>
+        </div>
+      </aside>
     </div>
   `;
+}
+
+export function render() {
+  const root = document.querySelector('[data-view="worker-pool"]');
+  if (!root) return;
+  repaint();
+  if (!cached.loading && cached.attempts.length === 0 && !cached.error) {
+    refreshData().then(repaint).catch(() => repaint());
+  }
 }
 
 export function bind() {
   document.addEventListener("click", (event) => {
     const root = document.querySelector('[data-view="worker-pool"]');
     if (!root || !root.contains(event.target)) return;
-
-    const logBtn = event.target.closest(".rp-open-log");
-    if (logBtn?.dataset.log) import("../router.js").then(({ setView }) => setView("logs"));
+    const refresh = event.target.closest("[data-rp-refresh]");
+    if (refresh) {
+      cached.attempts = [];
+      cached.lanes = [];
+      cached.error = "";
+      render();
+    }
   });
 }

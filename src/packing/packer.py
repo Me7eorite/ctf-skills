@@ -86,6 +86,7 @@ class PackerOptions:
     skip_docker: bool = False
     require_docker: bool = False
     generated_on: date | None = None
+    include_ids: set[str] | None = None
 
 
 class Packer:
@@ -104,7 +105,7 @@ class Packer:
         output = (out_dir or self.paths.delivery_bundle).resolve()
         _prepare_output(output)
         directories = _create_layout(output)
-        challenges = _selected_challenges(self.paths)
+        challenges = _selected_challenges(self.paths, self.options.include_ids)
         overview_rows = []
         image_rows = []
         emitted = []

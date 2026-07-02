@@ -114,6 +114,35 @@ def create_app(
             background=BackgroundTask(shutil.rmtree, temp_root, ignore_errors=True),
         )
 
+    @app.get("/api/challenges/{challenge_id}/delivery/download")
+    def download_single_challenge_delivery(challenge_id: str) -> FileResponse:
+        temp_root: Path | None = None
+        try:
+            archive_path, temp_root = _prepare_single_challenge_delivery_archive(
+                service.paths,
+                challenge_id,
+            )
+        except PackingError as exc:
+            if temp_root is not None:
+                shutil.rmtree(temp_root, ignore_errors=True)
+            raise HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail=str(exc),
+            ) from exc
+        except OSError as exc:
+            if temp_root is not None:
+                shutil.rmtree(temp_root, ignore_errors=True)
+            raise HTTPException(
+                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+                detail=f"交付包生成失败：{exc}",
+            ) from exc
+        return FileResponse(
+            archive_path,
+            media_type="application/zip",
+            filename="单题交付包.zip",
+            background=BackgroundTask(shutil.rmtree, temp_root, ignore_errors=True),
+        )
+
     @app.post("/api/actions/worker")
     def post_worker_action() -> JSONResponse:
         return _action_response(*service.tasks.start("worker"))
@@ -233,6 +262,34 @@ def _prepare_challenge_delivery_archive(paths: ProjectPaths) -> tuple[Path, Path
         if int(summary.get("challenges") or 0) <= 0:
             raise PackingError("没有可交付题目：需要构建通过且 EXP 校验通过")
         archive_path = temp_root / "完成题目交付包.zip"
+        _zip_directory(bundle_dir, archive_path)
+        return archive_path, temp_root
+    except Exception:
+        shutil.rmtree(temp_root, ignore_errors=True)
+        raise
+
+
+def _prepare_single_challenge_delivery_archive(
+    paths: ProjectPaths,
+    challenge_id: str,
+) -> tuple[Path, Path]:
+    download_root = paths.work / "downloads"
+    download_root.mkdir(parents=True, exist_ok=True)
+    temp_root = Path(
+        tempfile.mkdtemp(prefix="challenge-delivery-", dir=download_root)
+    )
+    try:
+        bundle_dir = temp_root / "bundle"
+        summary = Packer(
+            paths,
+            PackerOptions(
+                skip_docker=True,
+                include_ids={challenge_id},
+            ),
+        ).pack(bundle_dir)
+        if int(summary.get("challenges") or 0) <= 0:
+            raise PackingError(f"没有可交付题目：{challenge_id}")
+        archive_path = temp_root / f"{challenge_id}-交付包.zip"
         _zip_directory(bundle_dir, archive_path)
         return archive_path, temp_root
     except Exception:

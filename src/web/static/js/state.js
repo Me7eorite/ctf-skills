@@ -5,6 +5,7 @@ export const appState = {
   search: "",
   timer: null,
   stateLoading: false,
+  challengeDeliveryDownloadingId: null,
   buildAttempts: {
     list: null,
     detail: null,

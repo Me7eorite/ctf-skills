@@ -110,6 +110,27 @@
   border-bottom: 1px solid var(--line);
 }
 
+.ba-filters {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: end;
+}
+
+.ba-filters .filter-item {
+  min-width: 0;
+  flex: 1 1 180px;
+}
+
+.ba-filters .filter-select,
+.ba-filters .filter-input {
+  width: 100%;
+}
+
+.ba-filters .filter-clear,
+.ba-filters .btn {
+  margin-left: 0;
+}
+
 .ba-lane-pools {
   margin-bottom: var(--space-lg);
 }
@@ -279,6 +300,10 @@
   color: var(--ink-700);
   font-size: var(--font-sm);
   overflow-wrap: anywhere;
+}
+
+.ba-card-actions .btn {
+  min-width: 92px;
 }
 
 .ba-detail-toolbar {
@@ -472,6 +497,10 @@
   .ba-detail-actions,
   .ba-card-actions {
     justify-content: flex-start;
+  }
+
+  .ba-filters {
+    grid-template-columns: 1fr;
   }
 
   .ba-page-actions .btn,

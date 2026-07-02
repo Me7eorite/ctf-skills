@@ -64,11 +64,11 @@ def test_worker_pool_shows_multilane_progress_and_beijing_time():
     fmt = FORMAT_JS.read_text(encoding="utf-8")
 
     assert "实时进度" in source
-    assert "renderActiveBoard(proc, snapshots, events)" in source
-    assert "renderQueuePanel(proc, snapshots, events)" in source
-    assert "lane.build_attempt_ids" in source
-    assert "laneProgress(lane, snapshots, events)" in source
-    assert "activeLanes(proc, snapshots, events)" in source
+    assert "/api/build-attempts?limit=" in source
+    assert "/api/build-attempts/worker/pools" in source
+    assert "normalizeAttempts" in source
+    assert "design_task_id" in source
+    assert "latest一次尝试" not in source
     assert 'timeZone: "Asia/Shanghai"' in fmt
     assert '"+08:00"' in fmt
 

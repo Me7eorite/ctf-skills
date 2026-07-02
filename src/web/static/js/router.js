@@ -6,6 +6,21 @@ export function setView(view) {
   if (view === "progress") view = "worker-pool";
   if (view === "research-logs") view = "logs";
   if (!titles[view]) view = "overview";
+  const previousView = appState.view;
+  if (
+    view === "challenges"
+    && previousView !== view
+    && typeof viewHooks.challengesEnter === "function"
+  ) {
+    viewHooks.challengesEnter();
+  }
+  if (
+    view === "build-attempts"
+    && previousView !== view
+    && typeof viewHooks["build-attemptsEnter"] === "function"
+  ) {
+    viewHooks["build-attemptsEnter"]();
+  }
   appState.view = view;
 
   document.querySelectorAll(".view").forEach((node) => {
@@ -48,6 +63,10 @@ export function registerViews(map) {
   viewRenderers = map;
 }
 
+export function registerViewHooks(map) {
+  viewHooks = map;
+}
+
 const titles = {
   "overview":         { title: "概览",     group: "生产管线" },
   "research-submit":  { title: "新建需求", group: "生产管线" },
@@ -65,3 +84,4 @@ const titles = {
 };
 
 let viewRenderers = {};
+let viewHooks = {};

@@ -32,7 +32,7 @@ export function openBuildAttemptsRoute({ detailId = null, filters = {} } = {}) {
   state.detail = null;
   state.list = null;
   state.filters = {
-    ...state.filters,
+    ...EMPTY_FILTERS,
     ...filters,
   };
   syncFilterDraft();
@@ -550,7 +550,7 @@ function renderList(root) {
     <div class="ba-page-header">
       <div>
         <h2 class="ba-page-title">构建记录</h2>
-        <p class="ba-page-desc">查看构建队列、运行结果和产物校验状态。</p>
+        <p class="ba-page-desc">队列、执行和产物状态按当前筛选实时展示。</p>
       </div>
       <div class="ba-page-actions">
         <button id="ba-start-selected" class="btn btn-primary btn-sm" ${selectedCount ? "" : "disabled"}
@@ -588,9 +588,9 @@ function renderList(root) {
       <div class="ba-list-summary">
         <div>
           <div class="card-title">构建记录</div>
-          <div class="card-subtitle">${rows.length} 条最新构建运行${selectedCount ? ` · 已选 ${selectedCount} 条` : ""}</div>
+          <div class="card-subtitle">${rows.length} 条记录${selectedCount ? ` · 已选 ${selectedCount} 条` : ""}${Object.values(state.filters).some(Boolean) ? " · 已应用筛选" : ""}</div>
         </div>
-        <span class="pill">可选 ${summary.queued} 条</span>
+        <span class="pill">待运行 ${summary.queued} · 运行中 ${summary.running}</span>
       </div>
       ${renderFilters()}
       ${rows.length ? `${renderTable(rows)}${renderAttemptCards(rows)}` : `<div class="empty card-body">没有匹配的构建记录</div>`}
@@ -715,7 +715,7 @@ function pruneSelection(rows) {
 function renderFilters() {
   const draft = state.filterDraft || state.filters;
   return `
-    <div class="filter-bar filter-bar-vertical-sm ba-filters">
+    <div class="filter-bar filter-bar-responsive ba-filters">
       <label class="filter-item">状态
         <select id="ba-filter-status" class="filter-select">
           <option value=""${draft.status === "" ? " selected" : ""}>全部</option>
@@ -1154,6 +1154,7 @@ function applyFiltersFromInputs() {
   state.detail = null;
   state.list = null;
   state.selection.clear();
+  state.lanePools = null;
   render(appState.data);
 }
 
@@ -1164,6 +1165,7 @@ function clearFilters() {
   state.detail = null;
   state.list = null;
   state.selection.clear();
+  state.lanePools = null;
   render(appState.data);
 }
 
@@ -1298,4 +1300,8 @@ export function bind() {
       scheduleFilterApply();
     }
   });
+}
+
+export function activate() {
+  state.filterDraft = { ...state.filters };
 }
