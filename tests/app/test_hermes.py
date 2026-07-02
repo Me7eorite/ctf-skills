@@ -23,10 +23,30 @@ class HermesRunnerTests(unittest.TestCase):
             prompt,
         )
 
+    def test_shard_prompt_uses_materialized_design_references(self):
+        prompt = (ROOT / "prompts" / "shard_prompt.md").read_text(encoding="utf-8")
+
+        for current in (
+            "design-core.md",
+            "category-tactics.md",
+            "difficulty-rubric.md",
+            "shared_generation_strategy.md",
+        ):
+            self.assertIn(current, prompt)
+        for legacy in (
+            "web-design.md",
+            "pwn-design.md",
+            "reverse-design.md",
+            "quality-gate.md",
+            "spec-template.md",
+            "delivery-format.md",
+        ):
+            self.assertNotIn(f"- `{legacy}`", prompt)
+
     def test_shard_prompt_requires_pwn_xinetd_chroot_launcher(self):
         prompt = (ROOT / "prompts" / "shard_prompt.md").read_text(encoding="utf-8")
 
-        self.assertIn("./references/scaffolds/pwn/xinetd-chroot/", prompt)
+        self.assertIn("{pwn_scaffold_reference}", prompt)
         self.assertIn("xinetd + chroot + TCP socket", prompt)
         self.assertIn("server = /usr/sbin/chroot", prompt)
         self.assertIn("server_args = --userspec=1000:1000", prompt)
@@ -47,7 +67,10 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertIn("Never run bare `./<binary>`", prompt)
         self.assertIn("subprocess.run([...], input=..., timeout=5)", prompt)
         self.assertIn("Do not write absolute", prompt)
+        self.assertIn("/output/...", prompt)
+        self.assertIn("/attachments/...", prompt)
         self.assertIn("/writenup/exp.py", prompt)
+        self.assertIn("Do not `chmod` files under `attachments/`", prompt)
         self.assertIn("application-level probe", prompt)
         self.assertIn("Choice:", prompt)
         self.assertIn("greater than `2^48`", prompt)
@@ -72,6 +95,7 @@ class HermesRunnerTests(unittest.TestCase):
         )
 
         self.assertIn("Pwn container launcher", prompt)
+        self.assertIn("../references/scaffolds/pwn/xinetd-chroot/", prompt)
         self.assertIn("./references/scaffolds/pwn/xinetd-chroot/", prompt)
         self.assertIn("xinetd + chroot + TCP socket", prompt)
         self.assertIn("/usr/sbin/chroot", prompt)
@@ -85,6 +109,24 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertIn("greater than `2^48`", prompt)
         self.assertIn("pwn_debug_report.json", prompt)
         self.assertIn("alignment gadget", prompt)
+        self.assertIn("Directory discipline", prompt)
+        self.assertIn("Never run\n  `./bin/progress` by itself", prompt)
+        self.assertIn("already contains `metadata.json`, `validate.sh`", prompt)
+        self.assertIn("never concatenate `./output/challenges/...`", prompt)
+        self.assertIn("/output/...", prompt)
+        self.assertIn("/attachments/...", prompt)
+
+    def test_shard_prompt_enforces_workspace_path_discipline(self):
+        prompt = (ROOT / "prompts" / "shard_prompt.md").read_text(encoding="utf-8")
+
+        self.assertIn("Workspace Path Discipline", prompt)
+        self.assertIn("Never call only `{progress_command}` or `./bin/progress` by itself", prompt)
+        self.assertIn("Do not use absolute synthetic paths", prompt)
+        self.assertIn("/output/...", prompt)
+        self.assertIn("/attachments/...", prompt)
+        self.assertIn("/workspace/executions/...", prompt)
+        self.assertIn("Before reading optional files such as `deploy/src/Makefile`", prompt)
+        self.assertIn("Do not `chmod` files under `attachments/`", prompt)
 
     def test_repair_prompt_uses_pwn_failure_details(self):
         prompt = render_validation_repair_prompt(

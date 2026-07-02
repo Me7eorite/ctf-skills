@@ -112,6 +112,27 @@ merely echo the expected flag in the exploit. The exploit must recover it throug
 intended vulnerability. Do not write `validate/*` progress events.
 Update documentation and metadata when the repaired implementation changes them.
 
+Directory discipline:
+- At the start of every terminal command that changes directories, anchor the
+  execution workspace first: `WORKSPACE_ROOT="$(pwd)"` when `./input/shard.json`
+  exists, or walk upward until `input/shard.json` is found.
+- Invoke progress only from the execution workspace root and only with the full
+  argument set: `--challenge`, `--stage`, `--status`, and `--message`. Never run
+  `./bin/progress` by itself, and do not emit `validate/*` progress events.
+- If the current directory already contains `metadata.json`, `validate.sh`, and
+  `writenup/exp.py`, it is the challenge root; do not run
+  `cd ./output/challenges/...` from there.
+- To enter a challenge from the workspace root, use the exact path reported in
+  `logs/report.json` or discover it with `find ./output/challenges -name metadata.json`;
+  never concatenate `./output/challenges/...` onto an already-entered challenge root.
+- Do not use absolute synthetic paths such as `/output/...`, `/attachments/...`,
+  `/writenup/...`, or `/workspace/executions/...` in write tools. Use paths
+  relative to the workspace root or the exact challenge root you have entered.
+- Before reading optional files such as `deploy/src/Makefile`, `attachments/*`,
+  or `writenup/pwn_debug_report.json`, list the containing directory first.
+  If an optional file is missing, create or adapt the expected file instead of
+  retrying the same nonexistent path.
+
 Pwn exploit debugging acceleration:
 - Prefer pwntools for Pwn solvers. Use
   `context(os='linux', arch='amd64', log_level=os.environ.get('PWNLIB_LOG_LEVEL', 'info'))`
@@ -164,8 +185,13 @@ Pwn exploit debugging acceleration:
   from scratch.
 - Before writing files or calling `./bin/progress`, verify the current directory
   is the execution workspace or the exact challenge root. Do not write absolute
-  paths such as `/writenup/exp.py`; recover with `pwd` and `cd` back to the
-  workspace/challenge root when a debug command changes directories.
+  paths such as `/output/...`, `/attachments/...`, or `/writenup/exp.py`;
+  recover with `pwd` and `cd` back to the workspace/challenge root when a debug
+  command changes directories.
+- Do not repeatedly `chmod` restored files under `attachments/` just to make
+  local debug work. Compile or copy player binaries with the intended executable
+  bit, and prefer `python3 writenup/exp.py` or bounded tooling from the challenge
+  root when diagnosing solver logic.
 - Discover local Pwn tooling before guessing: use bounded probes such as
   `command -v gdb checksec readelf objdump ROPgadget ropper one_gadget`. If
   present, use `checksec --file <binary>`, `readelf -sW`, `objdump -d`, gadget
@@ -292,7 +318,9 @@ def _repair_steps_for_status(
                 ),
                 (
                     "If the error came from the scaffold, edit "
-                    "`./references/scaffolds/pwn/xinetd-chroot/` and then let Hermes rebuild."
+                    "`../references/scaffolds/pwn/xinetd-chroot/` from a `current/` "
+                    "workspace, or `./references/scaffolds/pwn/xinetd-chroot/` when "
+                    "that path exists, and then let Hermes rebuild."
                 ),
             ] + ([f"Host hint: {failure_hint}"] if failure_hint else [])
         if (
@@ -598,7 +626,8 @@ Web / Pwn:
 
 Pwn container launcher:
 - Prefer the fixed xinetd + chroot + TCP socket scaffold
-  `./references/scaffolds/pwn/xinetd-chroot/`. Copy its `deploy/` tree into the challenge and
+  at `../references/scaffolds/pwn/xinetd-chroot/` from a `current/` workspace,
+  or `./references/scaffolds/pwn/xinetd-chroot/` when that path exists. Copy its `deploy/` tree into the challenge and
   replace placeholders such as `{{BINARY_NAME}}` and `{{SERVICE_PORT}}`; keep the
   scaffold's fixed `ctf` user with uid/gid `1000:1000`. This scaffold is the
   factory-normalized form of `ctf-docker-template/pwn-ubuntu_20.04`; do not invent a fresh Docker/chroot layout.
@@ -768,6 +797,7 @@ def render_prompt(
     repair_requested: bool = False,
     repair_context: Mapping[str, object] | None = None,
     retry_context: Mapping[str, object] | None = None,
+    references_prefix: str = "./references",
 ) -> str:
     # 中文注释：读取分片执行模板，并替换路径、worker、进度命令等运行上下文。
     prompt_text = paths.prompt_template.read_text(encoding="utf-8")
@@ -775,17 +805,20 @@ def render_prompt(
     design_context_instruction = _design_context_instruction(shard)
     build_contract_section = _render_build_contract_section(shard)
     if workspace_relative:
+        references_prefix = references_prefix.rstrip("/")
         runtime_paths = {
             "{shard_path}": "./input/shard.json",
             "{challenge_dir}": "./output/challenges",
             "{report_path}": "./logs/report.json",
             "{generation_profile}": "./input/generation-profiles.json",
-            "{design_skill}": "./references/design-challenges/SKILL.md",
-            "{design_references}": "./references/design-challenges/references",
+            "{design_skill}": f"{references_prefix}/design-challenges/SKILL.md",
+            "{design_references}": f"{references_prefix}/design-challenges/references",
+            "{pwn_scaffold_reference}": f"{references_prefix}/scaffolds/pwn/xinetd-chroot/",
             "{progress_command}": "./bin/progress",
         }
     else:
         cli_script_path = Path(__file__).resolve().parents[1] / "cli.py"
+        repository = getattr(paths, "repository", paths.root)
         runtime_paths = {
             "{shard_path}": str(shard.resolve()),
             "{challenge_dir}": str(paths.challenges.resolve()),
@@ -793,6 +826,9 @@ def render_prompt(
             "{generation_profile}": str(paths.generation_profile.resolve()),
             "{design_skill}": str(paths.design_skill.resolve()),
             "{design_references}": str(paths.design_references.resolve()),
+            "{pwn_scaffold_reference}": str(
+                (repository / "scaffolds" / "pwn" / "xinetd-chroot").resolve()
+            ),
             "{progress_command}": (
                 f'"{sys.executable}" "{cli_script_path}" progress '
                 f'--shard "{progress_shard_name}" --worker "{worker}" --best-effort'

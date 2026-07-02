@@ -12,15 +12,21 @@ Before generating anything, read and follow:
 Design skill: {design_skill}
 Design references: {design_references}
 Generation profile: {generation_profile}
-Pwn scaffold reference: ./references/scaffolds/pwn/xinetd-chroot/
+Pwn scaffold reference: {pwn_scaffold_reference}
 ```
 
-Read only the category references needed by the current shard:
+Read only the materialized design references that exist in
+`{design_references}`:
 
-- Web: `web-design.md`
-- Pwn: `pwn-design.md`
-- Re: `reverse-design.md`
-- All categories: `quality-gate.md`, `spec-template.md`, `delivery-format.md`
+- `design-core.md` — output shape, spec template, quality gate, safety, and
+  fairness checks.
+- `category-tactics.md` — category technique lanes, including Web, Pwn, and Re.
+- `difficulty-rubric.md` — difficulty calibration.
+- `shared_generation_strategy.md` — shared generation workflow guidance.
+
+Do not try to read removed legacy split references such as `web-design.md`,
+`pwn-design.md`, `reverse-design.md`, `quality-gate.md`, `spec-template.md`,
+or `delivery-format.md`; the workspace does not materialize those files.
 
 # Mandatory Progress Reporting
 
@@ -50,6 +56,13 @@ Example:
 all `validate/*` events and writes them after invoking the host-side
 validator. Generate and test `validate.sh` and `writenup/exp.py` as part of Stage 4,
 but do not emit authoritative validation progress yourself.
+
+Progress commands must be issued from the execution workspace root, the
+directory that contains `input/shard.json`, `bin/progress`, `output/`, and
+`logs/`. If a terminal command has entered a challenge root, first return to
+the saved workspace root and then run the full progress command with all four
+required argument groups: `--challenge`, `--stage`, `--status`, and `--message`.
+Never call only `{progress_command}` or `./bin/progress` by itself.
 
 Do not report `passed` until the corresponding files have actually been written
 and self-checked. On failure, report `failed` with the concrete reason
@@ -99,6 +112,31 @@ challenge output, reports, or scratch JSON. Project-root side effects such as
 `output/`, `challenges/`, `.design_output/`, `challenge*.json`, `design*.json`,
 or `<category>-*.json` are rejected; write only under `./output/challenges`,
 `./logs/report.json`, or the declared challenge root.
+
+# Workspace Path Discipline
+
+Before the first file write or terminal command, establish the workspace root:
+it is the directory containing `input/shard.json`, `bin/progress`, `output/`,
+and `logs/`. Save it in shell commands as `WORKSPACE_ROOT="$(pwd)"` only after
+confirming `test -f ./input/shard.json`.
+
+- From the workspace root, challenge roots live under
+  `./output/challenges/<category>/<id>-<slug>/`.
+- From inside a challenge root, `metadata.json`, `validate.sh`, `writenup/`,
+  `attachments/`, `src/`, and/or `deploy/` are direct children. Do not append
+  `./output/challenges/...` again from that directory.
+- Do not use absolute synthetic paths such as `/output/...`, `/attachments/...`,
+  `/writenup/...`, or `/workspace/executions/...` in write tools. Use paths
+  relative to the workspace root or the exact challenge root you have entered.
+- Before reading optional files such as `deploy/src/Makefile`, `attachments/*`,
+  or `writenup/pwn_debug_report.json`, list the containing directory first.
+  Missing optional files are a signal to create or adapt the expected file, not
+  a reason to keep retrying the same nonexistent path.
+- Do not `chmod` files under `attachments/` just to make local debug work.
+  Compile or copy player binaries with the intended executable bit, and use
+  `python3 writenup/exp.py` or bounded tooling from the challenge root. If a
+  restored attachment is not executable, inspect permissions and continue with
+  source/build fixes rather than repeated chmod attempts.
 
 {repair_section}
 
@@ -175,7 +213,7 @@ Container rules for Web and Pwn:
   appropriate service user before starting long-running business processes when
   the selected runtime supports that pattern.
 - Pwn Docker services SHOULD use the fixed xinetd + chroot + TCP socket scaffold
-  `./references/scaffolds/pwn/xinetd-chroot/` unless the design explicitly needs a different
+  `{pwn_scaffold_reference}` unless the design explicitly needs a different
   launcher. Copy its `deploy/` tree into the challenge and replace placeholders
   such as `{{BINARY_NAME}}` and `{{SERVICE_PORT}}`; keep the scaffold's fixed
   `ctf` user with uid/gid `1000:1000`. This scaffold is the factory-normalized
@@ -287,7 +325,7 @@ Pwn rules:
 - Record the actual mitigation state and distribute the relevant binary.
 - Pin the libc/toolchain where exploit stability depends on it.
 - The deployed service should normally be socket-driven through xinetd and
-  chroot using `./references/scaffolds/pwn/xinetd-chroot/`, rather than a bare `socat EXEC`
+  chroot using `{pwn_scaffold_reference}`, rather than a bare `socat EXEC`
   or a Python wrapper. Use a different launcher only when required by the
   challenge mechanism, and document that reason in `metadata.json` and
   `writenup/wp.md`.

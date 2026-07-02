@@ -294,7 +294,10 @@ class TaskManager:
                 for lane in pool.lanes
                 if lane.process.poll() is None
             ]
-        if single is None and not lanes:
+        known_pids = {single.pid} if single is not None else set()
+        known_pids.update(lane.process.pid for lane in lanes)
+        external = _discover_dashboard_build_workers(exclude_pids=known_pids)
+        if single is None and not lanes and not external:
             return False, "没有正在运行的构建任务"
 
         stopped = 0
@@ -313,8 +316,15 @@ class TaskManager:
             )
             stopped += 1
             killed += 1 if was_killed else 0
+        for worker in external:
+            was_killed = _terminate_external_process_group(
+                int(worker["pid"]),
+                timeout=self._terminate_timeout_seconds(),
+            )
+            stopped += 1
+            killed += 1 if was_killed else 0
 
-        label = single_kind or ("lane pool" if lanes else "worker")
+        label = single_kind or ("lane pool" if lanes else "recovered worker")
         if killed:
             return True, f"已结束 {label}（{stopped} 个进程，{killed} 个强制结束）"
         return True, f"已结束 {label}（{stopped} 个进程）"
@@ -330,6 +340,18 @@ class TaskManager:
         with self._lock:
             lane_pools = self._lane_pools_state_unlocked()
             if self._process is None:
+                external = _discover_dashboard_build_workers()
+                if external:
+                    return {
+                        "running": True,
+                        "kind": "recovered-worker",
+                        "started_at": None,
+                        "returncode": None,
+                        "log": None,
+                        "message": f"发现 {len(external)} 个 dashboard 构建 worker 仍在运行",
+                        "external_workers": external,
+                        "lane_pools": lane_pools,
+                    }
                 return {"running": False, "lane_pools": lane_pools}
             return {
                 "running": self._process.poll() is None,
@@ -488,6 +510,19 @@ def _terminate_process(process: subprocess.Popen, *, timeout: float = 5.0) -> bo
         return True
 
 
+def _terminate_external_process_group(pid: int, *, timeout: float = 5.0) -> bool:
+    if not _pid_exists(pid):
+        return False
+    _signal_pid_group(pid, signal.SIGTERM)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _pid_exists(pid):
+            return False
+        time.sleep(0.1)
+    _signal_pid_group(pid, signal.SIGKILL)
+    return True
+
+
 def _repair_timeout_budget_seconds() -> int:
     """Budget a dashboard worker enough time to finish a repair/finalize cycle.
 
@@ -524,6 +559,109 @@ def _signal_process_tree(process: subprocess.Popen, signum: int) -> None:
             process.terminate()
         else:
             process.kill()
+
+
+def _signal_pid_group(pid: int, signum: int) -> None:
+    try:
+        os.killpg(pid, signum)
+    except ProcessLookupError:
+        return
+    except OSError:
+        try:
+            os.kill(pid, signum)
+        except ProcessLookupError:
+            return
+
+
+def _pid_exists(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _discover_dashboard_build_workers(*, exclude_pids: set[int] | None = None) -> list[dict]:
+    proc_root = Path("/proc")
+    if not proc_root.is_dir():
+        return []
+    workers: list[dict] = []
+    current_pid = os.getpid()
+    excluded = set(exclude_pids or ())
+    for entry in proc_root.iterdir():
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        if pid == current_pid or pid in excluded:
+            continue
+        argv = _read_proc_cmdline(entry / "cmdline")
+        if not _is_dashboard_build_worker_argv(argv):
+            continue
+        worker = _argv_value(argv, "--worker") or ""
+        attempt_ids = [
+            value
+            for index, item in enumerate(argv[:-1])
+            if item in {"--build-attempt", "--build-attempt-sequence"}
+            for value in [argv[index + 1]]
+        ]
+        workers.append(
+            {
+                "pid": pid,
+                "worker": worker,
+                "kind": _worker_kind(worker),
+                "build_attempt_ids": attempt_ids,
+                "cmd": " ".join(argv),
+            }
+        )
+    return sorted(workers, key=lambda item: int(item["pid"]))
+
+
+def _read_proc_cmdline(path: Path) -> list[str]:
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return []
+    return [
+        part.decode("utf-8", errors="replace")
+        for part in raw.split(b"\0")
+        if part
+    ]
+
+
+def _is_dashboard_build_worker_argv(argv: list[str]) -> bool:
+    if "run" not in argv:
+        return False
+    if not any(item.endswith("/cli.py") or item == "cli.py" for item in argv):
+        return False
+    worker = _argv_value(argv, "--worker")
+    if not worker or not worker.startswith("dashboard"):
+        return False
+    return any(
+        item in {"--build-attempt", "--build-attempt-sequence", "--loop"}
+        for item in argv
+    )
+
+
+def _argv_value(argv: list[str], flag: str) -> str | None:
+    try:
+        index = argv.index(flag)
+    except ValueError:
+        return None
+    if index + 1 >= len(argv):
+        return None
+    return argv[index + 1]
+
+
+def _worker_kind(worker: str) -> str:
+    if worker.startswith("dashboard-lane-"):
+        return "lane"
+    if worker.startswith("dashboard-sequential-"):
+        return "sequential-worker"
+    return "worker"
 
 
 class DashboardService:

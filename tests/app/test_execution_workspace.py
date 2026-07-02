@@ -25,7 +25,7 @@ from hermes.build_publisher import (
     prepare_workspace_validation,
     publish_workspace_output,
 )
-from hermes.runner import HermesRunner
+from hermes.runner import HermesRunner, _workspace_references_prefix
 from hermes.workspace import (
     WorkspacePreflightError,
     WorkspacePromotionError,
@@ -138,6 +138,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         self.assertEqual(ws1.active, ws1.root / "current")
         self.assertTrue((ws1.root / "current" / "input" / "shard.json").is_file())
         self.assertTrue((ws1.root / "references").is_dir())
+        self.assertEqual(_workspace_references_prefix(ws1), "../references")
         (ws1.output / "marker.txt").write_text("iter1", encoding="utf-8")
 
         shard2 = self._running_shard(payload, name="claimed.iter-002.worker.json")
@@ -948,6 +949,11 @@ class ExecutionWorkspaceTests(unittest.TestCase):
             worker="worker-1",
         )
         claimed = self._artifact(self.paths.challenges, marker="old")
+        executable = claimed / "attachments" / "canary"
+        executable.parent.mkdir()
+        executable.write_bytes(b"\x7fELF")
+        if os.name != "nt":
+            executable.chmod(0o755)
         self._artifact(self.paths.challenges, challenge_id="web-9999", slug="keep")
 
         materialize_resume_outputs(self.paths, workspace, payload)
@@ -964,6 +970,13 @@ class ExecutionWorkspaceTests(unittest.TestCase):
                     directory.stat().st_mode & 0o002,
                     f"{directory} should be writable by the Hermes container user",
                 )
+            restored_executable = (
+                workspace.output / "challenges" / "web" / claimed.name / "attachments" / "canary"
+            )
+            self.assertTrue(
+                restored_executable.stat().st_mode & 0o111,
+                "restored player binaries should keep an executable bit for local smoke tests",
+            )
 
     def test_resume_materialization_falls_back_to_latest_archived_attempt_output(self) -> None:
         attempt_id = uuid4()

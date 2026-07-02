@@ -72,6 +72,45 @@ class DashboardTests(unittest.TestCase):
         self.assertNotIn("challenges", state)
         self.assertNotIn("logs", state)
 
+    def test_task_state_recovers_orphaned_dashboard_worker(self):
+        worker = {
+            "pid": 1234,
+            "worker": "dashboard-01",
+            "kind": "worker",
+            "build_attempt_ids": ["11111111-1111-1111-1111-111111111111"],
+            "cmd": "python src/cli.py run --worker dashboard-01",
+        }
+
+        with patch("web.dashboard._discover_dashboard_build_workers", return_value=[worker]):
+            state = TaskManager(self.paths).state()
+
+        self.assertTrue(state["running"])
+        self.assertEqual(state["kind"], "recovered-worker")
+        self.assertEqual(state["external_workers"], [worker])
+        self.assertIn("dashboard 构建 worker", state["message"])
+
+    def test_stop_terminates_orphaned_dashboard_worker(self):
+        worker = {
+            "pid": 1234,
+            "worker": "dashboard-01",
+            "kind": "worker",
+            "build_attempt_ids": ["11111111-1111-1111-1111-111111111111"],
+            "cmd": "python src/cli.py run --worker dashboard-01",
+        }
+
+        with (
+            patch("web.dashboard._discover_dashboard_build_workers", return_value=[worker]),
+            patch("web.dashboard._terminate_external_process_group", return_value=False) as terminate,
+        ):
+            ok, message = TaskManager(self.paths).stop()
+
+        self.assertTrue(ok)
+        self.assertIn("recovered worker", message)
+        terminate.assert_called_once_with(
+            1234,
+            timeout=TaskManager._terminate_timeout_seconds(),
+        )
+
     def test_worker_rejects_empty_pending_queue(self):
         ok, message = TaskManager(self.paths).start("worker")
 
@@ -205,7 +244,10 @@ class DashboardTests(unittest.TestCase):
         tasks._process = process
         tasks._kind = "worker"
 
-        with patch("web.dashboard.os.killpg") as killpg:
+        with (
+            patch("web.dashboard._discover_dashboard_build_workers", return_value=[]),
+            patch("web.dashboard.os.killpg") as killpg,
+        ):
             ok, message = tasks.stop()
 
         self.assertTrue(ok)
@@ -235,7 +277,10 @@ class DashboardTests(unittest.TestCase):
             ],
         )
 
-        with patch("web.dashboard.os.killpg") as killpg:
+        with (
+            patch("web.dashboard._discover_dashboard_build_workers", return_value=[]),
+            patch("web.dashboard.os.killpg") as killpg,
+        ):
             ok, message = tasks.stop()
 
         self.assertTrue(ok)

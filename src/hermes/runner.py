@@ -354,6 +354,7 @@ class HermesRunner:
         repair_requested: bool = False,
         repair_context: Mapping[str, Any] | None = None,
         retry_context: Mapping[str, Any] | None = None,
+        references_prefix: str = "./references",
     ) -> str:
         """渲染送给 Hermes 的完整 prompt（含断点恢复计划）。"""
         return render_prompt(
@@ -369,6 +370,7 @@ class HermesRunner:
             repair_requested=repair_requested,
             repair_context=repair_context,
             retry_context=retry_context,
+            references_prefix=references_prefix,
         )
 
     def run(
@@ -883,6 +885,7 @@ class HermesRunner:
             repair_requested=repair_requested,
             repair_context=repair_context,
             retry_context=retry_context,
+            references_prefix=_workspace_references_prefix(workspace),
         )
         root_output_snapshot = _project_root_output_snapshot(self.paths.root)
         tailer = WorkspaceProgressTailer(workspace, self._progress.record)
@@ -1944,6 +1947,15 @@ _PROJECT_ROOT_LEAK_FILE_PREFIXES = (
     "web-",
     "pwn-",
 )
+
+
+def _workspace_references_prefix(workspace: ExecutionWorkspace) -> str:
+    """Return the reference path visible from Hermes' active working directory."""
+    try:
+        relative = os.path.relpath(workspace.references, workspace.active)
+    except ValueError:
+        return "./references"
+    return "." if relative == "." else relative.replace(os.sep, "/")
 
 
 def _project_root_output_snapshot(root: Path) -> dict[str, tuple[int, int]]:

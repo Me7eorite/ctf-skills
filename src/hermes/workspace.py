@@ -219,10 +219,13 @@ def _make_container_writable(active: Path) -> None:
             continue
         for child in directory.rglob("*"):
             try:
+                if child.is_symlink():
+                    continue
                 if child.is_dir():
                     child.chmod(0o777)
                 else:
-                    child.chmod(0o666)
+                    mode = child.stat().st_mode
+                    child.chmod(0o777 if mode & 0o111 else 0o666)
             except OSError:
                 continue
 

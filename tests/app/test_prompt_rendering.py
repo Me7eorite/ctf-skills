@@ -60,6 +60,28 @@ def _seed_paths(tmp: Path) -> _Paths:
 
 
 class RenderPromptTests(unittest.TestCase):
+    def test_workspace_relative_prompt_can_point_to_parent_references(self):
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            paths = _seed_paths(tmp_path)
+            running_shard = tmp_path / "running.json"
+            running_shard.write_text("{}", encoding="utf-8")
+
+            rendered = render_prompt(
+                paths,  # type: ignore[arg-type]
+                running_shard,
+                tmp_path / "report.json",
+                worker="worker-02",
+                workspace_relative=True,
+                references_prefix="../references",
+            )
+
+            self.assertIn("../references/design-challenges/SKILL.md", rendered)
+            self.assertIn("../references/design-challenges/references", rendered)
+            self.assertIn("../references/scaffolds/pwn/xinetd-chroot/", rendered)
+            self.assertNotIn("Design skill: ./references/design-challenges/SKILL.md", rendered)
+            self.assertNotIn("Pwn scaffold reference: ./references/scaffolds", rendered)
+
     def test_progress_command_uses_original_shard_name(self):
         with TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
