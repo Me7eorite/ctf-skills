@@ -70,6 +70,7 @@ _PWN_CHROOT_FLAG_PATH_RE = re.compile(r"""["']/home/ctf/flag(?:\.txt)?["']""")
 _PWN_CANARY_WIDTH_FILTER_RE = re.compile(
     r"(?:1\s*<<\s*48|2\s*\*\*\s*48|0x1_?0000_?0000_?0000)"
 )
+_PWN_BASH_C_RE = re.compile(r"\bbash\s+-c\b")
 
 
 def validation_failure_detail(
@@ -110,6 +111,13 @@ def classify_validation_failure(
         if "ModuleNotFoundError" in text or "No module named" in text:
             code = "missing_dependency"
             hint = "Make the solver offline-capable with the standard library or vendored helpers."
+        elif _looks_like_pwn_service_readiness_failure(text):
+            code = "pwn_service_readiness_failed"
+            hint = (
+                "Fix validate.sh service readiness first: verify CHAL_HOST/CHAL_PORT "
+                "wiring, xinetd/chroot startup, and read a real menu prompt from a "
+                "fresh TCP connection before debugging the exploit payload."
+            )
         elif _looks_like_pwn_prompt_eof(text):
             code = "pwn_prompt_eof"
             hint = (
@@ -335,6 +343,13 @@ def _classify_contract_error(message: str, *, status: str = "contract_failed") -
         code = "pwn_port_only_readiness"
         path = "validate.sh"
         hint = "Wait for an application banner/menu prompt such as Choice:, not only an open TCP port."
+    elif "Pwn validate.sh uses CHAL_HOST/CHAL_PORT inside bash -c" in message:
+        code = "pwn_bad_readiness_probe"
+        path = "validate.sh"
+        hint = (
+            "Do not rely on unexported shell variables inside bash -c; either export "
+            "CHAL_HOST/CHAL_PORT before the probe or call nc directly in the current shell."
+        )
     elif "canary leak filtering by 2^48" in message:
         code = "pwn_canary_width_filter"
         path = "writenup/exp.py"
@@ -357,6 +372,18 @@ def _looks_like_pwn_prompt_eof(text: str) -> bool:
             or "Choice:" in text
             or "Got EOF while reading" in text
         )
+    )
+
+
+def _looks_like_pwn_service_readiness_failure(text: str) -> bool:
+    lower = text.lower()
+    if "service failed to start within" in lower:
+        return True
+    return (
+        "waiting for service" in lower
+        and ("container" in lower or "docker-compose" in lower)
+        and ("started" in lower or "up " in lower or "xinetd" in lower)
+        and ("choice:" in text or "menu prompt" in lower or "banner" in lower)
     )
 
 
@@ -577,6 +604,11 @@ def _pwn_runtime_contract_errors(challenge_dir: Path) -> list[str]:
             "Pwn validate.sh uses nc -z readiness without proving the application "
             "banner/menu is ready"
         )
+    if validate_text and _validate_uses_unexported_bash_nc_probe(validate_text):
+        errors.append(
+            "Pwn validate.sh uses CHAL_HOST/CHAL_PORT inside bash -c readiness "
+            "without exporting them; the inner shell sees empty host/port"
+        )
 
     exp_text = _read_text(challenge_dir / "writenup" / "exp.py")
     if exp_text and "canary" in exp_text.lower() and _PWN_CANARY_WIDTH_FILTER_RE.search(
@@ -601,6 +633,21 @@ def _validate_has_app_readiness_probe(text: str) -> bool:
         "remote(",
     )
     return any(token in text for token in readiness_tokens)
+
+
+def _validate_uses_unexported_bash_nc_probe(text: str) -> bool:
+    has_problem_probe = any(
+        _PWN_BASH_C_RE.search(line)
+        and "nc" in line
+        and "$CHAL_HOST" in line
+        and "$CHAL_PORT" in line
+        for line in text.splitlines()
+    )
+    if not has_problem_probe:
+        return False
+    exported_host = re.search(r"\bexport\b[^\n]*\bCHAL_HOST\b", text)
+    exported_port = re.search(r"\bexport\b[^\n]*\bCHAL_PORT\b", text)
+    return not (exported_host and exported_port)
 
 
 def _dockerfile_uses_make(text: str) -> bool:

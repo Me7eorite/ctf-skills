@@ -306,6 +306,45 @@ class ValidationTests(unittest.TestCase):
 
         self.assertFalse(any("nc -z readiness" in e for e in errors))
 
+    def test_pwn_validate_rejects_unexported_bash_nc_probe(self):
+        challenge = self.paths.challenges / "pwn" / "pwn-readiness-scope-001"
+        metadata = _write_minimal_pwn_contract(challenge)
+        (challenge / "validate.sh").write_text(
+            "#!/bin/bash\n"
+            "CHAL_HOST=localhost\n"
+            "CHAL_PORT=9004\n"
+            "docker-compose up -d\n"
+            "if timeout 3 bash -c ': | nc \"$CHAL_HOST\" \"$CHAL_PORT\"' | grep -q 'Choice:'; then\n"
+            "  echo ready\n"
+            "fi\n"
+            "python3 writenup/exp.py\n",
+            encoding="utf-8",
+        )
+
+        errors = self.validator.contract_errors(challenge, metadata)
+
+        self.assertTrue(any("inner shell sees empty host/port" in e for e in errors))
+
+    def test_pwn_validate_allows_exported_bash_nc_probe(self):
+        challenge = self.paths.challenges / "pwn" / "pwn-readiness-export-ok-001"
+        metadata = _write_minimal_pwn_contract(challenge)
+        (challenge / "validate.sh").write_text(
+            "#!/bin/bash\n"
+            "CHAL_HOST=localhost\n"
+            "CHAL_PORT=9004\n"
+            "export CHAL_HOST CHAL_PORT\n"
+            "docker-compose up -d\n"
+            "if timeout 3 bash -c ': | nc \"$CHAL_HOST\" \"$CHAL_PORT\"' | grep -q 'Choice:'; then\n"
+            "  echo ready\n"
+            "fi\n"
+            "python3 writenup/exp.py\n",
+            encoding="utf-8",
+        )
+
+        errors = self.validator.contract_errors(challenge, metadata)
+
+        self.assertFalse(any("inner shell sees empty host/port" in e for e in errors))
+
     def test_pwn_exp_rejects_canary_width_threshold(self):
         challenge = self.paths.challenges / "pwn" / "pwn-canary-001"
         metadata = _write_minimal_pwn_contract(challenge)
@@ -481,6 +520,20 @@ class ValidationFailureClassificationTests(unittest.TestCase):
 
         self.assertEqual(details[0]["code"], "pwn_canary_leak_failed")
         self.assertIn("2^48", details[0]["hint"])
+
+    def test_classifies_service_readiness_before_canary_name(self):
+        details = classify_validation_failure(
+            status="nonzero_exit",
+            stderr=(
+                "Container canary Started\n"
+                "[ERROR] Service failed to start within 30 seconds\n"
+                "canary | * Starting internet superserver xinetd\n"
+                "canary |   ...done.\n"
+            ),
+        )
+
+        self.assertEqual(details[0]["code"], "pwn_service_readiness_failed")
+        self.assertIn("readiness", details[0]["hint"])
 
     def test_classifies_chroot_flag_path_failure(self):
         details = classify_validation_failure(

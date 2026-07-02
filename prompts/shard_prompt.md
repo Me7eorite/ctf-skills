@@ -361,6 +361,9 @@ authoritative `validate/passed` or `validate/failed` event.
   receives the expected banner/menu prompt such as `Choice:` before running the
   exploit. A port-only check can pass while xinetd is still initializing or can
   consume a short-lived service instance and cause the exploit to hit EOF.
+  Do not put `nc "$CHAL_HOST" "$CHAL_PORT"` behind `bash -c` unless both
+  variables are exported first; prefer a current-shell probe such as
+  `printf '3\n' | timeout 3 nc "$CHAL_HOST" "$CHAL_PORT" | grep -q "Choice:"`.
 - For Pwn, prefer a pwntools-based exploit skeleton when available. Set
   `context(os='linux', arch='amd64', log_level=os.environ.get('PWNLIB_LOG_LEVEL', 'info'))`
   for amd64 Linux targets, use `ELF('./attachments/<binary>', checksec=False)`

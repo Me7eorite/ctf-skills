@@ -249,3 +249,53 @@ def test_auto_repair_preserves_exp_failure_diagnostics(tmp_path: Path) -> None:
     repaired_again = validate.read_text(encoding="utf-8")
     assert second.changed is False
     assert repaired_again.count("set +e") == 1
+
+
+def test_auto_repair_fixes_pwn_unexported_bash_nc_probe(tmp_path: Path) -> None:
+    challenge_dir = tmp_path / "challenge"
+    challenge_dir.mkdir()
+    _write_metadata(challenge_dir, category="pwn")
+    validate = challenge_dir / "validate.sh"
+    validate.write_text(
+        "#!/bin/bash\n"
+        "CHAL_HOST=localhost\n"
+        "CHAL_PORT=9004\n"
+        "if timeout 3 bash -c ': | nc \"$CHAL_HOST\" \"$CHAL_PORT\"' | grep -q \"Choice:\"; then\n"
+        "    echo ready\n"
+        "fi\n",
+        encoding="utf-8",
+    )
+
+    result = auto_repair_challenge(challenge_dir)
+
+    repaired = validate.read_text(encoding="utf-8")
+    assert result.changed is True
+    assert "bash -c" not in repaired
+    assert "printf '3\\n' | timeout 3 nc \"$CHAL_HOST\" \"$CHAL_PORT\"" in repaired
+
+
+def test_auto_repair_fixes_pwn_echo_bash_nc_probe_variant(tmp_path: Path) -> None:
+    challenge_dir = tmp_path / "challenge"
+    challenge_dir.mkdir()
+    _write_metadata(challenge_dir, category="pwn")
+    validate = challenge_dir / "validate.sh"
+    validate.write_text(
+        "#!/bin/bash\n"
+        "CHAL_HOST=localhost\n"
+        "CHAL_PORT=9004\n"
+        "if timeout 5 bash -c 'echo \"\" | nc \"$CHAL_HOST\" \"$CHAL_PORT\"' 2>/dev/null | grep -qE \"(Choice:|Welcome)\"; then\n"
+        "    echo ready\n"
+        "fi\n"
+        "if timeout 3 bash -c 'nc \"$CHAL_HOST\" \"$CHAL_PORT\" < /dev/null' 2>/dev/null | head -c 100 | grep -q .; then\n"
+        "    echo data\n"
+        "fi\n",
+        encoding="utf-8",
+    )
+
+    result = auto_repair_challenge(challenge_dir)
+
+    repaired = validate.read_text(encoding="utf-8")
+    assert result.changed is True
+    assert "bash -c" not in repaired
+    assert "printf '3\\n' | timeout 5 nc \"$CHAL_HOST\" \"$CHAL_PORT\"" in repaired
+    assert "printf '3\\n' | timeout 3 nc \"$CHAL_HOST\" \"$CHAL_PORT\"" in repaired

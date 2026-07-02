@@ -41,6 +41,7 @@ def auto_repair_challenge(
     actions.extend(_repair_artifact_metadata(challenge_dir, metadata))
     actions.extend(_repair_validate_wrapper(challenge_dir, metadata))
     actions.extend(_repair_compose_validate_wrapper(challenge_dir, metadata))
+    actions.extend(_repair_pwn_validate_readiness_probe(challenge_dir, metadata))
     actions.extend(_repair_validate_solver_capture(challenge_dir, metadata))
     actions.extend(_repair_pwn_xinetd_scaffold(challenge_dir, metadata))
     actions.extend(_repair_deploy_dockerfile(challenge_dir, metadata))
@@ -322,6 +323,38 @@ def _replace_compose_invocations(text: str) -> str:
         )
         lines.append(line)
     return "".join(lines)
+
+
+def _repair_pwn_validate_readiness_probe(
+    challenge_dir: Path, metadata: dict[str, Any]
+) -> list[str]:
+    if metadata.get("category") != "pwn":
+        return []
+    validate = challenge_dir / "validate.sh"
+    if not validate.is_file():
+        return []
+    try:
+        text = validate.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return []
+    repaired = _replace_unexported_bash_nc_probe(text)
+    if repaired == text:
+        return []
+    validate.write_text(repaired, encoding="utf-8")
+    return ["fixed pwn validate.sh readiness probe to use CHAL_HOST/CHAL_PORT in the current shell"]
+
+
+def _replace_unexported_bash_nc_probe(text: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        timeout_seconds = match.group(1)
+        return f"printf '3\\n' | timeout {timeout_seconds} nc \"$CHAL_HOST\" \"$CHAL_PORT\""
+
+    for pattern in (
+        r"""timeout\s+(\d+)\s+bash\s+-c\s+'[^'\n]*\bnc\b[^'\n]*\$CHAL_HOST[^'\n]*\$CHAL_PORT[^'\n]*'""",
+        r'''timeout\s+(\d+)\s+bash\s+-c\s+"[^"\n]*\bnc\b[^"\n]*\$CHAL_HOST[^"\n]*\$CHAL_PORT[^"\n]*"''',
+    ):
+        text = re.sub(pattern, replace, text)
+    return text
 
 
 def _repair_validate_solver_capture(challenge_dir: Path, metadata: dict[str, Any]) -> list[str]:

@@ -121,6 +121,9 @@ Pwn exploit debugging acceleration:
   menu or banner. `validate.sh` readiness must open a fresh TCP connection and
   read an application prompt such as `Choice:`; a bare `nc -z` port check is too
   weak and can race xinetd startup, causing the exploit to receive EOF.
+  Do not put `nc "$CHAL_HOST" "$CHAL_PORT"` behind `bash -c` unless both
+  variables are exported first; prefer probing in the current shell, for example
+  `printf '3\n' | timeout 3 nc "$CHAL_HOST" "$CHAL_PORT" | grep -q "Choice:"`.
 - If the service uses `chroot /home/ctf` and startup writes the host-container
   file `/home/ctf/flag`, the vulnerable program must open `/flag` from inside
   the chroot. A source path like `/home/ctf/flag` resolves to
@@ -504,6 +507,10 @@ def _pwn_repair_steps_from_failure_details(
     if "pwn_prompt_eof" in codes:
         steps.append(
             "Fix service readiness and menu synchronization: wait for the real banner/menu prompt on a fresh connection, then align recv/send calls."
+        )
+    if "pwn_service_readiness_failed" in codes or "pwn_bad_readiness_probe" in codes:
+        steps.append(
+            "Fix the service readiness probe before exploit tuning: check that `validate.sh` exports or directly uses `CHAL_HOST`/`CHAL_PORT`, starts only this challenge's `docker-compose` service, and reads a real banner/menu prompt such as `Choice:` from a fresh TCP connection."
         )
     if "pwn_canary_leak_failed" in codes:
         steps.append(
