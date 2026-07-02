@@ -15,7 +15,7 @@ __pycache__/
 venv/
 .uv-cache/
 .ruff_cache/
-
+ctf-docker-template
 pwn_docker_example/
 # Editors
 .vscode/

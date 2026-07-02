@@ -2,8 +2,11 @@
 
 This scaffold is the default deployment skeleton for ordinary Pwn TCP services.
 Copy the `deploy/` tree into the generated challenge, then replace only the
-documented placeholder `{{SERVICE_PORT}}`.
-The runtime identity is fixed to `ctf:ctf` with uid/gid `1000:1000`.
+documented placeholders such as `{{BINARY_NAME}}` and `{{SERVICE_PORT}}`.
+The image creates a fixed `ctf` user/group with uid/gid `1000:1000`, and
+xinetd runs the challenge with `--userspec=1000:1000`.
+It follows the normalized `ctf-docker-template/pwn-ubuntu_20.04` xinetd/chroot
+layout while preserving this factory's `deploy/` directory contract.
 
 Host boundary:
 
@@ -22,9 +25,10 @@ deploy/Dockerfile
 deploy/docker-compose.yml
 deploy/_files/start.sh
 deploy/_files/ctf.xinetd
-deploy/src/pwn
+deploy/src/<source files and Makefile>
 ```
 
 The generated `docker-compose.yml` must inject the literal `FLAG=flag{...}`
-environment entry. The startup script writes that value to `/home/ctf/flag`
-inside the container before starting xinetd.
+environment entry. The startup script accepts `DASFLAG`, `FLAG`, or
+`GZCTF_FLAG`, writes the selected value to `/home/ctf/flag`, clears the
+environment variable, and then starts xinetd.

@@ -963,7 +963,8 @@ class RunnerRealRunTests(unittest.TestCase):
 
             self.assertEqual(outcome["status"], "failed")
             self.assertEqual(len(prompts), 2)
-            self.assertIn("Focused repair plan:", prompts[1])
+            self.assertIn("Focused debug plan:", prompts[1])
+            self.assertIn("Inherited build context:", prompts[1])
             self.assertIn("Root cause: `metadata.json` still reports an incomplete build.", prompts[1])
             self.assertIn("the host runner will run the controlled Docker build", prompts[1])
             self.assertIn("metadata.build_status is not passed", prompts[1])

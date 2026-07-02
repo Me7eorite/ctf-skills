@@ -1094,7 +1094,7 @@ class HermesRunner:
                 stage="validate",
                 status="running",
                 message=(
-                    "validation repair: sending host diagnostics to Hermes "
+                    "validation debug: continuing Hermes with host diagnostics "
                     f"({repair_attempt}/{repair_budget})"
                 ),
             )
@@ -1103,8 +1103,12 @@ class HermesRunner:
                 max_attempts=repair_budget,
                 validation_results=per_results,
                 prior_contract_errors=seen_contract_errors,
+                debug_context=self._validation_debug_context(
+                    workspace,
+                    per_results,
+                ),
             )
-            repair_log = workspace.logs / f"hermes-validation-repair-{repair_attempt}.log"
+            repair_log = workspace.logs / f"hermes-validation-debug-{repair_attempt}.log"
             pre_signature = _output_signature(workspace.output)
             repair_root_output_snapshot = _project_root_output_snapshot(self.paths.root)
             repair_tailer = WorkspaceProgressTailer(workspace, self._progress.record)
@@ -1123,7 +1127,7 @@ class HermesRunner:
             import_workspace_report(workspace, report)
             if repair_returncode != 0:
                 _LOGGER.warning(
-                    "validation repair attempt %s exited with %s",
+                    "validation debug attempt %s exited with %s",
                     repair_attempt,
                     repair_returncode,
                 )
@@ -1152,7 +1156,7 @@ class HermesRunner:
             post_signature = _output_signature(workspace.output)
             if pre_signature == post_signature:
                 _LOGGER.warning(
-                    "validation repair attempt %s made no changes under output/; aborting further repair attempts",
+                    "validation debug attempt %s made no changes under output/; aborting further debug attempts",
                     repair_attempt,
                 )
                 self._progress.record(
@@ -1161,7 +1165,7 @@ class HermesRunner:
                     stage="validate",
                     status="running",
                     message=(
-                        f"validation repair attempt {repair_attempt}: no changes detected, aborting further attempts"
+                        f"validation debug attempt {repair_attempt}: no changes detected, aborting further attempts"
                     ),
                 )
                 break
@@ -1543,6 +1547,29 @@ class HermesRunner:
         else:
             write_json(workspace.state / "validated-output.json", entry)
 
+    @staticmethod
+    def _validation_debug_context(
+        workspace: ExecutionWorkspace,
+        per_results: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        failed_ids = {
+            str(result.get("challenge_id"))
+            for result in per_results
+            if result.get("solve_status") == "failed" and result.get("challenge_id")
+        }
+        return {
+            "shard": read_json(workspace.input / "shard.json", {}),
+            "current_report": read_json(workspace.report, {}),
+            "validation_history_tail": _tail_json_list(
+                workspace.state / "validation-history.json",
+                limit=3,
+            ),
+            "failed_challenge_files": _failed_challenge_file_tree(
+                workspace.output / "challenges",
+                failed_ids,
+            ),
+        }
+
     def _validate_gate(self, challenge_id: str, plan: ChallengeResumePlan | None) -> str | None:
         return validate_gate(challenge_id, plan, self.paths, self._image_exists)
 
@@ -1794,6 +1821,41 @@ def _clear_terminal_staging(workspace: ExecutionWorkspace) -> None:
     for directory in (workspace.output, workspace.logs):
         if directory.is_dir():
             shutil.rmtree(directory)
+
+
+def _tail_json_list(path: Path, *, limit: int) -> list[Any]:
+    value = read_json(path, [])
+    if not isinstance(value, list):
+        return []
+    return value[-limit:]
+
+
+def _failed_challenge_file_tree(
+    challenges_root: Path,
+    failed_ids: set[str],
+) -> dict[str, list[str]]:
+    tree: dict[str, list[str]] = {}
+    if not challenges_root.is_dir():
+        return tree
+    for challenge_dir in sorted(challenges_root.glob("*/*")):
+        if not challenge_dir.is_dir() or challenge_dir.is_symlink():
+            continue
+        metadata = read_json(challenge_dir / "metadata.json", {})
+        if not isinstance(metadata, dict):
+            continue
+        challenge_id = str(metadata.get("id") or "")
+        if challenge_id not in failed_ids:
+            continue
+        files: list[str] = []
+        for path in sorted(challenge_dir.rglob("*")):
+            if path.is_symlink() or not path.is_file():
+                continue
+            files.append(path.relative_to(challenge_dir).as_posix())
+            if len(files) >= 120:
+                files.append("...[truncated]")
+                break
+        tree[challenge_id] = files
+    return tree
 
 
 def _output_signature(output_dir: Path) -> tuple[int, int, int]:

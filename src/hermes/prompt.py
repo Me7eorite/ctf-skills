@@ -23,6 +23,7 @@ def render_validation_repair_prompt(
     max_attempts: int,
     validation_results: list[dict],
     prior_contract_errors: Sequence[str] = (),
+    debug_context: Mapping[str, object] | None = None,
 ) -> str:
     """Render a focused prompt for repairing host-observed validation failures.
 
@@ -58,18 +59,22 @@ def render_validation_repair_prompt(
     rendered = json.dumps(diagnostics, ensure_ascii=False, indent=2)
     repair_plan = _render_repair_plan(diagnostics)
     non_regression = _render_non_regression_section(prior_contract_errors)
-    return f"""You are repairing CTF challenge artifacts after authoritative host validation failed.
+    context_section = _render_validation_debug_context(debug_context)
+    return f"""You are continuing CTF challenge implementation after authoritative host validation failed.
 
-Repair attempt {attempt} of {max_attempts}. Work only inside the existing claimed challenge
+Validation debug round {attempt} of {max_attempts}. Work only inside the existing claimed challenge
 directories under `./output/challenges`. Read `./input/shard.json` and inspect the current
 source, Docker/Compose files, built artifact metadata, `validate.sh`, and `writenup/exp.py`.
+
+Inherited build context:
+{context_section}
 
 Host validation diagnostics:
 ```json
 {rendered}
 ```
 
-Focused repair plan:
+Focused debug plan:
 {repair_plan}
 
 How to read `validation_error`:
@@ -93,12 +98,31 @@ How to read `validation_error`:
   encoded/encrypted material in the player artifact and update `writenup/exp.py` so
   it derives the flag through the declared reversing technique.
 {_VALIDATION_CONTRACT_CHECKLIST}{non_regression}
-Do not run Docker, Docker Compose, or `validate.sh` yourself during repair. Fix the
-source, deploy files, metadata, `validate.sh`, and solver so the host runner can perform
-the controlled build and authoritative validation after you return. Do not hardcode or
+This is a validation-debug continuation, not a broad redesign. First understand
+the inherited context above and the current files before editing. The host runner
+has already performed the controlled Docker build. You may run `./validate.sh`
+from the specific challenge root to reproduce runtime/solver failures and iterate
+on `writenup/exp.py`, readiness checks, and challenge files. Do not run `docker build`,
+`docker-compose build`, network-fetching dependency installs, Docker prune commands,
+or volume-destructive cleanup. If Docker Compose is needed, use it only through this
+challenge's `validate.sh` or bounded diagnostics for this challenge. The host runner
+will still perform the authoritative validation after you return. Do not hardcode or
 merely echo the expected flag in the exploit. The exploit must recover it through the
 intended vulnerability. Do not write `validate/*` progress events.
 Update documentation and metadata when the repaired implementation changes them.
+
+Pwn exploit debugging acceleration:
+- Prefer pwntools for Pwn solvers. Use
+  `context(os='linux', arch='amd64', log_level=os.environ.get('PWNLIB_LOG_LEVEL', 'info'))`
+  for amd64 Linux targets, and temporarily run with `PWNLIB_LOG_LEVEL=debug` when
+  diagnosing EOF, prompt mismatches, leaks, offsets, or payload bytes.
+- Load the local binary with `ELF('./attachments/<binary>', checksec=False)` or
+  `ELF('./deploy/src/<binary>', checksec=False)` so symbols, PLT/GOT, and
+  architecture assumptions come from the artifact instead of handwritten guesses.
+- Add or preserve a local mode such as `LOCAL=1 python3 writenup/exp.py` that
+  uses `process([binary_path])` for quick menu/offset smoke tests. The default
+  validation path must still connect with
+  `remote(os.environ['CHAL_HOST'], int(os.environ['CHAL_PORT']))`.
 
 Before you finish, self-check every challenge you touched with real file searches:
 - Run a search equivalent to
@@ -110,6 +134,40 @@ Before you finish, self-check every challenge you touched with real file searche
   `attachments/`.
 A repair that fixes one diagnostic by violating a different rule above still fails host validation.
 """
+
+
+def _render_validation_debug_context(context: Mapping[str, object] | None) -> str:
+    if not context:
+        return (
+            "- No inherited context was supplied; read `./input/shard.json`, "
+            "`./logs/report.json`, and the claimed challenge directory before editing."
+        )
+    return "```json\n" + json.dumps(
+        _compact_prompt_value(context),
+        ensure_ascii=False,
+        indent=2,
+    ) + "\n```"
+
+
+def _compact_prompt_value(value: object, *, depth: int = 0) -> object:
+    if depth > 5:
+        return "..."
+    if isinstance(value, str):
+        return value if len(value) <= 1600 else value[:1600] + "...[truncated]"
+    if isinstance(value, Mapping):
+        return {
+            str(key): _compact_prompt_value(item, depth=depth + 1)
+            for key, item in list(value.items())[:40]
+        }
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        compacted = [
+            _compact_prompt_value(item, depth=depth + 1)
+            for item in list(value)[:40]
+        ]
+        if len(value) > 40:
+            compacted.append(f"...[{len(value) - 40} more]")
+        return compacted
+    return value
 
 
 def _render_repair_plan(diagnostics: Sequence[Mapping[str, object]]) -> str:
@@ -334,6 +392,12 @@ def _repair_steps_for_status(
                 "Fix service startup/readiness, host/port wiring, and cleanup "
                 "traps before rerunning the exploit."
             )
+        elif "eoferror" in lower_output:
+            hint = (
+                "For Pwn EOFs, enable pwntools debug logging, reproduce against "
+                "the local ELF with `ELF()` + `process()` to fix menu synchronization "
+                "and payload layout, then retest the default `remote(CHAL_HOST, CHAL_PORT)` path."
+            )
         elif "permission denied" in lower_output:
             hint = "Fix executable bits, ownership, or container user permissions for the artifact and scripts."
         return [
@@ -386,6 +450,8 @@ Web / Pwn:
   equal to `metadata.flag`, and the service code MUST read `FLAG`.
 - The exploit recovers the flag from the live service via `CHAL_HOST`/`CHAL_PORT`,
   never from the compose file that injects it.
+- Pwn solvers may use pwntools and should keep a local `ELF()`/`process()` debug
+  path plus a default `remote(CHAL_HOST, CHAL_PORT)` validation path.
 - Do not run Docker from Hermes. The host runner rebuilds the exact image named by
   `metadata.docker_image` with `docker build -t <metadata.docker_image> -f deploy/Dockerfile .`
   after deploy source, Dockerfile, binary, or runtime dependencies change.
@@ -398,14 +464,15 @@ Pwn container launcher:
 - Prefer the fixed xinetd + chroot + TCP socket scaffold
   `./references/scaffolds/pwn/xinetd-chroot/`. Copy its `deploy/` tree into the challenge and
   replace placeholders such as `{{BINARY_NAME}}` and `{{SERVICE_PORT}}`; keep the
-  scaffold's fixed `ctf` user with uid/gid `1000:1000`. Do not invent a fresh Docker/chroot layout.
+  scaffold's fixed `ctf` user with uid/gid `1000:1000`. This scaffold is the
+  factory-normalized form of `ctf-docker-template/pwn-ubuntu_20.04`; do not invent a fresh Docker/chroot layout.
   The scaffold installs `xinetd`, copies an xinetd service file into
   `/etc/xinetd.d/ctf`, exposes the assigned service port, and has
   `/root/start.sh` start xinetd then stay foreground.
 - The xinetd service may run as root only to accept the socket and execute
   `/usr/sbin/chroot`; it should run the vulnerable binary with
-  `server_args = --userspec=ctf:ctf /home/ctf ./<binary>` by default, or an
-  equivalent fixed non-root uid/gid `1000:1000` drop inside the chroot.
+  `server_args = --userspec=1000:1000 /home/ctf ./<binary>` by default,
+  matching the fixed `ctf` user/group created in the image.
 - Build `/home/ctf` as the chroot root with the vulnerable binary, required
   runtime libraries, minimal `/dev/null`, `zero`, `random`, `urandom`, and only
   helper binaries needed by the intended exploit. This construction is
@@ -416,8 +483,9 @@ Pwn container launcher:
   container into the image's chroot, not from the host. They MUST NOT appear in
   `validate.sh`,
   `metadata.build_command`, `deploy/_files/start.sh`, or xinetd config files,
-  and MUST NOT be executed directly on the host. Write `/home/ctf/flag` from
-  the Compose `FLAG` value at startup, not in the Docker image layer.
+  and MUST NOT be executed directly on the host. Write `/home/ctf/flag` at
+  startup from `DASFLAG`, `FLAG`, or `GZCTF_FLAG` in that priority order, not
+  in the Docker image layer.
 - Harden xinetd with bounded settings such as `per_source`, `rlimit_cpu`, and
   compatible memory limits. Keep chroot contents owned by `root:ctf` and not
   writable by the `ctf` runtime user.

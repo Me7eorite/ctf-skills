@@ -27,8 +27,18 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertIn("./references/scaffolds/pwn/xinetd-chroot/", prompt)
         self.assertIn("xinetd + chroot + TCP socket", prompt)
         self.assertIn("server = /usr/sbin/chroot", prompt)
-        self.assertIn("server_args = --userspec=ctf:ctf", prompt)
+        self.assertIn("server_args = --userspec=1000:1000", prompt)
         self.assertIn("/etc/xinetd.d/ctf", prompt)
+
+    def test_shard_prompt_guides_pwntools_exp_debugging(self):
+        prompt = (ROOT / "prompts" / "shard_prompt.md").read_text(encoding="utf-8")
+
+        self.assertIn("context(os='linux', arch='amd64'", prompt)
+        self.assertIn("ELF('./attachments/<binary>', checksec=False)", prompt)
+        self.assertIn("LOCAL=1 python3 writenup/exp.py", prompt)
+        self.assertIn("process([binary_path])", prompt)
+        self.assertIn("PWNLIB_LOG_LEVEL=debug", prompt)
+        self.assertIn("remote(os.environ['CHAL_HOST']", prompt)
 
     def test_shard_prompt_keeps_pwn_chroot_setup_inside_dockerfile(self):
         prompt = (ROOT / "prompts" / "shard_prompt.md").read_text(encoding="utf-8")
@@ -48,7 +58,7 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertIn("./references/scaffolds/pwn/xinetd-chroot/", prompt)
         self.assertIn("xinetd + chroot + TCP socket", prompt)
         self.assertIn("/usr/sbin/chroot", prompt)
-        self.assertIn("--userspec=ctf:ctf", prompt)
+        self.assertIn("--userspec=1000:1000", prompt)
         self.assertIn("MUST appear only as `RUN` steps in", prompt)
 
     def test_pwn_xinetd_chroot_scaffold_has_container_only_setup(self):
@@ -60,14 +70,20 @@ class HermesRunnerTests(unittest.TestCase):
 
         self.assertNotIn("RUN cp -R /lib* /home/ctf", dockerfile)
         self.assertIn("cp -a /lib/x86_64-linux-gnu/*.so*", dockerfile)
+        self.assertIn("lib32z1", dockerfile)
         self.assertIn("cp /bin/ls /home/ctf/bin", dockerfile)
+        self.assertIn("cp /usr/bin/timeout /home/ctf/bin", dockerfile)
         self.assertIn("Every absolute path below", dockerfile)
+        self.assertIn("ctf-docker-template pwn Ubuntu layout", dockerfile)
         self.assertIn("- FLAG={{FLAG}}", compose)
         self.assertNotIn("volumes:", compose)
         self.assertNotIn("cp -R /lib* /home/ctf", start_sh)
         self.assertNotIn("mknod /home/ctf", start_sh)
+        self.assertIn("DASFLAG", start_sh)
+        self.assertIn("GZCTF_FLAG", start_sh)
+        self.assertIn("chmod 711 /home/ctf/{{BINARY_NAME}}", start_sh)
         self.assertIn("server      = /usr/sbin/chroot", xinetd)
-        self.assertIn("server_args = --userspec=ctf:ctf", xinetd)
+        self.assertIn("server_args = --userspec=1000:1000", xinetd)
         self.assertIn("groupadd -g 1000 ctf", dockerfile)
         self.assertIn("useradd -u 1000 -g 1000 -m ctf", dockerfile)
         self.assertNotIn("ARG CTF_UID", dockerfile)

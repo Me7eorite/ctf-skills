@@ -140,9 +140,11 @@ def test_auto_repair_normalizes_pwn_xinetd_deploy_from_scaffold(tmp_path: Path) 
 
     dockerfile = (challenge_dir / "deploy" / "Dockerfile").read_text(encoding="utf-8")
     compose = (challenge_dir / "deploy" / "docker-compose.yml").read_text(encoding="utf-8")
+    start_sh = (challenge_dir / "deploy" / "_files" / "start.sh").read_text(encoding="utf-8")
     xinetd = (challenge_dir / "deploy" / "_files" / "ctf.xinetd").read_text(encoding="utf-8")
     assert result.changed is True
     assert "FROM ubuntu:20.04" in dockerfile
+    assert "lib32z1" in dockerfile
     assert "COPY deploy/src/ /tmp/src/" in dockerfile
     assert "cp vuln /home/ctf/vuln" in dockerfile
     assert "cp -R /lib* /home/ctf/" not in dockerfile
@@ -151,7 +153,10 @@ def test_auto_repair_normalizes_pwn_xinetd_deploy_from_scaffold(tmp_path: Path) 
     assert "build:" not in compose
     assert '- "31337:31337"' in compose
     assert "- FLAG=flag{demo}" in compose
-    assert "server_args = --userspec=ctf:ctf /home/ctf ./vuln" in xinetd
+    assert "DASFLAG" in start_sh
+    assert "GZCTF_FLAG" in start_sh
+    assert "chmod 711 /home/ctf/vuln" in start_sh
+    assert "server_args = --userspec=1000:1000 /home/ctf ./vuln" in xinetd
 
 
 def test_auto_repair_makes_validate_sh_compose_compatible(tmp_path: Path) -> None:

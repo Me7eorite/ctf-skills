@@ -159,8 +159,8 @@ Container rules for Web and Pwn:
   foreground services, copy challenge files with `ctf` ownership and end with
   `USER ctf`. For the preferred xinetd/chroot Pwn pattern, xinetd may start as
   root only to accept the socket and call `/usr/sbin/chroot`; the vulnerable
-  binary itself MUST run inside the chroot with `--userspec=ctf:ctf` or an
-  equivalent fixed non-root uid/gid `1000:1000` drop.
+  binary itself MUST run inside the chroot with `--userspec=1000:1000`,
+  matching the fixed `ctf` user/group created in the image.
 - Web images MUST reuse the base image's appropriate non-root service user and
   conventional application directory when available, such as
   `www-data:/var/www/html` for Apache/PHP or the selected Tomcat image's
@@ -178,13 +178,14 @@ Container rules for Web and Pwn:
   `./references/scaffolds/pwn/xinetd-chroot/` unless the design explicitly needs a different
   launcher. Copy its `deploy/` tree into the challenge and replace placeholders
   such as `{{BINARY_NAME}}` and `{{SERVICE_PORT}}`; keep the scaffold's fixed
-  `ctf` user with uid/gid `1000:1000`. Do not invent a fresh Docker/chroot layout. The scaffold
+  `ctf` user with uid/gid `1000:1000`. This scaffold is the factory-normalized
+  form of `ctf-docker-template/pwn-ubuntu_20.04`; do not invent a fresh Docker/chroot layout. The scaffold
   installs `xinetd`, copies `deploy/_files/ctf.xinetd` into `/etc/xinetd.d/ctf`,
   exposes the assigned container port, and makes `/root/start.sh` start xinetd
   then block with `sleep infinity`. The xinetd service should use
   `socket_type = stream`, `protocol = tcp`, `wait = no`, `type = UNLISTED`,
   `bind = 0.0.0.0`, `server = /usr/sbin/chroot`, and
-  `server_args = --userspec=ctf:ctf /home/ctf ./<binary>` by default.
+  `server_args = --userspec=1000:1000 /home/ctf ./<binary>` by default.
 - For that Pwn chroot layout, construct `/home/ctf` as the runtime root:
   do this ONLY inside `deploy/Dockerfile` `RUN` steps executed by
   `docker build`. Dockerfile-only commands such as `cp -R /lib* /home/ctf`,
@@ -193,8 +194,8 @@ Container rules for Web and Pwn:
   appear in `validate.sh`, `metadata.build_command`, `deploy/_files/start.sh`,
   or xinetd config files. In the scaffold Dockerfile those commands copy from
   the Docker build container into the image's `/home/ctf` chroot, not from the
-  host. Place the flag at `/home/ctf/flag` from the Compose `FLAG` value during
-  container startup, not in an image layer.
+  host. Place the flag at `/home/ctf/flag` during container startup from
+  `DASFLAG`, `FLAG`, or `GZCTF_FLAG` in that priority order, not in an image layer.
 - Harden Pwn xinetd services with bounded resource settings such as
   `per_source`, `rlimit_cpu`, and, when compatible with the exploit,
   `rlimit_as`; include a `banner_fail` file. Keep `/home/ctf` owned by
@@ -346,6 +347,21 @@ authoritative `validate/passed` or `validate/failed` event.
 
 - Write `writenup/exp.py` as a real reference exploit/solver.
 - Write `validate.sh` as the single reproducible validation entrypoint.
+- For Pwn, debug the solver against the local compiled binary or delivered
+  attachment when possible before finishing: verify prompts, menu text, leak
+  parsing, offsets, and payload construction with bounded local runs. This does
+  not replace host validation, but the main agent must not leave obviously
+  untested `writenup/exp.py` logic for a later repair pass.
+- For Pwn, prefer a pwntools-based exploit skeleton when available. Set
+  `context(os='linux', arch='amd64', log_level=os.environ.get('PWNLIB_LOG_LEVEL', 'info'))`
+  for amd64 Linux targets, use `ELF('./attachments/<binary>', checksec=False)`
+  or `ELF('./deploy/src/<binary>', checksec=False)` to inspect symbols/PLT/GOT,
+  and support a bounded local debug mode such as `LOCAL=1 python3 writenup/exp.py`
+  that runs `process([binary_path])` against the local ELF. The default validation
+  path must still use `remote(os.environ['CHAL_HOST'], int(os.environ['CHAL_PORT']))`.
+  Use `PWNLIB_LOG_LEVEL=debug` or `context(..., log_level='debug')` while tuning
+  menu synchronization, leaks, offsets, and payload bytes; drop back to concise
+  output for normal validation.
 - `writenup/exp.py` must be offline-capable in the host validation
   environment. Use the Python standard library, system tools already used by
   the challenge such as `openssl`, or helper modules that you vendor under

@@ -197,7 +197,7 @@ def test_validation_repair_prompt_explains_unnecessary_intended_path() -> None:
     )
 
     assert '"unnecessary_intended_path"' in prompt
-    assert "Focused repair plan:" in prompt
+    assert "Focused debug plan:" in prompt
     assert "Root cause: the flag is reachable without the intended technique." in prompt
     assert "remove plaintext flag bytes" in prompt
     assert "binary print the flag when run with no input" in prompt
@@ -218,9 +218,17 @@ def test_validation_repair_prompt_classifies_nonzero_exit() -> None:
         ],
     )
 
-    assert "Focused repair plan:" in prompt
+    assert "Focused debug plan:" in prompt
     assert "Root cause: `validate.sh` exited non-zero." in prompt
     assert "Remove the missing dependency" in prompt
+    assert "You may run `./validate.sh`" in prompt
+    assert "Do not run `docker build`" in prompt
+    assert "Pwn exploit debugging acceleration:" in prompt
+    assert "context(os='linux', arch='amd64'" in prompt
+    assert "ELF('./attachments/<binary>', checksec=False)" in prompt
+    assert "process([binary_path])" in prompt
+    assert "PWNLIB_LOG_LEVEL=debug" in prompt
+    assert "remote(os.environ['CHAL_HOST']" in prompt
 
 
 def test_validation_repair_prompt_describes_host_build_failure() -> None:
@@ -244,6 +252,25 @@ def test_validation_repair_prompt_describes_host_build_failure() -> None:
     assert "missing_dependency" in prompt
     assert "Step 7: RUN make" in prompt
     assert "keep `ubuntu:20.04`" in prompt
+
+
+def test_validation_debug_prompt_guides_pwn_eof_debugging() -> None:
+    prompt = render_validation_repair_prompt(
+        attempt=1,
+        max_attempts=2,
+        validation_results=[
+            {
+                "challenge_id": "pwn-0001",
+                "solve_status": "failed",
+                "validation_status": "nonzero_exit",
+                "validation_stdout_tail": "pwnlib.tubes.sock.py raised EOFError",
+            }
+        ],
+    )
+
+    assert "For Pwn EOFs" in prompt
+    assert "`ELF()` + `process()`" in prompt
+    assert "remote(CHAL_HOST, CHAL_PORT)" in prompt
 
 
 def test_validation_repair_prompt_blocks_metadata_replacement_cheat() -> None:
@@ -272,6 +299,31 @@ def test_validation_repair_prompt_blocks_metadata_replacement_cheat() -> None:
     assert "Remove all `metadata.json` / `challenge.yml` reads" in prompt
     assert "do not compare against metadata inside the script" in prompt
     assert "same cheat in another form" in prompt
+
+
+def test_validation_debug_prompt_includes_inherited_context() -> None:
+    prompt = render_validation_repair_prompt(
+        attempt=1,
+        max_attempts=2,
+        validation_results=[
+            {
+                "challenge_id": "pwn-0001",
+                "solve_status": "failed",
+                "validation_status": "nonzero_exit",
+                "validation_stderr_tail": "EOFError",
+            }
+        ],
+        debug_context={
+            "shard": {"category": "pwn", "topic": "canary"},
+            "failed_challenge_files": {
+                "pwn-0001": ["deploy/src/vuln.c", "writenup/exp.py"]
+            },
+        },
+    )
+
+    assert "Inherited build context:" in prompt
+    assert '"topic": "canary"' in prompt
+    assert "writenup/exp.py" in prompt
 
 
 def test_validate_gate_reports_specific_implementation_gap(tmp_path: Path) -> None:
