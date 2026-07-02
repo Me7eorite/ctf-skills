@@ -447,6 +447,13 @@ Rules:
 - Prefer targeted edits to solver, validate.sh, metadata, documentation, and current artifact files.
 - For reverse-engineering repairs, the solver and validate.sh must derive the flag
   from distributed artifacts, not organizer files such as metadata.json or challenge.yml.
+- For Web/Pwn repairs, `deploy/docker-compose.yml` is organizer deployment
+  configuration and may contain the required literal `FLAG=<metadata.flag>`
+  list entry under `environment:` (singular). Do not replace it with
+  `${{FLAG}}` and do not move that value into `metadata.json`/`challenge.yml`
+  injection logic. Plaintext flag material is forbidden in player-facing
+  `attachments/`, solver hardcoding, and published artifacts, not in the
+  required Compose injection entry.
 - Do not call `./bin/progress` or `$WORKSPACE_ROOT/bin/progress`; this repair
   service records repair progress outside Hermes.
 
@@ -553,4 +560,3 @@ def _middle_truncate(text: str, limit: int) -> str:
     head = limit // 2
     tail = limit - head
     return f"{text[:head]}\n... <truncated> ...\n{text[-tail:]}"
-

@@ -420,12 +420,37 @@ class ValidationTests(unittest.TestCase):
 
         errors = self.validator.contract_errors(challenge, metadata)
 
-        self.assertTrue(any("FLAG=<metadata.flag>" in error for error in errors))
+        self.assertTrue(any("`- FLAG=<metadata.flag>`" in error for error in errors))
+        self.assertTrue(any("`environment:`" in error for error in errors))
 
         (deploy / "docker-compose.yml").write_text(
             "services:\n  challenge:\n    environment:\n      - FLAG=flag{demo}\n"
         )
         self.assertEqual(self.validator.contract_errors(challenge, metadata), [])
+
+    def test_web_contract_rejects_environments_key_typo(self):
+        challenge = self.paths.challenges / "web" / "web-flag-typo-001"
+        deploy = challenge / "deploy"
+        (deploy / "src").mkdir(parents=True)
+        (deploy / "src" / "app.js").write_text("console.log(process.env.FLAG)\n")
+        _write_root_start_contract(deploy)
+        (deploy / "docker-compose.yml").write_text(
+            "services:\n  challenge:\n    environments:\n      - FLAG=flag{demo}\n"
+        )
+        metadata = {
+            "id": "web-flag-typo-001",
+            "title": "Demo",
+            "category": "web",
+            "difficulty": "easy",
+            "build_status": "passed",
+            "flag": "flag{demo}",
+            "runtime": "node",
+            "framework": "Express",
+        }
+
+        errors = self.validator.contract_errors(challenge, metadata)
+
+        self.assertTrue(any("`environment:` (singular)" in error for error in errors))
 
     def test_reverse_contract_missing_elf_reports_attachments(self):
         """Error message should direct authors to the current delivery directory."""

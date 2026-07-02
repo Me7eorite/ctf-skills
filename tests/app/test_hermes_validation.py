@@ -201,6 +201,9 @@ def test_validation_repair_prompt_explains_unnecessary_intended_path() -> None:
     assert "Focused debug plan:" in prompt
     assert "Root cause: the flag is reachable without the intended technique." in prompt
     assert "remove plaintext flag bytes" in prompt
+    assert "`environment:` then `- FLAG=<metadata.flag>`" in prompt
+    normalized = " ".join(prompt.split())
+    assert "organizer deployment file may contain the plaintext flag" in normalized
     assert "binary print the flag when run with no input" in prompt
 
 

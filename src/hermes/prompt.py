@@ -98,6 +98,12 @@ How to read `validation_error`:
   shipped. Do not make the binary print the flag when run with no input. Store only
   encoded/encrypted material in the player artifact and update `writenup/exp.py` so
   it derives the flag through the declared reversing technique.
+  For `web`/`pwn`, keep the required literal Compose shape
+  `environment:` then `- FLAG=<metadata.flag>` in `deploy/docker-compose.yml`;
+  that organizer deployment file may contain the plaintext flag. Remove
+  plaintext only from player-visible artifacts such as `attachments/`, and
+  never make `validate.sh` or `writenup/exp.py` read the flag from
+  compose/metadata/challenge files.
 {_VALIDATION_CONTRACT_CHECKLIST}{non_regression}
 This is a validation-debug continuation, not a broad redesign. First understand
 the inherited context above and the current files before editing. The host runner
@@ -414,7 +420,7 @@ def _repair_steps_for_status(
                     "`deploy/docker-compose.yml`, and `deploy/src/` files using "
                     "the existing design."
                 ),
-                "For Compose, keep one service and a literal `- FLAG=<metadata.flag>` environment entry.",
+                "For Compose, keep one service with `environment:` and a literal `- FLAG=<metadata.flag>` entry.",
             ]
         if "no compiled elf" in lower_error or "no compiled pe" in lower_error:
             return [
@@ -462,6 +468,12 @@ def _repair_steps_for_status(
                 "For Re, remove plaintext flag bytes from `attachments/` and "
                 "`dist/`; organizer-only `src/` may contain build-time material "
                 "if not shipped."
+            ),
+            (
+                "For Web/Pwn, do not remove the required literal FLAG entry from "
+                "`deploy/docker-compose.yml`; that organizer deployment file may "
+                "contain plaintext. Remove plaintext only from player-facing "
+                "`attachments/` or from solver hardcoding."
             ),
             (
                 "Encode/encrypt delivered flag material and update `writenup/exp.py` "
@@ -633,8 +645,9 @@ Web / Pwn:
 - `deploy/Dockerfile` MUST install `deploy/_files/start.sh` into the image as
   `/root/start.sh`; the Compose service or image entrypoint MUST start through
   `/root/start.sh`.
-- The Compose service MUST define the literal environment list entry `- FLAG=flag{...}`
-  equal to `metadata.flag`, and the service code MUST read `FLAG`.
+- The Compose service MUST define `environment:` (singular) with the literal
+  list entry `- FLAG=flag{...}` equal to `metadata.flag`, and the service code
+  MUST read `FLAG`.
 - The exploit recovers the flag from the live service via `CHAL_HOST`/`CHAL_PORT`,
   never from the compose file that injects it.
 - Pwn solvers may use pwntools and should keep a local `ELF()`/`process()` debug

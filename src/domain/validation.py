@@ -1386,8 +1386,9 @@ class ChallengeValidator:
                 compose_flag = compose_literal_flag(compose_path)
                 if compose_flag != metadata.get("flag"):
                     errors.append(
-                        "deploy/docker-compose.yml must define environment list entry "
-                        "FLAG=<metadata.flag> with a literal matching value"
+                        "deploy/docker-compose.yml must define `environment:` "
+                        "(singular) with literal list entry `- FLAG=<metadata.flag>` "
+                        "matching metadata.flag"
                     )
             if category == "web" and (
                 not metadata.get("runtime") or not metadata.get("framework")

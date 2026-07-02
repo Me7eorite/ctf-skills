@@ -294,6 +294,8 @@ class RenderPromptTests(unittest.TestCase):
             )
             self.assertIn("Do not run `validate.sh`", rendered)
             self.assertIn("host runner", rendered)
+            self.assertIn("environment:", rendered)
+            self.assertIn("singular, not `environments`", rendered)
             self.assertIn("- FLAG=flag{xxxx}", rendered)
             # Progress reporting must list four stages only.
             self.assertIn(

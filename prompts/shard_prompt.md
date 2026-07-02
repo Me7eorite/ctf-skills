@@ -212,10 +212,18 @@ Container rules for Web and Pwn:
 
 - `deploy/docker-compose.yml` must define exactly one service.
 - Inject the challenge's deterministic organizer flag through that service's
-  `environment` using the literal Compose list form `- FLAG=flag{xxxx}`. The
-  value MUST exactly equal `metadata.flag`, and service code must read `FLAG`
-  at runtime. Do not use `${FLAG}` interpolation. Do not write the plaintext
-  flag into the Dockerfile, image layer, business source, or player attachment.
+  Compose environment list using exactly this shape:
+  ```yaml
+  environment:
+    - FLAG=flag{xxxx}
+  ```
+  Use `environment` (singular, not `environments`) and the literal list entry
+  `- FLAG=...`. The value MUST exactly equal `metadata.flag`, and service code
+  must read `FLAG` at runtime. This plaintext Compose entry is allowed and
+  required because `deploy/docker-compose.yml` is organizer deployment
+  configuration, not the player attachment. Do not use `${FLAG}` interpolation.
+  Do not write the plaintext flag into the Dockerfile, image layer, business
+  source, or any file under `attachments/`.
 - Set both Compose `image` and `container_name` to the challenge name,
   normalized to a stable lowercase Docker-safe identifier using only
   `[a-z0-9][a-z0-9_.-]`. Use the same identifier for the built image tag,
@@ -331,7 +339,9 @@ Reverse rules:
 - Do not store the plaintext `metadata.flag` in player-visible or published
   paths (`attachments/` or `dist/`) unless `strings` is explicitly the intended
   easy technique. Local build source under `src/` may contain organizer-only
-  plaintext, but it must not be copied into `attachments/` or `dist/`.
+  plaintext, and Web/Pwn `deploy/docker-compose.yml` must contain the literal
+  `FLAG=metadata.flag` organizer injection, but neither may be copied into
+  `attachments/` or `dist/`.
   Encode/encrypt flag material in delivered binaries and make the solver
   recover it through the declared reversing technique.
 - Running the delivered artifact with no exploit/license/input must not print
@@ -540,7 +550,8 @@ violates any of them fails validation regardless of what `validate.sh` prints:
 - `writenup/exp.py` MUST NOT read the flag from organizer files
   (`metadata.json`, `challenge.yml`, or `docker-compose.yml`). Web/Pwn exploits
   recover the flag from the live service via `CHAL_HOST`/`CHAL_PORT`; the
-  compose file merely injects it and is off-limits to the exploit.
+  compose file is allowed to contain the plaintext organizer flag for service
+  injection, but it is off-limits to the exploit.
 - A `re` `validate.sh`/`writenup/exp.py` MUST reference the distributed artifact
   under `attachments/` and MUST NOT reference `metadata.json` or `challenge.yml`
   — derive the flag from the binary, never from organizer files.
