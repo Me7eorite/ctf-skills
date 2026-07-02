@@ -7,6 +7,7 @@ import unittest
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from uuid import uuid4
 
 from core.jsonio import read_json, write_json
 from core.state import InMemoryProgressStore, ProgressStore
@@ -158,6 +159,51 @@ def _make_web_challenge(
     if metadata_extra:
         metadata.update(metadata_extra)
     (directory / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    return directory
+
+
+def _make_archived_web_challenge(
+    paths: _Paths,
+    attempt_id: str,
+    challenge_id: str = "web-0001",
+    *,
+    iteration: int = 13,
+    slug: str = "demo",
+) -> Path:
+    directory = (
+        paths.executions
+        / attempt_id
+        / "attempts"
+        / f"iter-{iteration:03d}"
+        / "output"
+        / "challenges"
+        / "web"
+        / f"{challenge_id}-{slug}"
+    )
+    deploy = directory / "deploy"
+    (deploy / "src").mkdir(parents=True, exist_ok=True)
+    (deploy / "src" / "app.py").write_text("print('vuln')\n", encoding="utf-8")
+    (deploy / "Dockerfile").write_text("FROM alpine\n", encoding="utf-8")
+    (deploy / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
+    (directory / "validate.sh").write_text("#!/bin/sh\necho flag{x}\n", encoding="utf-8")
+    (directory / "writenup").mkdir(parents=True, exist_ok=True)
+    (directory / "writenup" / "exp.py").write_text("pass\n", encoding="utf-8")
+    (directory / "metadata.json").write_text(
+        json.dumps(
+            {
+                "id": challenge_id,
+                "title": "demo",
+                "category": "web",
+                "difficulty": "easy",
+                "docker_image": "demo:latest",
+                "build_command": "docker build -t demo:latest .",
+                "build_status": "passed",
+                "solve_status": "failed",
+                "flag": "flag{example}",
+            }
+        ),
+        encoding="utf-8",
+    )
     return directory
 
 
@@ -746,6 +792,66 @@ class RunnerRealRunTests(unittest.TestCase):
             stages_with_status = [(e["stage"], e["status"], e["challenge_id"]) for e in window]
             self.assertIn(("validate", "pending", "web-0001"), stages_with_status)
 
+    def test_retry_uses_archived_attempt_output_instead_of_restarting_design(self):
+        with TemporaryDirectory() as tmp:
+            paths = _Paths(root=Path(tmp))
+            paths.initialize()
+            _copy_real_prompt(paths)
+            attempt_id = str(uuid4())
+            _make_archived_web_challenge(paths, attempt_id)
+            _make_shard(
+                paths,
+                "web-current.json",
+                ["web-0001"],
+                envelope={
+                    "build_attempt_id": attempt_id,
+                    "execution_mode": "resume",
+                    "resume_from_shard_basename": "web-source.json",
+                },
+            )
+            runner = HermesRunner(
+                paths,
+                image_exists=lambda _: True,
+                host_builder=NoopHostBuilder(),
+                profile_exists=lambda _: True,
+                validation_repair_attempts=0,
+                terminal_workspace_probe=lambda **_kwargs: None,
+            )  # type: ignore[arg-type]
+            prompts: list[str] = []
+
+            def invoke(prompt: str, log: Path, dry_run: bool, *, timeout=None, **_kwargs) -> int:
+                del dry_run, timeout
+                prompts.append(prompt)
+                log.parent.mkdir(parents=True, exist_ok=True)
+                log.write_text("fake invoke\n", encoding="utf-8")
+                return 0
+
+            runner._invoke = invoke  # type: ignore[assignment]
+            runner.validator.validate_path = lambda _path, *, expected_challenge_id: {  # type: ignore[method-assign]
+                "challenge_id": expected_challenge_id,
+                "status": "passed",
+                "elapsed": 0.0,
+            }
+
+            outcome = runner.process_one("worker-resume", dry_run=False)
+
+            self.assertEqual(outcome["status"], "done")
+            self.assertTrue(prompts)
+            self.assertNotIn("directory not found; start at `design`", prompts[0])
+            self.assertIn("next_stage=validate", prompts[0])
+            self.assertIn("edit_exact_path=", prompts[0])
+            self.assertIn("output/challenges/web/web-0001-demo", prompts[0])
+            latest_claim = runner.state.latest_claim_event("web-current.json")
+            assert latest_claim is not None
+            window = [
+                event
+                for event in runner.state.events_for_shard("web-current.json")
+                if event["id"] >= latest_claim["id"]
+            ]
+            stages_with_status = [(e["stage"], e["status"], e["challenge_id"]) for e in window]
+            self.assertIn(("validate", "pending", "web-0001"), stages_with_status)
+            self.assertNotIn(("design", "pending", "web-0001"), stages_with_status)
+
     def test_failed_validate_marks_shard_failed(self):
         with TemporaryDirectory() as tmp:
             paths = _Paths(root=Path(tmp))
@@ -881,7 +987,10 @@ class RunnerRealRunTests(unittest.TestCase):
                     stdout_tail="COPY failed\n",
                     stderr_tail="missing deploy/src/app.py\n",
                     failure_kind="missing_source",
-                    failure_hint="The build context or COPY path does not match the generated tree; verify the deploy/src files exist and the Dockerfile uses the right relative paths.",
+                    failure_hint=(
+                        "The build context or COPY path does not match the generated tree; "
+                        "verify the deploy/src files exist and the Dockerfile uses the right relative paths."
+                    ),
                     failed_step="Step 7: RUN cp -R /lib* /home/ctf",
                 )
 

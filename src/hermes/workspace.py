@@ -228,6 +228,7 @@ def _make_container_writable(active: Path) -> None:
 
 
 _CURRENT_LAYOUT = ("input", "output", "logs", "bin", "state")
+_ATTEMPT_ITER_RE = re.compile(r"^iter-(\d+)$")
 
 
 def _prepare_iteration(executions: Path, root: Path) -> tuple[Path, Path]:
@@ -387,11 +388,12 @@ def materialize_resume_outputs(
     workspace: ExecutionWorkspace,
     payload: Mapping[str, Any],
 ) -> dict[str, str]:
-    """Copy existing claimed canonical artifacts into isolated workspace output.
+    """Copy existing claimed artifacts into isolated workspace output.
 
     Returns a mapping ``{claimed_id: workspace_relative_path}`` for every id
-    that already had a canonical directory; ids without a canonical
-    predecessor are omitted.
+    that already had a reusable directory. Canonical ``work/challenges``
+    output wins; when a retry failed before publication, the latest archived
+    execution output for the same build attempt is used instead.
     """
     category, challenge_ids = _validate_challenges(payload.get("challenges"))
     destination_root = workspace.output / "challenges" / category
@@ -401,15 +403,69 @@ def materialize_resume_outputs(
         existing = _matching_directories(paths.challenges / category, challenge_id)
         if len(existing) > 1:
             raise WorkspacePromotionError(f"multiple canonical directories for claimed id {challenge_id}")
-        if not existing:
+        if existing:
+            source = existing[0]
+        else:
+            source = _latest_archived_resume_output(
+                paths,
+                payload=payload,
+                category=category,
+                challenge_id=challenge_id,
+            )
+        if source is None:
             continue
-        source = existing[0]
         _reject_tree_symlinks(source)
         destination = destination_root / source.name
         shutil.copytree(source, destination)
         targets[challenge_id] = destination.relative_to(workspace.root).as_posix()
     _make_container_writable(workspace.active)
     return targets
+
+
+def _latest_archived_resume_output(
+    paths: ProjectPaths,
+    *,
+    payload: Mapping[str, Any],
+    category: str,
+    challenge_id: str,
+) -> Path | None:
+    raw_attempt_id = payload.get("build_attempt_id")
+    if raw_attempt_id is None:
+        return None
+    try:
+        attempt_id = str(uuid.UUID(str(raw_attempt_id)))
+    except (ValueError, AttributeError, TypeError):
+        return None
+    attempts_root = _executions_path(paths) / attempt_id / "attempts"
+    if not attempts_root.is_dir():
+        return None
+    candidates: list[tuple[int, Path]] = []
+    for iteration in attempts_root.iterdir():
+        if not iteration.is_dir() or iteration.is_symlink():
+            continue
+        match = _ATTEMPT_ITER_RE.match(iteration.name)
+        if match is None:
+            continue
+        output_root = iteration / "output" / "challenges" / category
+        matches = _matching_directories(output_root, challenge_id)
+        if len(matches) > 1:
+            raise WorkspacePromotionError(
+                f"multiple archived directories for claimed id {challenge_id} in {iteration.name}"
+            )
+        if matches and _archived_resume_output_usable(matches[0]):
+            candidates.append((int(match.group(1)), matches[0]))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item[0])[1]
+
+
+def _archived_resume_output_usable(challenge_dir: Path) -> bool:
+    required = (
+        "metadata.json",
+        "validate.sh",
+        "writenup/exp.py",
+    )
+    return all((challenge_dir / relative).is_file() for relative in required)
 
 
 def _executions_path(paths: ProjectPaths) -> Path:

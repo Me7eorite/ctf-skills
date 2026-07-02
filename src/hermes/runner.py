@@ -106,6 +106,57 @@ def _validation_failure_message(results: list[dict[str, Any]]) -> str:
     return "; ".join(failures) or "challenge validation failed"
 
 
+def _bind_resume_targets_to_plan(
+    plan: ShardResumePlan,
+    *,
+    workspace: ExecutionWorkspace,
+    resume_targets: Mapping[str, str],
+) -> ShardResumePlan:
+    """Treat materialized retry outputs as the active resume source.
+
+    Failed executions are archived before publication, so canonical
+    ``work/challenges`` can be empty even though the previous iteration has a
+    reusable implementation/build candidate. Once that output is copied into
+    the current workspace, the next useful stage is host validation/exp repair.
+    """
+    if not resume_targets:
+        return plan
+    challenges: list[ChallengeResumePlan] = []
+    for challenge in plan.challenges:
+        target = resume_targets.get(challenge.challenge_id)
+        if target is None:
+            challenges.append(challenge)
+            continue
+        target_path = workspace.root / target
+        if challenge.lookup_status == "missing_challenge":
+            challenges.append(
+                ChallengeResumePlan(
+                    challenge_id=challenge.challenge_id,
+                    directory=target_path,
+                    lookup_status="ok",
+                    skipped_stages=("design", "implement", "build"),
+                    first_pending_stage="validate",
+                    stage_sources={},
+                )
+            )
+            continue
+        challenges.append(
+            ChallengeResumePlan(
+                challenge_id=challenge.challenge_id,
+                directory=target_path,
+                lookup_status=challenge.lookup_status,
+                skipped_stages=challenge.skipped_stages,
+                first_pending_stage=challenge.first_pending_stage,
+                stage_sources=challenge.stage_sources,
+            )
+        )
+    return ShardResumePlan(
+        shard=plan.shard,
+        previous_claim_event_id=plan.previous_claim_event_id,
+        challenges=tuple(challenges),
+    )
+
+
 _ITERATION_RE = re.compile(r"\.iter-(\d+)\.")
 
 
@@ -565,41 +616,9 @@ class HermesRunner:
             message=f"Worker claimed {len(challenge_ids)} challenge(s)",
         )
 
-        # 步骤 4: 写入断点恢复携带的阶段事件
-        plan_by_id: dict[str, ChallengeResumePlan] = {cp.challenge_id: cp for cp in plan.challenges}
-        carry_forward_events: list[ProgressEventInput] = []
-        for cp in plan.challenges:
-            for stage in cp.skipped_stages:
-                source_id = cp.stage_sources.get(stage, 0)
-                carry_forward_events.append(
-                    ProgressEventInput(
-                        shard=original_shard_name,
-                        challenge_id=cp.challenge_id,
-                        worker=worker,
-                        stage=stage,
-                        status="passed",
-                        message=carry_forward_message(stage, source_id),
-                    )
-                )
-        self._progress.record_batch(carry_forward_events)
-
-        # 步骤 5: 全跳捷径 —— 所有题目都已完成，不需要调 Hermes
-        if plan.all_challenges_fully_skipped:
-            return self._shortcircuit_all_skipped(shard, original_shard_name, worker, report, challenge_ids)
-
-        # 步骤 6: 写入每个题目的第一个待处理阶段 pending 事件
-        for cp in plan.challenges:
-            if cp.first_pending_stage is not None:
-                self._progress.record(
-                    shard=original_shard_name,
-                    challenge_id=cp.challenge_id,
-                    worker=worker,
-                    stage=cp.first_pending_stage,
-                    status="pending",
-                    message=_carry_forward_pending_message(cp.first_pending_stage),
-                )
-
-        # 步骤 7: 渲染 prompt 并调用 Hermes AI
+        # 步骤 4: 渲染 prompt 前准备 workspace。恢复产物 materialize 后再发布
+        # carry-forward/pending 事件，避免 retry UI 被旧的 missing_challenge
+        # 计划误标成 design 起步。
         try:
             workspace = prepare_workspace(
                 self.paths,
@@ -718,6 +737,11 @@ class HermesRunner:
                     manifest = {}
                 manifest["resume_output_targets"] = resume_targets
                 write_json(workspace.manifest, manifest)
+                plan = _bind_resume_targets_to_plan(
+                    plan,
+                    workspace=workspace,
+                    resume_targets=resume_targets,
+                )
         except (OSError, WorkspacePromotionError, ValueError) as exc:
             message = f"Workspace materialization failed: {exc}"
             failure_elapsed = elapsed()
@@ -743,6 +767,44 @@ class HermesRunner:
                 workspace=workspace,
                 publisher_phase=publisher_phase,
             )
+        # 步骤 5: 写入断点恢复携带的阶段事件
+        plan_by_id: dict[str, ChallengeResumePlan] = {cp.challenge_id: cp for cp in plan.challenges}
+        carry_forward_events: list[ProgressEventInput] = []
+        for cp in plan.challenges:
+            for stage in cp.skipped_stages:
+                source_id = cp.stage_sources.get(stage, 0)
+                message = (
+                    carry_forward_message(stage, source_id)
+                    if source_id
+                    else f"carry-forward: skipping {stage} from archived workspace output; evidence revalidated"
+                )
+                carry_forward_events.append(
+                    ProgressEventInput(
+                        shard=original_shard_name,
+                        challenge_id=cp.challenge_id,
+                        worker=worker,
+                        stage=stage,
+                        status="passed",
+                        message=message,
+                    )
+                )
+        self._progress.record_batch(carry_forward_events)
+
+        # 步骤 6: 全跳捷径 —— 所有题目都已完成，不需要调 Hermes
+        if plan.all_challenges_fully_skipped:
+            return self._shortcircuit_all_skipped(shard, original_shard_name, worker, report, challenge_ids)
+
+        # 步骤 7: 写入每个题目的第一个待处理阶段 pending 事件
+        for cp in plan.challenges:
+            if cp.first_pending_stage is not None:
+                self._progress.record(
+                    shard=original_shard_name,
+                    challenge_id=cp.challenge_id,
+                    worker=worker,
+                    stage=cp.first_pending_stage,
+                    status="pending",
+                    message=_carry_forward_pending_message(cp.first_pending_stage),
+                )
         if timeout is not None:
             if timeout <= 0:
                 raise ValueError("timeout must be positive")
@@ -1474,7 +1536,7 @@ class HermesRunner:
         actions: list[str] = []
         output_root = workspace.output / "challenges"
         for challenge_id in challenge_ids:
-            for challenge_dir in sorted(output_root.glob(f"*/*")):
+            for challenge_dir in sorted(output_root.glob("*/*")):
                 if not challenge_dir.is_dir():
                     continue
                 metadata = read_json(challenge_dir / "metadata.json", {})

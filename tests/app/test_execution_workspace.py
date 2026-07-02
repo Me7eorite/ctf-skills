@@ -965,6 +965,55 @@ class ExecutionWorkspaceTests(unittest.TestCase):
                     f"{directory} should be writable by the Hermes container user",
                 )
 
+    def test_resume_materialization_falls_back_to_latest_archived_attempt_output(self) -> None:
+        attempt_id = uuid4()
+        payload = {
+            "build_attempt_id": str(attempt_id),
+            "execution_mode": "resume",
+            "resume_from_shard_basename": "web-source.json",
+            "challenges": [{"id": "web-0001", "category": "web"}],
+        }
+        shard = self._running_shard(payload)
+        workspace = prepare_workspace(
+            self.paths,
+            shard=shard,
+            original_shard_name="web-current.json",
+            worker="worker-1",
+            two_layer=True,
+            iteration_no=2,
+        )
+        old = self._artifact(
+            self.paths.executions
+            / str(attempt_id)
+            / "attempts"
+            / "iter-012"
+            / "output"
+            / "challenges",
+            marker="old",
+        )
+        latest = self._artifact(
+            self.paths.executions
+            / str(attempt_id)
+            / "attempts"
+            / "iter-013"
+            / "output"
+            / "challenges",
+            marker="latest",
+        )
+        for directory in (old, latest):
+            (directory / "validate.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+            (directory / "writenup").mkdir(exist_ok=True)
+            (directory / "writenup" / "exp.py").write_text("pass\n", encoding="utf-8")
+
+        targets = materialize_resume_outputs(self.paths, workspace, payload)
+
+        self.assertEqual(
+            targets,
+            {"web-0001": "current/output/challenges/web/web-0001-demo"},
+        )
+        restored = workspace.output / "challenges" / "web" / "web-0001-demo"
+        self.assertEqual((restored / "artifact.txt").read_text(encoding="utf-8"), "latest")
+
     def test_report_import_remains_visible_to_merge_reports(self) -> None:
         shard = self._running_shard({"challenges": [{"id": "web-0001", "category": "web"}]})
         workspace = prepare_workspace(
