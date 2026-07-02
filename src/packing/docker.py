@@ -39,14 +39,15 @@ def _image_belongs_to_challenge(
     """镜像是否属于这道题本身（防止 docker save 偏移到其它题/基础镜像）。
 
     build 阶段约定镜像名包含归一化后的题目身份：历史格式是 ``<id>-<slug>``；
-    pwn host build 格式是 ``pwn-<workspace>-<delivery_name>``。因此仓库名必须
-    等于、以题目 id/交付名开头，或以完整交付名结尾才算归属本题。
+    pwn host build 格式是 ``pwn-<workspace>-<slug>``。因此仓库名必须等于、
+    以题目 id/交付名开头，或以完整交付名/交付 slug 结尾才算归属本题。
     """
     repo = _docker_safe(_image_repo(image))
     if not repo:
         return False
     challenge = _docker_safe(challenge_id)
     delivery = _docker_safe(delivery_name)
+    delivery_slug = _delivery_slug(delivery)
     if challenge and (repo == challenge or repo.startswith(f"{challenge}-")):
         return True
     return bool(
@@ -55,8 +56,18 @@ def _image_belongs_to_challenge(
             repo == delivery
             or repo.startswith(f"{delivery}-")
             or repo.endswith(f"-{delivery}")
+            or (delivery_slug and repo.endswith(f"-{delivery_slug}"))
         )
     )
+
+
+def _delivery_slug(delivery: str) -> str:
+    parts = [part for part in delivery.split("-") if part]
+    if parts and parts[0] in {"web", "pwn", "re"}:
+        parts = parts[1:]
+    while len(parts) > 1 and (parts[0].isdigit() or re.fullmatch(r"[a-f0-9]{6,32}", parts[0])):
+        parts = parts[1:]
+    return "-".join(parts)
 
 
 def _verify_saved_image(tar_path: Path, image: str) -> str | None:

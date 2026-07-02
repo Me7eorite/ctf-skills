@@ -455,14 +455,20 @@ Rules:
   `attachments/`, solver hardcoding, and published artifacts, not in the
   required Compose injection entry.
 - For Pwn repairs, do not invent or restore generic image names such as
-  `pwn-demo:latest`. The host runner owns final image identity and rewrites
-  `metadata.docker_image`, Compose `image`, and Compose `container_name` to
-  `pwn-{{workspace_id[:6]}}-{{challenge_name}}:latest` before the controlled
-  Docker build.
+  `pwn-canary:latest`, `pwn-demo:latest`, or `pwn-<slug>:latest`. The host
+  runner owns final image identity and rewrites `metadata.docker_image`,
+  Compose `image`, and Compose `container_name` to
+  `pwn-{{workspace_id[:6]}}-{{challenge_slug}}:latest` before the controlled
+  Docker build. If you touch those files, prefer the workspace-scoped pattern
+  immediately rather than preserving a generic name.
 - The host runner labels managed images with `ctf-factory.*` metadata and
   prunes workspace-scoped dangling managed images after successful Docker
   builds. Do not run broad `docker image prune` or `docker builder prune`
   commands from this repair.
+- For Pwn Dockerfile repairs, preserve the xinetd/chroot scaffold's apt mirror
+  fallback loop and mirror order. Do not replace it with one hardcoded mirror or
+  remove fallback entries; if package fetch fails, keep the loop and adjust only
+  the mirror list deliberately.
 - Do not call `./bin/progress` or `$WORKSPACE_ROOT/bin/progress`; this repair
   service records repair progress outside Hermes.
 

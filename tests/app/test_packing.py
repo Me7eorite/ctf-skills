@@ -428,13 +428,13 @@ class SaveDockerTests(unittest.TestCase):
             metadata = {
                 "id": "pwn-0001",
                 "port": 31337,
-                "docker_image": "pwn-exec12-pwn-0001-baby-stack:latest",
+                "docker_image": "pwn-exec12-baby-stack:latest",
             }
             expected = output / "pwn-0001-baby-stack[31337]-20260628.tar"
 
             def fake_run(cmd, *args, **kwargs):
                 if cmd[:2] == ["docker", "save"]:
-                    self._image_tar(expected, ["pwn-exec12-pwn-0001-baby-stack:latest"])
+                    self._image_tar(expected, ["pwn-exec12-baby-stack:latest"])
                 return self._completed()
 
             with patch("packing.docker.subprocess.run", side_effect=fake_run) as run:
@@ -457,15 +457,15 @@ class SaveDockerTests(unittest.TestCase):
         self.assertEqual(
             commands,
             [
-                ["docker", "image", "inspect", "pwn-exec12-pwn-0001-baby-stack:latest"],
+                ["docker", "image", "inspect", "pwn-exec12-baby-stack:latest"],
                 [
                     "docker",
                     "save",
                     "-o",
                     str(expected),
-                    "pwn-exec12-pwn-0001-baby-stack:latest",
+                    "pwn-exec12-baby-stack:latest",
                 ],
-                ["docker", "image", "rm", "pwn-exec12-pwn-0001-baby-stack:latest"],
+                ["docker", "image", "rm", "pwn-exec12-baby-stack:latest"],
             ],
         )
 

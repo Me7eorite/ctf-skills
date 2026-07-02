@@ -35,9 +35,12 @@ class DesignChallengeExecutor:
         profile_name: str,
         timeout_seconds: int,
         log_path: str | Path,
+        workspace: str | Path,
     ) -> DesignExecutionResult:
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
+        workspace_path = Path(workspace)
+        workspace_path.mkdir(parents=True, exist_ok=True)
         started_at = time.monotonic()
         result = self.hermes_invoke(
             prompt_text,
@@ -45,6 +48,7 @@ class DesignChallengeExecutor:
             log_path=Path(log_path),
             timeout=timeout_seconds,
             paths=self.paths,
+            cwd=workspace_path,
         )
         duration_s = time.monotonic() - started_at
         return result.stdout, result.returncode, duration_s

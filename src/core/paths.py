@@ -135,6 +135,11 @@ class ProjectPaths:
         """Design 流程的日志目录。"""
         return self.work / "design" / "logs"
 
+    @property
+    def design_executions(self) -> Path:
+        """Design attempt scratch workspaces, isolated by attempt id."""
+        return self.work / "design" / "executions"
+
     # ========== 资源文件路径 ==========
 
     @property
@@ -203,6 +208,7 @@ class ProjectPaths:
             self.worker_handshake,
             self.design_prompts,
             self.design_logs,
+            self.design_executions,
         ]
         for directory in directories:
             directory.mkdir(parents=True, exist_ok=True)

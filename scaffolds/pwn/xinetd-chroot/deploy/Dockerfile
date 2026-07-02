@@ -6,10 +6,10 @@ RUN set -eux; \
     cp /etc/apt/sources.list /etc/apt/sources.list.orig; \
     success=0; \
     for mirror in \
-        http://mirrors.163.com/ubuntu/ \
+        http://mirror.tuna.tsinghua.edu.cn/ \
         http://mirrors.aliyun.com/ubuntu/ \
-        http://mirrors.ustc.edu.cn/ubuntu/ \
-        http://mirrors.163.com/ubuntu/; do \
+        http://mirrors.zju.edu.cn/ \
+        http://mirrors.ustc.edu.cn/ubuntu/; do \
         mirror="${mirror%/}"; \
         sed -E \
             -e "s#http://archive.ubuntu.com/ubuntu/?#${mirror}#g" \

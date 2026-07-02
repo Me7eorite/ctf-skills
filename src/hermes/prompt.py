@@ -89,8 +89,8 @@ How to read `validation_error`:
   fix `metadata.docker_image`, `deploy/Dockerfile`, and `deploy/docker-compose.yml`
   so the host runner can rebuild that exact image tag. For Pwn, the host runner
   owns the final tag and rewrites it to
-  `pwn-{{workspace_id[:6]}}-{{challenge_name}}:latest`; do not change it back to a
-  generic value such as `pwn-demo:latest`.
+  `pwn-{{workspace_id[:6]}}-{{challenge_slug}}:latest`; do not change it back to a
+  generic value such as `pwn-canary:latest` or `pwn-demo:latest`.
 - `"build evidence incomplete: metadata.artifact_sha256 does not match artifact contents"`
   means the file at `metadata.artifact` was rebuilt without updating its `artifact_sha256`.
   Recompute the SHA-256 and write it back to `metadata.json`.
@@ -680,7 +680,10 @@ Web / Pwn:
   after deploy source, Dockerfile, binary, or runtime dependencies change.
 - For Pwn, the host runner normalizes image identity before the build:
   `metadata.docker_image`, Compose `image`, and Compose `container_name` are
-  synchronized to `pwn-{workspace_id[:6]}-{challenge_name}:latest`.
+  synchronized to `pwn-{workspace_id[:6]}-{challenge_slug}:latest`.
+  If existing files use generic names like `pwn-canary:latest`,
+  `pwn-demo:latest`, or `pwn-<slug>:latest`, replace them with the
+  workspace-scoped pattern instead of preserving them.
 - The host runner labels managed images with `ctf-factory.*` metadata and
   prunes workspace-scoped dangling managed images after successful Docker
   builds. Do not run broad `docker image prune` or `docker builder prune`
@@ -700,6 +703,10 @@ Pwn container launcher:
   The scaffold installs `xinetd`, copies an xinetd service file into
   `/etc/xinetd.d/ctf`, exposes the assigned service port, and has
   `/root/start.sh` start xinetd then stay foreground.
+- Preserve the pwn xinetd/chroot scaffold's apt mirror fallback loop and mirror
+  order. Do not replace it with one hardcoded mirror or remove fallback entries.
+  If package fetch fails, keep the fallback loop and adjust the mirror list only
+  deliberately.
 - The xinetd service may run as root only to accept the socket and execute
   `/usr/sbin/chroot`; it should run the vulnerable binary with
   `server_args = --userspec=1000:1000 /home/ctf ./<binary>` by default,

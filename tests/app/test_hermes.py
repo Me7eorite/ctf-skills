@@ -51,10 +51,16 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertIn("server = /usr/sbin/chroot", prompt)
         self.assertIn("server_args = --userspec=1000:1000", prompt)
         self.assertIn("/etc/xinetd.d/ctf", prompt)
-        self.assertIn("pwn-{workspace_id[:6]}-{challenge_name}:latest", prompt)
-        self.assertIn("do not fight this\n  rewrite", prompt)
+        self.assertIn("pwn-{workspace_id[:6]}-{challenge_slug}:latest", prompt)
+        self.assertIn("Read `workspace_id` from `./input/manifest.json`", prompt)
+        self.assertIn("derive `challenge_slug` from the\n  canonical challenge directory basename", prompt)
+        self.assertIn("Do not use short/generic names such as\n  `pwn-canary:latest`", prompt)
+        self.assertIn("The slug alone is NOT the image name", prompt)
+        self.assertIn("pwn-09c554-canary:latest", prompt)
         self.assertIn("ctf-factory.*", prompt)
         self.assertIn("workspace-scoped dangling managed images", prompt)
+        self.assertIn("apt mirror fallback loop and mirror\n  order", prompt)
+        self.assertIn("Do not replace it with one hardcoded mirror", prompt)
 
     def test_shard_prompt_guides_pwntools_exp_debugging(self):
         prompt = (ROOT / "prompts" / "shard_prompt.md").read_text(encoding="utf-8")
@@ -125,8 +131,11 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertIn("read `deploy/Dockerfile`, not", prompt)
         self.assertIn("/output/...", prompt)
         self.assertIn("/attachments/...", prompt)
-        self.assertIn("pwn-{workspace_id[:6]}-{challenge_name}:latest", prompt)
+        self.assertIn("pwn-{workspace_id[:6]}-{challenge_slug}:latest", prompt)
+        self.assertIn("pwn-canary:latest", prompt)
+        self.assertIn("workspace-scoped pattern", prompt)
         self.assertIn("ctf-factory.*", prompt)
+        self.assertIn("apt mirror fallback loop and mirror\n  order", prompt)
 
     def test_shard_prompt_enforces_workspace_path_discipline(self):
         prompt = (ROOT / "prompts" / "shard_prompt.md").read_text(encoding="utf-8")

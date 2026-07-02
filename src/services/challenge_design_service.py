@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -21,10 +21,21 @@ from domain.challenge_design_validators import (
     validate_design_payload,
 )
 from persistence.models import design_tasks as dt_model
-from persistence.repositories import ChallengeDesignRepository, DesignTaskRepository, ResearchRepository
+from persistence.repositories import (
+    ChallengeDesignRepository,
+    DesignTaskRepository,
+    ResearchRepository,
+)
 from persistence.session import SessionFactory, transaction
-from services.design_agent_executor import DesignChallengeExecutor, last_error_for_exit_code
-from services.design_prompt import DesignPromptContext, build_design_prompt, load_design_prompt_context
+from services.design_agent_executor import (
+    DesignChallengeExecutor,
+    last_error_for_exit_code,
+)
+from services.design_prompt import (
+    DesignPromptContext,
+    build_design_prompt,
+    load_design_prompt_context,
+)
 
 DESIGN_BINDING_ROLE = "design"
 DEFAULT_PROFILE_NAME = "default"
@@ -101,6 +112,7 @@ class ChallengeDesignService:
         attempt = started.attempt
         prompt_path = self.paths.design_prompts / f"{attempt.id}.md"
         log_path = self.paths.design_logs / f"{attempt.id}.log"
+        workspace = self.paths.design_executions / str(attempt.id)
         prompt_rel = self._relative_path(prompt_path)
         log_rel = self._relative_path(log_path)
 
@@ -124,12 +136,29 @@ class ChallengeDesignService:
                     prompt_rel,
                 )
 
+            root_output_snapshot = _project_root_output_snapshot(self.paths.root)
             stdout, exit_code, _duration_s = self.executor.execute(
                 prompt_text,
                 attempt.profile_name_used,
                 self.timeout_seconds,
                 log_path,
+                workspace,
             )
+            root_output_leaks = _project_root_output_leaks(
+                self.paths.root,
+                root_output_snapshot,
+            )
+            if root_output_leaks:
+                leak_list = ", ".join(root_output_leaks[:5])
+                if len(root_output_leaks) > 5:
+                    leak_list += f", ... (+{len(root_output_leaks) - 5} more)"
+                return self._fail_attempt(
+                    attempt,
+                    log_rel,
+                    "Hermes design wrote output outside the design workspace under "
+                    f"project root: {leak_list}",
+                    started.max_attempts,
+                )
             exit_error = last_error_for_exit_code(exit_code)
             if exit_error is not None:
                 return self._fail_attempt(attempt, log_rel, exit_error, started.max_attempts)
@@ -388,3 +417,60 @@ def _validation_notes(base_notes: str, quality_notes: Sequence[str]) -> str:
     lines = [base_notes, "", "Quality gate notes:"]
     lines.extend(f"- {note}" for note in quality_notes)
     return "\n".join(lines)
+
+
+_PROJECT_ROOT_LEAK_DIRS = ("output", "challenges", ".design_output")
+_PROJECT_ROOT_LEAK_FILE_PREFIXES = (
+    "challenge",
+    "design",
+    "re-",
+    "web-",
+    "pwn-",
+)
+
+
+def _project_root_output_snapshot(root: Path) -> dict[str, tuple[int, int]]:
+    snapshot: dict[str, tuple[int, int]] = {}
+    for path in _iter_project_root_output_candidates(root):
+        try:
+            if not path.is_file():
+                continue
+            stat = path.stat()
+        except OSError:
+            continue
+        snapshot[path.relative_to(root).as_posix()] = (stat.st_size, stat.st_mtime_ns)
+    return snapshot
+
+
+def _project_root_output_leaks(
+    root: Path,
+    before: Mapping[str, tuple[int, int]],
+) -> list[str]:
+    leaks: list[str] = []
+    for path in _iter_project_root_output_candidates(root):
+        try:
+            if not path.is_file():
+                continue
+            stat = path.stat()
+        except OSError:
+            continue
+        relative = path.relative_to(root).as_posix()
+        if before.get(relative) != (stat.st_size, stat.st_mtime_ns):
+            leaks.append(relative)
+    return sorted(leaks)
+
+
+def _iter_project_root_output_candidates(root: Path):
+    for dirname in _PROJECT_ROOT_LEAK_DIRS:
+        directory = root / dirname
+        if directory.is_dir() and not directory.is_symlink():
+            yield from directory.rglob("*")
+    try:
+        direct_children = list(root.iterdir())
+    except OSError:
+        return
+    for path in direct_children:
+        if not path.is_file() or path.suffix != ".json":
+            continue
+        if path.name.startswith(_PROJECT_ROOT_LEAK_FILE_PREFIXES):
+            yield path

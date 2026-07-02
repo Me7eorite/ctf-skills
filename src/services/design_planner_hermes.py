@@ -115,6 +115,8 @@ class HermesPlannerService:
             self.paths.design_logs / f"planner-{primary.id}.log"
         )
         actual_log.parent.mkdir(parents=True, exist_ok=True)
+        workspace = self.paths.design_executions / f"planner-{primary.id}"
+        workspace.mkdir(parents=True, exist_ok=True)
 
         started_at = time.monotonic()
         try:
@@ -124,6 +126,7 @@ class HermesPlannerService:
                 log_path=actual_log,
                 timeout=self.timeout_seconds,
                 paths=self.paths,
+                cwd=workspace,
             )
         except Exception as exc:  # noqa: BLE001 — defensive fallback
             _LOGGER.warning(

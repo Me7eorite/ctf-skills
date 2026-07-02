@@ -61,6 +61,40 @@ def test_invoke_design_agent_forwards_skill_prompt_profile_and_log(
     assert captured_call_map["timeout"] == 45
 
 
+def test_invoke_design_agent_uses_supplied_cwd(
+    monkeypatch,
+    tmp_path,
+):
+    captured_call_map = {}
+
+    def fake_invoke_capture(prompt_text, **keyword_args):
+        captured_call_map["prompt_text"] = prompt_text
+        captured_call_map.update(keyword_args)
+        return HermesProcessResult(returncode=0, stdout='{"event":{},"challenges":[]}', cancelled=False)
+
+    monkeypatch.setattr(
+        hermes_process,
+        "hermes_arguments",
+        lambda: ["hermes", "chat", "-Q", "-q"],
+    )
+    monkeypatch.setattr(hermes_process, "apply_legacy_custom_provider", lambda *_args: False)
+    monkeypatch.setattr(hermes_design, "invoke_capture", fake_invoke_capture)
+
+    project_paths = ProjectPaths(root=tmp_path, repository=tmp_path)
+    workspace = tmp_path / "work" / "design" / "executions" / "attempt"
+
+    hermes_design.invoke_design_agent(
+        "Design one challenge.",
+        profile_name="design-bot",
+        log_path=tmp_path / "attempt.log",
+        timeout=45,
+        paths=project_paths,
+        cwd=workspace,
+    )
+
+    assert captured_call_map["cwd"] == workspace
+
+
 def test_executor_returns_stdout_exit_code_and_duration(tmp_path):
     captured_call_map = {}
 
@@ -78,6 +112,7 @@ def test_executor_returns_stdout_exit_code_and_duration(tmp_path):
         "design-bot",
         30,
         log_path,
+        project_paths.design_executions / "attempt-1",
     )
 
     assert stdout == '{"ok": true}'
@@ -87,13 +122,21 @@ def test_executor_returns_stdout_exit_code_and_duration(tmp_path):
     assert captured_call_map["log_path"] == log_path
     assert captured_call_map["timeout"] == 30
     assert captured_call_map["paths"] == project_paths
+    assert captured_call_map["cwd"] == project_paths.design_executions / "attempt-1"
+    assert (project_paths.design_executions / "attempt-1").is_dir()
 
 
 def test_executor_rejects_non_positive_timeout(tmp_path):
     executor = DesignChallengeExecutor(ProjectPaths(root=tmp_path, repository=tmp_path))
 
     try:
-        executor.execute("/skill design-challenges", "default", 0, tmp_path / "x.log")
+        executor.execute(
+            "/skill design-challenges",
+            "default",
+            0,
+            tmp_path / "x.log",
+            tmp_path / "workspace",
+        )
     except ValueError as exc:
         assert "timeout_seconds must be positive" in str(exc)
     else:  # pragma: no cover - assertion guard

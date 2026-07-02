@@ -13,21 +13,27 @@ from hermes.host_build import HostBuilder, HostBuildError
 from hermes.workspace import ExecutionWorkspace
 
 
-def _workspace(tmp_path: Path) -> ExecutionWorkspace:
-    root = tmp_path / "exec"
+def _workspace(tmp_path: Path, *, workspace_id: str = "exec") -> ExecutionWorkspace:
+    root = tmp_path / workspace_id
     for name in ("output", "logs", "input", "state"):
         (root / name).mkdir(parents=True, exist_ok=True)
-    return ExecutionWorkspace("exec", root)
+    return ExecutionWorkspace(workspace_id, root)
 
 
-def _expected_build_command(image: str, *, category: str, challenge_id: str) -> list[str]:
+def _expected_build_command(
+    image: str,
+    *,
+    workspace_id: str = "exec",
+    category: str,
+    challenge_id: str,
+) -> list[str]:
     return [
         "docker",
         "build",
         "--label",
         "ctf-factory.managed=true",
         "--label",
-        "ctf-factory.workspace_id=exec",
+        f"ctf-factory.workspace_id={workspace_id}",
         "--label",
         f"ctf-factory.challenge_id={challenge_id}",
         "--label",
@@ -75,8 +81,8 @@ def _web_challenge(workspace: ExecutionWorkspace, *, compose: str | None = None)
     return challenge
 
 
-def _pwn_challenge(workspace: ExecutionWorkspace) -> Path:
-    challenge = workspace.output / "challenges" / "pwn" / "pwn-0001-baby-stack"
+def _pwn_challenge(workspace: ExecutionWorkspace, *, name: str = "pwn-0001-baby-stack") -> Path:
+    challenge = workspace.output / "challenges" / "pwn" / name
     deploy = challenge / "deploy"
     (deploy / "src").mkdir(parents=True)
     (deploy / "src" / "vuln.c").write_text("int main(){return 0;}\n", encoding="utf-8")
@@ -173,7 +179,7 @@ def test_host_builder_rewrites_pwn_image_to_workspace_scoped_tag(tmp_path: Path)
     with patch("hermes.host_build.subprocess.run", side_effect=fake_run):
         results = HostBuilder().build_workspace(workspace, validation_set)
 
-    expected_image = "pwn-exec-pwn-0001-baby-stack:latest"
+    expected_image = "pwn-exec-baby-stack:latest"
     assert calls[0] == _expected_build_command(
         expected_image,
         category="pwn",
@@ -184,7 +190,53 @@ def test_host_builder_rewrites_pwn_image_to_workspace_scoped_tag(tmp_path: Path)
     compose = (challenge / "deploy" / "docker-compose.yml").read_text(encoding="utf-8")
     assert metadata["docker_image"] == expected_image
     assert f"image: {expected_image}" in compose
-    assert "container_name: pwn-exec-pwn-0001-baby-stack" in compose
+    assert "container_name: pwn-exec-baby-stack" in compose
+
+
+def test_host_builder_uses_short_pwn_slug_for_workspace_image(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path, workspace_id="09c5542e-attempt")
+    challenge = _pwn_challenge(workspace, name="pwn-09c5542e-0008-canary")
+    validation_set = WorkspaceValidationSet(
+        candidates={"pwn-0008": challenge},
+        output_manifest_hash="sha256:before",
+    )
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[:3] == ["docker", "image", "inspect"]:
+            return subprocess.CompletedProcess(command, 0, stdout="sha256:image\n", stderr="")
+        if command[:3] == ["docker", "image", "prune"]:
+            return subprocess.CompletedProcess(command, 0, stdout="Total reclaimed space: 0B\n", stderr="")
+        assert kwargs["cwd"] == challenge
+        return subprocess.CompletedProcess(command, 0, stdout="built\n", stderr="")
+
+    with patch("hermes.host_build.subprocess.run", side_effect=fake_run):
+        results = HostBuilder().build_workspace(workspace, validation_set)
+
+    expected_image = "pwn-09c554-canary:latest"
+    assert calls[0] == _expected_build_command(
+        expected_image,
+        workspace_id="09c5542e-attempt",
+        category="pwn",
+        challenge_id="pwn-0008",
+    )
+    assert calls[2] == [
+        "docker",
+        "image",
+        "prune",
+        "-f",
+        "--filter",
+        "label=ctf-factory.managed=true",
+        "--filter",
+        "label=ctf-factory.workspace_id=09c5542e-attempt",
+    ]
+    assert results[0].image == expected_image
+    metadata = read_json(challenge / "metadata.json")
+    compose = (challenge / "deploy" / "docker-compose.yml").read_text(encoding="utf-8")
+    assert metadata["docker_image"] == expected_image
+    assert f"image: {expected_image}" in compose
+    assert "container_name: pwn-09c554-canary" in compose
 
 
 def test_host_builder_rejects_compose_volumes(tmp_path: Path) -> None:

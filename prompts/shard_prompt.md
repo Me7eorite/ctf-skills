@@ -228,11 +228,22 @@ Container rules for Web and Pwn:
   configuration, not the player attachment. Do not use `${FLAG}` interpolation.
   Do not write the plaintext flag into the Dockerfile, image layer, business
   source, or any file under `attachments/`.
-- For Pwn, the host runner owns final image naming and will normalize
-  `metadata.docker_image`, Compose `image`, and Compose `container_name` to
-  `pwn-{workspace_id[:6]}-{challenge_name}:latest` before the authoritative
-  build. Use a reasonable placeholder while authoring, but do not fight this
-  rewrite or change it back to a generic name such as `pwn-demo:latest`.
+- For Pwn, initial authoring MUST use the same image identity that the host
+  runner will enforce. Read `workspace_id` from `./input/manifest.json`, take
+  its first 6 Docker-safe characters, and derive `challenge_slug` from the
+  canonical challenge directory basename by removing leading `pwn`, workspace,
+  and sequence/id segments. Set `metadata.docker_image`, Compose `image`, and
+  Compose `container_name` to:
+  `pwn-{workspace_id[:6]}-{challenge_slug}:latest`
+  (container name without `:latest`). Do not use short/generic names such as
+  `pwn-canary:latest`, `pwn-demo:latest`, `pwn-challenge:latest`, or
+  `pwn-<slug>:latest`, even temporarily. The slug alone is NOT the image name;
+  it must be prefixed with `pwn-{workspace_id[:6]}-`.
+- Example: if `./input/manifest.json` contains
+  `"workspace_id": "09c5542e..."` and the challenge directory is
+  `pwn-09c5542e-0008-canary`, then `metadata.docker_image` and Compose `image`
+  MUST be `pwn-09c554-canary:latest`, and Compose `container_name` MUST be
+  `pwn-09c554-canary`.
 - For Web, set both Compose `image` and `container_name` to the challenge name,
   normalized to a stable lowercase Docker-safe identifier using only
   `[a-z0-9][a-z0-9_.-]`. Use the same identifier for the built image tag,
@@ -270,6 +281,10 @@ Container rules for Web and Pwn:
   `socket_type = stream`, `protocol = tcp`, `wait = no`, `type = UNLISTED`,
   `bind = 0.0.0.0`, `server = /usr/sbin/chroot`, and
   `server_args = --userspec=1000:1000 /home/ctf ./<binary>` by default.
+- Preserve the pwn xinetd/chroot scaffold's apt mirror fallback loop and mirror
+  order. Do not replace it with one hardcoded mirror or remove fallback entries.
+  If package fetch fails, keep the fallback loop and adjust the mirror list only
+  deliberately.
 - For that Pwn chroot layout, construct `/home/ctf` as the runtime root:
   do this ONLY inside `deploy/Dockerfile` `RUN` steps executed by
   `docker build`. Dockerfile-only commands such as `cp -R /lib* /home/ctf`,
@@ -387,8 +402,10 @@ Pwn rules:
   `docker build -t <metadata.docker_image> -f deploy/Dockerfile .` from the
   challenge root.
 - Pwn: before that build, the host runner rewrites the image identity to
-  `pwn-{workspace_id[:6]}-{challenge_name}:latest` and synchronizes
+  `pwn-{workspace_id[:6]}-{challenge_slug}:latest` and synchronizes
   `metadata.docker_image`, Compose `image`, and Compose `container_name`.
+  Your generated files should already use that exact pattern; host rewriting is
+  a safety net, not permission to write generic image names.
 - The host runner labels managed images with `ctf-factory.*` metadata and
   prunes workspace-scoped dangling managed images after successful Docker
   builds. Do not run broad `docker image prune` or `docker builder prune`
@@ -418,8 +435,8 @@ Pwn rules:
   `metadata.json` when an artifact file is produced.
 - For Web/Pwn Docker images, set `metadata.docker_image` to the stable image tag
   the host runner should build. For Pwn, this value is only an authoring
-  placeholder because the runner will replace it with
-  `pwn-{workspace_id[:6]}-{challenge_name}:latest`. `metadata.build_command`
+  placeholder until you have read `./input/manifest.json`; after that, it MUST
+  be `pwn-{workspace_id[:6]}-{challenge_slug}:latest`. `metadata.build_command`
   may be the fixed host command above; the runner will overwrite it with the
   authoritative command and set `metadata.build_status` to `passed` only after
   Docker build succeeds. Do not claim that a Docker image was built by Hermes.

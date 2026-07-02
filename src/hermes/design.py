@@ -21,6 +21,7 @@ def invoke_design_agent(
     log_path: Path,
     timeout: int,
     paths: ProjectPaths,
+    cwd: Path | None = None,
 ) -> HermesProcessResult:
     """使用指定 profile 运行 Hermes Design Agent，并捕获 stdout 和日志。
 
@@ -54,7 +55,7 @@ def invoke_design_agent(
         prompt,
         arguments=hermes_arguments,
         log_path=log_path,
-        cwd=paths.root,
+        cwd=cwd or paths.root,
         environment=environment_map,
         timeout=timeout,
     )

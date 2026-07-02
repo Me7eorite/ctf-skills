@@ -371,8 +371,22 @@ def _prepare_pwn_image(
 
 def _pwn_workspace_image(workspace_id: str, challenge_name: str) -> str:
     workspace_prefix = _docker_component(workspace_id)[:6] or "local"
-    safe_name = _docker_component(challenge_name) or "challenge"
-    return f"pwn-{workspace_prefix}-{safe_name}:latest"
+    slug = _pwn_challenge_slug(challenge_name)
+    return f"pwn-{workspace_prefix}-{slug}:latest"
+
+
+def _pwn_challenge_slug(challenge_name: str) -> str:
+    safe_name = _docker_component(challenge_name)
+    parts = [part for part in safe_name.split("-") if part]
+    if parts and parts[0] == "pwn":
+        parts = parts[1:]
+    while len(parts) > 1 and _pwn_name_prefix_part(parts[0]):
+        parts = parts[1:]
+    return "-".join(parts) or safe_name or "challenge"
+
+
+def _pwn_name_prefix_part(value: str) -> bool:
+    return value.isdigit() or bool(re.fullmatch(r"[a-f0-9]{6,32}", value))
 
 
 def _docker_component(value: str) -> str:

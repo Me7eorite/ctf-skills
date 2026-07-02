@@ -74,13 +74,14 @@ class FakeDesignExecutor:
         self.exit_code = exit_code
         self.calls: list[dict[str, object]] = []
 
-    def execute(self, prompt_text, profile_name, timeout_seconds, log_path):
+    def execute(self, prompt_text, profile_name, timeout_seconds, log_path, workspace):
         self.calls.append(
             {
                 "prompt_text": prompt_text,
                 "profile_name": profile_name,
                 "timeout_seconds": timeout_seconds,
                 "log_path": Path(log_path),
+                "workspace": Path(workspace),
             }
         )
         return self.stdout, self.exit_code, 0.01
@@ -93,6 +94,7 @@ def _context_loader(_paths: ProjectPaths):
         "design-core.md": "design core",
         "category-tactics.md": "category tactics",
         "difficulty-rubric.md": "difficulty rubric",
+        "shared_generation_strategy.md": "shared generation strategy",
     }
     return DesignPromptContext(skill_text="design skill", references=references)
 
@@ -306,6 +308,9 @@ def test_happy_path_inserts_design_and_marks_task_designed(
     assert executor.calls[0]["profile_name"] == "design-profile"
     assert executor.calls[0]["timeout_seconds"] == 30
     assert "boolean blind sqli" in executor.calls[0]["prompt_text"]
+    assert executor.calls[0]["workspace"] == (
+        tmp_path / "work" / "design" / "executions" / str(result.attempt_id)
+    )
     prompt_path = tmp_path / "work" / "design" / "prompts" / f"{result.attempt_id}.md"
     assert prompt_path.exists()
 
@@ -317,6 +322,39 @@ def test_happy_path_inserts_design_and_marks_task_designed(
         assert attempts[0].prompt_path == f"work/design/prompts/{result.attempt_id}.md"
         assert attempts[0].hermes_log_path == f"work/design/logs/{result.attempt_id}.log"
         assert ChallengeDesignRepository(session).latest_design(task_id) is not None
+
+
+def test_project_root_output_leak_fails_design_attempt(
+    session_factory: SessionFactory,
+    tmp_path: Path,
+):
+    task_id, _ = _seed(session_factory)
+
+    class LeakingExecutor(FakeDesignExecutor):
+        def execute(self, prompt_text, profile_name, timeout_seconds, log_path, workspace):
+            result = super().execute(
+                prompt_text,
+                profile_name,
+                timeout_seconds,
+                log_path,
+                workspace,
+            )
+            leaked = tmp_path / "output" / "pwn-leak.json"
+            leaked.parent.mkdir(parents=True, exist_ok=True)
+            leaked.write_text("{}\n", encoding="utf-8")
+            return result
+
+    executor = LeakingExecutor(stdout=_valid_stdout())
+
+    result = _service(tmp_path, session_factory, executor).design_for_task(task_id, "alice")
+
+    assert result.attempt_status == "failed"
+    assert result.challenge_design is None
+    assert result.error is not None
+    assert "outside the design workspace" in result.error
+    assert "output/pwn-leak.json" in result.error
+    with session_factory() as session:
+        assert ChallengeDesignRepository(session).latest_design(task_id) is None
 
 
 def test_schema_invalid_requeues_when_retry_remains(
