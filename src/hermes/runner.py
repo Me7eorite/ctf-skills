@@ -106,6 +106,24 @@ def _validation_failure_message(results: list[dict[str, Any]]) -> str:
     return "; ".join(failures) or "challenge validation failed"
 
 
+def _validation_result_has_compose_cli_failure(result: Mapping[str, Any]) -> bool:
+    if result.get("validation_status") != "nonzero_exit":
+        return False
+    text = "\n".join(
+        str(result.get(key) or "")
+        for key in (
+            "validation_stdout_tail",
+            "validation_stderr_tail",
+            "validation_error",
+        )
+    ).lower()
+    return (
+        "docker: 'compose' is not a docker command" in text
+        or "starting service via docker-compose" in text
+        and "run 'docker command --help'" in text
+    )
+
+
 def _bind_resume_targets_to_plan(
     plan: ShardResumePlan,
     *,
@@ -1557,6 +1575,7 @@ class HermesRunner:
         return any(
             result.get("validation_status") == "contract_failed"
             or bool(result.get("validation_contract_errors"))
+            or _validation_result_has_compose_cli_failure(result)
             for result in per_results
         )
 

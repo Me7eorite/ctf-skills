@@ -968,6 +968,25 @@ class RunnerRealRunTests(unittest.TestCase):
             self.assertIn("the host runner will run the controlled Docker build", prompts[1])
             self.assertIn("metadata.build_status is not passed", prompts[1])
 
+    def test_compose_cli_validation_failure_allows_deterministic_repair(self):
+        runner = HermesRunner(
+            _Paths(root=Path("/tmp/unused")),
+            profile_exists=lambda _: True,
+        )  # type: ignore[arg-type]
+
+        assert runner._validation_results_allow_auto_repair(
+            [
+                {
+                    "validation_status": "nonzero_exit",
+                    "validation_stdout_tail": "[INFO] Starting service via docker-compose...",
+                    "validation_stderr_tail": (
+                        "docker: 'compose' is not a docker command.\n"
+                        "Run 'docker COMMAND --help' for more information on a command."
+                    ),
+                }
+            ]
+        )
+
     def test_host_build_failure_is_forwarded_to_validation_repair_prompt(self):
         class FailingHostBuilder:
             def build_workspace(self, _workspace, _validation_set):

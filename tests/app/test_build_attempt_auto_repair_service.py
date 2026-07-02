@@ -125,6 +125,97 @@ def test_auto_repair_normalizes_pwn_xinetd_deploy_from_scaffold(tmp_path: Path) 
     assert "cp vuln /home/ctf/vuln" in dockerfile
     assert "cp -R /lib* /home/ctf/" not in dockerfile
     assert "image: pwn-demo:latest" in compose
+    assert "container_name: pwn-demo" in compose
+    assert "build:" not in compose
     assert '- "31337:31337"' in compose
     assert "- FLAG=flag{demo}" in compose
     assert "server_args = --userspec=1000:1000 /home/ctf ./vuln" in xinetd
+
+
+def test_auto_repair_makes_validate_sh_compose_compatible(tmp_path: Path) -> None:
+    challenge_dir = tmp_path / "challenge"
+    challenge_dir.mkdir()
+    _write_metadata(challenge_dir)
+    validate = challenge_dir / "validate.sh"
+    validate.write_text(
+        "#!/bin/bash\n"
+        "set -e\n"
+        "docker compose up -d\n"
+        "docker compose ps\n"
+        "docker compose logs --no-color --tail=120\n",
+        encoding="utf-8",
+    )
+
+    result = auto_repair_challenge(challenge_dir)
+
+    repaired = validate.read_text(encoding="utf-8")
+    assert result.changed is True
+    assert "compose() {" in repaired
+    assert "docker-compose \"$@\"" in repaired
+    assert "docker-compose version" not in repaired
+    assert "compose up -d" in repaired
+    assert "docker compose up -d" not in repaired
+
+    second = auto_repair_challenge(challenge_dir)
+    assert second.changed is False
+
+
+def test_auto_repair_repairs_legacy_recursive_compose_helper(tmp_path: Path) -> None:
+    challenge_dir = tmp_path / "challenge"
+    challenge_dir.mkdir()
+    _write_metadata(challenge_dir)
+    validate = challenge_dir / "validate.sh"
+    validate.write_text(
+        "#!/bin/bash\n"
+        "set -e\n"
+        "compose() {\n"
+        "    if compose version >/dev/null 2>&1; then\n"
+        "        compose \"$@\"\n"
+        "    elif command -v docker-compose >/dev/null 2>&1; then\n"
+        "        docker-compose \"$@\"\n"
+        "    else\n"
+        "        echo \"validate.sh: neither compose nor docker-compose is available\" >&2\n"
+        "        return 127\n"
+        "    fi\n"
+        "}\n"
+        "compose up -d\n",
+        encoding="utf-8",
+    )
+
+    result = auto_repair_challenge(challenge_dir)
+
+    repaired = validate.read_text(encoding="utf-8")
+    assert result.changed is True
+    assert "if command -v docker-compose" in repaired
+    assert "compose version" not in repaired
+    assert "neither compose nor docker-compose" not in repaired
+
+
+def test_auto_repair_preserves_exp_failure_diagnostics(tmp_path: Path) -> None:
+    challenge_dir = tmp_path / "challenge"
+    challenge_dir.mkdir()
+    _write_metadata(challenge_dir)
+    validate = challenge_dir / "validate.sh"
+    validate.write_text(
+        "#!/bin/bash\n"
+        "set -e\n"
+        "trap cleanup EXIT ERR\n"
+        "EXPLOIT_OUTPUT=$(python3 writenup/exp.py 2>&1)\n"
+        "EXPLOIT_EXIT=$?\n"
+        "echo \"$EXPLOIT_OUTPUT\"\n",
+        encoding="utf-8",
+    )
+
+    result = auto_repair_challenge(challenge_dir)
+
+    repaired = validate.read_text(encoding="utf-8")
+    assert result.changed is True
+    assert "set +e\nEXPLOIT_OUTPUT=$(python3 writenup/exp.py 2>&1)" in repaired
+    assert "EXPLOIT_EXIT=$?\nset -e" in repaired
+    assert "trap cleanup EXIT ERR" not in repaired
+    assert "trap cleanup EXIT" in repaired
+
+    second = auto_repair_challenge(challenge_dir)
+    repaired_again = validate.read_text(encoding="utf-8")
+    assert second.changed is False
+    assert repaired_again.count("set +e") == 1

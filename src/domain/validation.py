@@ -50,6 +50,9 @@ _FORBIDDEN_DOCKER_CLEANUP_RE = re.compile(
     r"docker-compose\s+down\b[^\n;&|]*\s(?:-v|--volumes)\b)",
     re.MULTILINE,
 )
+_UNDECLARED_SOLVER_IMPORT_RE = re.compile(
+    r"(?m)^\s*(?:from\s+(?:pwn|pwnlib|Crypto)\b|import\s+(?:pwn|pwnlib|Crypto)\b)"
+)
 _ROOT_START_INSTALL_RE = re.compile(
     r"(?im)^\s*(?:COPY|ADD)\s+(?:--[^\r\n]+\s+)*[^\r\n#]*start\.sh\s+/root/start\.sh\b"
 )
@@ -1191,6 +1194,12 @@ class ChallengeValidator:
             errors.append(
                 "writenup/exp.py references 'docker-compose'; the exploit must "
                 "recover the flag from the target, not organizer files"
+            )
+        if category in {"web", "pwn"} and exp_text and _UNDECLARED_SOLVER_IMPORT_RE.search(exp_text):
+            errors.append(
+                "writenup/exp.py imports undeclared third-party solver packages "
+                "such as pwntools/Crypto; use the Python standard library or "
+                "vendor required helper modules under writenup/"
             )
 
         # D — destructive Docker cleanup can remove host infrastructure volumes

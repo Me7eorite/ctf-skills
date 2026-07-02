@@ -42,6 +42,8 @@ def auto_repair_challenge(
     actions.extend(_repair_source_evidence(challenge_dir, metadata))
     actions.extend(_repair_artifact_metadata(challenge_dir, metadata))
     actions.extend(_repair_validate_wrapper(challenge_dir, metadata))
+    actions.extend(_repair_compose_validate_wrapper(challenge_dir, metadata))
+    actions.extend(_repair_validate_solver_capture(challenge_dir, metadata))
     actions.extend(_repair_pwn_xinetd_scaffold(challenge_dir, metadata))
     actions.extend(_repair_deploy_dockerfile(challenge_dir, metadata))
 
@@ -279,6 +281,109 @@ def _repair_validate_wrapper(challenge_dir: Path, metadata: dict[str, Any]) -> l
     return ["rewrote validate.sh to check solver flag output without organizer files"]
 
 
+def _repair_compose_validate_wrapper(challenge_dir: Path, metadata: dict[str, Any]) -> list[str]:
+    if metadata.get("category") not in {"web", "pwn"}:
+        return []
+    validate = challenge_dir / "validate.sh"
+    if not validate.is_file():
+        return []
+    try:
+        original = validate.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return []
+    compose_repair_tokens = (
+        "docker compose",
+        "compose version",
+        "neither compose nor docker-compose",
+    )
+    if not any(token in original for token in compose_repair_tokens):
+        return []
+
+    helper = (
+        "\n"
+        "compose() {\n"
+        "    if command -v docker-compose >/dev/null 2>&1; then\n"
+        "        docker-compose \"$@\"\n"
+        "    else\n"
+        "        docker compose \"$@\"\n"
+        "    fi\n"
+        "}\n"
+    )
+    text = _replace_compose_helper(original, helper)
+    text = _replace_direct_docker_compose_calls(text)
+    if "compose() {" not in text:
+        text = _insert_shell_helper(text, helper)
+    if text == original:
+        return []
+    validate.write_text(text, encoding="utf-8")
+    return ["made validate.sh compatible with docker compose and docker-compose"]
+
+
+def _replace_compose_helper(text: str, helper: str) -> str:
+    pattern = re.compile(r"(?ms)^compose\(\) \{\n.*?^\}\n?")
+    return pattern.sub(helper.lstrip("\n"), text, count=1)
+
+
+def _replace_direct_docker_compose_calls(text: str) -> str:
+    lines: list[str] = []
+    in_compose_helper = False
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if re.match(r"^compose\(\)\s*\{", stripped):
+            in_compose_helper = True
+            lines.append(line)
+            continue
+        if in_compose_helper:
+            lines.append(line)
+            if stripped == "}":
+                in_compose_helper = False
+            continue
+        lines.append(re.sub(r"(?<![\w-])docker\s+compose\b", "compose", line))
+    return "".join(lines)
+
+
+def _insert_shell_helper(text: str, helper: str) -> str:
+    lines = text.splitlines(keepends=True)
+    for index, line in enumerate(lines[:10]):
+        if re.match(r"^\s*set\s+-[A-Za-z]+\s*$", line):
+            return "".join(lines[: index + 1]) + helper + "".join(lines[index + 1 :])
+    if lines and lines[0].startswith("#!"):
+        return lines[0] + helper + "".join(lines[1:])
+    return helper.lstrip("\n") + text
+
+
+def _repair_validate_solver_capture(challenge_dir: Path, metadata: dict[str, Any]) -> list[str]:
+    if metadata.get("category") not in {"web", "pwn"}:
+        return []
+    validate = challenge_dir / "validate.sh"
+    if not validate.is_file():
+        return []
+    try:
+        text = validate.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return []
+    if "EXPLOIT_OUTPUT=$(python3 writenup/exp.py 2>&1)" not in text:
+        return []
+    canonical_capture = (
+        "set +e\n"
+        "EXPLOIT_OUTPUT=$(python3 writenup/exp.py 2>&1)\n"
+        "EXPLOIT_EXIT=$?\n"
+        "set -e"
+    )
+    repaired = re.sub(
+        r"(?:set \+e\n)*EXPLOIT_OUTPUT=\$\(python3 writenup/exp\.py 2>&1\)\n"
+        r"EXPLOIT_EXIT=\$\?\n(?:set -e\n?)*",
+        canonical_capture + "\n",
+        text,
+        count=1,
+    )
+    repaired = repaired.replace("trap cleanup EXIT ERR", "trap cleanup EXIT")
+    if repaired == text:
+        return []
+    validate.write_text(repaired, encoding="utf-8")
+    return ["made validate.sh preserve solver diagnostics when exp.py exits non-zero"]
+
+
 def _repair_pwn_xinetd_scaffold(challenge_dir: Path, metadata: dict[str, Any]) -> list[str]:
     if metadata.get("category") != "pwn" or not _looks_like_pwn_xinetd(challenge_dir, metadata):
         return []
@@ -293,6 +398,7 @@ def _repair_pwn_xinetd_scaffold(challenge_dir: Path, metadata: dict[str, Any]) -
     binary_name = _pwn_binary_name(challenge_dir, metadata)
     service_port = _metadata_port(metadata)
     image_name = _metadata_image(challenge_dir, metadata)
+    container_name = _docker_container_name(image_name)
     flag = str(metadata.get("flag") or "flag{replace_me}")
     replacements = {
         "{{BINARY_NAME}}": binary_name,
@@ -300,6 +406,7 @@ def _repair_pwn_xinetd_scaffold(challenge_dir: Path, metadata: dict[str, Any]) -
         "{{HOST_PORT}}": service_port,
         "{{FLAG}}": flag,
         "{{IMAGE_NAME}}": image_name,
+        "{{CONTAINER_NAME}}": container_name,
         "{{CTF_UID}}": _PWN_DEFAULT_UID,
         "{{CTF_GID}}": _PWN_DEFAULT_GID,
     }
@@ -418,6 +525,12 @@ def _metadata_image(challenge_dir: Path, metadata: dict[str, Any]) -> str:
     return sanitized or "pwn-challenge"
 
 
+def _docker_container_name(image_name: str) -> str:
+    base = image_name.split("/", 1)[-1].split(":", 1)[0]
+    sanitized = re.sub(r"[^a-z0-9_.-]+", "-", base.lower()).strip(".-")
+    return sanitized or "pwn-challenge"
+
+
 def _safe_filename(value: str) -> bool:
     return bool(re.fullmatch(r"[A-Za-z0-9_.-]+", value)) and value not in {".", ".."}
 
@@ -463,7 +576,12 @@ def _repair_deploy_dockerfile(challenge_dir: Path, metadata: dict[str, Any]) -> 
         actions.append("added Dockerfile layer installing make before build steps")
 
     replaced = re.sub(
-        r"cp -R /lib\* /home/ctf/?(?:\s*\\)?(?:\s*2>/dev/null \|\| true)?\s*&&\s*cp -R /usr/lib\* /home/ctf/?(?:\s*\\)?(?:\s*2>/dev/null \|\| true)?",
+        (
+            r"cp -R /lib\* /home/ctf/?(?:\s*\\)?"
+            r"(?:\s*2>/dev/null \|\| true)?\s*&&\s*"
+            r"cp -R /usr/lib\* /home/ctf/?(?:\s*\\)?"
+            r"(?:\s*2>/dev/null \|\| true)?"
+        ),
         (
             "mkdir -p /home/ctf/lib64 /home/ctf/lib/x86_64-linux-gnu && "
             "(cp -L /lib64/ld-linux-x86-64.so.2 /home/ctf/lib64/ 2>/dev/null || "

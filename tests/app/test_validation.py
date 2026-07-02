@@ -495,6 +495,13 @@ class SolverIntegrityTests(unittest.TestCase):
         errors = self.validator.contract_errors(challenge, metadata)
         self.assertTrue(any("embeds the literal metadata.flag" in e for e in errors))
 
+    def test_web_exp_importing_pwntools_is_rejected(self):
+        challenge, metadata = self._web_challenge(
+            exp_py="from pwn import *\nprint('solve')\n"
+        )
+        errors = self.validator.contract_errors(challenge, metadata)
+        self.assertTrue(any("undeclared third-party solver packages" in e for e in errors))
+
     def test_genuine_web_exp_passes_integrity(self):
         challenge, metadata = self._web_challenge(
             exp_py="import os,requests\nr=requests.get(f\"http://{os.environ['CHAL_HOST']}:{os.environ['CHAL_PORT']}/\")\nprint(r.text)\n"
