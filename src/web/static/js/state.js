@@ -4,6 +4,7 @@ export const appState = {
   category: "all",
   search: "",
   timer: null,
+  stateLoading: false,
   buildAttempts: {
     list: null,
     detail: null,
@@ -30,6 +31,10 @@ export const appState = {
   },
 };
 
+const ACTIVE_REFRESH_MS = 5000;
+const SETTLED_REFRESH_MS = 20000;
+const HIDDEN_REFRESH_MS = 60000;
+
 export function isActive(data) {
   return Boolean(
     data?.process?.running
@@ -39,5 +44,9 @@ export function isActive(data) {
 
 export function scheduleRefresh(reload) {
   clearTimeout(appState.timer);
-  appState.timer = setTimeout(reload, isActive(appState.data) ? 2000 : 8000);
+  const hidden = typeof document !== "undefined" && document.hidden;
+  const delay = hidden
+    ? HIDDEN_REFRESH_MS
+    : (isActive(appState.data) ? ACTIVE_REFRESH_MS : SETTLED_REFRESH_MS);
+  appState.timer = setTimeout(reload, delay);
 }

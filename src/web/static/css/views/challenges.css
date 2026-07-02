@@ -1,0 +1,226 @@
+/* === 完成题目 === */
+
+.ch-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-lg);
+  margin-bottom: var(--space-lg);
+}
+
+.ch-page-title {
+  color: var(--ink-900);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.ch-page-desc {
+  margin-top: 4px;
+  color: var(--ink-500);
+  font-size: var(--font-sm);
+}
+
+.ch-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-md);
+  margin-bottom: var(--space-lg);
+}
+
+.ch-metric {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: 13px var(--space-md);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+
+.ch-metric > svg {
+  width: 18px;
+  height: 18px;
+  padding: 7px;
+  box-sizing: content-box;
+  border-radius: var(--radius-md);
+  background: var(--ink-100);
+  color: var(--ink-600);
+}
+
+.ch-metric strong {
+  display: block;
+  color: var(--ink-900);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.ch-metric span {
+  color: var(--ink-500);
+  font-size: var(--font-xs);
+}
+
+.ch-metric-success > svg { background: var(--accent-green-50); color: var(--accent-green); }
+.ch-metric-info > svg { background: var(--brand-50); color: var(--brand-600); }
+.ch-metric-warning > svg { background: var(--accent-amber-50); color: var(--accent-amber); }
+
+.ch-list-card .filter-bar-responsive {
+  border-bottom: 1px solid var(--line);
+}
+
+.ch-list-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: 1px solid var(--line);
+}
+
+.ch-filter-bar {
+  padding: var(--space-md) var(--space-lg);
+  margin-bottom: 0;
+}
+
+.ch-filter-bar .input {
+  width: 256px;
+}
+
+.ch-filter-bar .filter-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ch-filter-bar .filter-button span {
+  font-family: var(--font-mono-family);
+  font-size: 11px;
+  opacity: .78;
+}
+
+.ch-table-wrap {
+  border: 0;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+}
+
+.ch-table {
+  min-width: 980px;
+}
+
+.ch-title {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-900);
+  font-weight: 600;
+}
+
+.ch-id {
+  margin-top: 2px;
+  color: var(--ink-500);
+  font-size: var(--font-xs);
+}
+
+.ch-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-700);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.ch-card-list {
+  display: none;
+}
+
+.ch-card {
+  display: grid;
+  gap: var(--space-md);
+  padding: var(--space-md);
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.ch-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-md);
+}
+
+.ch-card-head strong {
+  display: block;
+  color: var(--ink-900);
+  font-size: var(--font-md);
+  overflow-wrap: anywhere;
+}
+
+.ch-card-head span.mono {
+  display: block;
+  margin-top: 3px;
+  color: var(--ink-500);
+  font-size: var(--font-xs);
+}
+
+.ch-card-badges {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
+.ch-card-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-md);
+}
+
+.ch-card-meta dt {
+  color: var(--ink-400);
+  font-size: var(--font-xs);
+}
+
+.ch-card-meta dd {
+  margin-top: 2px;
+  color: var(--ink-700);
+  font-size: var(--font-sm);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 1023px) {
+  .ch-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 767px) {
+  .ch-page-header,
+  .ch-list-summary {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .ch-page-header .btn {
+    width: 100%;
+  }
+
+  .ch-summary-grid,
+  .ch-card-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .ch-filter-bar .input {
+    width: 100%;
+  }
+
+  .ch-table-wrap {
+    display: none;
+  }
+
+  .ch-card-list {
+    display: grid;
+  }
+}

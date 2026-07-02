@@ -55,7 +55,7 @@ const titles = {
   "design-tasks":     { title: "题目设计", group: "生产管线" },
   "challenges":       { title: "完成题目", group: "生产管线" },
   "build-attempts":   { title: "构建列表", group: "生产管线" },
-  "worker-pool":      { title: "Worker 池", group: "运行监控" },
+  "worker-pool":      { title: "实时进度", group: "运行监控" },
   "logs":             { title: "运行日志", group: "运行监控" },
   "shards":           { title: "任务队列", group: "系统" },
   // 以下保留路由兼容，由 setView 重定向到新页面

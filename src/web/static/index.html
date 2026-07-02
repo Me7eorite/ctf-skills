@@ -27,6 +27,9 @@
   <link rel="stylesheet" href="/css/views/research-submit.css">
   <link rel="stylesheet" href="/css/views/research-requests.css">
   <link rel="stylesheet" href="/css/views/design-tasks.css">
+  <link rel="stylesheet" href="/css/views/overview.css">
+  <link rel="stylesheet" href="/css/views/worker-pool.css">
+  <link rel="stylesheet" href="/css/views/challenges.css">
   <link rel="stylesheet" href="/css/views/build-attempts.css">
   <script src="/assets/lucide.min.js" defer></script>
 </head>
@@ -54,10 +57,10 @@
         <!-- ── 生产管线 ── -->
         <div class="sidebar-nav-group">
           <div class="sidebar-nav-group-title">生产管线</div>
-          <button class="sidebar-nav-item" data-target="overview">
+          <button class="sidebar-nav-item primary" data-target="overview">
             <i data-lucide="layout-dashboard"></i>概览
           </button>
-          <button class="sidebar-nav-item primary" data-target="research-submit">
+          <button class="sidebar-nav-item" data-target="research-submit">
             <i data-lucide="plus-circle"></i>新建需求
           </button>
           <button class="sidebar-nav-item" data-target="research-requests">
@@ -79,7 +82,7 @@
         <div class="sidebar-nav-group">
           <div class="sidebar-nav-group-title">运行监控</div>
           <button class="sidebar-nav-item" data-target="worker-pool">
-            <i data-lucide="cpu"></i>Worker 池
+            <i data-lucide="activity"></i>实时进度
           </button>
           <button class="sidebar-nav-item" data-target="logs">
             <i data-lucide="file-text"></i>运行日志
@@ -112,7 +115,7 @@
           <h1 id="pageTitle" class="header-title">生产概览</h1>
         </div>
         <div class="header-right">
-          <div id="sidebarWorkerPoolEntry" class="header-status sidebar-worker-pool-entry hidden lg:flex" data-target="worker-pool" title="Worker 池">
+          <div id="sidebarWorkerPoolEntry" class="header-status sidebar-worker-pool-entry hidden lg:flex" data-target="worker-pool" title="实时进度">
             <span id="sidebarWorkerDot" class="sidebar-worker-dot idle"></span>
             <span id="sidebarWorkerCount" class="sidebar-worker-count">—</span>
             <i data-lucide="chevron-right" class="header-status-arrow"></i>

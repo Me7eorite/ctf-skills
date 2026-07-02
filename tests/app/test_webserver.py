@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import Mock, patch
 from uuid import uuid4
@@ -47,6 +48,31 @@ class WebserverTests(unittest.TestCase):
     def _client(self, tasks: TaskManager | None = None) -> TestClient:
         service = DashboardService(self.paths, tasks=tasks)
         return TestClient(create_app(service))
+
+    def _write_deliverable_challenge(self) -> None:
+        challenge = self.paths.challenges / "re" / "re-0001-demo"
+        (challenge / "writenup").mkdir(parents=True)
+        (challenge / "writenup" / "wp.md").write_text(
+            "# 题目分析\n\n这是中文题解。\n",
+            encoding="utf-8",
+        )
+        (challenge / "writenup" / "exp.py").write_text(
+            "print('flag{demo}')\n",
+            encoding="utf-8",
+        )
+        (challenge / "dist").mkdir()
+        (challenge / "dist" / "checker.bin").write_bytes(b"artifact")
+        write_json(
+            challenge / "metadata.json",
+            {
+                "id": "re-0001",
+                "title": "Demo",
+                "category": "re",
+                "difficulty": "easy",
+                "build_status": "passed",
+                "solve_status": "passed",
+            },
+        )
 
     def test_state_endpoint_returns_dashboard(self):
         with self._client() as client:
@@ -125,6 +151,28 @@ class WebserverTests(unittest.TestCase):
         body = response.json()
         self.assertEqual(body["name"], "demo.log")
         self.assertIn("hello", body["content"])
+
+    def test_delivery_download_returns_zip_for_publishable_challenges(self):
+        self._write_deliverable_challenge()
+
+        with self._client() as client:
+            response = client.get("/api/challenges/delivery/download")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "application/zip")
+        archive_path = self.paths.work / "download-fixture.zip"
+        archive_path.write_bytes(response.content)
+        with zipfile.ZipFile(archive_path) as archive:
+            names = set(archive.namelist())
+        self.assertIn("题库资源/ctf-overview.xlsx", names)
+        self.assertIn("工具/js-reverse-re-0001exp.zip", names)
+
+    def test_delivery_download_rejects_empty_publishable_set(self):
+        with self._client() as client:
+            response = client.get("/api/challenges/delivery/download")
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("没有可交付题目", response.json()["detail"])
 
     def test_worker_action_returns_accepted_on_ok(self):
         tasks = _StubTaskManager(self.paths, (True, "worker 已启动"))

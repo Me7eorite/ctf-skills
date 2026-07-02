@@ -18,8 +18,8 @@ from core.jsonio import read_json
 from core.paths import ProjectPaths
 from core.queue import ShardQueue
 from core.state import InMemoryProgressStore, ProgressStore
-from hermes.runner import validation_repair_timeout_cap
 from domain.seeds import SeedStore
+from hermes.runner import validation_repair_timeout_cap
 
 
 def relative_time(timestamp: float) -> str:
@@ -689,6 +689,9 @@ class DashboardService:
                 "built": sum(
                     item["build_status"] == "passed" for item in challenges
                 ),
+                "delivery_ready": sum(
+                    item["delivery_ready"] for item in challenges
+                ),
                 "queue": shard_counts,
                 "categories": {
                     category: sum(
@@ -794,6 +797,10 @@ class DashboardService:
                     or "-",
                     "build_status": metadata.get("build_status", "unknown"),
                     "solve_status": metadata.get("solve_status", "unknown"),
+                    "delivery_ready": (
+                        metadata.get("build_status") == "passed"
+                        and metadata.get("solve_status") == "passed"
+                    ),
                     "path": str(directory.relative_to(self.paths.root)).replace(
                         "\\", "/"
                     ),

@@ -6,17 +6,21 @@ import logging
 import mimetypes
 import shutil
 import sys
+import tempfile
 import time
+import zipfile
 from http import HTTPStatus
 from pathlib import Path
 from threading import Thread
 from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
+from starlette.background import BackgroundTask
 
 from core.jsonio import read_json
 from core.paths import ProjectPaths
+from packing import Packer, PackerOptions, PackingError
 from persistence import make_postgres_progress_store
 from services import ResourceDeletionService
 from services.build_profile_readiness import check_build_profile_readiness
@@ -81,6 +85,34 @@ def create_app(
                 detail="log not found",
             ) from exc
         return JSONResponse({"name": Path(name).name, "content": content})
+
+    @app.get("/api/challenges/delivery/download")
+    def download_challenge_delivery() -> FileResponse:
+        temp_root: Path | None = None
+        try:
+            archive_path, temp_root = _prepare_challenge_delivery_archive(
+                service.paths
+            )
+        except PackingError as exc:
+            if temp_root is not None:
+                shutil.rmtree(temp_root, ignore_errors=True)
+            raise HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail=str(exc),
+            ) from exc
+        except OSError as exc:
+            if temp_root is not None:
+                shutil.rmtree(temp_root, ignore_errors=True)
+            raise HTTPException(
+                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+                detail=f"交付包生成失败：{exc}",
+            ) from exc
+        return FileResponse(
+            archive_path,
+            media_type="application/zip",
+            filename="完成题目交付包.zip",
+            background=BackgroundTask(shutil.rmtree, temp_root, ignore_errors=True),
+        )
 
     @app.post("/api/actions/worker")
     def post_worker_action() -> JSONResponse:
@@ -182,6 +214,42 @@ def create_app(
         return Response(content=body, media_type=media_type)
 
     return app
+
+
+def _prepare_challenge_delivery_archive(paths: ProjectPaths) -> tuple[Path, Path]:
+    download_root = paths.work / "downloads"
+    download_root.mkdir(parents=True, exist_ok=True)
+    temp_root = Path(
+        tempfile.mkdtemp(prefix="challenge-delivery-", dir=download_root)
+    )
+    try:
+        bundle_dir = temp_root / "bundle"
+        summary = Packer(
+            paths,
+            PackerOptions(
+                skip_docker=True,
+            ),
+        ).pack(bundle_dir)
+        if int(summary.get("challenges") or 0) <= 0:
+            raise PackingError("没有可交付题目：需要构建通过且 EXP 校验通过")
+        archive_path = temp_root / "完成题目交付包.zip"
+        _zip_directory(bundle_dir, archive_path)
+        return archive_path, temp_root
+    except Exception:
+        shutil.rmtree(temp_root, ignore_errors=True)
+        raise
+
+
+def _zip_directory(source: Path, destination: Path) -> None:
+    with zipfile.ZipFile(
+        destination,
+        "w",
+        compression=zipfile.ZIP_DEFLATED,
+    ) as archive:
+        for path in sorted(source.rglob("*")):
+            if not path.is_file() or path.is_symlink():
+                continue
+            archive.write(path, path.relative_to(source).as_posix())
 
 
 def _action_response(ok: bool, message: str) -> JSONResponse:

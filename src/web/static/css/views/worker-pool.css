@@ -1,0 +1,349 @@
+/* === 实时进度 === */
+
+.rp-warning {
+  margin-bottom: var(--space-md);
+  border: 1px solid var(--accent-amber-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+  background: var(--accent-amber-light);
+  color: #92400e;
+  font-size: var(--font-sm);
+}
+
+.rp-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(420px, .9fr);
+  align-items: stretch;
+  gap: var(--space-lg);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent-green);
+  border-radius: var(--radius-md);
+  padding: var(--space-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+
+.rp-eyebrow {
+  color: var(--brand-600);
+  font-size: var(--font-xs);
+  font-weight: 700;
+}
+
+.rp-hero h2 {
+  margin-top: 6px;
+  color: var(--ink-900);
+  font-size: 26px;
+  line-height: 1.2;
+  letter-spacing: 0;
+}
+
+.rp-hero p {
+  max-width: 680px;
+  margin-top: 8px;
+  color: var(--ink-500);
+  font-size: var(--font-md);
+}
+
+.rp-hero-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-sm);
+}
+
+.rp-metric {
+  display: grid;
+  align-content: center;
+  gap: 6px;
+  min-height: 104px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+  background: var(--ink-50);
+}
+
+.rp-metric svg {
+  width: 18px;
+  height: 18px;
+  color: var(--brand-600);
+}
+
+.rp-metric span {
+  color: var(--ink-500);
+  font-size: var(--font-xs);
+}
+
+.rp-metric strong {
+  color: var(--ink-900);
+  font-size: 24px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.rp-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  gap: var(--space-lg);
+  margin-top: var(--space-lg);
+}
+
+.rp-main {
+  display: grid;
+  gap: var(--space-lg);
+}
+
+.rp-panel {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+
+.rp-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: 1px solid var(--line);
+}
+
+.rp-panel-head h3 {
+  color: var(--ink-900);
+  font-size: var(--font-md);
+  font-weight: 700;
+}
+
+.rp-panel-head p {
+  margin-top: 3px;
+  color: var(--ink-500);
+  font-size: var(--font-xs);
+}
+
+.rp-active-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--space-md);
+  padding: var(--space-lg);
+}
+
+.rp-task-card,
+.rp-lane-card {
+  display: grid;
+  gap: var(--space-sm);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+  background: var(--ink-50);
+}
+
+.rp-task-head,
+.rp-lane-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-md);
+}
+
+.rp-task-head strong,
+.rp-lane-top strong,
+.rp-queue-item strong,
+.rp-result-item strong,
+.rp-event strong {
+  display: block;
+  overflow: hidden;
+  color: var(--ink-900);
+  font-size: var(--font-sm);
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rp-task-head span,
+.rp-lane-top span,
+.rp-queue-item span,
+.rp-result-item span,
+.rp-event span {
+  color: var(--ink-500);
+  font-size: var(--font-xs);
+}
+
+.rp-task-card p,
+.rp-lane-card p,
+.rp-event p {
+  margin: 0;
+  overflow: hidden;
+  color: var(--ink-600);
+  font-size: var(--font-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rp-task-card time,
+.rp-result-item time,
+.rp-event time {
+  color: var(--ink-400);
+  font-size: var(--font-xs);
+}
+
+.rp-progress-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 42px;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.rp-progress-line > span {
+  color: var(--ink-700);
+  font-size: var(--font-xs);
+  font-weight: 700;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.rp-progress-track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--ink-200);
+}
+
+.rp-progress-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--brand-600);
+}
+
+.rp-progress-track i.failed {
+  background: var(--accent-red);
+}
+
+.rp-lane-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--space-md);
+  padding: 0 var(--space-lg) var(--space-lg);
+}
+
+.rp-queue-list,
+.rp-result-list,
+.rp-event-list {
+  display: grid;
+}
+
+.rp-queue-item,
+.rp-result-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-md);
+  padding: 13px var(--space-lg);
+  border-bottom: 1px solid var(--line);
+}
+
+.rp-queue-item:last-child,
+.rp-result-item:last-child {
+  border-bottom: 0;
+}
+
+.rp-queue-item em {
+  color: var(--ink-400);
+  font-size: var(--font-xs);
+  font-style: normal;
+  white-space: nowrap;
+}
+
+.rp-result-item {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.rp-result-item > div:last-child {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+}
+
+.rp-events {
+  align-self: start;
+  max-height: calc(100vh - 160px);
+  overflow: hidden;
+}
+
+.rp-event-list {
+  max-height: calc(100vh - 250px);
+  overflow: auto;
+  padding: var(--space-md) var(--space-lg);
+  gap: var(--space-md);
+}
+
+.rp-event {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-sm);
+}
+
+.rp-event .dot {
+  margin-top: 6px;
+}
+
+.rp-event > div > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+
+.rp-empty {
+  padding: var(--space-xl);
+  color: var(--ink-500);
+  font-size: var(--font-sm);
+  text-align: center;
+}
+
+.rp-empty.compact {
+  padding: var(--space-lg);
+}
+
+@media (max-width: 1180px) {
+  .rp-hero,
+  .rp-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .rp-events,
+  .rp-event-list {
+    max-height: none;
+  }
+}
+
+@media (max-width: 767px) {
+  .rp-hero {
+    padding: var(--space-lg);
+  }
+
+  .rp-hero h2 {
+    font-size: 22px;
+  }
+
+  .rp-hero-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .rp-panel-head,
+  .rp-task-head,
+  .rp-lane-top,
+  .rp-event > div > div {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .rp-queue-item,
+  .rp-result-item {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .rp-result-item > div:last-child {
+    justify-items: start;
+  }
+}

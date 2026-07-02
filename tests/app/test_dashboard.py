@@ -46,7 +46,9 @@ class DashboardTests(unittest.TestCase):
 
         self.assertEqual(state["summary"]["challenges"], 1)
         self.assertEqual(state["summary"]["validated"], 1)
+        self.assertEqual(state["summary"]["delivery_ready"], 1)
         self.assertEqual(state["summary"]["queue"]["pending"], 1)
+        self.assertTrue(state["challenges"][0]["delivery_ready"])
         self.assertEqual(state["challenges"][0]["runtime"], "node")
         self.assertEqual(state["seeds"], [])
         self.assertEqual(state["progress"]["snapshots"], [])

@@ -46,7 +46,12 @@ registerViews({
 
 function routeFromHash() {
   const raw = window.location.hash || "";
-  if (!raw.startsWith("#/build-attempts")) return false;
+  if (!raw) return false;
+  if (!raw.startsWith("#/build-attempts")) {
+    clearLocationHash();
+    setView("overview");
+    return false;
+  }
 
   const hash = raw.slice(2);
   const [path, query = ""] = hash.split("?");
@@ -65,7 +70,25 @@ function routeFromHash() {
   return true;
 }
 
+function clearLocationHash() {
+  if (!window.location.hash) return;
+  history.replaceState(null, "", window.location.pathname + window.location.search);
+}
+
+function navigateTo(target) {
+  if (!target) return;
+  if (target === "build-attempts") {
+    if (window.location.hash === "#/build-attempts") routeFromHash();
+    else window.location.hash = "#/build-attempts";
+    return;
+  }
+  clearLocationHash();
+  setView(target);
+}
+
 async function loadState() {
+  if (appState.stateLoading) return;
+  appState.stateLoading = true;
   try {
     appState.data = appState.view === "build-attempts"
       ? await api("/api/ui-state")
@@ -74,6 +97,7 @@ async function loadState() {
   } catch (error) {
     showToast(error.message, true);
   } finally {
+    appState.stateLoading = false;
     scheduleRefresh(loadState);
   }
 }
@@ -112,16 +136,18 @@ document.addEventListener("click", (event) => {
     if (window.innerWidth < 1024) {
       document.querySelector("#sidebarNav")?.classList.add("hidden");
     }
-    if (target === "build-attempts") {
-      if (window.location.hash === "#/build-attempts") routeFromHash();
-      else window.location.hash = "#/build-attempts";
-      return;
-    }
-    setView(target);
+    navigateTo(target);
     return;
   }
   const jump = event.target.closest("[data-jump]");
-  if (jump) jumpTo(jump.dataset.jump);
+  if (jump) {
+    const target = jump.dataset.jump;
+    if (target === "build-attempts") navigateTo(target);
+    else {
+      clearLocationHash();
+      jumpTo(target);
+    }
+  }
 });
 
 window.addEventListener("hashchange", routeFromHash);
