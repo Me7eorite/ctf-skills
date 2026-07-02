@@ -229,6 +229,9 @@ def test_validation_repair_prompt_classifies_nonzero_exit() -> None:
     assert "process([binary_path])" in prompt
     assert "PWNLIB_LOG_LEVEL=debug" in prompt
     assert "remote(os.environ['CHAL_HOST']" in prompt
+    assert "command -v gdb checksec readelf objdump" in prompt
+    assert "gdb -q <binary>" in prompt
+    assert "pwndbg/gef" in prompt
 
 
 def test_validation_repair_prompt_describes_host_build_failure() -> None:

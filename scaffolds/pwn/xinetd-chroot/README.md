@@ -31,4 +31,7 @@ deploy/src/<source files and Makefile>
 The generated `docker-compose.yml` must inject the literal `FLAG=flag{...}`
 environment entry. The startup script accepts `DASFLAG`, `FLAG`, or
 `GZCTF_FLAG`, writes the selected value to `/home/ctf/flag`, clears the
-environment variable, and then starts xinetd.
+environment variable, and then starts xinetd. Since xinetd runs the challenge
+after `chroot /home/ctf`, vulnerable challenge code should read that file as
+`/flag` from inside the chroot. A source path such as `/home/ctf/flag` would
+resolve to `/home/ctf/home/ctf/flag` in the container and is usually wrong.

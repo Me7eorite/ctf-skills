@@ -1,4 +1,5 @@
 ﻿import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,6 +8,7 @@ from uuid import uuid4
 
 from core.paths import ProjectPaths
 from hermes import HermesRunner
+from hermes import process as hermes_process
 from hermes.prompt import render_validation_repair_prompt
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -39,6 +41,17 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertIn("process([binary_path])", prompt)
         self.assertIn("PWNLIB_LOG_LEVEL=debug", prompt)
         self.assertIn("remote(os.environ['CHAL_HOST']", prompt)
+        self.assertIn("command -v gdb checksec readelf objdump", prompt)
+        self.assertIn("gdb -q <binary>", prompt)
+        self.assertIn("pwndbg/gef", prompt)
+        self.assertIn("Never run bare `./<binary>`", prompt)
+        self.assertIn("subprocess.run([...], input=..., timeout=5)", prompt)
+        self.assertIn("Do not write absolute", prompt)
+        self.assertIn("/writenup/exp.py", prompt)
+        self.assertIn("application-level probe", prompt)
+        self.assertIn("Choice:", prompt)
+        self.assertIn("greater than `2^48`", prompt)
+        self.assertIn("open the flag by its chroot-internal path such as `/flag`", prompt)
 
     def test_shard_prompt_keeps_pwn_chroot_setup_inside_dockerfile(self):
         prompt = (ROOT / "prompts" / "shard_prompt.md").read_text(encoding="utf-8")
@@ -60,6 +73,12 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertIn("/usr/sbin/chroot", prompt)
         self.assertIn("--userspec=1000:1000", prompt)
         self.assertIn("MUST appear only as `RUN` steps in", prompt)
+        self.assertIn("Never run bare `./<binary>`", prompt)
+        self.assertIn("subprocess.run([...], input=..., timeout=5)", prompt)
+        self.assertIn("/writenup/exp.py", prompt)
+        self.assertIn("bare `nc -z` port check is too", prompt)
+        self.assertIn("program must open `/flag`", prompt)
+        self.assertIn("greater than `2^48`", prompt)
 
     def test_pwn_xinetd_chroot_scaffold_has_container_only_setup(self):
         scaffold = ROOT / "scaffolds" / "pwn" / "xinetd-chroot"
@@ -81,6 +100,7 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertNotIn("mknod /home/ctf", start_sh)
         self.assertIn("DASFLAG", start_sh)
         self.assertIn("GZCTF_FLAG", start_sh)
+        self.assertIn("printf '%s\\n' \"$INSERT_FLAG\" > /home/ctf/flag", start_sh)
         self.assertIn("chmod 711 /home/ctf/{{BINARY_NAME}}", start_sh)
         self.assertIn("server      = /usr/sbin/chroot", xinetd)
         self.assertIn("server_args = --userspec=1000:1000", xinetd)
@@ -295,6 +315,31 @@ class HermesRunnerTests(unittest.TestCase):
             captured["environment"]["TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES"],
             "false",
         )
+        self.assertIn("profile_log_path", captured)
+
+    def test_invoke_flushes_header_before_blocking_run(self):
+        log = self.paths.logs / "live.log"
+        profile_log = self.paths.root / ".hermes" / "profiles" / "cf-pwn" / "logs" / "agent.log"
+
+        def fake_run(*args, **kwargs):
+            text = log.read_text(encoding="utf-8")
+            self.assertIn("timeout: 9s", text)
+            self.assertIn(f"profile_log: {profile_log}", text)
+            self.assertIs(kwargs["stdin"], subprocess.DEVNULL)
+            return subprocess.CompletedProcess(args[0], 0)
+
+        with patch("hermes.process.subprocess.run", side_effect=fake_run):
+            returncode = hermes_process.invoke(
+                "prompt",
+                arguments=["hermes", "chat", "-Q", "-q"],
+                log_path=log,
+                cwd=self.paths.root,
+                environment={},
+                timeout=9,
+                profile_log_path=profile_log,
+            )
+
+        self.assertEqual(returncode, 0)
 
     def test_invoke_returns_timeout_status(self):
         runner = HermesRunner(self.paths)

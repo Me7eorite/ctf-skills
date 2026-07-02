@@ -196,6 +196,10 @@ Container rules for Web and Pwn:
   the Docker build container into the image's `/home/ctf` chroot, not from the
   host. Place the flag at `/home/ctf/flag` during container startup from
   `DASFLAG`, `FLAG`, or `GZCTF_FLAG` in that priority order, not in an image layer.
+  Because the service binary runs after `chroot /home/ctf`, challenge code must
+  open the flag by its chroot-internal path such as `/flag`, not
+  `/home/ctf/flag`; `/home/ctf/flag` inside the source would resolve to
+  `/home/ctf/home/ctf/flag` in the container and break exploitation.
 - Harden Pwn xinetd services with bounded resource settings such as
   `per_source`, `rlimit_cpu`, and, when compatible with the exploit,
   `rlimit_as`; include a `banner_fail` file. Keep `/home/ctf` owned by
@@ -352,6 +356,11 @@ authoritative `validate/passed` or `validate/failed` event.
   parsing, offsets, and payload construction with bounded local runs. This does
   not replace host validation, but the main agent must not leave obviously
   untested `writenup/exp.py` logic for a later repair pass.
+- For Pwn xinetd/chroot services, readiness in `validate.sh` must be an
+  application-level probe, not just `nc -z`. Wait until a fresh TCP connection
+  receives the expected banner/menu prompt such as `Choice:` before running the
+  exploit. A port-only check can pass while xinetd is still initializing or can
+  consume a short-lived service instance and cause the exploit to hit EOF.
 - For Pwn, prefer a pwntools-based exploit skeleton when available. Set
   `context(os='linux', arch='amd64', log_level=os.environ.get('PWNLIB_LOG_LEVEL', 'info'))`
   for amd64 Linux targets, use `ELF('./attachments/<binary>', checksec=False)`
@@ -362,6 +371,31 @@ authoritative `validate/passed` or `validate/failed` event.
   Use `PWNLIB_LOG_LEVEL=debug` or `context(..., log_level='debug')` while tuning
   menu synchronization, leaks, offsets, and payload bytes; drop back to concise
   output for normal validation.
+- When leaking stack canaries through `%n$p`, scan a broad bounded range and
+  identify canary-like values by stability and low byte `0x00`. Do not reject
+  values merely because they are greater than `2^48`; amd64 canaries commonly
+  use the upper seven bytes and will often exceed that threshold.
+- Every local binary, pwntools `process()`, subprocess, and gdb run must be
+  bounded and non-interactive. Never run bare `./<binary>` or a menu-driven
+  ELF without input in headless mode. Use patterns like
+  `timeout 5s ./<binary> < input.txt`, pwntools recv/send calls with short
+  timeouts, or `subprocess.run([...], input=..., timeout=5)`. Headless gdb
+  runs must use `timeout`, `-batch` or explicit `-ex quit`, and deterministic
+  input. If a local smoke test cannot be bounded, skip it and explain why in
+  `logs/report.json` instead of risking a hung worker.
+- Before writing files or calling `./bin/progress`, verify the current directory
+  is the execution workspace or the exact challenge root. Do not write absolute
+  paths such as `/writenup/exp.py`; recover with `pwd` and `cd` back to the
+  workspace/challenge root when a debug command changes directories.
+- For Pwn, first discover available local tooling with bounded probes such as
+  `command -v gdb checksec readelf objdump ROPgadget ropper one_gadget`. When
+  present, use them to speed up exploit construction: `checksec --file <binary>`
+  for mitigations, `readelf -sW` / `objdump -d` for symbols and gadgets, and
+  headless `gdb -q <binary> -ex 'set pagination off' -ex 'run' -ex 'bt' -ex 'info registers' -ex 'quit'`
+  or a short gdb command file to confirm crashes, offsets, stack layout, canary
+  behavior, and target addresses. If pwndbg/gef is installed, use its checksec,
+  cyclic, telescope, and vmmap helpers where useful. Keep these as local debug
+  aids; `validate.sh` must remain deterministic and not depend on interactive gdb.
 - `writenup/exp.py` must be offline-capable in the host validation
   environment. Use the Python standard library, system tools already used by
   the challenge such as `openssl`, or helper modules that you vendor under

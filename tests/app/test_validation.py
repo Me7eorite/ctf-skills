@@ -5,6 +5,7 @@ from pathlib import Path
 from core.paths import ProjectPaths
 from domain.validation import (
     ChallengeValidator,
+    classify_validation_failure,
     elf_machine,
     is_elf,
     is_pe,
@@ -252,6 +253,74 @@ class ValidationTests(unittest.TestCase):
 
         self.assertTrue(any("metadata.build_command contains Dockerfile-only" in e for e in errors))
 
+    def test_pwn_chroot_source_must_read_internal_flag_path(self):
+        challenge = self.paths.challenges / "pwn" / "pwn-flag-path-001"
+        metadata = _write_minimal_pwn_contract(challenge)
+        (challenge / "deploy" / "_files" / "ctf.xinetd").write_text(
+            "service ctf\n{\n"
+            "  server = /usr/sbin/chroot\n"
+            "  server_args = --userspec=1000:1000 /home/ctf ./vuln\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        (challenge / "deploy" / "src" / "challenge.c").write_text(
+            'int main(void) { fopen("/home/ctf/flag.txt", "r"); }\n',
+            encoding="utf-8",
+        )
+
+        errors = self.validator.contract_errors(challenge, metadata)
+
+        self.assertTrue(any("source must open /flag" in e for e in errors))
+
+    def test_pwn_validate_requires_application_level_readiness(self):
+        challenge = self.paths.challenges / "pwn" / "pwn-readiness-001"
+        metadata = _write_minimal_pwn_contract(challenge)
+        (challenge / "validate.sh").write_text(
+            "#!/bin/sh\n"
+            "docker-compose up -d\n"
+            "until nc -z 127.0.0.1 9999; do sleep 1; done\n"
+            "python3 writenup/exp.py\n",
+            encoding="utf-8",
+        )
+
+        errors = self.validator.contract_errors(challenge, metadata)
+
+        self.assertTrue(any("nc -z readiness" in e for e in errors))
+
+    def test_pwn_validate_allows_prompt_level_readiness(self):
+        challenge = self.paths.challenges / "pwn" / "pwn-readiness-ok-001"
+        metadata = _write_minimal_pwn_contract(challenge)
+        (challenge / "validate.sh").write_text(
+            "#!/bin/sh\n"
+            "docker-compose up -d\n"
+            "python3 - <<'PY'\n"
+            "from pwn import remote\n"
+            "io = remote('127.0.0.1', 9999)\n"
+            "io.recvuntil(b'Choice:')\n"
+            "PY\n"
+            "python3 writenup/exp.py\n",
+            encoding="utf-8",
+        )
+
+        errors = self.validator.contract_errors(challenge, metadata)
+
+        self.assertFalse(any("nc -z readiness" in e for e in errors))
+
+    def test_pwn_exp_rejects_canary_width_threshold(self):
+        challenge = self.paths.challenges / "pwn" / "pwn-canary-001"
+        metadata = _write_minimal_pwn_contract(challenge)
+        (challenge / "writenup").mkdir(parents=True, exist_ok=True)
+        (challenge / "writenup" / "exp.py").write_text(
+            "canary = int(leak, 16)\n"
+            "if canary < (1 << 48):\n"
+            "    raise RuntimeError('Could not find canary')\n",
+            encoding="utf-8",
+        )
+
+        errors = self.validator.contract_errors(challenge, metadata)
+
+        self.assertTrue(any("canary leak filtering by 2^48" in e for e in errors))
+
     def test_web_contract_requires_literal_compose_flag_matching_metadata(self):
         challenge = self.paths.challenges / "web" / "web-flag-001"
         deploy = challenge / "deploy"
@@ -387,6 +456,43 @@ class ValidationTests(unittest.TestCase):
 
         self.assertEqual(summary["total"], 1)
         self.assertEqual(summary["results"][0]["status"], "generation_empty_output")
+
+
+class ValidationFailureClassificationTests(unittest.TestCase):
+    def test_classifies_pwntools_prompt_eof(self):
+        details = classify_validation_failure(
+            status="nonzero_exit",
+            stderr=(
+                "Traceback\n"
+                "  File \"writenup/exp.py\", line 14, in <module>\n"
+                "    io.recvuntil(b'Choice: ')\n"
+                "EOFError\n"
+            ),
+        )
+
+        self.assertEqual(details[0]["code"], "pwn_prompt_eof")
+        self.assertIn("application-level readiness", details[0]["hint"])
+
+    def test_classifies_canary_scan_failure(self):
+        details = classify_validation_failure(
+            status="nonzero_exit",
+            stderr="RuntimeError: Could not find canary\n",
+        )
+
+        self.assertEqual(details[0]["code"], "pwn_canary_leak_failed")
+        self.assertIn("2^48", details[0]["hint"])
+
+    def test_classifies_chroot_flag_path_failure(self):
+        details = classify_validation_failure(
+            status="nonzero_exit",
+            stderr=(
+                "Could not read flag: /home/ctf/flag.txt: "
+                "No such file or directory\n"
+            ),
+        )
+
+        self.assertEqual(details[0]["code"], "pwn_chroot_flag_path")
+        self.assertIn("/flag", details[0]["hint"])
 
 
 class SolverIntegrityTests(unittest.TestCase):

@@ -66,6 +66,10 @@ _HOST_CHROOT_SETUP_TEXT_FIELDS = (
     "validation",
     "run_command",
 )
+_PWN_CHROOT_FLAG_PATH_RE = re.compile(r"""["']/home/ctf/flag(?:\.txt)?["']""")
+_PWN_CANARY_WIDTH_FILTER_RE = re.compile(
+    r"(?:1\s*<<\s*48|2\s*\*\*\s*48|0x1_?0000_?0000_?0000)"
+)
 
 
 def validation_failure_detail(
@@ -106,6 +110,24 @@ def classify_validation_failure(
         if "ModuleNotFoundError" in text or "No module named" in text:
             code = "missing_dependency"
             hint = "Make the solver offline-capable with the standard library or vendored helpers."
+        elif _looks_like_pwn_prompt_eof(text):
+            code = "pwn_prompt_eof"
+            hint = (
+                "Use an application-level readiness probe and synchronize the solver "
+                "with the real menu/banner prompt before sending payloads."
+            )
+        elif _looks_like_pwn_canary_failure(text):
+            code = "pwn_canary_leak_failed"
+            hint = (
+                "Scan a broad %n$p range, identify stable canary-like values with "
+                "low byte 0x00, and do not filter leaks by a 2^48 threshold."
+            )
+        elif _looks_like_pwn_chroot_flag_path_failure(text):
+            code = "pwn_chroot_flag_path"
+            hint = (
+                "For xinetd chroot, startup writes container /home/ctf/flag but "
+                "the challenge process must open /flag inside the chroot."
+            )
         else:
             code = "nonzero_exit"
             hint = "Inspect validate.sh stderr/stdout and repair the failing command."
@@ -257,6 +279,18 @@ def _classify_contract_error(message: str, *, status: str = "contract_failed") -
         code = "plaintext_flag_exposure"
         path = "attachments/"
         hint = "Encode or encrypt flag material in the delivered artifact."
+    elif "chrooted pwn source opens /home/ctf/flag" in message:
+        code = "pwn_chroot_flag_path"
+        path = "deploy/src/"
+        hint = "Use /flag in challenge code because xinetd chroots the process into /home/ctf."
+    elif "Pwn validate.sh uses nc -z readiness" in message:
+        code = "pwn_port_only_readiness"
+        path = "validate.sh"
+        hint = "Wait for an application banner/menu prompt such as Choice:, not only an open TCP port."
+    elif "canary leak filtering by 2^48" in message:
+        code = "pwn_canary_width_filter"
+        path = "writenup/exp.py"
+        hint = "Remove the 2^48 threshold and validate canary candidates by stability and low byte 0x00."
     return validation_failure_detail(
         phase=phase,
         code=code,
@@ -264,6 +298,35 @@ def _classify_contract_error(message: str, *, status: str = "contract_failed") -
         message=message,
         path=path,
         hint=hint,
+    )
+
+
+def _looks_like_pwn_prompt_eof(text: str) -> bool:
+    return (
+        "EOFError" in text
+        and (
+            "recvuntil" in text
+            or "Choice:" in text
+            or "Got EOF while reading" in text
+        )
+    )
+
+
+def _looks_like_pwn_canary_failure(text: str) -> bool:
+    lower = text.lower()
+    return "canary" in lower and (
+        "could not find" in lower
+        or "not find" in lower
+        or "failed" in lower
+        or "invalid" in lower
+    )
+
+
+def _looks_like_pwn_chroot_flag_path_failure(text: str) -> bool:
+    lower = text.lower()
+    return (
+        ("could not read flag" in lower or "no such file" in lower)
+        and ("/home/ctf/flag" in lower or "/flag" in lower or "flag.txt" in lower)
     )
 
 
@@ -347,6 +410,71 @@ def _pwn_dockerfile_scaffold_errors(challenge_dir: Path) -> list[str]:
             "this collides on Ubuntu 22.04 where /lib points at /usr/lib"
         )
     return errors
+
+
+def _pwn_uses_xinetd_chroot(challenge_dir: Path) -> bool:
+    candidates = (
+        challenge_dir / "deploy" / "_files" / "ctf.xinetd",
+        challenge_dir / "deploy" / "_files" / "etc" / "xinetd.d" / "ctf",
+        challenge_dir / "deploy" / "_files" / "etc" / "xinetd.d" / "chal",
+    )
+    for path in candidates:
+        text = _read_text(path)
+        if text and "/usr/sbin/chroot" in text and "/home/ctf" in text:
+            return True
+    dockerfile = _read_text(challenge_dir / "deploy" / "Dockerfile")
+    return bool(dockerfile and "xinetd" in dockerfile and "/usr/sbin/chroot" in dockerfile)
+
+
+def _pwn_runtime_contract_errors(challenge_dir: Path) -> list[str]:
+    errors: list[str] = []
+    if _pwn_uses_xinetd_chroot(challenge_dir):
+        for root in (challenge_dir / "deploy" / "src", challenge_dir / "src"):
+            if not root.is_dir():
+                continue
+            for path in root.rglob("*"):
+                if not path.is_file():
+                    continue
+                text = _read_text(path)
+                if text and _PWN_CHROOT_FLAG_PATH_RE.search(text):
+                    rel = path.relative_to(challenge_dir).as_posix()
+                    errors.append(
+                        f"{rel}: chrooted pwn source opens /home/ctf/flag; "
+                        "xinetd chroots into /home/ctf, so source must open /flag"
+                    )
+
+    validate_text = _read_text(challenge_dir / "validate.sh")
+    if validate_text and "nc -z" in validate_text and not _validate_has_app_readiness_probe(
+        validate_text
+    ):
+        errors.append(
+            "Pwn validate.sh uses nc -z readiness without proving the application "
+            "banner/menu is ready"
+        )
+
+    exp_text = _read_text(challenge_dir / "writenup" / "exp.py")
+    if exp_text and "canary" in exp_text.lower() and _PWN_CANARY_WIDTH_FILTER_RE.search(
+        exp_text
+    ):
+        errors.append(
+            "writenup/exp.py uses canary leak filtering by 2^48; stack canaries "
+            "should be selected by stable %n$p leaks and low byte 0x00"
+        )
+    return errors
+
+
+def _validate_has_app_readiness_probe(text: str) -> bool:
+    readiness_tokens = (
+        "Choice:",
+        "recvuntil",
+        "readuntil",
+        "banner",
+        "menu",
+        "socket.create_connection",
+        "pwntools",
+        "remote(",
+    )
+    return any(token in text for token in readiness_tokens)
 
 
 def _dockerfile_uses_make(text: str) -> bool:
@@ -946,7 +1074,7 @@ class ChallengeValidator:
             }
         )
         if process.stderr.strip():
-            record["stderr_tail"] = process.stderr[-500:]
+            record["stderr_tail"] = process.stderr[-2000:]
 
         # 非零退出 → 失败
         if process.returncode != 0:
@@ -956,7 +1084,14 @@ class ChallengeValidator:
                 "status": "nonzero_exit",
                 "failure_details": classify_validation_failure(
                     status="nonzero_exit",
-                    stderr=record.get("stderr_tail"),
+                    stderr="\n".join(
+                        value
+                        for value in (
+                            record.get("stdout_tail"),
+                            record.get("stderr_tail"),
+                        )
+                        if isinstance(value, str) and value
+                    ),
                     error="validate.sh exited non-zero",
                 ),
             }
@@ -1073,6 +1208,7 @@ class ChallengeValidator:
             if category == "pwn":
                 errors.extend(_host_chroot_setup_errors(challenge_dir, metadata))
                 errors.extend(_pwn_dockerfile_scaffold_errors(challenge_dir))
+                errors.extend(_pwn_runtime_contract_errors(challenge_dir))
 
         target_format = metadata.get("target_format", "elf")
         if category in {"re", "pwn"} and target_format == "elf":

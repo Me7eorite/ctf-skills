@@ -1747,6 +1747,7 @@ class HermesRunner:
             cwd=cwd,
             environment=environment,
             timeout=effective_timeout,
+            profile_log_path=self._profile_agent_log_path(profile_name, environment),
         )
 
     def _invoke_context(
@@ -1810,6 +1811,22 @@ class HermesRunner:
 
     def _remove_conflicting_custom_pool(self) -> bool:
         return hermes_process.remove_conflicting_custom_pool(self.paths.hermes_home)
+
+    def _profile_agent_log_path(
+        self,
+        profile_name: str | None,
+        environment: Mapping[str, str],
+    ) -> Path | None:
+        if profile_name is None:
+            return None
+        raw_home = environment.get("HERMES_HOME")
+        if raw_home:
+            hermes_home = Path(raw_home).expanduser()
+        elif hermes_process.project_hermes_home_is_configured(self.paths.hermes_home):
+            hermes_home = self.paths.hermes_home
+        else:
+            hermes_home = Path.home() / ".hermes"
+        return hermes_home / "profiles" / profile_name / "logs" / "agent.log"
 
     @staticmethod
     def _hermes_arguments() -> list[str]:

@@ -116,6 +116,14 @@ Pwn exploit debugging acceleration:
   `context(os='linux', arch='amd64', log_level=os.environ.get('PWNLIB_LOG_LEVEL', 'info'))`
   for amd64 Linux targets, and temporarily run with `PWNLIB_LOG_LEVEL=debug` when
   diagnosing EOF, prompt mismatches, leaks, offsets, or payload bytes.
+- For Pwn xinetd/chroot services, first confirm the service itself reaches its
+  menu or banner. `validate.sh` readiness must open a fresh TCP connection and
+  read an application prompt such as `Choice:`; a bare `nc -z` port check is too
+  weak and can race xinetd startup, causing the exploit to receive EOF.
+- If the service uses `chroot /home/ctf` and startup writes the host-container
+  file `/home/ctf/flag`, the vulnerable program must open `/flag` from inside
+  the chroot. A source path like `/home/ctf/flag` resolves to
+  `/home/ctf/home/ctf/flag` after chroot and will make ret2win appear broken.
 - Load the local binary with `ELF('./attachments/<binary>', checksec=False)` or
   `ELF('./deploy/src/<binary>', checksec=False)` so symbols, PLT/GOT, and
   architecture assumptions come from the artifact instead of handwritten guesses.
@@ -123,6 +131,30 @@ Pwn exploit debugging acceleration:
   uses `process([binary_path])` for quick menu/offset smoke tests. The default
   validation path must still connect with
   `remote(os.environ['CHAL_HOST'], int(os.environ['CHAL_PORT']))`.
+- Every local binary, pwntools `process()`, subprocess, and gdb run must be
+  bounded and non-interactive. Never run bare `./<binary>` or a menu-driven
+  ELF without input in headless mode. Use patterns like
+  `timeout 5s ./<binary> < input.txt`, pwntools recv/send calls with short
+  timeouts, or `subprocess.run([...], input=..., timeout=5)`. Headless gdb
+  runs must use `timeout`, `-batch` or explicit `-ex quit`, and deterministic
+  input. If a local smoke test cannot be bounded, skip it and explain why in
+  `logs/report.json` instead of risking a hung worker.
+- When leaking stack canaries through `%n$p`, scan a broad bounded range and
+  identify canary-like values by stability and low byte `0x00`. Do not reject
+  values merely because they are greater than `2^48`; amd64 canaries commonly
+  use the upper seven bytes and will often exceed that threshold.
+- Before writing files or calling `./bin/progress`, verify the current directory
+  is the execution workspace or the exact challenge root. Do not write absolute
+  paths such as `/writenup/exp.py`; recover with `pwd` and `cd` back to the
+  workspace/challenge root when a debug command changes directories.
+- Discover local Pwn tooling before guessing: use bounded probes such as
+  `command -v gdb checksec readelf objdump ROPgadget ropper one_gadget`. If
+  present, use `checksec --file <binary>`, `readelf -sW`, `objdump -d`, gadget
+  tools, and headless `gdb -q <binary> -ex 'set pagination off' -ex 'run' -ex 'bt' -ex 'info registers' -ex 'quit'`
+  or a short gdb command file to confirm crashes, offsets, stack layout, canary
+  behavior, and addresses. If pwndbg/gef is installed, use its helpers such as
+  checksec, cyclic, telescope, and vmmap. Do not make `validate.sh` depend on
+  interactive gdb.
 
 Before you finish, self-check every challenge you touched with real file searches:
 - Run a search equivalent to

@@ -489,6 +489,7 @@ def invoke(
     cwd: Path,
     environment: dict[str, str],
     timeout: int,
+    profile_log_path: Path | None = None,
 ) -> int:
     """把 `prompt` 作为最后一个 argv 运行 Hermes，并记录完整日志。
 
@@ -509,13 +510,24 @@ def invoke(
         output.write(
             f"$ {' '.join(shlex.quote(arg) for arg in full_arguments[:-1])} <prompt>\n"
             f"cwd: {cwd}\n"
-            f"timeout: {timeout}s\n\n"
+            f"timeout: {timeout}s\n"
+        )
+        if profile_log_path is not None:
+            output.write(f"profile_log: {profile_log_path}\n")
+        output.write("\n")
+        output.flush()
+        tail_stop = threading.Event()
+        tail_thread = _start_profile_log_mirror(
+            profile_log_path,
+            output,
+            stop_event=tail_stop,
         )
         try:
             process = subprocess.run(
                 full_arguments,
                 cwd=cwd,
                 env=environment,
+                stdin=subprocess.DEVNULL,
                 text=True,
                 stdout=output,           # stdout 直接写入日志文件
                 stderr=subprocess.STDOUT, # stderr 合并到 stdout
@@ -532,8 +544,48 @@ def invoke(
             returncode = HERMES_TIMEOUT_RETURNCODE
         else:
             returncode = process.returncode
+        finally:
+            tail_stop.set()
+            if tail_thread is not None:
+                tail_thread.join(timeout=2)
+            output.flush()
     _write_error_marker_from_log(log_path)
     return returncode
+
+
+def _start_profile_log_mirror(
+    profile_log_path: Path | None,
+    output,
+    *,
+    stop_event: threading.Event,
+) -> threading.Thread | None:
+    """Mirror new Hermes profile log lines into the per-attempt log while running."""
+    if profile_log_path is None:
+        return None
+
+    def _mirror() -> None:
+        offset = 0
+        try:
+            offset = profile_log_path.stat().st_size
+        except OSError:
+            pass
+        while not stop_event.wait(1.0):
+            try:
+                with profile_log_path.open("r", encoding="utf-8", errors="replace") as handle:
+                    handle.seek(offset)
+                    chunk = handle.read()
+                    offset = handle.tell()
+            except OSError:
+                continue
+            if not chunk:
+                continue
+            for line in chunk.splitlines(True):
+                output.write("[profile] " + line)
+            output.flush()
+
+    thread = threading.Thread(target=_mirror, daemon=True)
+    thread.start()
+    return thread
 
 
 def _write_error_marker_from_log(log_path: Path) -> None:
