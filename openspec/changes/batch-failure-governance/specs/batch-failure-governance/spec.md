@@ -2,7 +2,7 @@
 
 ### Requirement: Batch failure taxonomy is normalized and stable
 
-The system SHALL map build-attempt validation failures into a normalized, closed set of failure classes that is stable across runner invocations. Every failed attempt SHALL have exactly one class assigned for the latest validation round. The class SHALL be derivable from the final validation result without requiring new storage tables.
+The system SHALL map build-attempt validation failures into a normalized, closed set of failure classes that is stable across runner invocations. The closed set SHALL be exactly `timeout`, `service-readiness`, `prompt`, `contract`, and `solver`. These exact slugs are the canonical API and repair-policy values. Every failed attempt SHALL have exactly one class assigned for the latest validation round. The class SHALL be derivable from the final validation result and existing diagnostic evidence without requiring new storage tables or a new durable source-of-truth field. The system MAY copy the derived class into existing progress-event or attempt-summary payloads for visibility, but such copies SHALL NOT replace derivation as the source of truth.
 
 #### Scenario: Timeout is classified deterministically
 - **WHEN** a build attempt fails because `validate.sh` exceeds its allotted time
@@ -11,13 +11,23 @@ The system SHALL map build-attempt validation failures into a normalized, closed
 
 #### Scenario: Service readiness is distinguished from exploit logic
 - **WHEN** a pwn attempt fails because the reference solver cannot observe a real banner or menu on a fresh connection
-- **THEN** the attempt SHALL be classified as a service-readiness failure
+- **THEN** the attempt SHALL be classified as `service-readiness`
 - **AND** the summary SHALL point the operator toward probe or startup issues rather than exploit payload tuning
+
+#### Scenario: Prompt failures are classified before runtime repair
+- **WHEN** a build, validation, or repair prompt cannot be rendered or supplied because required prompt inputs are missing or invalid
+- **THEN** the attempt SHALL be classified as `prompt`
+- **AND** the result SHALL not be classified as a solver or service-readiness failure
 
 #### Scenario: Contract failures remain separate from runtime failures
 - **WHEN** validation fails because a required file, field, or evidence contract is missing
-- **THEN** the attempt SHALL be classified as a contract failure
-- **AND** the result SHALL not be classified as a timeout or solver-runtime failure
+- **THEN** the attempt SHALL be classified as `contract`
+- **AND** the result SHALL not be classified as a timeout, prompt, service-readiness, or solver failure
+
+#### Scenario: Solver runtime failures remain separate from contracts
+- **WHEN** `validate.sh` runs and the reference solver exits non-zero, emits a wrong flag, or otherwise fails after required files and service readiness have been established
+- **THEN** the attempt SHALL be classified as `solver`
+- **AND** the summary SHALL preserve the solver-runtime evidence instead of routing the failure as a contract or prompt problem
 
 ### Requirement: Automatic repair stops after repeated identical failures
 
@@ -36,7 +46,7 @@ The system SHALL stop automatic repair for a build attempt when the same normali
 
 ### Requirement: Batch processing isolates attempts
 
-The system SHALL treat each build attempt in a batch as an independent failure domain for validation and repair. One attempt's timeout, prompt failure, readiness failure, or repair exhaustion SHALL NOT block other attempts in the same batch from being validated, repaired, or reported.
+The system SHALL treat each build attempt in a batch as an independent failure domain for validation and repair. One attempt's timeout, prompt failure, service-readiness failure, solver failure, contract failure, or repair exhaustion SHALL NOT block other attempts in the same batch from being validated, repaired, or reported.
 
 #### Scenario: One failed attempt does not stall its siblings
 - **GIVEN** a batch contains attempts A, B, and C
