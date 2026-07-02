@@ -447,6 +447,31 @@ Rules:
 - Prefer targeted edits to solver, validate.sh, metadata, documentation, and current artifact files.
 - For reverse-engineering repairs, the solver and validate.sh must derive the flag
   from distributed artifacts, not organizer files such as metadata.json or challenge.yml.
+- Do not call `./bin/progress` or `$WORKSPACE_ROOT/bin/progress`; this repair
+  service records repair progress outside Hermes.
+
+Terminal tool usage:
+- The terminal may start in `/`, the workspace root, or a prior challenge root.
+  Do not trust `pwd` and do not use relative guesses such as
+  `output/challenges/...` or `cd ./output/challenges/...`.
+- Start every terminal command that touches challenge files by assigning the
+  allowed repair root literally, then `cd` to it:
+  ```bash
+  CHAL_ROOT={json.dumps(str(context["challenge_dir"]))}
+  test -d "$CHAL_ROOT" || exit 1
+  cd "$CHAL_ROOT" || exit 1
+  ```
+- After that, use direct child paths such as `validate.sh`, `writenup/exp.py`,
+  `metadata.json`, `deploy/docker-compose.yml`, `attachments/`, `src/`, and
+  `writenup/wp.md`. Never prepend `output/challenges/...` once inside
+  `$CHAL_ROOT`.
+- Before reading optional files, list the containing directory first, for
+  example `ls -la deploy src attachments writenup 2>/dev/null || true`.
+- Do not use `eval`, ad-hoc quoted command strings, or long shell one-liners
+  with nested quotes. If a change needs complex JSON, sed replacement, or long
+  text, use the file write/patch tool instead of terminal.
+- If `pwd` prints `/`, immediately `cd "$CHAL_ROOT"` using the bootstrap above;
+  do not run `ls output/...` from `/`.
 
 Relevant file context:
 {context.get("file_context") or "(none)"}
@@ -528,5 +553,4 @@ def _middle_truncate(text: str, limit: int) -> str:
     head = limit // 2
     tail = limit - head
     return f"{text[:head]}\n... <truncated> ...\n{text[-tail:]}"
-
 

@@ -138,6 +138,35 @@ confirming `test -f ./input/shard.json`.
   restored attachment is not executable, inspect permissions and continue with
   source/build fixes rather than repeated chmod attempts.
 
+# Terminal Tool Usage
+
+The terminal tool does not protect you from a stale current directory. Do not
+use `eval`, ad-hoc quoted command strings, or chained `cd ./output/...` guesses.
+When a terminal command needs challenge files, start with this exact shape and
+replace only the `<category>` / `<challenge-id>` values:
+
+```bash
+WORKSPACE_ROOT="$PWD"
+while [ ! -f "$WORKSPACE_ROOT/input/shard.json" ] && [ "$WORKSPACE_ROOT" != "/" ]; do
+  WORKSPACE_ROOT="$(dirname "$WORKSPACE_ROOT")"
+done
+test -f "$WORKSPACE_ROOT/input/shard.json" || exit 1
+CHAL_ROOT="$(find "$WORKSPACE_ROOT/output/challenges/<category>" -mindepth 1 -maxdepth 1 -type d -name '<challenge-id>-*' | head -n 1)"
+test -n "$CHAL_ROOT" || exit 1
+cd "$CHAL_ROOT" || exit 1
+```
+
+Use `$WORKSPACE_ROOT/bin/progress`, not a bare `./bin/progress`, when reporting
+from any command that may have entered a challenge root:
+
+```bash
+"$WORKSPACE_ROOT/bin/progress" --challenge <challenge-id> --stage <design|implement|build|document> --status <running|passed|failed> --message "<short concrete update>"
+```
+
+If a command needs complex JSON, sed replacement, or long quoted text, prefer
+the file write/patch tool over a terminal command. Unbalanced quotes in terminal
+commands waste repair budget and do not count as progress.
+
 {repair_section}
 
 # 0. Resume Check

@@ -116,9 +116,9 @@ Directory discipline:
 - At the start of every terminal command that changes directories, anchor the
   execution workspace first: `WORKSPACE_ROOT="$(pwd)"` when `./input/shard.json`
   exists, or walk upward until `input/shard.json` is found.
-- Invoke progress only from the execution workspace root and only with the full
-  argument set: `--challenge`, `--stage`, `--status`, and `--message`. Never run
-  `./bin/progress` by itself, and do not emit `validate/*` progress events.
+- This validation-debug continuation must not call `./bin/progress` at all.
+  The runner owns all validation-debug and complete progress events. A bare
+  `./bin/progress` call is always wrong in this prompt.
 - If the current directory already contains `metadata.json`, `validate.sh`, and
   `writenup/exp.py`, it is the challenge root; do not run
   `cd ./output/challenges/...` from there.
@@ -132,6 +132,29 @@ Directory discipline:
   or `writenup/pwn_debug_report.json`, list the containing directory first.
   If an optional file is missing, create or adapt the expected file instead of
   retrying the same nonexistent path.
+
+Terminal tool usage:
+- Do not use `eval`, ad-hoc quoted command strings, or chained
+  `cd ./output/challenges/...` guesses. The terminal may still be in a prior
+  challenge root from an earlier command.
+- For terminal commands that inspect or edit challenge files, use this shape
+  and replace only the category and challenge id:
+  ```bash
+  WORKSPACE_ROOT="$PWD"
+  while [ ! -f "$WORKSPACE_ROOT/input/shard.json" ] && [ "$WORKSPACE_ROOT" != "/" ]; do
+    WORKSPACE_ROOT="$(dirname "$WORKSPACE_ROOT")"
+  done
+  test -f "$WORKSPACE_ROOT/input/shard.json" || exit 1
+  CHAL_ROOT="$(find "$WORKSPACE_ROOT/output/challenges/<category>" -mindepth 1 -maxdepth 1 -type d -name '<challenge-id>-*' | head -n 1)"
+  test -n "$CHAL_ROOT" || exit 1
+  cd "$CHAL_ROOT" || exit 1
+  ```
+- Do not call `$WORKSPACE_ROOT/bin/progress` in this validation-debug
+  continuation. Focus on editing files and bounded diagnostics; the host runner
+  records validation progress after you return.
+- If a command needs complex JSON, sed replacement, or long quoted text, prefer
+  the file write/patch tool instead of terminal. Unbalanced quotes in terminal
+  commands waste repair budget and do not count as progress.
 
 Pwn exploit debugging acceleration:
 - Prefer pwntools for Pwn solvers. Use
