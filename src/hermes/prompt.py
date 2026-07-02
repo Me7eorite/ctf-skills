@@ -390,7 +390,7 @@ Web / Pwn:
   `metadata.docker_image` with `docker build -t <metadata.docker_image> -f deploy/Dockerfile .`
   after deploy source, Dockerfile, binary, or runtime dependencies change.
 - `validate.sh` MUST print bounded service diagnostics to stderr on failure:
-  `docker compose ps`, recent `docker compose logs --no-color --tail=120`, and
+  `docker-compose ps`, recent `docker-compose logs --no-color --tail=120`, and
   solver stdout/stderr tails. The host runner forwards those tails into repair prompts.
 - Web additionally requires `metadata.runtime` and `metadata.framework`.
 
@@ -398,16 +398,14 @@ Pwn container launcher:
 - Prefer the fixed xinetd + chroot + TCP socket scaffold
   `./references/scaffolds/pwn/xinetd-chroot/`. Copy its `deploy/` tree into the challenge and
   replace placeholders such as `{{BINARY_NAME}}` and `{{SERVICE_PORT}}`; keep the
-  scaffold's default `CTF_UID=1000` and `CTF_GID=1000` build args unless a
-  special runtime identity is required. Do not invent a fresh Docker/chroot layout.
+  scaffold's fixed `ctf` user with uid/gid `1000:1000`. Do not invent a fresh Docker/chroot layout.
   The scaffold installs `xinetd`, copies an xinetd service file into
   `/etc/xinetd.d/ctf`, exposes the assigned service port, and has
   `/root/start.sh` start xinetd then stay foreground.
 - The xinetd service may run as root only to accept the socket and execute
   `/usr/sbin/chroot`; it should run the vulnerable binary with
-  `server_args = --userspec=1000:1000 /home/ctf ./<binary>` by default, or an
-  equivalent non-root uid/gid drop inside the chroot. Override uid/gid only
-  through explicit Docker build args when the challenge needs a special value.
+  `server_args = --userspec=ctf:ctf /home/ctf ./<binary>` by default, or an
+  equivalent fixed non-root uid/gid `1000:1000` drop inside the chroot.
 - Build `/home/ctf` as the chroot root with the vulnerable binary, required
   runtime libraries, minimal `/dev/null`, `zero`, `random`, `urandom`, and only
   helper binaries needed by the intended exploit. This construction is

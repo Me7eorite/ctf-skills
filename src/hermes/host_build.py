@@ -355,17 +355,32 @@ def _classify_docker_failure(
     if "cannot overwrite non-directory" in text:
         return (
             "filesystem_conflict",
-            "The chroot copy layout collides with an existing path; avoid copying multiple library roots into the same destination without pre-creating the directory tree.",
+            "The chroot copy layout collides with an existing path; avoid "
+            "copying multiple library roots into the same destination without "
+            "pre-creating the directory tree.",
+        )
+    if (
+        "mirrors.tuna.tsinghua.edu.cn" in text
+        and ("403  forbidden" in text or "failed to fetch" in text)
+    ):
+        return (
+            "apt_mirror_forbidden",
+            "The TUNA Ubuntu mirror returned 403; switch the Dockerfile apt "
+            "source to an approved mirror such as 163, Aliyun, or USTC and "
+            "retry the host build.",
         )
     if "copy failed" in text and "deploy/src" in text:
         return (
             "missing_source",
-            "The build context or COPY path does not match the generated tree; verify the deploy/src files exist and the Dockerfile uses the right relative paths.",
+            "The build context or COPY path does not match the generated tree; "
+            "verify the deploy/src files exist and the Dockerfile uses the "
+            "right relative paths.",
         )
     if "permission denied" in text and ("mknod" in text or "chmod" in text):
         return (
             "permission_denied",
-            "This step needs to run during Docker build as root; keep filesystem setup in the Dockerfile, not in start.sh.",
+            "This step needs to run during Docker build as root; keep "
+            "filesystem setup in the Dockerfile, not in start.sh.",
         )
     if "no such file or directory" in text:
         return (
@@ -374,7 +389,8 @@ def _classify_docker_failure(
         )
     return (
         "docker_exit_nonzero",
-        "Docker exited non-zero; inspect the last failed step and the build log tails for the exact missing file or command.",
+        "Docker exited non-zero; inspect the last failed step and the build "
+        "log tails for the exact missing file or command.",
     )
 
 

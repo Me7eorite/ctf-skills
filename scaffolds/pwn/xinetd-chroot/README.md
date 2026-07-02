@@ -7,7 +7,7 @@ The runtime identity is fixed to `ctf:ctf` with uid/gid `1000:1000`.
 
 Host boundary:
 
-- Host commands may run `docker build`, `docker compose`, `file`, checksum
+- Host commands may run `docker build`, `docker-compose`, `file`, checksum
   tools, and the reference exploit.
 - Host commands must not run the chroot setup commands directly.
 - Commands such as `cp -R /lib* /home/ctf`, `mknod /home/ctf/dev/null ...`,

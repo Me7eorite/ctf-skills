@@ -154,14 +154,13 @@ Container rules for Web and Pwn:
   `[a-z0-9][a-z0-9_.-]`. Use the same identifier for the built image tag,
   validation commands, and `metadata.docker_image`.
 - Apply least privilege by default. Pwn images normally create a fixed
-  non-zero `ctf` user/group, defaulting to uid/gid `1000:1000`, and use
-  `WORKDIR /home/ctf`. For ordinary
+  non-zero `ctf` user/group with fixed uid/gid `1000:1000`, and use
+  `WORKDIR /home/ctf`. Do not add Docker build args for this identity. For ordinary
   foreground services, copy challenge files with `ctf` ownership and end with
   `USER ctf`. For the preferred xinetd/chroot Pwn pattern, xinetd may start as
   root only to accept the socket and call `/usr/sbin/chroot`; the vulnerable
-  binary itself MUST run inside the chroot with `--userspec=1000:1000` by
-  default, or an equivalent non-root uid/gid drop. Override the uid/gid only
-  through explicit Docker build args when the challenge needs a special value.
+  binary itself MUST run inside the chroot with `--userspec=ctf:ctf` or an
+  equivalent fixed non-root uid/gid `1000:1000` drop.
 - Web images MUST reuse the base image's appropriate non-root service user and
   conventional application directory when available, such as
   `www-data:/var/www/html` for Apache/PHP or the selected Tomcat image's
@@ -178,15 +177,14 @@ Container rules for Web and Pwn:
 - Pwn Docker services SHOULD use the fixed xinetd + chroot + TCP socket scaffold
   `./references/scaffolds/pwn/xinetd-chroot/` unless the design explicitly needs a different
   launcher. Copy its `deploy/` tree into the challenge and replace placeholders
-  such as `{{BINARY_NAME}}` and `{{SERVICE_PORT}}`; keep the scaffold's default
-  `CTF_UID=1000` and `CTF_GID=1000` build args unless a special runtime
-  identity is required. Do not invent a fresh Docker/chroot layout. The scaffold
+  such as `{{BINARY_NAME}}` and `{{SERVICE_PORT}}`; keep the scaffold's fixed
+  `ctf` user with uid/gid `1000:1000`. Do not invent a fresh Docker/chroot layout. The scaffold
   installs `xinetd`, copies `deploy/_files/ctf.xinetd` into `/etc/xinetd.d/ctf`,
   exposes the assigned container port, and makes `/root/start.sh` start xinetd
   then block with `sleep infinity`. The xinetd service should use
   `socket_type = stream`, `protocol = tcp`, `wait = no`, `type = UNLISTED`,
   `bind = 0.0.0.0`, `server = /usr/sbin/chroot`, and
-  `server_args = --userspec=1000:1000 /home/ctf ./<binary>` by default.
+  `server_args = --userspec=ctf:ctf /home/ctf ./<binary>` by default.
 - For that Pwn chroot layout, construct `/home/ctf` as the runtime root:
   do this ONLY inside `deploy/Dockerfile` `RUN` steps executed by
   `docker build`. Dockerfile-only commands such as `cp -R /lib* /home/ctf`,
@@ -300,7 +298,7 @@ Pwn rules:
 - Web/Pwn: statically self-check that Compose has the literal
   `FLAG=flag{...}`, `image`, and `container_name`, defines no `volumes`, and is
   wired to the intended non-root account (`ctf` for ordinary Pwn, or the
-  selected Web base image's service user). Do not run `docker compose up`.
+  selected Web base image's service user). Do not run `docker-compose up`.
 - Pwn build: when using the default xinetd/chroot socket model, ensure the
   generated `deploy/Dockerfile` installs `/etc/xinetd.d/ctf`,
   `/usr/sbin/chroot`, `/root/start.sh`, the vulnerable binary under
@@ -362,7 +360,7 @@ authoritative `validate/passed` or `validate/failed` event.
 For Web/Pwn, `validate.sh` MUST consume an already-built image and MUST NOT
 attempt to build it. The Docker image is part of Stage 3's deliverable: by
 the time host validation starts, the runner has already built the image on the
-host. Place this fail-fast gate before `docker compose up`:
+host. Place this fail-fast gate before `docker-compose up`:
 
 ```bash
 docker image inspect "$IMAGE" >/dev/null 2>&1 || {
@@ -371,7 +369,7 @@ docker image inspect "$IMAGE" >/dev/null 2>&1 || {
 }
 ```
 
-`validate.sh` MUST NOT contain `docker build`, `docker compose build`, or any
+`validate.sh` MUST NOT contain `docker build`, `docker-compose build`, or any
 network-fetching dependency installation. Validation is offline-capable.
 
 After that gate, `validate.sh` must start the service, wait for
@@ -379,8 +377,8 @@ health/readiness, run `writenup/exp.py`, and always clean up with a shell trap.
 The fixed flag comes from `deploy/docker-compose.yml`; `validate.sh` must not
 override it with a host-side `FLAG` environment variable.
 When readiness or the exploit fails, `validate.sh` MUST emit bounded diagnostic
-evidence to stderr before exiting non-zero: the relevant `docker compose ps`
-state, recent `docker compose logs --no-color --tail=120` output, and the
+evidence to stderr before exiting non-zero: the relevant `docker-compose ps`
+state, recent `docker-compose logs --no-color --tail=120` output, and the
 solver stdout/stderr tail. This is how the host runner feeds container/runtime
 failures back into repair prompts without giving Hermes Docker daemon access.
 Every command and diagnostic in a function invoked by an `EXIT` or `ERR` trap
@@ -388,7 +386,7 @@ MUST redirect its output to stderr (`>&2`); cleanup must never write to stdout.
 Before starting a container named `"$CONTAINER_NAME"`, remove a stale
 same-name container with
 `docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true`.
-Do not remove Docker volumes, prune Docker resources, or run `docker compose down`
+Do not remove Docker volumes, prune Docker resources, or run `docker-compose down`
 with `-v`/`--volumes`; cleanup must be limited to the challenge's own container
 and Compose service so host PostgreSQL/database volumes are never touched.
 Forced rebuilds are an operator concern (`docker rmi` outside the script);
@@ -416,7 +414,7 @@ violates any of them fails validation regardless of what `validate.sh` prints:
   `"artifact_sha256": "<sha256>"`. If the artifact is rebuilt, recompute the
   SHA-256 before marking `build_status` or `solve_status` as `passed`.
 - `validate.sh` MUST NOT contain `docker volume rm`, `docker volume prune`,
-  Docker prune commands, or `docker compose down -v`/`--volumes`. Destructive
+  Docker prune commands, or `docker-compose down -v`/`--volumes`. Destructive
   Docker cleanup is rejected before execution.
 
 ## 5. Document

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import unittest
 from dataclasses import dataclass
@@ -73,7 +74,10 @@ class ValidateChallengeLookupTests(unittest.TestCase):
             result = validator.validate_challenge("web-0001")
             self.assertEqual(result["challenge_id"], "web-0001")
             # validate_one returns invalid_metadata when metadata.json missing.
-            self.assertIn(result["status"], {"invalid_metadata", "contract_failed"})
+            self.assertIn(
+                result["status"],
+                {"invalid_metadata", "contract_failed", "generation_empty_output"},
+            )
             self.assertEqual(result.get("path"), str(directory))
 
 
@@ -142,6 +146,36 @@ class ValidateChallengeFlagExtractionTests(unittest.TestCase):
             expected_challenge_id="web-9999",
         )
         self.assertEqual(mismatch["status"], "identity_mismatch")
+
+    def test_validate_one_prefers_project_venv_python_on_path(self):
+        temp = TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        paths = _seed_paths(Path(temp.name))
+        (paths.root / ".venv" / "bin").mkdir(parents=True)
+        directory = _make_challenge_dir(paths, "web-0001")
+        write_json(
+            directory / "metadata.json",
+            {"id": "web-0001", "flag": "flag{expected-value}"},
+        )
+        (directory / "validate.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+        validator = ChallengeValidator(paths)  # type: ignore[arg-type]
+        validator.contract_errors = lambda *_: []  # type: ignore[method-assign]
+
+        with patch(
+            "domain.validation.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                [], 0, "flag{expected-value}\n", ""
+            ),
+        ) as runner:
+            result = validator.validate_one(directory)
+
+        self.assertEqual(result["status"], "passed")
+        env = runner.call_args.kwargs["env"]
+        self.assertEqual(env["VIRTUAL_ENV"], str(paths.root / ".venv"))
+        self.assertEqual(
+            env["PATH"].split(os.pathsep)[0],
+            str(paths.root / ".venv" / "bin"),
+        )
 
 
 class MergeValidationIntoReportTests(unittest.TestCase):

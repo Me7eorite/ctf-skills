@@ -173,3 +173,33 @@ def test_host_builder_classifies_common_docker_failures(tmp_path: Path) -> None:
     assert error.value.failure_kind == "missing_dependency"
     assert error.value.failed_step == "Step 7: RUN make"
     assert "make" in (error.value.failure_hint or "")
+
+
+def test_host_builder_classifies_tuna_mirror_forbidden(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    challenge = _web_challenge(workspace)
+    validation_set = WorkspaceValidationSet(
+        candidates={"web-0001": challenge},
+        output_manifest_hash="sha256:before",
+    )
+
+    def fake_run(command, **_kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            100,
+            stdout=(
+                "Step 4/10 : RUN apt-get update && apt-get install -y xinetd\n"
+                "E: Failed to fetch http://mirrors.tuna.tsinghua.edu.cn/ubuntu/pool/main/x/xinetd "
+                "403  Forbidden [IP: 101.6.15.130 80]\n"
+            ),
+            stderr="The command returned a non-zero code: 100\n",
+        )
+
+    with (
+        patch("hermes.host_build.subprocess.run", side_effect=fake_run),
+        pytest.raises(HostBuildError) as error,
+    ):
+        HostBuilder().build_workspace(workspace, validation_set)
+
+    assert error.value.failure_kind == "apt_mirror_forbidden"
+    assert "TUNA" in (error.value.failure_hint or "")

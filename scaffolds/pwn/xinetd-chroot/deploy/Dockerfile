@@ -1,19 +1,34 @@
 FROM ubuntu:20.04
 
-ARG CTF_UID=1000
-ARG CTF_GID=1000
-
-RUN sed -i "s/http:\/\/archive.ubuntu.com/http:\/\/mirrors.tuna.tsinghua.edu.cn/g" /etc/apt/sources.list && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends \
-        gcc \
-        make \
-        libc6-dev \
-        xinetd && \
+RUN set -eux; \
+    cp /etc/apt/sources.list /etc/apt/sources.list.orig; \
+    success=0; \
+    for mirror in \
+        http://mirrors.163.com/ubuntu/ \
+        http://mirrors.aliyun.com/ubuntu/ \
+        http://mirrors.ustc.edu.cn/ubuntu/ \
+        http://mirrors.163.com/ubuntu/; do \
+        mirror="${mirror%/}"; \
+        sed -E \
+            -e "s#http://archive.ubuntu.com/ubuntu/?#${mirror}#g" \
+            -e "s#http://security.ubuntu.com/ubuntu/?#${mirror}#g" \
+            -e "s#http://mirrors.tuna.tsinghua.edu.cn/ubuntu/?#${mirror}#g" \
+            /etc/apt/sources.list.orig > /etc/apt/sources.list; \
+        rm -rf /var/lib/apt/lists/*; \
+        if apt-get update && apt-get install -y --no-install-recommends \
+            gcc \
+            make \
+            libc6-dev \
+            xinetd; then \
+            success=1; \
+            break; \
+        fi; \
+    done; \
+    test "$success" = "1"; \
     rm -rf /var/lib/apt/lists/*
 
-RUN groupadd -g "${CTF_GID}" ctf && \
-    useradd -u "${CTF_UID}" -g "${CTF_GID}" -m ctf
+RUN groupadd -g 1000 ctf && \
+    useradd -u 1000 -g 1000 -m ctf
 
 WORKDIR /home/ctf
 

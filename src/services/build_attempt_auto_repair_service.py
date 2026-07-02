@@ -14,8 +14,6 @@ from core.jsonio import read_json, write_json
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 _PWN_XINETD_SCAFFOLD = _REPOSITORY_ROOT / "scaffolds" / "pwn" / "xinetd-chroot"
 _PWN_DEFAULT_SERVICE_PORT = "9999"
-_PWN_DEFAULT_UID = "1000"
-_PWN_DEFAULT_GID = "1000"
 
 
 @dataclass(frozen=True)
@@ -294,62 +292,36 @@ def _repair_compose_validate_wrapper(challenge_dir: Path, metadata: dict[str, An
     compose_repair_tokens = (
         "docker compose",
         "compose version",
+        "compose()",
         "neither compose nor docker-compose",
     )
     if not any(token in original for token in compose_repair_tokens):
         return []
 
-    helper = (
-        "\n"
-        "compose() {\n"
-        "    if command -v docker-compose >/dev/null 2>&1; then\n"
-        "        docker-compose \"$@\"\n"
-        "    else\n"
-        "        docker compose \"$@\"\n"
-        "    fi\n"
-        "}\n"
-    )
-    text = _replace_compose_helper(original, helper)
-    text = _replace_direct_docker_compose_calls(text)
-    if "compose() {" not in text:
-        text = _insert_shell_helper(text, helper)
+    text = _remove_compose_helper(original)
+    text = _replace_compose_invocations(text)
     if text == original:
         return []
     validate.write_text(text, encoding="utf-8")
-    return ["made validate.sh compatible with docker compose and docker-compose"]
+    return ["normalized validate.sh to use docker-compose only"]
 
 
-def _replace_compose_helper(text: str, helper: str) -> str:
+def _remove_compose_helper(text: str) -> str:
     pattern = re.compile(r"(?ms)^compose\(\) \{\n.*?^\}\n?")
-    return pattern.sub(helper.lstrip("\n"), text, count=1)
+    return pattern.sub("", text, count=1)
 
 
-def _replace_direct_docker_compose_calls(text: str) -> str:
+def _replace_compose_invocations(text: str) -> str:
     lines: list[str] = []
-    in_compose_helper = False
     for line in text.splitlines(keepends=True):
-        stripped = line.strip()
-        if re.match(r"^compose\(\)\s*\{", stripped):
-            in_compose_helper = True
-            lines.append(line)
-            continue
-        if in_compose_helper:
-            lines.append(line)
-            if stripped == "}":
-                in_compose_helper = False
-            continue
-        lines.append(re.sub(r"(?<![\w-])docker\s+compose\b", "compose", line))
+        line = re.sub(r"(?<![\w-])docker\s+compose\b", "docker-compose", line)
+        line = re.sub(
+            r"(?<![\w-])compose\s+(up|down|ps|logs|pull|config|restart|stop|start)\b",
+            r"docker-compose \1",
+            line,
+        )
+        lines.append(line)
     return "".join(lines)
-
-
-def _insert_shell_helper(text: str, helper: str) -> str:
-    lines = text.splitlines(keepends=True)
-    for index, line in enumerate(lines[:10]):
-        if re.match(r"^\s*set\s+-[A-Za-z]+\s*$", line):
-            return "".join(lines[: index + 1]) + helper + "".join(lines[index + 1 :])
-    if lines and lines[0].startswith("#!"):
-        return lines[0] + helper + "".join(lines[1:])
-    return helper.lstrip("\n") + text
 
 
 def _repair_validate_solver_capture(challenge_dir: Path, metadata: dict[str, Any]) -> list[str]:
@@ -407,8 +379,6 @@ def _repair_pwn_xinetd_scaffold(challenge_dir: Path, metadata: dict[str, Any]) -
         "{{FLAG}}": flag,
         "{{IMAGE_NAME}}": image_name,
         "{{CONTAINER_NAME}}": container_name,
-        "{{CTF_UID}}": _PWN_DEFAULT_UID,
-        "{{CTF_GID}}": _PWN_DEFAULT_GID,
     }
 
     actions: list[str] = []
@@ -570,6 +540,11 @@ def _repair_deploy_dockerfile(challenge_dir: Path, metadata: dict[str, Any]) -> 
     text = "".join(updated_lines)
     if text != original:
         actions.append("normalized Dockerfile COPY sources to challenge-root build context")
+
+    if "mirrors.tuna.tsinghua.edu.cn" in text:
+        text = text.replace("https://mirrors.tuna.tsinghua.edu.cn", "http://mirrors.163.com")
+        text = text.replace("http://mirrors.tuna.tsinghua.edu.cn", "http://mirrors.163.com")
+        actions.append("replaced unavailable TUNA apt mirror with approved 163 mirror")
 
     if _dockerfile_needs_make_install(text, challenge_dir):
         text = _inject_make_install_layer(text)

@@ -27,7 +27,7 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertIn("./references/scaffolds/pwn/xinetd-chroot/", prompt)
         self.assertIn("xinetd + chroot + TCP socket", prompt)
         self.assertIn("server = /usr/sbin/chroot", prompt)
-        self.assertIn("server_args = --userspec=1000:1000", prompt)
+        self.assertIn("server_args = --userspec=ctf:ctf", prompt)
         self.assertIn("/etc/xinetd.d/ctf", prompt)
 
     def test_shard_prompt_keeps_pwn_chroot_setup_inside_dockerfile(self):
@@ -48,7 +48,7 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertIn("./references/scaffolds/pwn/xinetd-chroot/", prompt)
         self.assertIn("xinetd + chroot + TCP socket", prompt)
         self.assertIn("/usr/sbin/chroot", prompt)
-        self.assertIn("--userspec=1000:1000", prompt)
+        self.assertIn("--userspec=ctf:ctf", prompt)
         self.assertIn("MUST appear only as `RUN` steps in", prompt)
 
     def test_pwn_xinetd_chroot_scaffold_has_container_only_setup(self):
@@ -67,11 +67,13 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertNotIn("cp -R /lib* /home/ctf", start_sh)
         self.assertNotIn("mknod /home/ctf", start_sh)
         self.assertIn("server      = /usr/sbin/chroot", xinetd)
-        self.assertIn("server_args = --userspec={{CTF_UID}}:{{CTF_GID}}", xinetd)
-        self.assertIn("ARG CTF_UID=1000", dockerfile)
-        self.assertIn("ARG CTF_GID=1000", dockerfile)
-        self.assertIn('CTF_UID: "1000"', compose)
-        self.assertIn('CTF_GID: "1000"', compose)
+        self.assertIn("server_args = --userspec=ctf:ctf", xinetd)
+        self.assertIn("groupadd -g 1000 ctf", dockerfile)
+        self.assertIn("useradd -u 1000 -g 1000 -m ctf", dockerfile)
+        self.assertNotIn("ARG CTF_UID", dockerfile)
+        self.assertNotIn("ARG CTF_GID", dockerfile)
+        self.assertIn("container_name: {{CONTAINER_NAME}}", compose)
+        self.assertNotIn("build:", compose)
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -389,5 +391,3 @@ class HermesRunnerTests(unittest.TestCase):
             build_attempt_id=attempt_id,
             require_build_attempt=True,
         )
-
-

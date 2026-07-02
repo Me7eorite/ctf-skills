@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import time
@@ -49,9 +50,6 @@ _FORBIDDEN_DOCKER_CLEANUP_RE = re.compile(
     r"docker\s+compose\s+down\b[^\n;&|]*\s(?:-v|--volumes)\b|"
     r"docker-compose\s+down\b[^\n;&|]*\s(?:-v|--volumes)\b)",
     re.MULTILINE,
-)
-_UNDECLARED_SOLVER_IMPORT_RE = re.compile(
-    r"(?m)^\s*(?:from\s+(?:pwn|pwnlib|Crypto)\b|import\s+(?:pwn|pwnlib|Crypto)\b)"
 )
 _ROOT_START_INSTALL_RE = re.compile(
     r"(?im)^\s*(?:COPY|ADD)\s+(?:--[^\r\n]+\s+)*[^\r\n#]*start\.sh\s+/root/start\.sh\b"
@@ -728,6 +726,21 @@ class ChallengeValidator:
         self.timeout = timeout
         self.shell = shell
 
+    def _validation_env(self) -> dict[str, str]:
+        """Return the host environment used to run challenge validate.sh."""
+        env = os.environ.copy()
+        venv_dir = self.paths.root / ".venv"
+        venv_bin = venv_dir / "bin"
+        if venv_bin.is_dir():
+            current_path = env.get("PATH", "")
+            env["PATH"] = (
+                f"{venv_bin}{os.pathsep}{current_path}"
+                if current_path
+                else str(venv_bin)
+            )
+            env["VIRTUAL_ENV"] = str(venv_dir)
+        return env
+
     def validate(self, challenge_ids: list[str] | None = None) -> dict:
         """批量校验题目。
 
@@ -896,6 +909,7 @@ class ChallengeValidator:
             process = subprocess.run(
                 [self.shell, str(validation_script)],
                 cwd=challenge_dir,
+                env=self._validation_env(),
                 text=True,
                 capture_output=True,
                 timeout=self.timeout,
@@ -1195,13 +1209,6 @@ class ChallengeValidator:
                 "writenup/exp.py references 'docker-compose'; the exploit must "
                 "recover the flag from the target, not organizer files"
             )
-        if category in {"web", "pwn"} and exp_text and _UNDECLARED_SOLVER_IMPORT_RE.search(exp_text):
-            errors.append(
-                "writenup/exp.py imports undeclared third-party solver packages "
-                "such as pwntools/Crypto; use the Python standard library or "
-                "vendor required helper modules under writenup/"
-            )
-
         # D — destructive Docker cleanup can remove host infrastructure volumes
         if validate_text and _FORBIDDEN_DOCKER_CLEANUP_RE.search(validate_text):
             errors.append(

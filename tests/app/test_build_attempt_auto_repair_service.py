@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from core.jsonio import write_json
@@ -67,6 +68,27 @@ def test_auto_repair_adds_make_and_replaces_conflicting_chroot_copy(tmp_path: Pa
     assert "cp -a /lib/x86_64-linux-gnu/*.so*" in repaired
 
 
+def test_auto_repair_replaces_tuna_apt_mirror(tmp_path: Path) -> None:
+    challenge_dir = tmp_path / "challenge"
+    (challenge_dir / "deploy" / "src").mkdir(parents=True)
+    (challenge_dir / "deploy" / "_files").mkdir(parents=True)
+    _write_metadata(challenge_dir)
+    dockerfile = challenge_dir / "deploy" / "Dockerfile"
+    dockerfile.write_text(
+        "FROM ubuntu:20.04\n"
+        "RUN sed -i 's#http://archive.ubuntu.com#http://mirrors.tuna.tsinghua.edu.cn#g' "
+        "/etc/apt/sources.list && apt-get update && apt-get install -y gcc xinetd\n",
+        encoding="utf-8",
+    )
+
+    result = auto_repair_challenge(challenge_dir)
+
+    repaired = dockerfile.read_text(encoding="utf-8")
+    assert result.changed is True
+    assert "mirrors.tuna.tsinghua.edu.cn" not in repaired
+    assert "mirrors.163.com" in repaired
+
+
 def test_auto_repair_replaces_multiline_conflicting_chroot_copy(tmp_path: Path) -> None:
     challenge_dir = tmp_path / "challenge"
     (challenge_dir / "deploy" / "src").mkdir(parents=True)
@@ -129,7 +151,7 @@ def test_auto_repair_normalizes_pwn_xinetd_deploy_from_scaffold(tmp_path: Path) 
     assert "build:" not in compose
     assert '- "31337:31337"' in compose
     assert "- FLAG=flag{demo}" in compose
-    assert "server_args = --userspec=1000:1000 /home/ctf ./vuln" in xinetd
+    assert "server_args = --userspec=ctf:ctf /home/ctf ./vuln" in xinetd
 
 
 def test_auto_repair_makes_validate_sh_compose_compatible(tmp_path: Path) -> None:
@@ -150,10 +172,12 @@ def test_auto_repair_makes_validate_sh_compose_compatible(tmp_path: Path) -> Non
 
     repaired = validate.read_text(encoding="utf-8")
     assert result.changed is True
-    assert "compose() {" in repaired
-    assert "docker-compose \"$@\"" in repaired
+    assert "compose() {" not in repaired
+    assert "docker-compose up -d" in repaired
+    assert "docker-compose ps" in repaired
+    assert "docker-compose logs --no-color --tail=120" in repaired
     assert "docker-compose version" not in repaired
-    assert "compose up -d" in repaired
+    assert not re.search(r"(?m)^\s*compose\s+up\b", repaired)
     assert "docker compose up -d" not in repaired
 
     second = auto_repair_challenge(challenge_dir)
@@ -186,7 +210,8 @@ def test_auto_repair_repairs_legacy_recursive_compose_helper(tmp_path: Path) -> 
 
     repaired = validate.read_text(encoding="utf-8")
     assert result.changed is True
-    assert "if command -v docker-compose" in repaired
+    assert "compose() {" not in repaired
+    assert "docker-compose up -d" in repaired
     assert "compose version" not in repaired
     assert "neither compose nor docker-compose" not in repaired
 
