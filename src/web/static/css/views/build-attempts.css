@@ -372,6 +372,62 @@
   overflow-wrap: anywhere;
 }
 
+.ba-design-link {
+  display: inline-grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  min-height: 34px;
+  padding: 6px 9px;
+  border: 1px solid var(--brand-200);
+  border-radius: var(--radius-md);
+  background: var(--brand-50);
+  color: var(--brand-700);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ba-design-link:hover {
+  border-color: var(--brand-500);
+  background: var(--surface);
+}
+
+.ba-design-link span {
+  color: var(--brand-600);
+  font-size: var(--font-xs);
+  font-weight: 700;
+}
+
+.ba-design-link strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-sm);
+  font-weight: 700;
+}
+
+.ba-design-link svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.ba-file-token {
+  display: inline-block;
+  max-width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--ink-50);
+  color: var(--ink-700);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .ba-section-card {
   margin-top: var(--space-lg);
 }

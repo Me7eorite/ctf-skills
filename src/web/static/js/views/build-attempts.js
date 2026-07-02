@@ -4,6 +4,7 @@ import { initIcons } from "../ui/icons.js";
 import { showToast } from "../ui/toast.js";
 import { confirmDeletion } from "../ui/delete-dialog.js";
 import {
+  categoryLabel,
   dotTone,
   escapeHtml,
   formatDateTime,
@@ -635,6 +636,63 @@ function renderProgressCell(attempt) {
   return `${value}`;
 }
 
+function executionCountLabel(attempt) {
+  const latest = latestExecutionIteration(attempt);
+  if (latest > 0) return `第 ${latest} 轮`;
+  return `第 ${attempt.attempt_no || 1} 次`;
+}
+
+function latestExecutionIteration(attempt) {
+  const direct = Number(attempt.latest_execution_iteration);
+  if (Number.isFinite(direct) && direct > 0) return Math.floor(direct);
+  const executions = Array.isArray(attempt.executions) ? attempt.executions : [];
+  return executions.reduce((max, row) => {
+    const value = Number(row?.iteration_no);
+    return Number.isFinite(value) && value > max ? Math.floor(value) : max;
+  }, 0);
+}
+
+function timeoutLabel(attempt) {
+  const seconds = Number(attempt.effective_timeout_seconds);
+  if (!Number.isFinite(seconds) || seconds <= 0) return "-";
+  return `${Math.floor(seconds)}s (${attempt.timeout_source || "-"})`;
+}
+
+function designTaskLabel(attempt) {
+  const title = String(attempt.title || "").trim();
+  if (title && !/^题目设计\s+[0-9a-f-]{6,}$/i.test(title)) return title;
+  const taskNo = Number(attempt.task_no);
+  if (Number.isFinite(taskNo) && taskNo > 0) return `第 ${Math.floor(taskNo)} 题设计`;
+  if (attempt.challenge_id) return `挑战 ${attempt.challenge_id}`;
+  return "构建题目";
+}
+
+function shortShardName(value) {
+  const text = String(value || "-");
+  const match = text.match(/^([0-9a-f-]{36})(\.iter-\d{3}\.json|\.json)$/i);
+  if (match) return `${shortId(match[1])}...${match[2].replace(/^\./, "")}`;
+  if (text.length <= 28) return text;
+  return `${text.slice(0, 8)}...${text.slice(-16)}`;
+}
+
+function fileQueueToken(value) {
+  return `
+    <span class="ba-file-token mono" title="${escapeHtml(value || "-")}">
+      ${escapeHtml(shortShardName(value))}
+    </span>
+  `;
+}
+
+function designTaskLink(attempt) {
+  return `
+    <button class="ba-design-link ba-open-design-task" title="打开关联设计 ${escapeHtml(attempt.design_task_id || "")}">
+      <span>查看</span>
+      <strong>${escapeHtml(designTaskLabel(attempt))}</strong>
+      <i data-lucide="arrow-up-right"></i>
+    </button>
+  `;
+}
+
 function sequentialAttemptNotice(attempt) {
   const result = appState.data?.sequential_worker_result;
   const outcomes = Array.isArray(result?.outcomes) ? result.outcomes : [];
@@ -727,13 +785,13 @@ function renderTable(rows) {
                 <div class="ba-title">${escapeHtml(attempt.title || attempt.challenge_id || attempt.id)}</div>
                 ${attempt.failure_summary ? `<div class="ba-failure-line">${escapeHtml(attempt.failure_summary)}</div>` : ""}
               </td>
-              <td>${softPill(attempt.category || "-")}</td>
+              <td>${softPill(categoryLabel(attempt.category))}</td>
               <td>${escapeHtml(attempt.difficulty || "-")}</td>
               <td>${buildStatusIndicator(attempt.status)}</td>
               <td>${artifactPill(attempt.artifact_status)}</td>
               <td>${renderProgressCell(attempt)}</td>
               <td>${escapeHtml(attempt.worker || "-")}</td>
-              <td>${attempt.attempt_no}</td>
+              <td>${escapeHtml(executionCountLabel(attempt))}</td>
               <td class="table-cell-time">${escapeHtml(formatDateTime(attempt.created_at))}</td>
               <td>
                 <div class="btn-group">
@@ -764,11 +822,11 @@ function renderAttemptCards(rows) {
             </label>
             <div class="ba-card-title">
               <strong>${escapeHtml(attempt.title || attempt.challenge_id || attempt.id)}</strong>
-              <span>${escapeHtml(shortId(attempt.id))} · 第 ${escapeHtml(attempt.attempt_no)} 次</span>
+              <span>${escapeHtml(shortId(attempt.id))} · ${escapeHtml(executionCountLabel(attempt))}</span>
             </div>
           </div>
           <div class="ba-card-badges">
-            ${softPill(attempt.category || "-")}
+            ${softPill(categoryLabel(attempt.category))}
             ${buildStatusIndicator(attempt.status)}
             ${artifactPill(attempt.artifact_status)}
           </div>
@@ -844,13 +902,13 @@ function renderDetail(root) {
         <div class="ba-detail-badges">
           ${buildStatusIndicator(attempt.status)}
           ${artifactPill(attempt.artifact_status)}
-          ${softPill(`第 ${attempt.attempt_no} 次`)}
-          ${attempt.category ? softPill(attempt.category) : ""}
+          ${softPill(executionCountLabel(attempt))}
+          ${attempt.category ? softPill(categoryLabel(attempt.category)) : ""}
         </div>
-        <h2>构建运行 #${escapeHtml(attempt.attempt_no)}</h2>
+        <h2>${escapeHtml(designTaskLabel(attempt))} · ${escapeHtml(executionCountLabel(attempt))}</h2>
         <div class="ba-detail-meta">
-          <span>设计任务 ${escapeHtml(shortId(attempt.design_task_id))}</span>
-          <span>${escapeHtml(attempt.shard_basename)}</span>
+          <span>关联设计</span>
+          <span title="${escapeHtml(attempt.shard_basename)}">队列 ${escapeHtml(shortShardName(attempt.shard_basename))}</span>
           <span>${escapeHtml(formatDateTime(attempt.created_at))}</span>
         </div>
       </div>
@@ -862,10 +920,11 @@ function renderDetail(root) {
         <div><div class="card-title">运行信息</div><div class="card-subtitle">构建记录与文件证据的后端状态。</div></div>
       </div>
       <dl class="ba-info-grid">
-        <div><dt>设计任务</dt><dd><button class="btn btn-ghost btn-sm ba-open-design-task">${escapeHtml(shortId(attempt.design_task_id))}</button></dd></div>
-        <div><dt>分片</dt><dd class="mono">${escapeHtml(attempt.shard_basename)}</dd></div>
+        <div><dt>关联设计</dt><dd>${designTaskLink(attempt)}</dd></div>
+        <div><dt>文件队列</dt><dd>${fileQueueToken(attempt.shard_basename)}</dd></div>
         <div><dt>worker</dt><dd>${escapeHtml(attempt.worker || "-")}</dd></div>
-        <div><dt>Hermes 超时</dt><dd>${attempt.effective_timeout_seconds ? `${attempt.effective_timeout_seconds}s (${escapeHtml(attempt.timeout_source || "-")})` : "-"}</dd></div>
+        <div><dt>执行轮次</dt><dd>${escapeHtml(executionCountLabel(attempt))}</dd></div>
+        <div><dt>Hermes 超时</dt><dd>${escapeHtml(timeoutLabel(attempt))}</dd></div>
         <div><dt>开始时间</dt><dd>${escapeHtml(formatDateTime(attempt.started_at))}</dd></div>
         <div><dt>完成时间</dt><dd>${escapeHtml(formatDateTime(attempt.finished_at))}</dd></div>
         <div><dt>产物目录</dt><dd class="mono">${escapeHtml(attempt.resulting_challenge_dir || "-")}</dd></div>
@@ -874,15 +933,7 @@ function renderDetail(root) {
 
     <section class="card ba-section-card">
       <div class="card-header">
-        <div><div class="card-title">尝试历史</div></div>
-        <span class="pill">${(attempt.sibling_attempts || []).length}</span>
-      </div>
-      ${renderSiblingAttempts(attempt)}
-    </section>
-
-    <section class="card ba-section-card">
-      <div class="card-header">
-        <div><div class="card-title">执行轮次</div></div>
+        <div><div class="card-title">执行历史</div></div>
         <span class="pill">${(attempt.executions || []).length}</span>
       </div>
       ${renderExecutions(attempt.executions || [])}
@@ -940,45 +991,23 @@ function buildProfileReady(category) {
   return readiness.categories?.[category]?.ready === true;
 }
 
-function renderSiblingAttempts(attempt) {
-  const rows = attempt.sibling_attempts || [];
-  if (!rows.length) return `<div class="empty card-body">没有尝试历史</div>`;
-  return `
-    <div class="table-container">
-      <table class="table">
-        <thead><tr><th>#</th><th>状态</th><th>产物</th><th>Worker</th><th>开始时间</th><th>完成时间</th></tr></thead>
-        <tbody>
-          ${rows.map((row) => `
-            <tr class="ba-history-row" data-build-attempt-id="${escapeHtml(row.id)}">
-              <td>${row.attempt_no}</td>
-              <td>${buildStatusIndicator(row.status)}</td>
-              <td>${artifactPill(row.artifact_status)}</td>
-              <td>${escapeHtml(row.worker || "-")}</td>
-              <td class="table-cell-time">${escapeHtml(formatDateTime(row.started_at))}</td>
-              <td class="table-cell-time">${escapeHtml(formatDateTime(row.finished_at))}</td>
-            </tr>
-          `).join("")}
-        </tbody>
-      </table>
-    </div>
-  `;
-}
-
 function renderExecutions(rows) {
-  if (!rows.length) return `<div class="empty card-body">没有执行轮次</div>`;
+  if (!rows.length) return `<div class="empty card-body">没有执行历史</div>`;
+  const sortedRows = [...rows].sort((a, b) => Number(b.iteration_no || 0) - Number(a.iteration_no || 0));
   return `
     <div class="table-container">
       <table class="table">
-        <thead><tr><th>轮次</th><th>状态</th><th>类型</th><th>Worker</th><th>创建</th><th>完成</th></tr></thead>
+        <thead><tr><th>轮次</th><th>状态</th><th>类型</th><th>Worker</th><th>开始</th><th>完成</th><th>结果</th></tr></thead>
         <tbody>
-          ${rows.map((row) => `
+          ${sortedRows.map((row) => `
             <tr>
               <td>#${escapeHtml(String(row.iteration_no || "-"))}</td>
               <td>${buildStatusIndicator(row.status)}</td>
               <td>${escapeHtml(row.execution_kind || "-")}</td>
               <td>${escapeHtml(row.worker_id || "-")}</td>
-              <td class="table-cell-time">${escapeHtml(formatDateTime(row.created_at))}</td>
+              <td class="table-cell-time">${escapeHtml(formatDateTime(row.started_at || row.created_at))}</td>
               <td class="table-cell-time">${escapeHtml(formatDateTime(row.finished_at))}</td>
+              <td>${escapeHtml(row.error || row.exit_class || "-")}</td>
             </tr>
           `).join("")}
         </tbody>
@@ -1088,8 +1117,8 @@ function artifactLabel(value) {
   return {
     present: "已生成",
     missing: "缺失",
-    unknown: "未知",
-  }[value] || "未知";
+    unknown: "未生成",
+  }[value] || "未生成";
 }
 
 function failureSummary(attempt) {

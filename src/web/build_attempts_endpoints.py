@@ -198,6 +198,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
                 session,
                 [row.shard_basename for row in rows],
             )
+            execution_summaries = _execution_summaries(session, [row.id for row in rows])
         headers = {}
         if capped != requested_limit:
             headers["X-Limit-Capped"] = str(capped)
@@ -207,6 +208,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
                     row,
                     project_root=_project_paths(app).root,
                     summaries=summaries,
+                    execution_summary=execution_summaries.get(row.id),
                 )
                 for row in rows
             ],
@@ -229,12 +231,13 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
                     detail="build attempt not found",
                 )
             siblings = repo.list_for_design_task(attempt.design_task_id)
-            category = session.scalar(
-                sa.select(task_model.DesignTask.category).where(task_model.DesignTask.id == attempt.design_task_id)
-            )
-            challenge_id = session.scalar(
-                sa.select(task_model.DesignTask.challenge_id).where(task_model.DesignTask.id == attempt.design_task_id)
-            )
+            task = session.scalars(
+                sa.select(task_model.DesignTask).where(
+                    task_model.DesignTask.id == attempt.design_task_id
+                )
+            ).one_or_none()
+            category = task.category if task is not None else None
+            challenge_id = task.challenge_id if task is not None else None
             if isinstance(category, str) and isinstance(challenge_id, str):
                 attempt = _normalize_artifact_status(
                     session,
@@ -257,14 +260,13 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
             failure_summary=_derive_failure_summary(event_payloads, attempt.error),
         )
         body["category"] = category
-        timeout_manifest = read_json(
-            _project_paths(app).executions / str(attempt.id) / "input" / "manifest.json",
-            {},
-        )
-        if isinstance(timeout_manifest, dict):
-            if isinstance(timeout_manifest.get("effective_timeout_seconds"), int):
-                body["effective_timeout_seconds"] = timeout_manifest["effective_timeout_seconds"]
-                body["timeout_source"] = timeout_manifest.get("timeout_source")
+        if task is not None:
+            body["challenge_id"] = task.challenge_id
+            body["task_no"] = task.task_no
+            body["title"] = task.title
+            body["difficulty"] = task.difficulty
+        body.update(_timeout_metadata_for_attempt(_project_paths(app), attempt.id))
+        body.update(_execution_summary_from_rows(executions))
         body["sibling_attempts"] = [
             _attempt_dict(row, project_root=_project_paths(app).root)
             for row in siblings
@@ -1304,6 +1306,96 @@ def _effective_timeout_for_attempt(paths, attempt_id: UUID) -> tuple[int, str]:
     return shard_timeout_policy(payload), "shard_policy"
 
 
+def _timeout_metadata_for_attempt(paths, attempt_id: UUID) -> dict[str, Any]:
+    for manifest in _candidate_timeout_manifests(paths, attempt_id):
+        metadata = _timeout_metadata_from_manifest(manifest)
+        if metadata:
+            return metadata
+
+    env_raw = os.environ.get("HERMES_TIMEOUT")
+    if env_raw:
+        try:
+            value = int(env_raw)
+        except ValueError:
+            value = 0
+        if value > 0:
+            return {"effective_timeout_seconds": value, "timeout_source": "env"}
+
+    for shard in _candidate_timeout_shards(paths, attempt_id):
+        payload = read_json(shard, {})
+        if not isinstance(payload, dict):
+            continue
+        try:
+            return {
+                "effective_timeout_seconds": shard_timeout_policy(payload),
+                "timeout_source": "shard_policy",
+            }
+        except (TypeError, ValueError):
+            continue
+    return {}
+
+
+def _timeout_metadata_from_manifest(path: Path) -> dict[str, Any]:
+    manifest = read_json(path, None)
+    if not isinstance(manifest, dict):
+        return {}
+    seconds = manifest.get("effective_timeout_seconds")
+    if not isinstance(seconds, int) or seconds <= 0:
+        return {}
+    source = manifest.get("timeout_source")
+    return {
+        "effective_timeout_seconds": seconds,
+        "timeout_source": source if isinstance(source, str) and source else "manifest",
+    }
+
+
+def _candidate_timeout_manifests(paths, attempt_id: UUID) -> list[Path]:
+    root = paths.executions / str(attempt_id)
+    candidates = [
+        root / "current" / "input" / "manifest.json",
+    ]
+    attempts = root / "attempts"
+    if attempts.is_dir() and not attempts.is_symlink():
+        candidates.extend(
+            item / "input" / "manifest.json"
+            for item in sorted(
+                attempts.glob("iter-*"),
+                key=lambda item: _iteration_dir_no(item),
+                reverse=True,
+            )
+            if item.is_dir() and not item.is_symlink()
+        )
+    candidates.append(root / "input" / "manifest.json")
+    return candidates
+
+
+def _candidate_timeout_shards(paths, attempt_id: UUID) -> list[Path]:
+    root = paths.executions / str(attempt_id)
+    return [
+        root / "current" / "input" / "shard.json",
+        *[
+            item / "input" / "shard.json"
+            for item in sorted(
+                (root / "attempts").glob("iter-*")
+                if (root / "attempts").is_dir()
+                else [],
+                key=lambda item: _iteration_dir_no(item),
+                reverse=True,
+            )
+            if item.is_dir() and not item.is_symlink()
+        ],
+        root / "input" / "shard.json",
+        *_candidate_pending_shards(paths, attempt_id),
+    ]
+
+
+def _iteration_dir_no(path: Path) -> int:
+    try:
+        return int(path.name.removeprefix("iter-"))
+    except ValueError:
+        return 0
+
+
 def _candidate_pending_shards(paths, attempt_id: UUID) -> list[Path]:
     pending = paths.shards / "pending"
     exact = pending / f"{attempt_id}.json"
@@ -1410,6 +1502,42 @@ def _execution_dict(execution) -> dict[str, Any]:
     }
 
 
+def _execution_summary_from_rows(executions) -> dict[str, int]:
+    if not executions:
+        return {
+            "execution_count": 0,
+            "latest_execution_iteration": 0,
+        }
+    return {
+        "execution_count": len(executions),
+        "latest_execution_iteration": max(
+            int(execution.iteration_no or 0)
+            for execution in executions
+        ),
+    }
+
+
+def _execution_summaries(session, attempt_ids: list[UUID]) -> dict[UUID, dict[str, int]]:
+    if not attempt_ids:
+        return {}
+    rows = session.execute(
+        sa.select(
+            exec_model.Execution.build_attempt_id,
+            sa.func.count(exec_model.Execution.id),
+            sa.func.max(exec_model.Execution.iteration_no),
+        )
+        .where(exec_model.Execution.build_attempt_id.in_(attempt_ids))
+        .group_by(exec_model.Execution.build_attempt_id)
+    ).all()
+    return {
+        attempt_id: {
+            "execution_count": int(count or 0),
+            "latest_execution_iteration": int(latest or 0),
+        }
+        for attempt_id, count, latest in rows
+    }
+
+
 def _retry_response_payload(attempt_id: UUID) -> dict[str, Any]:
     from persistence.session import transaction
 
@@ -1439,11 +1567,19 @@ def _list_item_dict(
     *,
     project_root: Path,
     summaries: dict[str, str] | None = None,
+    execution_summary: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     row = _attempt_dict(
         item,
         project_root=project_root,
         failure_summary=(summaries or {}).get(item.shard_basename) or _derive_failure_summary([], item.error),
+    )
+    row.update(
+        execution_summary
+        or {
+            "execution_count": 0,
+            "latest_execution_iteration": 0,
+        }
     )
     row.update(
         {

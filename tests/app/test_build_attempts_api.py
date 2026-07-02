@@ -455,6 +455,8 @@ def test_detail_exposes_siblings_and_progress_events(
     payload = response.json()
     assert [item["attempt_no"] for item in payload["sibling_attempts"]] == [1, 2]
     assert payload["sibling_attempts"][1]["id"] == str(second.id)
+    assert payload["task_no"] == 1
+    assert payload["title"] == "Task 1"
     assert any(event["message"].startswith("carry-forward:") for event in payload["progress_events"])
 
 
@@ -484,9 +486,44 @@ def test_detail_exposes_execution_iterations(
     assert response.status_code == 200
     payload = response.json()
     assert payload["shard_basename"] == f"{attempt_id}.iter-002.json"
+    assert payload["execution_count"] == 2
+    assert payload["latest_execution_iteration"] == 2
     assert [item["iteration_no"] for item in payload["executions"]] == [1, 2]
     assert payload["executions"][1]["execution_kind"] == "retry"
     assert payload["executions"][1]["status"] == "queued"
+
+
+def test_detail_exposes_current_workspace_timeout(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory)
+    service = build_attempts_endpoints.BuildOrchestrationService(
+        paths=client.app.state.project_paths
+    )
+    attempt_id = service.submit_single(task_id)
+    manifest = (
+        client.app.state.project_paths.executions
+        / str(attempt_id)
+        / "current"
+        / "input"
+        / "manifest.json"
+    )
+    manifest.parent.mkdir(parents=True)
+    write_json(
+        manifest,
+        {
+            "effective_timeout_seconds": 4321,
+            "timeout_source": "fixture",
+        },
+    )
+
+    response = client.get(f"/api/build-attempts/{attempt_id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["effective_timeout_seconds"] == 4321
+    assert payload["timeout_source"] == "fixture"
 
 
 def test_retry_rejects_stale_sibling(
