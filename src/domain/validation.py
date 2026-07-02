@@ -128,6 +128,54 @@ def classify_validation_failure(
                 "For xinetd chroot, startup writes container /home/ctf/flag but "
                 "the challenge process must open /flag inside the chroot."
             )
+        elif _looks_like_pwn_bad_offset(text):
+            code = "pwn_bad_offset"
+            hint = (
+                "Recompute the overflow offset with cyclic/core/gdb against the "
+                "actual shipped ELF and update the payload layout."
+            )
+        elif _looks_like_pwn_rop_missing_gadget(text):
+            code = "pwn_rop_missing_gadget"
+            hint = (
+                "Discover gadgets from the actual ELF/libc with ROPgadget, ropper, "
+                "objdump, or pwntools ROP instead of using guessed addresses."
+            )
+        elif _looks_like_pwn_rop_stack_alignment(text):
+            code = "pwn_rop_stack_alignment"
+            hint = (
+                "Add or adjust a single ret gadget before libc calls so amd64 ROP "
+                "enters system/puts with 16-byte stack alignment."
+            )
+        elif _looks_like_pwn_bad_libc_base(text):
+            code = "pwn_bad_libc_base"
+            hint = (
+                "Validate the leaked libc address, subtract the matching symbol "
+                "offset, and require a plausible page-aligned libc base."
+            )
+        elif _looks_like_pwn_libc_leak_failure(text):
+            code = "pwn_libc_leak_failed"
+            hint = (
+                "Fix the first-stage leak: synchronize prompts, leak a GOT/libc "
+                "symbol, parse the full pointer, then rerun the second-stage payload."
+            )
+        elif _looks_like_pwn_pie_base_failure(text):
+            code = "pwn_pie_base_failed"
+            hint = (
+                "Leak a code pointer and compute the PIE base before using binary "
+                "symbols, PLT/GOT, or ROP gadgets."
+            )
+        elif _looks_like_pwn_shell_no_flag(text):
+            code = "pwn_shell_no_flag"
+            hint = (
+                "After code execution, run the expected flag read path such as "
+                "cat /flag inside chroot and verify the flag token reaches stdout."
+            )
+        elif _looks_like_pwn_remote_local_mismatch(text):
+            code = "pwn_remote_local_mismatch"
+            hint = (
+                "Compare local process and container remote behavior: libc/ld, "
+                "PIE base, environment, menu timing, and newline synchronization."
+            )
         else:
             code = "nonzero_exit"
             hint = "Inspect validate.sh stderr/stdout and repair the failing command."
@@ -327,6 +375,84 @@ def _looks_like_pwn_chroot_flag_path_failure(text: str) -> bool:
     return (
         ("could not read flag" in lower or "no such file" in lower)
         and ("/home/ctf/flag" in lower or "/flag" in lower or "flag.txt" in lower)
+    )
+
+
+def _looks_like_pwn_bad_offset(text: str) -> bool:
+    lower = text.lower()
+    return (
+        "bad offset" in lower
+        or "incorrect offset" in lower
+        or ("cyclic" in lower and "offset" in lower and ("not found" in lower or "failed" in lower))
+        or ("saved rip" in lower and "offset" in lower and "wrong" in lower)
+    )
+
+
+def _looks_like_pwn_rop_missing_gadget(text: str) -> bool:
+    lower = text.lower()
+    return (
+        "missing gadget" in lower
+        or "no gadget" in lower
+        or "gadget not found" in lower
+        or ("pop rdi" in lower and ("not found" in lower or "missing" in lower))
+        or ("ropgadget" in lower and "not found" in lower)
+    )
+
+
+def _looks_like_pwn_rop_stack_alignment(text: str) -> bool:
+    lower = text.lower()
+    return (
+        "movaps" in lower
+        or "stack alignment" in lower
+        or "16-byte alignment" in lower
+        or "rsp alignment" in lower
+    )
+
+
+def _looks_like_pwn_bad_libc_base(text: str) -> bool:
+    lower = text.lower()
+    return (
+        "bad libc base" in lower
+        or "invalid libc base" in lower
+        or "libc base is not page aligned" in lower
+        or ("libc base" in lower and ("negative" in lower or "0x0" in lower))
+    )
+
+
+def _looks_like_pwn_libc_leak_failure(text: str) -> bool:
+    lower = text.lower()
+    return (
+        ("libc" in lower or "puts@got" in lower or "got leak" in lower or "leak" in lower)
+        and ("leak failed" in lower or "could not leak" in lower or "failed to leak" in lower)
+    )
+
+
+def _looks_like_pwn_pie_base_failure(text: str) -> bool:
+    lower = text.lower()
+    return (
+        "pie base failed" in lower
+        or "could not compute pie" in lower
+        or "invalid pie base" in lower
+        or ("pie base" in lower and ("failed" in lower or "not page aligned" in lower))
+    )
+
+
+def _looks_like_pwn_shell_no_flag(text: str) -> bool:
+    lower = text.lower()
+    return (
+        "shell no flag" in lower
+        or "got shell but no flag" in lower
+        or ("cat /flag" in lower and ("failed" in lower or "no such file" in lower))
+    )
+
+
+def _looks_like_pwn_remote_local_mismatch(text: str) -> bool:
+    lower = text.lower()
+    return (
+        "remote/local mismatch" in lower
+        or "local/remote mismatch" in lower
+        or ("works locally" in lower and "remote" in lower)
+        or ("local succeeds" in lower and "remote fails" in lower)
     )
 
 

@@ -375,6 +375,21 @@ authoritative `validate/passed` or `validate/failed` event.
   identify canary-like values by stability and low byte `0x00`. Do not reject
   values merely because they are greater than `2^48`; amd64 canaries commonly
   use the upper seven bytes and will often exceed that threshold.
+- For ROP/ret2libc/PIE Pwn tasks, follow a structured debug loop before
+  finishing the exploit: identify mitigations with `checksec`/`file`, compute
+  the exact overflow offset with cyclic/core/headless gdb, discover gadgets from
+  the actual ELF/libc, leak a GOT/libc or PIE pointer when needed, verify
+  computed bases are plausible and page-aligned, add an amd64 `ret` stack
+  alignment gadget when libc calls crash around `movaps`, and retest against
+  the container service path. Do not ship guessed gadget, libc, PIE, or offset
+  constants.
+- Write `writenup/pwn_debug_report.json` for Pwn challenges when the solve path
+  needed debugging or when the exploit is non-trivial. Keep it bounded and
+  organizer-facing; include keys such as `checksec`, `binary`, `libc`,
+  `prompt_probe`, `offset`, `leaks`, `bases`, `gadgets`, `local_result`,
+  `remote_result`, `failure_code`, and `notes`. This report is used by later
+  validation-debug/repair rounds so they inherit context instead of starting
+  from scratch.
 - Every local binary, pwntools `process()`, subprocess, and gdb run must be
   bounded and non-interactive. Never run bare `./<binary>` or a menu-driven
   ELF without input in headless mode. Use patterns like

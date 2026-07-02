@@ -9,6 +9,7 @@ from typing import Any
 
 from domain.resume import ChallengeResumePlan
 from hermes.prompt import render_validation_repair_prompt
+from hermes.runner import _failed_challenge_debug_reports
 from hermes.validation import run_validation, validate_gate
 
 
@@ -327,6 +328,32 @@ def test_validation_debug_prompt_includes_inherited_context() -> None:
     assert "Inherited build context:" in prompt
     assert '"topic": "canary"' in prompt
     assert "writenup/exp.py" in prompt
+
+
+def test_pwn_debug_report_is_available_for_repair_context(tmp_path: Path) -> None:
+    challenge = tmp_path / "challenges" / "pwn" / "pwn-0001-demo"
+    (challenge / "writenup").mkdir(parents=True)
+    (challenge / "metadata.json").write_text(
+        json.dumps({"id": "pwn-0001", "category": "pwn"}),
+        encoding="utf-8",
+    )
+    (challenge / "writenup" / "pwn_debug_report.json").write_text(
+        json.dumps(
+            {
+                "failure_code": "pwn_bad_libc_base",
+                "bases": {"libc": "0x7ffff7dc0000"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    reports = _failed_challenge_debug_reports(
+        tmp_path / "challenges",
+        {"pwn-0001"},
+    )
+
+    assert reports["pwn-0001"]["path"] == "writenup/pwn_debug_report.json"
+    assert reports["pwn-0001"]["content"]["failure_code"] == "pwn_bad_libc_base"
 
 
 def test_validate_gate_reports_specific_implementation_gap(tmp_path: Path) -> None:

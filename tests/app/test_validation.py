@@ -494,6 +494,42 @@ class ValidationFailureClassificationTests(unittest.TestCase):
         self.assertEqual(details[0]["code"], "pwn_chroot_flag_path")
         self.assertIn("/flag", details[0]["hint"])
 
+    def test_classifies_rop_stack_alignment_failure(self):
+        details = classify_validation_failure(
+            status="nonzero_exit",
+            stderr="Program received SIGSEGV at movaps; likely stack alignment issue\n",
+        )
+
+        self.assertEqual(details[0]["code"], "pwn_rop_stack_alignment")
+        self.assertIn("ret gadget", details[0]["hint"])
+
+    def test_classifies_bad_libc_base_failure(self):
+        details = classify_validation_failure(
+            status="nonzero_exit",
+            stderr="invalid libc base: libc base is not page aligned\n",
+        )
+
+        self.assertEqual(details[0]["code"], "pwn_bad_libc_base")
+        self.assertIn("page-aligned", details[0]["hint"])
+
+    def test_classifies_pie_base_failure(self):
+        details = classify_validation_failure(
+            status="nonzero_exit",
+            stderr="PIE base failed: could not compute PIE base from leak\n",
+        )
+
+        self.assertEqual(details[0]["code"], "pwn_pie_base_failed")
+        self.assertIn("PIE base", details[0]["hint"])
+
+    def test_classifies_missing_rop_gadget(self):
+        details = classify_validation_failure(
+            status="nonzero_exit",
+            stderr="pop rdi gadget not found in the shipped binary\n",
+        )
+
+        self.assertEqual(details[0]["code"], "pwn_rop_missing_gadget")
+        self.assertIn("gadget", details[0]["hint"])
+
 
 class SolverIntegrityTests(unittest.TestCase):
     def setUp(self):

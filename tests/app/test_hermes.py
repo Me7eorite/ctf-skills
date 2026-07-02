@@ -52,6 +52,10 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertIn("Choice:", prompt)
         self.assertIn("greater than `2^48`", prompt)
         self.assertIn("open the flag by its chroot-internal path such as `/flag`", prompt)
+        self.assertIn("For ROP/ret2libc/PIE Pwn tasks", prompt)
+        self.assertIn("writenup/pwn_debug_report.json", prompt)
+        self.assertIn("movaps", prompt)
+        self.assertIn("remote_result", prompt)
 
     def test_shard_prompt_keeps_pwn_chroot_setup_inside_dockerfile(self):
         prompt = (ROOT / "prompts" / "shard_prompt.md").read_text(encoding="utf-8")
@@ -79,6 +83,32 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertIn("bare `nc -z` port check is too", prompt)
         self.assertIn("program must open `/flag`", prompt)
         self.assertIn("greater than `2^48`", prompt)
+        self.assertIn("pwn_debug_report.json", prompt)
+        self.assertIn("alignment gadget", prompt)
+
+    def test_repair_prompt_uses_pwn_failure_details(self):
+        prompt = render_validation_repair_prompt(
+            attempt=1,
+            max_attempts=2,
+            validation_results=[
+                {
+                    "challenge_id": "pwn-0001",
+                    "solve_status": "failed",
+                    "validation_status": "nonzero_exit",
+                    "validation_failure_details": [
+                        {
+                            "code": "pwn_bad_libc_base",
+                            "hint": "libc base is not page aligned",
+                        }
+                    ],
+                }
+            ],
+        )
+
+        self.assertIn("Pwn validation failed", prompt)
+        self.assertIn("pwn_debug_report.json", prompt)
+        self.assertIn("matching libc/ld", prompt)
+        self.assertIn("libc base is not page aligned", prompt)
 
     def test_pwn_xinetd_chroot_scaffold_has_container_only_setup(self):
         scaffold = ROOT / "scaffolds" / "pwn" / "xinetd-chroot"

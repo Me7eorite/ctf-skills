@@ -48,6 +48,7 @@ def render_validation_repair_prompt(
                     "validation_stdout_tail",
                     "validation_stderr_tail",
                     "validation_contract_errors",
+                    "validation_failure_details",
                     "validation_elapsed",
                     "failure_kind",
                     "failure_hint",
@@ -143,6 +144,21 @@ Pwn exploit debugging acceleration:
   identify canary-like values by stability and low byte `0x00`. Do not reject
   values merely because they are greater than `2^48`; amd64 canaries commonly
   use the upper seven bytes and will often exceed that threshold.
+- For ROP/ret2libc/PIE Pwn tasks, follow a structured debug loop before
+  finishing the exploit: identify mitigations with `checksec`/`file`, compute
+  the exact overflow offset with cyclic/core/headless gdb, discover gadgets from
+  the actual ELF/libc, leak a GOT/libc or PIE pointer when needed, verify
+  computed bases are plausible and page-aligned, add an amd64 `ret` stack
+  alignment gadget when libc calls crash around `movaps`, and retest against
+  the container service path. Do not ship guessed gadget, libc, PIE, or offset
+  constants.
+- Write `writenup/pwn_debug_report.json` for Pwn challenges when the solve path
+  needed debugging or when the exploit is non-trivial. Keep it bounded and
+  organizer-facing; include keys such as `checksec`, `binary`, `libc`,
+  `prompt_probe`, `offset`, `leaks`, `bases`, `gadgets`, `local_result`,
+  `remote_result`, `failure_code`, and `notes`. This report is used by later
+  validation-debug/repair rounds so they inherit context instead of starting
+  from scratch.
 - Before writing files or calling `./bin/progress`, verify the current directory
   is the execution workspace or the exact challenge root. Do not write absolute
   paths such as `/writenup/exp.py`; recover with `pwd` and `cd` back to the
@@ -222,6 +238,7 @@ def _render_repair_plan(diagnostics: Sequence[Mapping[str, object]]) -> str:
         failure_kind = str(item.get("failure_kind") or "").strip()
         failure_hint = str(item.get("failure_hint") or "").strip()
         failed_step = str(item.get("failed_step") or "").strip()
+        failure_details = item.get("validation_failure_details")
         lines.extend(
             f"  - {step}"
             for step in _repair_steps_for_status(
@@ -232,6 +249,7 @@ def _render_repair_plan(diagnostics: Sequence[Mapping[str, object]]) -> str:
                 failure_kind=failure_kind,
                 failure_hint=failure_hint,
                 failed_step=failed_step,
+                failure_details=failure_details if isinstance(failure_details, list) else [],
             )
         )
     return "\n".join(lines)
@@ -246,9 +264,13 @@ def _repair_steps_for_status(
     failure_kind: str,
     failure_hint: str,
     failed_step: str,
+    failure_details: Sequence[object] = (),
 ) -> list[str]:
     lower_error = error.lower()
     lower_output = f"{stdout_tail}\n{stderr_tail}".lower()
+    pwn_steps = _pwn_repair_steps_from_failure_details(failure_details)
+    if pwn_steps:
+        return pwn_steps
     if status == "contract_failed":
         if failure_kind or failed_step or failure_hint:
             return [
@@ -435,6 +457,11 @@ def _repair_steps_for_status(
         return [
             "Root cause: `validate.sh` exited non-zero.",
             hint,
+            (
+                "For Pwn, write or update `writenup/pwn_debug_report.json` with "
+                "checksec, offset/leak/base/gadget evidence, local-vs-container "
+                "results, and the final failing stage before editing blindly."
+            ),
             "Keep validation offline-capable and deterministic; rerun `validate.sh` after each fix.",
         ]
     if status == "timeout":
@@ -451,6 +478,76 @@ def _repair_steps_for_status(
         "Use the status, error, stdout tail, and stderr tail above to make the smallest targeted fix.",
         "Rerun `validate.sh` before finishing and avoid changing challenge identity or delivery layout.",
     ]
+
+
+def _pwn_repair_steps_from_failure_details(
+    failure_details: Sequence[object],
+) -> list[str]:
+    details = [item for item in failure_details if isinstance(item, Mapping)]
+    codes = {str(item.get("code") or "") for item in details}
+    if not any(code.startswith("pwn_") for code in codes):
+        return []
+    hints = [
+        str(item.get("hint"))
+        for item in details
+        if isinstance(item.get("hint"), str) and item.get("hint")
+    ]
+    steps = [
+        "Root cause: Pwn validation failed in the exploit/runtime path.",
+        (
+            "Before broad rewrites, create or update `writenup/pwn_debug_report.json` "
+            "with bounded evidence: checksec/file/libc, prompt transcript, offset, "
+            "leak values, computed bases, gadget addresses, local result, container "
+            "remote result, and the exact final failure code."
+        ),
+    ]
+    if "pwn_prompt_eof" in codes:
+        steps.append(
+            "Fix service readiness and menu synchronization: wait for the real banner/menu prompt on a fresh connection, then align recv/send calls."
+        )
+    if "pwn_canary_leak_failed" in codes:
+        steps.append(
+            "Rescan stack leaks across a broad bounded `%n$p` range; choose stable low-byte-zero canary candidates and remove any `2^48` filter."
+        )
+    if "pwn_chroot_flag_path" in codes:
+        steps.append(
+            "For xinetd chroot, keep startup writing `/home/ctf/flag` but make challenge code read `/flag` inside the chroot."
+        )
+    if "pwn_bad_offset" in codes:
+        steps.append(
+            "Recompute the overflow offset with cyclic/core/headless gdb against the actual shipped ELF, then update padding and saved frame layout."
+        )
+    if "pwn_rop_missing_gadget" in codes:
+        steps.append(
+            "Rediscover ROP gadgets from the actual ELF/libc with pwntools ROP, ROPgadget, ropper, or objdump; do not reuse guessed addresses."
+        )
+    if "pwn_rop_stack_alignment" in codes:
+        steps.append(
+            "Add or remove a `ret` alignment gadget before libc calls so amd64 stack alignment is correct."
+        )
+    if "pwn_libc_leak_failed" in codes:
+        steps.append(
+            "Repair the first-stage leak: verify GOT/PLT symbols, parse the full leaked pointer, and rerun stage two only after the leak is plausible."
+        )
+    if "pwn_bad_libc_base" in codes:
+        steps.append(
+            "Use the matching libc/ld from the container or attachments; check that computed libc base is plausible and page-aligned."
+        )
+    if "pwn_pie_base_failed" in codes:
+        steps.append(
+            "Leak a code pointer first, compute PIE base, and derive all binary symbols/gadgets from that base."
+        )
+    if "pwn_shell_no_flag" in codes:
+        steps.append(
+            "After control-flow success, explicitly run the intended flag read command or function and verify a `flag{...}` token reaches stdout."
+        )
+    if "pwn_remote_local_mismatch" in codes:
+        steps.append(
+            "Compare local process and container remote environment: libc/ld, PIE, ASLR assumptions, newline timing, chroot paths, and prompt text."
+        )
+    steps.extend(f"Host hint: {hint}" for hint in hints[:3])
+    steps.append("Rerun `validate.sh` after each targeted fix; repair is not complete until the real exploit prints the metadata flag.")
+    return steps
 
 
 # Host contract checklist replayed into every repair prompt. The host validator

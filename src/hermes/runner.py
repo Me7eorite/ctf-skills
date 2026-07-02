@@ -1568,6 +1568,10 @@ class HermesRunner:
                 workspace.output / "challenges",
                 failed_ids,
             ),
+            "pwn_debug_reports": _failed_challenge_debug_reports(
+                workspace.output / "challenges",
+                failed_ids,
+            ),
         }
 
     def _validate_gate(self, challenge_id: str, plan: ChallengeResumePlan | None) -> str | None:
@@ -1873,6 +1877,38 @@ def _failed_challenge_file_tree(
                 break
         tree[challenge_id] = files
     return tree
+
+
+def _failed_challenge_debug_reports(
+    challenges_root: Path,
+    failed_ids: set[str],
+) -> dict[str, Any]:
+    reports: dict[str, Any] = {}
+    if not challenges_root.is_dir():
+        return reports
+    for challenge_dir in sorted(challenges_root.glob("*/*")):
+        if not challenge_dir.is_dir() or challenge_dir.is_symlink():
+            continue
+        metadata = read_json(challenge_dir / "metadata.json", {})
+        if not isinstance(metadata, dict):
+            continue
+        challenge_id = str(metadata.get("id") or "")
+        if challenge_id not in failed_ids or metadata.get("category") != "pwn":
+            continue
+        candidates = (
+            challenge_dir / "writenup" / "pwn_debug_report.json",
+            challenge_dir / "logs" / "pwn_debug_report.json",
+        )
+        for path in candidates:
+            if not path.is_file() or path.is_symlink():
+                continue
+            rel = path.relative_to(challenge_dir).as_posix()
+            reports[challenge_id] = {
+                "path": rel,
+                "content": read_json(path, {}),
+            }
+            break
+    return reports
 
 
 def _output_signature(output_dir: Path) -> tuple[int, int, int]:

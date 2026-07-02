@@ -28,7 +28,11 @@ DEFAULT_HERMES_TIMEOUT = 1500  # 默认超时秒数（25 分钟）
 HERMES_TIMEOUT_RETURNCODE = 124  # 超时返回码（与 timeout 命令兼容）
 TERMINATION_WAIT_TIMEOUT = 10
 _ERROR_MARKER_MAX_BYTES = 64 * 1024
-TERMINAL_WORKSPACE_PROBE_TIMEOUT = 90
+# The probe starts a full Hermes CLI process. On server-side custom providers,
+# plugin loading plus model metadata probing can take over a minute before the
+# first terminal/file tool call is made, so keep this comfortably above that
+# startup cost while still failing much earlier than a normal worker timeout.
+TERMINAL_WORKSPACE_PROBE_TIMEOUT = 240
 
 
 class TerminalWorkspaceVisibilityError(RuntimeError):
