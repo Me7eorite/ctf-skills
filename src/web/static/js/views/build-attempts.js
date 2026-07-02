@@ -361,9 +361,42 @@ async function startSelectedLanes() {
   }
 }
 
+async function retrySelectedLanes() {
+  if (!state.selection.size) return;
+  const rows = state.list || [];
+  const orderedIds = selectedRetryableIds(rows);
+  if (!orderedIds.length) {
+    showToast("选中的题目均不需要重试", true);
+    return;
+  }
+  try {
+    const result = await postJson(
+      "/api/build-attempts/worker/retry-sequential-lanes",
+      {
+        build_attempt_ids: orderedIds,
+        lanes: currentLaneCount(),
+      },
+    );
+    showToast(`重试多队列已启动 · ${result.lane_count} 条 lane · 共 ${result.queue_length} 个任务`);
+    state.selection.clear();
+    state.lanePools = result.pool ? [result.pool, ...(state.lanePools || [])] : state.lanePools;
+    state.list = null;
+    await ensureList();
+    schedulePoll(START_REFRESH_MS);
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
 function selectedQueuedIds(rows) {
   return rows
     .filter((row) => row.status === "queued" && state.selection.has(row.id))
+    .map((row) => row.id);
+}
+
+function selectedRetryableIds(rows) {
+  return rows
+    .filter((row) => (row.status === "failed" || row.status === "lost") && state.selection.has(row.id))
     .map((row) => row.id);
 }
 
@@ -386,7 +419,7 @@ function toggleRowSelection(attemptId, checked) {
 function toggleSelectAll(checked) {
   const rows = state.list || [];
   for (const row of rows) {
-    if (row.status !== "queued") continue;
+    if (!["queued", "failed", "lost"].includes(row.status)) continue;
     if (checked) state.selection.add(row.id);
     else state.selection.delete(row.id);
   }
@@ -428,25 +461,8 @@ async function retryAttempt(attemptId) {
     state.list = null;
     await ensureDetail(state.detailId);
     const iterationLabel = result.iteration_no ? `第 ${result.iteration_no} 轮` : "新一轮";
-    try {
-      const startResult = await postJson(
-        `/api/build-attempts/${encodeURIComponent(state.detailId)}/worker/start`,
-        {},
-      );
-      showToast(
-        `已排队并启动${iterationLabel}重试 ${shortId(result.build_attempt_id)}（超时 ${startResult.effective_timeout_seconds}s）`,
-      );
-      state.detail = null;
-      state.list = null;
-      await ensureDetail(state.detailId);
-      schedulePoll(START_REFRESH_MS);
-    } catch (startErr) {
-      showToast(
-        `已排队${iterationLabel}重试 ${shortId(result.build_attempt_id)}，但未能立即启动：${startErr.message}`,
-        true,
-      );
-      schedulePoll(START_REFRESH_MS);
-    }
+    showToast(`已排队${iterationLabel}重试 ${shortId(result.build_attempt_id)}`);
+    schedulePoll(START_REFRESH_MS);
   } catch (err) {
     showToast(err.message, true);
   } finally {
@@ -576,6 +592,8 @@ function renderList(root) {
   const rows = state.list || [];
   pruneSelection(rows);
   const selectedCount = state.selection.size;
+  const selectedQueuedCount = selectedQueuedIds(rows).length;
+  const selectedRetryableCount = selectedRetryableIds(rows).length;
   const summary = summarizeBuildRows(rows);
   const hasActiveWorker = rows.some((row) => row.status === "running") || (state.lanePools || []).some((pool) => pool.running);
   const focusSnapshot = captureFilterFocus(root);
@@ -587,17 +605,21 @@ function renderList(root) {
         <p class="ba-page-desc">队列、执行和产物状态按当前筛选实时展示。</p>
       </div>
       <div class="ba-page-actions">
-        <button id="ba-start-selected" class="btn btn-primary btn-sm" ${selectedCount ? "" : "disabled"}
+        <button id="ba-start-selected" class="btn btn-primary btn-sm" ${selectedQueuedCount ? "" : "disabled"}
           title="按表格中的勾选顺序顺序执行所选 queued 题目">
-          <i data-lucide="play"></i>启动选中（单队列）${selectedCount ? `· ${selectedCount}` : ""}
+          <i data-lucide="play"></i>启动选中（单队列）${selectedQueuedCount ? `· ${selectedQueuedCount}` : ""}
         </button>
         <label class="ba-lane-control" title="把选中任务拆成多条顺序队列；每条 lane 内仍按顺序执行">
           <span>lane</span>
           <input id="ba-lane-count" type="number" min="1" max="6" step="1" value="${escapeHtml(state.laneCount || 4)}">
         </label>
-        <button id="ba-start-selected-lanes" class="btn btn-primary btn-sm" ${selectedCount ? "" : "disabled"}
+        <button id="ba-start-selected-lanes" class="btn btn-primary btn-sm" ${selectedQueuedCount ? "" : "disabled"}
           title="按表格顺序 round-robin 拆分选中 queued 题目，多条顺序队列并发运行">
-          <i data-lucide="columns-3"></i>启动多队列${selectedCount ? `（${selectedCount}）` : ""}
+          <i data-lucide="columns-3"></i>启动多队列${selectedQueuedCount ? `（${selectedQueuedCount}）` : ""}
+        </button>
+        <button id="ba-retry-selected-lanes" class="btn btn-secondary btn-sm" ${selectedRetryableCount ? "" : "disabled"}
+          title="对选中的 failed/lost 题目创建重试轮次，并按 lane 并发启动">
+          <i data-lucide="rotate-cw"></i>重试多队列${selectedRetryableCount ? `（${selectedRetryableCount}）` : ""}
         </button>
         <button id="ba-start-queue" class="btn btn-secondary btn-sm"
           title="按当前的分类/生成请求筛选，启动全部 queued 题目（按创建时间从早到晚，最多 100 条）">
@@ -740,7 +762,7 @@ function sequentialAttemptNotice(attempt) {
 
 function pruneSelection(rows) {
   if (!state.selection.size) return;
-  const eligible = new Set(rows.filter((r) => r.status === "queued").map((r) => r.id));
+  const eligible = new Set(rows.filter((r) => ["queued", "failed", "lost"].includes(r.status)).map((r) => r.id));
   for (const id of [...state.selection]) {
     if (!eligible.has(id)) state.selection.delete(id);
   }
@@ -785,9 +807,9 @@ function renderFilters() {
 }
 
 function renderTable(rows) {
-  const queuedRows = rows.filter((r) => r.status === "queued");
-  const allQueuedSelected = queuedRows.length > 0
-    && queuedRows.every((r) => state.selection.has(r.id));
+  const selectableRows = rows.filter((r) => ["queued", "failed", "lost"].includes(r.status));
+  const allSelectableSelected = selectableRows.length > 0
+    && selectableRows.every((r) => state.selection.has(r.id));
   return `
     <div class="table-container ba-table-wrap">
       <table class="table ba-table">
@@ -795,9 +817,9 @@ function renderTable(rows) {
           <tr>
             <th class="ba-select-col">
               <input type="checkbox" id="ba-select-all"
-                ${queuedRows.length === 0 ? "disabled" : ""}
-                ${allQueuedSelected ? "checked" : ""}
-                title="全选当前页面上 queued 状态的题目">
+                ${selectableRows.length === 0 ? "disabled" : ""}
+                ${allSelectableSelected ? "checked" : ""}
+                title="全选当前页面上 queued/failed/lost 状态的题目">
             </th>
             <th>题目</th>
             <th>分类</th>
@@ -815,9 +837,9 @@ function renderTable(rows) {
           ${rows.map((attempt) => `
             <tr data-build-attempt-id="${escapeHtml(attempt.id)}">
               <td>
-                ${attempt.status === "queued"
+                ${["queued", "failed", "lost"].includes(attempt.status)
                   ? `<input type="checkbox" class="ba-row-select" data-build-attempt-id="${escapeHtml(attempt.id)}" ${state.selection.has(attempt.id) ? "checked" : ""}>`
-                  : `<span class="ba-muted" title="仅 queued 状态可选">—</span>`}
+                  : `<span class="ba-muted" title="仅 queued/failed/lost 状态可选">—</span>`}
               </td>
               <td>
                 <div class="ba-title">${escapeHtml(attempt.title || attempt.challenge_id || attempt.id)}</div>
@@ -854,7 +876,7 @@ function renderAttemptCards(rows) {
         <article class="ba-attempt-card" data-build-attempt-id="${escapeHtml(attempt.id)}">
           <div class="ba-card-head">
             <label class="ba-card-select">
-              ${attempt.status === "queued"
+              ${["queued", "failed", "lost"].includes(attempt.status)
                 ? `<input type="checkbox" class="ba-row-select" data-build-attempt-id="${escapeHtml(attempt.id)}" ${state.selection.has(attempt.id) ? "checked" : ""}>`
                 : `<span class="ba-muted">—</span>`}
             </label>
@@ -1252,6 +1274,10 @@ export function bind() {
     }
     if (event.target.closest("#ba-start-selected-lanes")) {
       startSelectedLanes();
+      return;
+    }
+    if (event.target.closest("#ba-retry-selected-lanes")) {
+      retrySelectedLanes();
       return;
     }
     if (event.target.closest("#ba-worker")) {

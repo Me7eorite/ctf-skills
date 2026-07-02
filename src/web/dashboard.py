@@ -52,6 +52,7 @@ class TaskManager:
         self._worker_ids: set[str] = set()
         self._build_attempt_ids: set[UUID] = set()
         self._lane_pools: dict[str, LanePool] = {}
+        self._ignored_finished_records: set[tuple] = set()
 
     def start(self, kind: str) -> tuple[bool, str]:
         cli_script = Path(__file__).resolve().parents[1] / "cli.py"
@@ -163,6 +164,7 @@ class TaskManager:
                 return False, "another task is already running", {}
             if self._active_lane_count_unlocked():
                 return False, "another lane pool is already running", {}
+            self._discard_finished_records_unlocked()
             self.paths.logs.mkdir(parents=True, exist_ok=True)
             try:
                 for index, attempt_ids in enumerate(lane_batches, start=1):
@@ -253,6 +255,7 @@ class TaskManager:
                 return False, "another task is already running"
             if self._active_lane_count_unlocked():
                 return False, "another lane pool is already running"
+            self._discard_finished_records_unlocked()
             self.paths.logs.mkdir(parents=True, exist_ok=True)
             self._log = f"dashboard-{kind}.log"
             with (self.paths.logs / self._log).open("w", encoding="utf-8") as output:
@@ -373,7 +376,16 @@ class TaskManager:
         with self._lock:
             if self._process is not None and self._worker_ids:
                 returncode = self._process.poll()
-                if returncode is not None:
+                key = self._finished_record_key(
+                    kind=self._kind or "worker",
+                    worker_ids=self._worker_ids,
+                    build_attempt_ids=self._build_attempt_ids,
+                    returncode=returncode,
+                )
+                if (
+                    returncode is not None
+                    and key not in self._ignored_finished_records
+                ):
                     records.append(
                         {
                             "kind": self._kind,
@@ -388,6 +400,14 @@ class TaskManager:
                 for lane in pool.lanes:
                     returncode = lane.process.poll()
                     if returncode is None:
+                        continue
+                    key = self._finished_record_key(
+                        kind="lane",
+                        worker_ids={lane.worker},
+                        build_attempt_ids=set(lane.build_attempt_ids),
+                        returncode=returncode,
+                    )
+                    if key in self._ignored_finished_records:
                         continue
                     records.append(
                         {
@@ -436,6 +456,47 @@ class TaskManager:
             for pool in self._lane_pools.values()
             for lane in pool.lanes
             if lane.process.poll() is None
+        )
+
+    def _discard_finished_records_unlocked(self) -> None:
+        if self._process is not None and self._worker_ids:
+            returncode = self._process.poll()
+            if returncode is not None:
+                self._ignored_finished_records.add(
+                    self._finished_record_key(
+                        kind=self._kind or "worker",
+                        worker_ids=self._worker_ids,
+                        build_attempt_ids=self._build_attempt_ids,
+                        returncode=returncode,
+                    )
+                )
+        for pool in self._lane_pools.values():
+            for lane in pool.lanes:
+                returncode = lane.process.poll()
+                if returncode is None:
+                    continue
+                self._ignored_finished_records.add(
+                    self._finished_record_key(
+                        kind="lane",
+                        worker_ids={lane.worker},
+                        build_attempt_ids=set(lane.build_attempt_ids),
+                        returncode=returncode,
+                    )
+                )
+
+    @staticmethod
+    def _finished_record_key(
+        *,
+        kind: str,
+        worker_ids: set[str],
+        build_attempt_ids: set[UUID],
+        returncode: int | None,
+    ) -> tuple:
+        return (
+            kind,
+            tuple(sorted(worker_ids)),
+            tuple(str(item) for item in sorted(build_attempt_ids, key=str)),
+            returncode,
         )
 
     def _lane_pools_state_unlocked(self) -> list[dict]:

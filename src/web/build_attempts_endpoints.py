@@ -403,6 +403,68 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
             status_code=HTTPStatus.ACCEPTED,
         )
 
+    @app.post("/api/build-attempts/worker/retry-sequential-lanes")
+    async def retry_sequential_lane_pool(request: Request) -> JSONResponse:
+        payload = await _json_object(request)
+        source_ids = _parse_build_attempt_ids(payload)
+        lane_count = _parse_lane_count(payload.get("lanes"))
+
+        BuildOrchestrationService(paths=_project_paths(app)).recover_staging()
+        categories = _selected_retry_attempt_categories(app, source_ids)
+        preflight = _sequential_profile_preflight_response(categories)
+        if preflight is not None:
+            return preflight
+
+        service = BuildOrchestrationService(paths=_project_paths(app))
+        retry_ids: list[UUID] = []
+        try:
+            for source_id in source_ids:
+                retry_ids.append(service.retry(source_id))
+        except BuildOrchestrationError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail=str(exc),
+            ) from exc
+        except IntegrityError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail="a build is already active for this design task",
+            ) from exc
+
+        retry_categories = _selected_attempt_categories(app, retry_ids)
+        preflight = _sequential_profile_preflight_response(retry_categories)
+        if preflight is not None:
+            return preflight
+
+        lane_batches = _round_robin_lanes(retry_ids, lane_count)
+        tasks = app.state.dashboard_tasks
+        ok, message, pool = tasks.start_sequential_lanes(lanes=lane_batches)
+        if not ok:
+            raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=message)
+        for lane in pool.get("lanes", []):
+            lane_attempt_ids = [
+                UUID(value)
+                for value in lane.get("build_attempt_ids", [])
+            ]
+            if lane_attempt_ids:
+                _assign_queued_attempt_worker(
+                    lane_attempt_ids,
+                    worker=lane.get("worker", ""),
+                )
+        return JSONResponse(
+            {
+                "ok": True,
+                "message": message,
+                "source_build_attempt_ids": [str(item) for item in source_ids],
+                "build_attempt_ids": [str(item) for item in retry_ids],
+                "queue_length": len(retry_ids),
+                "requested_lanes": lane_count,
+                "lane_count": len(pool.get("lanes", [])),
+                "pool": pool,
+            },
+            status_code=HTTPStatus.ACCEPTED,
+        )
+
     @app.get("/api/build-attempts/worker/pools")
     def list_sequential_lane_pools() -> JSONResponse:
         tasks = app.state.dashboard_tasks
@@ -780,19 +842,26 @@ def _sync_finished_dashboard_workers(app: FastAPI) -> None:
     if not records:
         return
     worker_errors: dict[str, str] = {}
-    attempt_errors: dict[UUID, str] = {}
+    attempt_errors: dict[UUID, list[tuple[str, set[str]]]] = {}
     for record in records:
         returncode = record.get("returncode")
         kind = record.get("kind") or "worker"
         message = f"dashboard {kind} exited before finalizing attempt"
         if returncode is not None:
             message = f"{message} (returncode {returncode})"
+        record_workers = {
+            worker_id
+            for worker_id in record.get("worker_ids") or []
+            if isinstance(worker_id, str) and worker_id
+        }
         for worker_id in record.get("worker_ids") or []:
             if isinstance(worker_id, str) and worker_id:
                 worker_errors[worker_id] = message
         for raw_id in record.get("build_attempt_ids") or []:
             try:
-                attempt_errors[UUID(str(raw_id))] = message
+                attempt_errors.setdefault(UUID(str(raw_id)), []).append(
+                    (message, record_workers)
+                )
             except (TypeError, ValueError):
                 continue
     if not worker_errors and not attempt_errors:
@@ -816,11 +885,36 @@ def _sync_finished_dashboard_workers(app: FastAPI) -> None:
         ).all()
         now = datetime.now(timezone.utc)
         for row in rows:
-            error = attempt_errors.get(row.id)
+            error = None
+            for candidate_error, record_workers in attempt_errors.get(row.id, []):
+                if _finished_dashboard_worker_matches_row(
+                    session,
+                    row,
+                    record_workers,
+                ):
+                    error = candidate_error
+                    break
             if error is None and row.worker is not None:
                 error = worker_errors.get(row.worker)
+            if error is None:
+                continue
             error = error or "dashboard worker exited before finalizing attempt"
             _mark_dashboard_attempt_lost(session, row, now=now, error=error)
+
+
+def _finished_dashboard_worker_matches_row(
+    session: Any,
+    row: build_model.BuildAttempt,
+    record_workers: set[str],
+) -> bool:
+    if not record_workers:
+        return True
+    if row.worker in record_workers:
+        return True
+    if row.current_execution_id is None:
+        return False
+    current = session.get(exec_model.Execution, row.current_execution_id)
+    return current is not None and current.worker_id in record_workers
 
 
 def _mark_dashboard_attempt_lost(
@@ -991,6 +1085,62 @@ def _selected_attempt_categories(app: FastAPI, attempt_ids: list[UUID]) -> list[
                 detail=(f"build attempt {attempt_id} is not an eligible queued task"),
             )
         categories.append(category)
+    return categories
+
+
+def _selected_retry_attempt_categories(app: FastAPI, attempt_ids: list[UUID]) -> list[str]:
+    from persistence.session import transaction
+
+    categories: list[str] = []
+    with transaction() as session:
+        for attempt_id in attempt_ids:
+            row = session.execute(
+                sa.select(build_model.BuildAttempt, task_model.DesignTask)
+                .join(
+                    task_model.DesignTask,
+                    task_model.DesignTask.id == build_model.BuildAttempt.design_task_id,
+                )
+                .where(build_model.BuildAttempt.id == attempt_id)
+            ).one_or_none()
+            if row is None:
+                raise HTTPException(
+                    status_code=HTTPStatus.NOT_FOUND,
+                    detail=f"build attempt {attempt_id} not found",
+                )
+            attempt, task = row
+            if task.status != "build_failed" or attempt.status not in {"failed", "lost"}:
+                raise HTTPException(
+                    status_code=HTTPStatus.CONFLICT,
+                    detail=(
+                        f"build attempt {attempt_id} is not eligible for retry; "
+                        f"current status: {attempt.status}"
+                    ),
+                )
+            latest_id = session.scalar(
+                sa.select(build_model.BuildAttempt.id)
+                .where(build_model.BuildAttempt.design_task_id == attempt.design_task_id)
+                .order_by(build_model.BuildAttempt.attempt_no.desc())
+                .limit(1)
+            )
+            if latest_id != attempt.id:
+                raise HTTPException(
+                    status_code=HTTPStatus.CONFLICT,
+                    detail=f"build attempt {attempt_id} is not the latest attempt",
+                )
+            active_id = session.scalar(
+                sa.select(build_model.BuildAttempt.id)
+                .where(
+                    build_model.BuildAttempt.design_task_id == attempt.design_task_id,
+                    build_model.BuildAttempt.status.in_(("queued", "running")),
+                )
+                .limit(1)
+            )
+            if active_id is not None:
+                raise HTTPException(
+                    status_code=HTTPStatus.CONFLICT,
+                    detail=f"build attempt {attempt_id} already has an active retry",
+                )
+            categories.append(task.category)
     return categories
 
 

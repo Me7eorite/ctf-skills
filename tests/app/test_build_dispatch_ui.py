@@ -21,6 +21,7 @@ def test_build_attempt_actions_use_constrained_endpoints():
     assert "启动选中" in source
     assert "/api/build-attempts/worker/start-sequential" in source
     assert "/api/build-attempts/worker/start-sequential-lanes" in source
+    assert "/api/build-attempts/worker/retry-sequential-lanes" in source
     assert "/api/build-attempts/worker/pools" in source
     assert "/api/build-attempts/worker/stop" in source
     assert "const LIST_LIMIT = 200;" in source
@@ -31,6 +32,7 @@ def test_build_attempt_actions_use_constrained_endpoints():
     assert "isListInteractionProtected(root)" in source
     assert "markFilterInteraction()" in source
     assert "启动多队列" in source
+    assert "重试多队列" in source
     assert "多队列执行池" not in source
     assert 'id="ba-lane-count"' in source
     assert "/revalidate`" in source
@@ -53,7 +55,8 @@ def test_build_attempt_actions_use_constrained_endpoints():
     assert "执行轮次" in source
     assert "renderExecutions(attempt.executions || [])" in source
     assert "result.iteration_no" in source
-    assert "/worker/start`" in source[source.index("async function retryAttempt") :]
+    retry_source = source[source.index("async function retryAttempt") : source.index("async function repairAttempt")]
+    assert "/worker/start`" not in retry_source
     assert "crypto.randomUUID()" in source
     assert "confirmed: true" in source
     assert '["failed", "lost", "succeeded"].includes(attempt.status)' in source

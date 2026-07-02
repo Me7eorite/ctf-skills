@@ -820,6 +820,52 @@ def test_sequential_lane_pool_splits_selected_attempts_round_robin(
     assert pools_response.json()["pools"][0]["id"] == "stub-pool"
 
 
+def test_retry_sequential_lane_pool_retries_failed_attempts_before_start(
+    client: TestClient,
+    session_factory: SessionFactory,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    first_task = _seed_designed_task(session_factory, task_no=1)
+    second_task = _seed_designed_task(session_factory, task_no=2)
+    third_task = _seed_designed_task(session_factory, task_no=3)
+    with transaction(factory=session_factory) as session:
+        repo = BuildAttemptsRepository(session)
+        first = _create_canonical_attempt(repo, first_task)
+        second = _create_canonical_attempt(repo, second_task)
+        third = _create_canonical_attempt(repo, third_task)
+        repo.finalize_attempt(first.id, status="failed", error="first failed")
+        repo.finalize_attempt(second.id, status="failed", error="second failed")
+        repo.finalize_attempt(third.id, status="lost", error="third lost")
+
+    tasks = _StubBuildTaskManager()
+    client.app.state.dashboard_tasks = tasks
+    monkeypatch.setattr(
+        build_attempts_endpoints,
+        "hermes_profile_health",
+        lambda _profile: (True, "", "ok"),
+    )
+
+    response = client.post(
+        "/api/build-attempts/worker/retry-sequential-lanes",
+        json={"build_attempt_ids": [str(first.id), str(second.id), str(third.id)], "lanes": 2},
+    )
+
+    assert response.status_code == 202
+    body = response.json()
+    retry_ids = [UUID(value) for value in body["build_attempt_ids"]]
+    assert body["source_build_attempt_ids"] == [str(first.id), str(second.id), str(third.id)]
+    assert body["queue_length"] == 3
+    assert body["requested_lanes"] == 2
+    assert body["lane_count"] == 2
+    assert tasks.lane_batches == [[retry_ids[0], retry_ids[2]], [retry_ids[1]]]
+    with session_factory() as session:
+        rows = [session.get(build_model.BuildAttempt, retry_id) for retry_id in retry_ids]
+        assert [row.status for row in rows] == ["queued", "queued", "queued"]
+        assert [row.worker for row in rows] == ["stub-lane-01", "stub-lane-02", "stub-lane-01"]
+    for retry_id in retry_ids:
+        assert (client.app.state.project_paths.shards / "pending" / f"{retry_id}.json").is_file()
+
+
 def test_sequential_lane_pool_rejects_default_over_cap(client: TestClient):
     response = client.post(
         "/api/build-attempts/worker/start-sequential-lanes",
@@ -1202,6 +1248,40 @@ def test_finished_dashboard_worker_with_attempt_id_does_not_mark_sibling_lost(
         sibling_row = session.get(build_model.BuildAttempt, sibling.id)
         assert failed_row.status == "lost"
         assert sibling_row.status == "running"
+
+
+def test_finished_old_lane_does_not_mark_new_lane_attempt_lost(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory, status="building")
+    with transaction(factory=session_factory) as session:
+        attempt = _create_canonical_attempt(BuildAttemptsRepository(session), task_id)
+        row = session.get(build_model.BuildAttempt, attempt.id)
+        row.status = "running"
+        row.worker = "dashboard-lane-01-newpool"
+    tasks = _StubBuildTaskManager()
+    tasks.finished_records = [
+        {
+            "kind": "lane",
+            "worker_ids": ["dashboard-lane-01-oldpool"],
+            "build_attempt_ids": [str(attempt.id)],
+            "returncode": 0,
+        }
+    ]
+    client.app.state.dashboard_tasks = tasks
+
+    response = client.get("/api/build-attempts")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload[0]["id"] == str(attempt.id)
+    assert payload[0]["status"] == "running"
+    with session_factory() as session:
+        row = session.get(build_model.BuildAttempt, attempt.id)
+        assert row.status == "running"
+        assert row.error is None
+        assert session.get(task_model.DesignTask, task_id).status == "building"
 
 
 # ============================================================================
