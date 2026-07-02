@@ -24,6 +24,7 @@ const state = {
 
 const DIFFICULTY_LABELS = ["easy", "medium", "hard", "expert"];
 const DIFFICULTY_COLORS = { easy: "var(--accent-green)", medium: "var(--brand-500)", hard: "var(--accent-amber)", expert: "var(--accent-red)" };
+const FORM_INTERACTION_HOLD_MS = 1500;
 const DEFAULT_RE_POLICY = [
   "XOR 类题最多 9 题。",
   "每道题必须有明确算法差异，避免 encrypted_flag + static_key + XOR 批量重复。",
@@ -52,6 +53,7 @@ export function render(data) {
   ensureCategories();
   const root = document.querySelector('[data-view="research-submit"]');
   if (!root) return;
+  if (shouldDeferFormRender(root)) return;
 
   const cats = state.categories || [];
   const f = state.form;
@@ -317,6 +319,7 @@ export function render(data) {
 }
 
 async function handleSubmit() {
+  clearFormInteraction();
   const f = state.form;
   const seedList = parseLines(f.seed_urls);
   const searchKeywords = parseLines(f.search_keywords);
@@ -357,6 +360,7 @@ async function handleSubmit() {
 }
 
 function resetForm() {
+  clearFormInteraction();
   state.form = {
     category: "",
     topic: "",
@@ -375,6 +379,32 @@ function resetForm() {
   initIcons();
 }
 
+function markFormInteraction(duration = FORM_INTERACTION_HOLD_MS) {
+  state.formInteractionUntil = Date.now() + duration;
+}
+
+function clearFormInteraction() {
+  state.formInteractionUntil = 0;
+}
+
+function isResearchFormControl(element) {
+  if (!element) return false;
+  if (element.dataset?.difficulty) return true;
+  return typeof element.id === "string" && element.id.startsWith("form-");
+}
+
+function isFormInteractionProtected(root) {
+  const active = document.activeElement;
+  if (active && root.contains(active) && isResearchFormControl(active)) return true;
+  return Boolean(state.formInteractionUntil && Date.now() < state.formInteractionUntil);
+}
+
+function shouldDeferFormRender(root) {
+  return !state.form.submitting
+    && root.querySelector("#research-submit-form")
+    && isFormInteractionProtected(root);
+}
+
 export function bind() {
   document.addEventListener("submit", (e) => {
     if (e.target?.id === "research-submit-form") {
@@ -388,6 +418,7 @@ export function bind() {
       resetForm();
     }
     if (e.target.closest("#form-use-re-policy")) {
+      clearFormInteraction();
       state.form.generation_policy = DEFAULT_RE_POLICY;
       state.showAdvanced = true;
       render(state.data);
@@ -395,6 +426,7 @@ export function bind() {
       return;
     }
     if (e.target.closest("#advanced-toggle .rs-collapse-toggle")) {
+      clearFormInteraction();
       state.showAdvanced = !state.showAdvanced;
       render(state.data);
       initIcons();
@@ -406,18 +438,32 @@ export function bind() {
       state.form.category = e.target.value;
     } else if (e.target.dataset?.difficulty) {
       state.form.distribution[e.target.dataset.difficulty] = Number(e.target.value) || 0;
+      markFormInteraction();
       render(state.data);
       initIcons();
     }
   });
 
   document.addEventListener("input", (e) => {
+    if (isResearchFormControl(e.target)) markFormInteraction();
     if (e.target.id === "form-topic") state.form.topic = e.target.value;
     else if (e.target.id === "form-target-count") state.form.target_count = e.target.value;
     else if (e.target.id === "form-max-attempts") state.form.max_attempts = e.target.value;
     else if (e.target.id === "form-seed-urls") state.form.seed_urls = e.target.value;
     else if (e.target.id === "form-search-keywords") state.form.search_keywords = e.target.value;
     else if (e.target.id === "form-generation-policy") state.form.generation_policy = e.target.value;
+  });
+
+  document.addEventListener("focusin", (e) => {
+    const root = document.querySelector('[data-view="research-submit"]');
+    if (!root || !root.contains(e.target)) return;
+    if (isResearchFormControl(e.target)) markFormInteraction();
+  });
+
+  document.addEventListener("pointerdown", (e) => {
+    const root = document.querySelector('[data-view="research-submit"]');
+    if (!root || !root.contains(e.target)) return;
+    if (isResearchFormControl(e.target)) markFormInteraction();
   });
 }
 

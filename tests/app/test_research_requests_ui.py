@@ -67,6 +67,17 @@ def test_research_submit_supports_generation_policy() -> None:
     assert "生成策略" in source
 
 
+def test_research_submit_preserves_form_editing_during_refresh() -> None:
+    source = (STATIC / "js" / "views" / "research-submit.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "shouldDeferFormRender(root)" in source
+    assert "isFormInteractionProtected(root)" in source
+    assert "markFormInteraction()" in source
+    assert "form-seed-urls" in source
+
+
 def test_request_detail_header_is_a_state_aware_summary_card() -> None:
     source = (STATIC / "js" / "views" / "research-requests.js").read_text(
         encoding="utf-8"

@@ -28,6 +28,8 @@ def test_build_attempt_actions_use_constrained_endpoints():
     assert "filterDraft" in source
     assert "captureFilterFocus(root)" in source
     assert "scheduleFilterApply()" in source
+    assert "isListInteractionProtected(root)" in source
+    assert "markFilterInteraction()" in source
     assert "启动多队列" in source
     assert "多队列执行池" not in source
     assert 'id="ba-lane-count"' in source

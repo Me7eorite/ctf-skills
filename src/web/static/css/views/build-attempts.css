@@ -10,7 +10,7 @@
 
 .ba-page-title {
   color: var(--ink-900);
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 700;
   letter-spacing: 0;
 }
@@ -84,7 +84,7 @@
 .ba-metric strong {
   display: block;
   color: var(--ink-900);
-  font-size: 18px;
+  font-size: 16px;
   line-height: 1;
 }
 
@@ -111,24 +111,43 @@
 }
 
 .ba-filters {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  align-items: end;
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-md);
+  flex-wrap: nowrap;
+  overflow-x: auto;
 }
 
-.ba-filters .filter-item {
+.ba-filter-grid {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-md);
+  flex: 1 1 auto;
   min-width: 0;
-  flex: 1 1 180px;
+  flex-wrap: nowrap;
 }
 
-.ba-filters .filter-select,
-.ba-filters .filter-input {
+.ba-filter-item {
+  display: grid;
+  gap: 5px;
+  flex: 1 1 160px;
+  min-width: 150px;
+  white-space: nowrap;
+}
+
+.ba-filter-item .filter-select,
+.ba-filter-item .filter-input {
   width: 100%;
+  min-width: 0;
+  height: 34px;
 }
 
-.ba-filters .filter-clear,
-.ba-filters .btn {
-  margin-left: 0;
+.ba-filter-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-left: auto;
+  flex: 0 0 auto;
 }
 
 .ba-lane-pools {
@@ -393,7 +412,7 @@
 .ba-info-grid dd {
   min-width: 0;
   color: var(--ink-700);
-  font-size: var(--font-md);
+  font-size: var(--font-sm);
   overflow-wrap: anywhere;
 }
 
@@ -500,7 +519,28 @@
   }
 
   .ba-filters {
-    grid-template-columns: 1fr;
+    flex-wrap: wrap;
+    overflow: visible;
+  }
+
+  .ba-filter-grid {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .ba-filter-item {
+    flex-basis: calc(50% - var(--space-sm));
+  }
+
+  .ba-filter-actions {
+    justify-content: stretch;
+    flex-direction: column;
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .ba-filter-actions .btn {
+    width: 100%;
   }
 
   .ba-page-actions .btn,

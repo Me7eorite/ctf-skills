@@ -14,6 +14,7 @@ import {
 const ACTIVE_POLL_MS = 1000;
 const START_REFRESH_MS = 300;
 const SETTLED_POLL_MS = 12000;
+const FILTER_INTERACTION_HOLD_MS = 1500;
 const LIST_LIMIT = 200;
 const STATUSES = ["queued", "running", "succeeded", "failed", "lost"];
 const CATEGORIES = ["web", "pwn", "re"];
@@ -76,6 +77,11 @@ function schedulePoll(delay = SETTLED_POLL_MS) {
 async function poll() {
   if (!isViewActive() || document.hidden || state.poll.loading) return;
   if (state.flags.deleting) {
+    schedulePoll(ACTIVE_POLL_MS);
+    return;
+  }
+  const root = document.querySelector('[data-view="build-attempts"]');
+  if (!state.detailId && root && isListInteractionProtected(root)) {
     schedulePoll(ACTIVE_POLL_MS);
     return;
   }
@@ -171,6 +177,30 @@ function readFilterInputs() {
 
 function updateFilterDraftFromInputs() {
   state.filterDraft = readFilterInputs();
+}
+
+function markFilterInteraction(duration = FILTER_INTERACTION_HOLD_MS) {
+  state.filterInteractionUntil = Date.now() + duration;
+}
+
+function clearFilterInteraction() {
+  state.filterInteractionUntil = 0;
+}
+
+function isFilterControl(element) {
+  return Boolean(element?.id?.startsWith("ba-filter-") || element?.id === "ba-lane-count");
+}
+
+function isListInteractionProtected(root) {
+  const active = document.activeElement;
+  if (active && root.contains(active) && isFilterControl(active)) return true;
+  return Boolean(state.filterInteractionUntil && Date.now() < state.filterInteractionUntil);
+}
+
+function shouldDeferListRender(root) {
+  return state.list !== null
+    && root.querySelector(".ba-list-card")
+    && isListInteractionProtected(root);
 }
 
 function captureFilterFocus(root) {
@@ -521,6 +551,10 @@ export function render(data) {
     requestAnimationFrame(rebuildDetailEventNodes);
   } else {
     detailEventNodes.clear();
+    if (shouldDeferListRender(root)) {
+      schedulePoll(ACTIVE_POLL_MS);
+      return;
+    }
     renderList(root);
   }
 
@@ -715,33 +749,37 @@ function pruneSelection(rows) {
 function renderFilters() {
   const draft = state.filterDraft || state.filters;
   return `
-    <div class="filter-bar filter-bar-responsive ba-filters">
-      <label class="filter-item">状态
-        <select id="ba-filter-status" class="filter-select">
-          <option value=""${draft.status === "" ? " selected" : ""}>全部</option>
-          ${STATUSES.map((status) => `<option value="${status}"${draft.status === status ? " selected" : ""}>${buildStatusLabel(status)}</option>`).join("")}
-        </select>
-      </label>
-      <label class="filter-item">Worker
-        <input id="ba-filter-worker" class="filter-input" value="${escapeHtml(draft.worker)}" placeholder="worker">
-      </label>
-      <label class="filter-item">分类
-        <select id="ba-filter-category" class="filter-select">
-          <option value=""${draft.category === "" ? " selected" : ""}>全部</option>
-          ${CATEGORIES.map((category) => `<option value="${category}"${draft.category === category ? " selected" : ""}>${category}</option>`).join("")}
-        </select>
-      </label>
-      <label class="filter-item">设计任务
-        <input id="ba-filter-design-task" class="filter-input" value="${escapeHtml(draft.design_task_id)}" placeholder="design_task_id">
-      </label>
-      <label class="filter-item">生成请求
-        <input id="ba-filter-generation-request" class="filter-input" value="${escapeHtml(draft.generation_request_id)}" placeholder="generation_request_id">
-      </label>
-      <button id="ba-apply-filter" class="filter-clear">应用筛选</button>
-      <button id="ba-clear-filter" class="filter-clear">清空</button>
-      <button id="ba-refresh" class="btn btn-secondary btn-sm${state.flags.refreshing ? " btn-loading" : ""}">
-        <i data-lucide="refresh-cw"></i>刷新
-      </button>
+    <div class="filter-bar ba-filters">
+      <div class="ba-filter-grid">
+        <label class="filter-item ba-filter-item">状态
+          <select id="ba-filter-status" class="filter-select">
+            <option value=""${draft.status === "" ? " selected" : ""}>全部</option>
+            ${STATUSES.map((status) => `<option value="${status}"${draft.status === status ? " selected" : ""}>${buildStatusLabel(status)}</option>`).join("")}
+          </select>
+        </label>
+        <label class="filter-item ba-filter-item">Worker
+          <input id="ba-filter-worker" class="filter-input" value="${escapeHtml(draft.worker)}" placeholder="worker">
+        </label>
+        <label class="filter-item ba-filter-item">分类
+          <select id="ba-filter-category" class="filter-select">
+            <option value=""${draft.category === "" ? " selected" : ""}>全部</option>
+            ${CATEGORIES.map((category) => `<option value="${category}"${draft.category === category ? " selected" : ""}>${category}</option>`).join("")}
+          </select>
+        </label>
+        <label class="filter-item ba-filter-item">设计任务
+          <input id="ba-filter-design-task" class="filter-input" value="${escapeHtml(draft.design_task_id)}" placeholder="design_task_id">
+        </label>
+        <label class="filter-item ba-filter-item">生成请求
+          <input id="ba-filter-generation-request" class="filter-input" value="${escapeHtml(draft.generation_request_id)}" placeholder="generation_request_id">
+        </label>
+      </div>
+      <div class="ba-filter-actions">
+        <button id="ba-apply-filter" class="btn btn-primary btn-sm">应用筛选</button>
+        <button id="ba-clear-filter" class="btn btn-secondary btn-sm">清空</button>
+        <button id="ba-refresh" class="btn btn-secondary btn-sm${state.flags.refreshing ? " btn-loading" : ""}">
+          <i data-lucide="refresh-cw"></i>刷新
+        </button>
+      </div>
     </div>
   `;
 }
@@ -1148,6 +1186,7 @@ function failureMessageReason(message) {
 }
 
 function applyFiltersFromInputs() {
+  clearFilterInteraction();
   state.filterDraft = readFilterInputs();
   state.filters = { ...state.filterDraft };
   state.detailId = null;
@@ -1159,6 +1198,7 @@ function applyFiltersFromInputs() {
 }
 
 function clearFilters() {
+  clearFilterInteraction();
   state.filters = { ...EMPTY_FILTERS };
   syncFilterDraft();
   state.detailId = null;
@@ -1271,6 +1311,7 @@ export function bind() {
     const root = document.querySelector('[data-view="build-attempts"]');
     if (!root || !root.contains(event.target)) return;
     if (["ba-filter-status", "ba-filter-category"].includes(event.target.id)) {
+      clearFilterInteraction();
       applyFiltersFromInputs();
       return;
     }
@@ -1296,12 +1337,29 @@ export function bind() {
       || event.target.id === "ba-filter-design-task"
       || event.target.id === "ba-filter-generation-request"
     ) {
+      markFilterInteraction();
       updateFilterDraftFromInputs();
       scheduleFilterApply();
     }
+  });
+
+  document.addEventListener("focusin", (event) => {
+    const root = document.querySelector('[data-view="build-attempts"]');
+    if (!root || !root.contains(event.target)) return;
+    if (isFilterControl(event.target)) markFilterInteraction();
+  });
+
+  document.addEventListener("pointerdown", (event) => {
+    const root = document.querySelector('[data-view="build-attempts"]');
+    if (!root || !root.contains(event.target)) return;
+    if (isFilterControl(event.target)) markFilterInteraction();
   });
 }
 
 export function activate() {
   state.filterDraft = { ...state.filters };
+  if (Object.values(state.filters).every((value) => !value)) {
+    state.filters = { ...EMPTY_FILTERS };
+    state.filterDraft = { ...EMPTY_FILTERS };
+  }
 }

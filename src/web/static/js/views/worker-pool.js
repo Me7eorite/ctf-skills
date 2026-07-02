@@ -39,6 +39,38 @@ function attemptSubLabel(item) {
   ].filter(Boolean).join(" · ");
 }
 
+function clampPercent(value) {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.max(0, Math.min(100, Math.round(numeric)));
+}
+
+function statusTone(status) {
+  if (status === "succeeded") return "ok";
+  if (status === "failed" || status === "lost") return "bad";
+  if (status === "running") return "active";
+  if (status === "queued") return "wait";
+  return "idle";
+}
+
+function statusText(status) {
+  if (status === "succeeded") return "已完成";
+  if (status === "failed") return "失败";
+  if (status === "lost") return "已丢失";
+  return status || "未知";
+}
+
+function activeDetail(item) {
+  if (item.status === "queued") return "等待 Worker 领取";
+  if (item.message) return item.message;
+  return item.worker ? "Worker 正在处理" : "构建进行中";
+}
+
+function terminalDetail(item) {
+  if (item.status === "succeeded") return "构建与校验已通过";
+  return item.failure_summary || item.error || item.message || "未提供失败原因";
+}
+
 function normalizeAttempts(rows) {
   const grouped = new Map();
   for (const item of rows || []) {
@@ -98,9 +130,11 @@ function renderHero() {
   return `
     <section class="rp-hero">
       <div class="rp-hero-main">
-        <span class="rp-eyebrow">实时进度</span>
-        <h2>构建任务总览</h2>
-        <p>按设计任务去重后的最新构建尝试，只保留最后态，不再把失败重试拆成多条任务。</p>
+        <div>
+          <span class="rp-eyebrow">实时进度</span>
+          <h2>构建任务总览</h2>
+        </div>
+        <p>按设计任务汇总当前构建态，运行、结果、队列池分区展示。</p>
       </div>
       <div class="rp-hero-metrics">
         ${renderMetric("总任务", stats.total, "layout-grid")}
@@ -113,50 +147,53 @@ function renderHero() {
   `;
 }
 
-function renderProgressCard(item) {
-  const isActive = ACTIVE_STATUSES.has(item.status);
-  const isTerminal = TERMINAL_STATUSES.has(item.status);
-  const detail = item.failure_summary || item.error || item.message || (isActive ? "进行中" : isTerminal ? "已结束" : "");
+function renderProgressLine(item) {
+  const percent = clampPercent(item.percent);
+  const failed = item.status === "failed" || item.status === "lost";
   return `
-    <article class="rp-task-card">
-      <div class="rp-task-head">
-        <div>
+    <div class="rp-progress-line">
+      <div class="rp-progress-track">
+        <i class="${failed ? "failed" : ""}" style="width:${percent}%"></i>
+      </div>
+      <span>${percent}%</span>
+    </div>
+  `;
+}
+
+function renderActiveCard(item) {
+  return `
+    <article class="rp-active-card">
+      <div class="rp-active-main">
+        <div class="rp-task-title">
           <strong>${escapeHtml(attemptLabel(item))}</strong>
-          <span>${escapeHtml(attemptSubLabel(item))}</span>
+          <span>${escapeHtml(attemptSubLabel(item) || item.shard_basename || "-")}</span>
         </div>
-        ${statusIndicator(item.status)}
-      </div>
-      <div class="rp-progress-line">
-        <div class="rp-progress-track">
-          <i class="${item.status === "failed" || item.status === "lost" ? "failed" : ""}" style="width:${Number(item.percent || 0)}%"></i>
+        <div class="rp-status-block">
+          ${statusIndicator(item.status)}
+          <time>${escapeHtml(formatDateTime(item.updated_at || item.created_at))}</time>
         </div>
-        <span>${Number(item.percent || 0)}%</span>
       </div>
-      <div class="rp-task-meta">
-        <span>${escapeHtml(item.shard_basename || "-")}</span>
-        <span>${escapeHtml(formatDateTime(item.updated_at || item.created_at))}</span>
+      ${renderProgressLine(item)}
+      <div class="rp-active-foot">
+        <span>${escapeHtml(activeDetail(item))}</span>
+        <span>${escapeHtml(item.worker || "未分配 Worker")}</span>
       </div>
-      <p>${escapeHtml(detail)}</p>
     </article>
   `;
 }
 
 function renderProgressPanel() {
   const activeRows = cached.attempts.filter((item) => ACTIVE_STATUSES.has(item.status));
-  const recentRows = cached.attempts.slice(0, 8);
   return `
     <section class="rp-panel rp-active-panel">
       <div class="rp-panel-head">
         <div>
-          <h3>最新构建</h3>
-          <p>每个设计任务只显示最新一次尝试，重试不会重复计数。</p>
+          <h3>正在运行</h3>
+          <p>只显示等待执行和执行中的任务。</p>
         </div>
       </div>
       <div class="rp-active-grid">
-        ${activeRows.length ? activeRows.map(renderProgressCard).join("") : `<div class="rp-empty">暂无进行中的构建</div>`}
-      </div>
-      <div class="rp-lane-summary">
-        ${recentRows.length ? recentRows.map(renderProgressCard).join("") : ""}
+        ${activeRows.length ? activeRows.map(renderActiveCard).join("") : `<div class="rp-empty">暂无进行中的构建</div>`}
       </div>
     </section>
   `;
@@ -165,15 +202,15 @@ function renderProgressPanel() {
 function renderLanePool(pool) {
   const laneCount = Array.isArray(pool.lanes) ? pool.lanes.length : 0;
   return `
-    <article class="rp-lane-card">
+    <article class="rp-pool-card">
       <div class="rp-lane-top">
         <div>
           <strong>队列池 ${escapeHtml(pool.id || "-")}</strong>
-          <span>${escapeHtml(pool.started_at || "-")} · ${laneCount} 条 lane</span>
+          <span>${escapeHtml(formatDateTime(pool.started_at) || pool.started_at || "-")} · ${laneCount} 条 lane</span>
         </div>
         ${statusIndicator(pool.running ? "running" : "completed")}
       </div>
-      <div class="rp-task-meta">
+      <div class="rp-pool-stats">
         <span>活动 lane ${Number(pool.active_lanes || 0)}</span>
         <span>成功 ${Number(pool.succeeded_lanes || 0)}</span>
         <span>失败 ${Number(pool.failed_lanes || 0)}</span>
@@ -192,10 +229,29 @@ function renderPoolPanel() {
           <p>只展示当前还活着的 lane pool。</p>
         </div>
       </div>
-      <div class="rp-lane-summary">
+      <div class="rp-pool-list">
         ${runningPools.length ? runningPools.map(renderLanePool).join("") : `<div class="rp-empty compact">暂无运行中的队列池</div>`}
       </div>
     </section>
+  `;
+}
+
+function renderResultRow(item) {
+  return `
+    <article class="rp-result-row">
+      <span class="rp-result-mark ${statusTone(item.status)}"></span>
+      <div class="rp-result-main">
+        <div class="rp-result-title">
+          <strong>${escapeHtml(attemptLabel(item))}</strong>
+          <span>${escapeHtml(attemptSubLabel(item) || item.shard_basename || "-")}</span>
+        </div>
+        <p>${escapeHtml(terminalDetail(item))}</p>
+      </div>
+      <div class="rp-result-side">
+        <span>${escapeHtml(statusText(item.status))}</span>
+        <time>${escapeHtml(formatDateTime(item.updated_at || item.created_at))}</time>
+      </div>
+    </article>
   `;
 }
 
@@ -210,7 +266,7 @@ function renderRecentPanel() {
         </div>
       </div>
       <div class="rp-result-list">
-        ${rows.length ? rows.map(renderProgressCard).join("") : `<div class="rp-empty compact">暂无终态记录</div>`}
+        ${rows.length ? rows.map(renderResultRow).join("") : `<div class="rp-empty compact">暂无终态记录</div>`}
       </div>
     </section>
   `;
@@ -229,19 +285,10 @@ async function repaint() {
     <div class="rp-layout">
       <main class="rp-main">
         ${renderProgressPanel()}
-        ${renderPoolPanel()}
         ${renderRecentPanel()}
       </main>
-      <aside class="rp-panel rp-events">
-        <div class="rp-panel-head">
-          <div>
-            <h3>实时说明</h3>
-            <p>当前页用最新尝试推导任务状态，避免重复统计。</p>
-          </div>
-        </div>
-        <div class="rp-event-list">
-          <div class="rp-empty compact">当前只展示最新构建态与队列池，不再叠加历史事件。</div>
-        </div>
+      <aside class="rp-side">
+        ${renderPoolPanel()}
       </aside>
     </div>
   `;
@@ -251,7 +298,7 @@ export function render() {
   const root = document.querySelector('[data-view="worker-pool"]');
   if (!root) return;
   repaint();
-  if (!cached.loading && cached.attempts.length === 0 && !cached.error) {
+  if (!cached.loading) {
     refreshData().then(repaint).catch(() => repaint());
   }
 }
