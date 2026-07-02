@@ -1,8 +1,14 @@
 services:
   challenge:
-    build: .
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        CTF_UID: "1000"
+        CTF_GID: "1000"
+    image: {{IMAGE_NAME}}
     restart: always
     ports:
       - "{{HOST_PORT}}:{{SERVICE_PORT}}"
     environment:
-      FLAG: flag{replace_me}
+      - FLAG={{FLAG}}

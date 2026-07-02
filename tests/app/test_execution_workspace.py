@@ -70,6 +70,11 @@ class ExecutionWorkspaceTests(unittest.TestCase):
             "shared_generation_strategy.md",
         ):
             (self.paths.design_references / filename).write_text(f"# {filename}\n", encoding="utf-8")
+        scaffold = self.paths.repository / "scaffolds" / "pwn" / "xinetd-chroot" / "deploy"
+        (scaffold / "_files").mkdir(parents=True, exist_ok=True)
+        (scaffold / "Dockerfile").write_text("FROM ubuntu:20.04\n", encoding="utf-8")
+        (scaffold / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
+        (scaffold / "_files" / "start.sh").write_text("#!/bin/sh\n", encoding="utf-8")
 
     def _running_shard(self, payload: dict, name: str = "claimed.worker.json") -> Path:
         shard = self.paths.shards / "running" / name
@@ -296,6 +301,26 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         self.assertFalse(any(path.is_symlink() for path in workspace.root.rglob("*")))
         manifest = json.loads(workspace.manifest.read_text(encoding="utf-8"))
         self.assertEqual(manifest["allowed_static_reference_roots"], [])
+
+    def test_materializes_pwn_scaffold_reference_as_regular_files(self) -> None:
+        shard = self._running_shard({"challenges": [{"id": "pwn-0001", "category": "pwn"}]})
+
+        workspace = prepare_workspace(
+            self.paths,
+            shard=shard,
+            original_shard_name="pwn.json",
+            worker="worker-1",
+        )
+
+        scaffold = workspace.references / "scaffolds" / "pwn" / "xinetd-chroot" / "deploy"
+        self.assertTrue((scaffold / "Dockerfile").is_file())
+        self.assertTrue((scaffold / "docker-compose.yml").is_file())
+        self.assertFalse(any(path.is_symlink() for path in scaffold.rglob("*")))
+        manifest = json.loads(workspace.manifest.read_text(encoding="utf-8"))
+        self.assertIn(
+            "references/scaffolds/pwn/xinetd-chroot/deploy/Dockerfile",
+            manifest["input_hashes"],
+        )
 
     def test_materializes_generation_profile_from_repository_when_root_differs(self) -> None:
         root = Path(self.temp.name) / "runtime-root"

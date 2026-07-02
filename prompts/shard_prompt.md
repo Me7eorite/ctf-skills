@@ -12,6 +12,7 @@ Before generating anything, read and follow:
 Design skill: {design_skill}
 Design references: {design_references}
 Generation profile: {generation_profile}
+Pwn scaffold reference: ./references/scaffolds/pwn/xinetd-chroot/
 ```
 
 Read only the category references needed by the current shard:
@@ -175,7 +176,7 @@ Container rules for Web and Pwn:
   appropriate service user before starting long-running business processes when
   the selected runtime supports that pattern.
 - Pwn Docker services SHOULD use the fixed xinetd + chroot + TCP socket scaffold
-  `scaffolds/pwn/xinetd-chroot/` unless the design explicitly needs a different
+  `./references/scaffolds/pwn/xinetd-chroot/` unless the design explicitly needs a different
   launcher. Copy its `deploy/` tree into the challenge and replace placeholders
   such as `{{BINARY_NAME}}` and `{{SERVICE_PORT}}`; keep the scaffold's default
   `CTF_UID=1000` and `CTF_GID=1000` build args unless a special runtime
@@ -283,7 +284,7 @@ Pwn rules:
 - Record the actual mitigation state and distribute the relevant binary.
 - Pin the libc/toolchain where exploit stability depends on it.
 - The deployed service should normally be socket-driven through xinetd and
-  chroot using `scaffolds/pwn/xinetd-chroot/`, rather than a bare `socat EXEC`
+  chroot using `./references/scaffolds/pwn/xinetd-chroot/`, rather than a bare `socat EXEC`
   or a Python wrapper. Use a different launcher only when required by the
   challenge mechanism, and document that reason in `metadata.json` and
   `writenup/wp.md`.

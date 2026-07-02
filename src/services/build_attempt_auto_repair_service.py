@@ -11,6 +11,12 @@ from typing import Any
 
 from core.jsonio import read_json, write_json
 
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+_PWN_XINETD_SCAFFOLD = _REPOSITORY_ROOT / "scaffolds" / "pwn" / "xinetd-chroot"
+_PWN_DEFAULT_SERVICE_PORT = "9999"
+_PWN_DEFAULT_UID = "1000"
+_PWN_DEFAULT_GID = "1000"
+
 
 @dataclass(frozen=True)
 class AutoRepairResult:
@@ -36,6 +42,7 @@ def auto_repair_challenge(
     actions.extend(_repair_source_evidence(challenge_dir, metadata))
     actions.extend(_repair_artifact_metadata(challenge_dir, metadata))
     actions.extend(_repair_validate_wrapper(challenge_dir, metadata))
+    actions.extend(_repair_pwn_xinetd_scaffold(challenge_dir, metadata))
     actions.extend(_repair_deploy_dockerfile(challenge_dir, metadata))
 
     if actions:
@@ -272,6 +279,161 @@ def _repair_validate_wrapper(challenge_dir: Path, metadata: dict[str, Any]) -> l
     return ["rewrote validate.sh to check solver flag output without organizer files"]
 
 
+def _repair_pwn_xinetd_scaffold(challenge_dir: Path, metadata: dict[str, Any]) -> list[str]:
+    if metadata.get("category") != "pwn" or not _looks_like_pwn_xinetd(challenge_dir, metadata):
+        return []
+    if not _PWN_XINETD_SCAFFOLD.is_dir():
+        return []
+
+    deploy = challenge_dir / "deploy"
+    deploy.mkdir(parents=True, exist_ok=True)
+    (deploy / "_files").mkdir(parents=True, exist_ok=True)
+    (deploy / "src").mkdir(parents=True, exist_ok=True)
+
+    binary_name = _pwn_binary_name(challenge_dir, metadata)
+    service_port = _metadata_port(metadata)
+    image_name = _metadata_image(challenge_dir, metadata)
+    flag = str(metadata.get("flag") or "flag{replace_me}")
+    replacements = {
+        "{{BINARY_NAME}}": binary_name,
+        "{{SERVICE_PORT}}": service_port,
+        "{{HOST_PORT}}": service_port,
+        "{{FLAG}}": flag,
+        "{{IMAGE_NAME}}": image_name,
+        "{{CTF_UID}}": _PWN_DEFAULT_UID,
+        "{{CTF_GID}}": _PWN_DEFAULT_GID,
+    }
+
+    actions: list[str] = []
+    for relative in (
+        "deploy/Dockerfile",
+        "deploy/docker-compose.yml",
+        "deploy/_files/start.sh",
+        "deploy/_files/ctf.xinetd",
+    ):
+        source = _PWN_XINETD_SCAFFOLD / relative
+        destination = challenge_dir / relative
+        if not source.is_file():
+            continue
+        text = source.read_text(encoding="utf-8")
+        for needle, value in replacements.items():
+            text = text.replace(needle, value)
+        if destination.is_file():
+            current = destination.read_text(encoding="utf-8", errors="ignore")
+            if current == text:
+                continue
+            if relative == "deploy/Dockerfile" and not _pwn_dockerfile_needs_scaffold(current):
+                continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(text, encoding="utf-8")
+        actions.append(f"normalized {relative} from pwn/xinetd-chroot scaffold")
+
+    if metadata.get("docker_image") != image_name:
+        metadata["docker_image"] = image_name
+        actions.append("filled metadata.docker_image from pwn scaffold image name")
+    if metadata.get("port") in (None, ""):
+        metadata["port"] = int(service_port) if service_port.isdigit() else service_port
+        actions.append("filled metadata.port from pwn scaffold service port")
+    return actions
+
+
+def _looks_like_pwn_xinetd(challenge_dir: Path, metadata: dict[str, Any]) -> bool:
+    haystack = " ".join(
+        str(value)
+        for value in (
+            metadata.get("runtime_profile"),
+            metadata.get("service_model"),
+            metadata.get("template"),
+            metadata.get("scaffold"),
+            metadata.get("implementation_plan"),
+        )
+        if value is not None
+    ).lower()
+    if any(token in haystack for token in ("xinetd", "chroot", "socket", "tcp")):
+        return True
+    return any(
+        (challenge_dir / relative).is_file()
+        for relative in (
+            "deploy/_files/ctf.xinetd",
+            "deploy/_files/etc/xinetd.d/ctf",
+            "deploy/_files/etc/xinetd.d/chal",
+        )
+    )
+
+
+def _pwn_binary_name(challenge_dir: Path, metadata: dict[str, Any]) -> str:
+    for key in ("binary_name", "service_binary", "executable"):
+        value = metadata.get(key)
+        if isinstance(value, str) and _safe_filename(value):
+            return Path(value).name
+    makefile = challenge_dir / "deploy" / "src" / "Makefile"
+    detected = _binary_name_from_makefile(makefile)
+    if detected:
+        return detected
+    executables = [
+        path.name
+        for path in (challenge_dir / "deploy" / "src").glob("*")
+        if path.is_file() and path.stat().st_size > 0 and _safe_filename(path.name)
+    ]
+    for preferred in ("pwn", "vuln", "chal", "challenge"):
+        if preferred in executables:
+            return preferred
+    return "pwn"
+
+
+def _binary_name_from_makefile(makefile: Path) -> str | None:
+    try:
+        text = makefile.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    for pattern in (
+        r"(?m)^\s*(?:TARGET|BIN|BINARY|OUT)\s*[:?+]?=\s*([A-Za-z0-9_.-]+)\s*$",
+        r"(?m)^\s*all\s*:\s*([A-Za-z0-9_.-]+)\s*$",
+    ):
+        match = re.search(pattern, text)
+        if match and _safe_filename(match.group(1)):
+            return match.group(1)
+    for match in re.finditer(r"(?m)^\s*(?:gcc|clang|cc)\b[^\n]*\s-o\s+([A-Za-z0-9_.-]+)", text):
+        if _safe_filename(match.group(1)):
+            return match.group(1)
+    return None
+
+
+def _metadata_port(metadata: dict[str, Any]) -> str:
+    for key in ("port", "service_port", "container_port", "host_port"):
+        value = metadata.get(key)
+        if isinstance(value, int) and 0 < value < 65536:
+            return str(value)
+        if isinstance(value, str) and value.isdigit() and 0 < int(value) < 65536:
+            return value
+    return _PWN_DEFAULT_SERVICE_PORT
+
+
+def _metadata_image(challenge_dir: Path, metadata: dict[str, Any]) -> str:
+    image = metadata.get("docker_image")
+    if isinstance(image, str) and re.fullmatch(r"[a-z0-9][a-z0-9_.-]*(?::[A-Za-z0-9_.-]+)?", image.strip()):
+        return image.strip()
+    challenge_id = str(metadata.get("id") or challenge_dir.name).lower()
+    sanitized = re.sub(r"[^a-z0-9_.-]+", "-", challenge_id).strip(".-")
+    return sanitized or "pwn-challenge"
+
+
+def _safe_filename(value: str) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z0-9_.-]+", value)) and value not in {".", ".."}
+
+
+def _pwn_dockerfile_needs_scaffold(text: str) -> bool:
+    lowered = text.lower()
+    if "scaffolds/pwn/xinetd-chroot" in lowered:
+        return False
+    required = ("xinetd", "/usr/sbin/chroot", "/etc/xinetd.d/ctf")
+    if not all(token in lowered for token in required):
+        return True
+    if "copy ./src/" in lowered or "copy ./_files/" in lowered:
+        return True
+    return "cp -r /lib* /home/ctf" in lowered and "cp -r /usr/lib* /home/ctf" in lowered
+
+
 def _repair_deploy_dockerfile(challenge_dir: Path, metadata: dict[str, Any]) -> list[str]:
     if metadata.get("category") not in {"web", "pwn"}:
         return []
@@ -301,11 +463,11 @@ def _repair_deploy_dockerfile(challenge_dir: Path, metadata: dict[str, Any]) -> 
         actions.append("added Dockerfile layer installing make before build steps")
 
     replaced = re.sub(
-        r"cp -R /lib\* /home/ctf/?(?: 2>/dev/null \|\| true)?\s*&&\s*cp -R /usr/lib\* /home/ctf/?(?: 2>/dev/null \|\| true)?",
+        r"cp -R /lib\* /home/ctf/?(?:\s*\\)?(?:\s*2>/dev/null \|\| true)?\s*&&\s*cp -R /usr/lib\* /home/ctf/?(?:\s*\\)?(?:\s*2>/dev/null \|\| true)?",
         (
             "mkdir -p /home/ctf/lib64 /home/ctf/lib/x86_64-linux-gnu && "
-            "cp -L /lib64/ld-linux-x86-64.so.2 /home/ctf/lib64/ 2>/dev/null || "
-            "cp /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 /home/ctf/lib64/ld-linux-x86-64.so.2 && "
+            "(cp -L /lib64/ld-linux-x86-64.so.2 /home/ctf/lib64/ 2>/dev/null || "
+            "cp /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 /home/ctf/lib64/ld-linux-x86-64.so.2) && "
             "cp -a /lib/x86_64-linux-gnu/*.so* /home/ctf/lib/x86_64-linux-gnu/ 2>/dev/null || true"
         ),
         text,

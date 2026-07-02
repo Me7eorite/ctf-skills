@@ -24,7 +24,7 @@ class HermesRunnerTests(unittest.TestCase):
     def test_shard_prompt_requires_pwn_xinetd_chroot_launcher(self):
         prompt = (ROOT / "prompts" / "shard_prompt.md").read_text(encoding="utf-8")
 
-        self.assertIn("scaffolds/pwn/xinetd-chroot/", prompt)
+        self.assertIn("./references/scaffolds/pwn/xinetd-chroot/", prompt)
         self.assertIn("xinetd + chroot + TCP socket", prompt)
         self.assertIn("server = /usr/sbin/chroot", prompt)
         self.assertIn("server_args = --userspec=1000:1000", prompt)
@@ -45,7 +45,7 @@ class HermesRunnerTests(unittest.TestCase):
         )
 
         self.assertIn("Pwn container launcher", prompt)
-        self.assertIn("scaffolds/pwn/xinetd-chroot/", prompt)
+        self.assertIn("./references/scaffolds/pwn/xinetd-chroot/", prompt)
         self.assertIn("xinetd + chroot + TCP socket", prompt)
         self.assertIn("/usr/sbin/chroot", prompt)
         self.assertIn("--userspec=1000:1000", prompt)
@@ -58,7 +58,8 @@ class HermesRunnerTests(unittest.TestCase):
         start_sh = (scaffold / "deploy" / "_files" / "start.sh").read_text(encoding="utf-8")
         xinetd = (scaffold / "deploy" / "_files" / "ctf.xinetd").read_text(encoding="utf-8")
 
-        self.assertIn("RUN cp -R /lib* /home/ctf", dockerfile)
+        self.assertNotIn("RUN cp -R /lib* /home/ctf", dockerfile)
+        self.assertIn("cp -a /lib/x86_64-linux-gnu/*.so*", dockerfile)
         self.assertIn("cp /bin/ls /home/ctf/bin", dockerfile)
         self.assertIn("Every absolute path below", dockerfile)
         self.assertIn("- FLAG={{FLAG}}", compose)
@@ -388,7 +389,5 @@ class HermesRunnerTests(unittest.TestCase):
             build_attempt_id=attempt_id,
             require_build_attempt=True,
         )
-
-
 
 

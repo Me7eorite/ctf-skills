@@ -75,6 +75,7 @@ from hermes.workspace import (
     record_effective_timeout,
 )
 from hermes.workspace_progress import WorkspaceProgressTailer, materialize_progress_shim
+from services.build_attempt_auto_repair_service import auto_repair_challenge
 
 __all__ = [
     "DEFAULT_HERMES_COMMAND",
@@ -942,16 +943,63 @@ class HermesRunner:
         self._record_validation_round(workspace, 0, per_results, validated_set)
         merge_validation_into_report(report, per_results)
 
-        # Host validation is authoritative, but a generated exploit frequently needs
-        # runtime feedback (container logs, traceback, leak parsing, libc offsets) that
-        # was unavailable during the initial authoring pass. Feed deterministic failure
-        # diagnostics back to Hermes and revalidate a bounded number of times.
-        # Union of every contract violation seen across repair rounds, replayed
-        # into each prompt as a non-regression list so the agent does not satisfy
-        # the latest diagnostic by reintroducing an earlier one.
+        # Host validation is authoritative. First apply deterministic mechanical
+        # fixes (path normalization, scaffold alignment, metadata/doc wrappers)
+        # without consuming AI repair budget; then use Hermes only for failures
+        # that still require challenge-specific reasoning.
         seen_contract_errors: list[str] = []
         repair_budget = self.validation_repair_attempts
         repair_timeout = _resolve_validation_repair_timeout(effective_timeout)
+        validation_round = 0
+        deterministic_rounds = 0
+
+        def run_deterministic_repairs() -> None:
+            nonlocal deterministic_rounds, per_results, validated_set, validation_round
+            while (
+                any(result.get("solve_status") == "failed" for result in per_results)
+                and self._validation_results_allow_auto_repair(per_results)
+            ):
+                if deterministic_rounds >= 3:
+                    self._progress.record(
+                        shard=original_shard_name,
+                        worker=worker,
+                        stage="validate",
+                        status="running",
+                        message="deterministic validation repair limit reached; escalating if budget remains",
+                    )
+                    break
+                auto_actions = self._auto_repair_workspace_outputs(
+                    workspace,
+                    challenge_ids,
+                )
+                if not auto_actions:
+                    break
+                deterministic_rounds += 1
+                self._progress.record(
+                    shard=original_shard_name,
+                    worker=worker,
+                    stage="validate",
+                    status="running",
+                    message=(
+                        "deterministic validation repair: "
+                        + "; ".join(auto_actions[:4])
+                    ),
+                )
+                per_results, validated_set = self._run_workspace_validation(
+                    original_shard_name,
+                    worker,
+                    challenge_ids,
+                    plan_by_id,
+                    workspace,
+                    publication_contract,
+                )
+                validation_round += 1
+                self._record_validation_round(
+                    workspace, validation_round, per_results, validated_set
+                )
+                merge_validation_into_report(report, per_results)
+
+        run_deterministic_repairs()
         for repair_attempt in range(1, repair_budget + 1):
             if not any(result.get("solve_status") == "failed" for result in per_results):
                 break
@@ -1045,10 +1093,12 @@ class HermesRunner:
                 workspace,
                 publication_contract,
             )
+            validation_round += 1
             self._record_validation_round(
-                workspace, repair_attempt, per_results, validated_set
+                workspace, validation_round, per_results, validated_set
             )
             merge_validation_into_report(report, per_results)
+            run_deterministic_repairs()
 
         # 步骤 10: 根据校验结果判定最终状态
         any_failed = any(result.get("solve_status") == "failed" for result in per_results)
@@ -1381,7 +1431,7 @@ class HermesRunner:
                 worker=worker,
                 stage="build",
                 status="passed",
-                message=f"host build passed: {' '.join(result.command or [])}",
+                message=f"host image build passed; proceeding to validator: {' '.join(result.command or [])}",
             )
         return None
 
@@ -1415,6 +1465,38 @@ class HermesRunner:
 
     def _validate_gate(self, challenge_id: str, plan: ChallengeResumePlan | None) -> str | None:
         return validate_gate(challenge_id, plan, self.paths, self._image_exists)
+
+    @staticmethod
+    def _auto_repair_workspace_outputs(
+        workspace: ExecutionWorkspace,
+        challenge_ids: list[str],
+    ) -> list[str]:
+        actions: list[str] = []
+        output_root = workspace.output / "challenges"
+        for challenge_id in challenge_ids:
+            for challenge_dir in sorted(output_root.glob(f"*/*")):
+                if not challenge_dir.is_dir():
+                    continue
+                metadata = read_json(challenge_dir / "metadata.json", {})
+                if not isinstance(metadata, dict) or metadata.get("id") != challenge_id:
+                    continue
+                result = auto_repair_challenge(
+                    challenge_dir,
+                    challenge_id=challenge_id,
+                )
+                actions.extend(result.actions)
+                break
+        return actions
+
+    @staticmethod
+    def _validation_results_allow_auto_repair(
+        per_results: list[dict[str, Any]],
+    ) -> bool:
+        return any(
+            result.get("validation_status") == "contract_failed"
+            or bool(result.get("validation_contract_errors"))
+            for result in per_results
+        )
 
     # ------------------------------------------------------------------
     # State helpers

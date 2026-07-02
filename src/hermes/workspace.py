@@ -37,6 +37,9 @@ _COMMON_REFERENCES = (
     "shared_generation_strategy.md",
 )
 _CATEGORIES_WITH_REFERENCES = frozenset({"web", "pwn", "re"})
+_CATEGORY_SCAFFOLDS = {
+    "pwn": ("pwn/xinetd-chroot",),
+}
 # 中文注释：`_CHALLENGE_NAMESPACE` 只用来识别"这个目录名属于挑战命名空间"，
 # 比之前 ^(web|pwn|re)-\d+ 宽松，能覆盖真实 design-task 生成的
 # web-<hex8>-<NNNN>-<slug> 形态。具体哪一个 id 是已认领的，由 `_match_claimed_id`
@@ -445,6 +448,10 @@ def _materialize_context(
         target = references_target / filename
         _copy_regular_file(paths.design_references / filename, target)
         copied.append(target)
+    for scaffold in _CATEGORY_SCAFFOLDS.get(category or "", ()):
+        source = paths.repository / "scaffolds" / scaffold
+        target = references_root / "references" / "scaffolds" / scaffold
+        copied.extend(_copy_tree_files(source, target))
     return copied
 
 
@@ -453,6 +460,21 @@ def _copy_regular_file(source: Path, target: Path) -> None:
         raise ValueError(f"required workspace input is not a regular file: {source}")
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source, target)
+
+
+def _copy_tree_files(source: Path, target: Path) -> list[Path]:
+    if source.is_symlink() or not source.is_dir():
+        raise ValueError(f"required workspace scaffold is not a directory: {source}")
+    copied: list[Path] = []
+    for path in sorted(source.rglob("*")):
+        if path.is_symlink():
+            raise ValueError(f"workspace scaffold contains a symlink: {path}")
+        if not path.is_file():
+            continue
+        destination = target / path.relative_to(source)
+        _copy_regular_file(path, destination)
+        copied.append(destination)
+    return copied
 
 
 def _validate_challenges(challenges: Any) -> tuple[str, set[str]]:

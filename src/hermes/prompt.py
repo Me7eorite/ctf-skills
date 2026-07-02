@@ -173,11 +173,11 @@ def _repair_steps_for_status(
                 ),
                 (
                     "For the pwn xinetd scaffold, keep `ubuntu:20.04`, the fixed "
-                    "`pwn` binary at `/home/ctf/pwn`, and UID/GID `1000:1000`."
+                    "binary at `/home/ctf/<binary>`, and UID/GID `1000:1000`."
                 ),
                 (
                     "If the error came from the scaffold, edit "
-                    "`scaffolds/pwn/xinetd-chroot/` and then let Hermes rebuild."
+                    "`./references/scaffolds/pwn/xinetd-chroot/` and then let Hermes rebuild."
                 ),
             ] + ([f"Host hint: {failure_hint}"] if failure_hint else [])
         if (
@@ -396,7 +396,7 @@ Web / Pwn:
 
 Pwn container launcher:
 - Prefer the fixed xinetd + chroot + TCP socket scaffold
-  `scaffolds/pwn/xinetd-chroot/`. Copy its `deploy/` tree into the challenge and
+  `./references/scaffolds/pwn/xinetd-chroot/`. Copy its `deploy/` tree into the challenge and
   replace placeholders such as `{{BINARY_NAME}}` and `{{SERVICE_PORT}}`; keep the
   scaffold's default `CTF_UID=1000` and `CTF_GID=1000` build args unless a
   special runtime identity is required. Do not invent a fresh Docker/chroot layout.

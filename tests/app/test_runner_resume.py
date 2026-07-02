@@ -21,6 +21,10 @@ class _Paths:
     root: Path
 
     @property
+    def repository(self) -> Path:
+        return Path(__file__).resolve().parents[2]
+
+    @property
     def challenges(self) -> Path:
         return self.root / "work" / "challenges"
 
@@ -913,6 +917,95 @@ class RunnerRealRunTests(unittest.TestCase):
             self.assertIn("missing_source", prompts[1])
             self.assertIn("Step 7: RUN cp -R /lib* /home/ctf", prompts[1])
             self.assertIn("deploy/src files exist", prompts[1])
+
+    def test_deterministic_repair_fixes_host_build_without_ai_budget(self):
+        class BuildOnceAfterAutoRepair:
+            def __init__(self):
+                self.calls = 0
+
+            def build_workspace(self, workspace, validation_set):
+                self.calls += 1
+                challenge = next(iter(validation_set.candidates.values()))
+                dockerfile = (challenge / "deploy" / "Dockerfile").read_text(encoding="utf-8")
+                if self.calls == 1:
+                    raise HostBuildError(
+                        "pwn-0001: docker build failed with exit 1",
+                        challenge_id="pwn-0001",
+                        command=[
+                            "docker",
+                            "build",
+                            "-t",
+                            "pwn-demo:latest",
+                            "-f",
+                            "deploy/Dockerfile",
+                            ".",
+                        ],
+                        stdout_tail="COPY src/ /tmp/src/\n",
+                        stderr_tail="failed to calculate checksum of ref src: not found\n",
+                    )
+                assert "COPY deploy/src/ /tmp/src/" in dockerfile
+                assert "cp vuln /home/ctf/vuln" in dockerfile
+                return NoopHostBuilder().build_workspace(workspace, validation_set)
+
+        with TemporaryDirectory() as tmp:
+            paths = _Paths(root=Path(tmp))
+            paths.initialize()
+            _copy_real_prompt(paths)
+            challenge = _make_web_challenge(
+                paths,
+                "pwn-0001",
+                category="pwn",
+                docker_image="pwn-demo:latest",
+                metadata_extra={"port": 31337, "runtime_profile": "xinetd"},
+            )
+            (challenge / "deploy" / "src" / "app.py").unlink()
+            (challenge / "deploy" / "src" / "vuln.c").write_text("int main(){return 0;}\n", encoding="utf-8")
+            (challenge / "deploy" / "src" / "Makefile").write_text(
+                "TARGET = vuln\nall:\n\tgcc vuln.c -o $(TARGET)\nclean:\n\trm -f $(TARGET)\n",
+                encoding="utf-8",
+            )
+            (challenge / "deploy" / "_files").mkdir(parents=True, exist_ok=True)
+            (challenge / "deploy" / "_files" / "start.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+            (challenge / "deploy" / "_files" / "ctf.xinetd").write_text(
+                "service ctf\n{\n server = /usr/sbin/chroot\n server_args = /home/ctf ./pwn\n}\n",
+                encoding="utf-8",
+            )
+            (challenge / "deploy" / "Dockerfile").write_text(
+                "FROM ubuntu:22.04\n"
+                "RUN apt-get update && apt-get install -y gcc xinetd\n"
+                "COPY src/ /tmp/src/\n"
+                "RUN cp -R /lib* /home/ctf/ \\\n"
+                "    && cp -R /usr/lib* /home/ctf/\n",
+                encoding="utf-8",
+            )
+            _make_shard(paths, "pwn-0001-0001.json", ["pwn-0001"])
+            host_builder = BuildOnceAfterAutoRepair()
+            runner = HermesRunner(
+                paths,
+                image_exists=lambda _: True,
+                host_builder=host_builder,
+                profile_exists=lambda _: True,
+                validation_repair_attempts=0,
+                terminal_workspace_probe=lambda **_kwargs: None,
+            )  # type: ignore[arg-type]
+            prompts: list[str] = []
+            runner._invoke = lambda prompt, log, dry_run, *, timeout=None, **_kwargs: prompts.append(prompt) or 0  # type: ignore[assignment]
+            runner.validator.validate_challenge = lambda cid: {  # type: ignore[assignment]
+                "challenge_id": cid,
+                "status": "passed",
+                "elapsed": 0.1,
+            }
+            runner.validator.validate_path = lambda _path, *, expected_challenge_id: {  # type: ignore[method-assign]
+                "challenge_id": expected_challenge_id,
+                "status": "passed",
+                "elapsed": 0.1,
+            }
+
+            outcome = runner.process_one("worker-01", dry_run=False)
+
+            self.assertEqual(outcome["status"], "done")
+            self.assertEqual(host_builder.calls, 2)
+            self.assertEqual(len(prompts), 1)
 
     def test_validation_repair_uses_capped_timeout(self):
         with TemporaryDirectory() as tmp:
