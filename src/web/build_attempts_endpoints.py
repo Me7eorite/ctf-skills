@@ -22,6 +22,7 @@ from core.clock import beijing_isoformat
 from core.jsonio import read_json
 from core.queue import SUPPORTED_CATEGORIES
 from domain.build_attempts import BuildAttempt, BuildAttemptListItem, BuildAttemptStatus
+from domain.validation_failure_governance import latest_failed_validation
 from hermes.process import hermes_profile_health
 from persistence.models import build_attempts as build_model
 from persistence.models import design_tasks as task_model
@@ -206,7 +207,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
             [
                 _list_item_dict(
                     row,
-                    project_root=_project_paths(app).root,
+                    paths=_project_paths(app),
                     summaries=summaries,
                     execution_summary=execution_summaries.get(row.id),
                 )
@@ -256,7 +257,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
         event_payloads = [_progress_event_dict(row) for row in events]
         body = _attempt_dict(
             attempt,
-            project_root=_project_paths(app).root,
+            paths=_project_paths(app),
             failure_summary=_derive_failure_summary(event_payloads, attempt.error),
         )
         body["category"] = category
@@ -268,7 +269,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
         body.update(_timeout_metadata_for_attempt(_project_paths(app), attempt.id))
         body.update(_execution_summary_from_rows(executions))
         body["sibling_attempts"] = [
-            _attempt_dict(row, project_root=_project_paths(app).root)
+            _attempt_dict(row, paths=_project_paths(app))
             for row in siblings
         ]
         body["progress_events"] = event_payloads
@@ -786,7 +787,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
                     detail="build attempt not found",
                 )
             return JSONResponse(
-                _attempt_dict(attempt, project_root=_project_paths(app).root)
+                _attempt_dict(attempt, paths=_project_paths(app))
             )
 
     @app.delete("/api/build-attempts/{attempt_id}")
@@ -1588,9 +1589,14 @@ def _parse_optional_uuid(value: str | None, label: str) -> UUID | None:
 def _attempt_dict(
     attempt: BuildAttempt,
     *,
-    project_root: Path,
+    project_root: Path | None = None,
+    paths=None,
     failure_summary: str | None = None,
 ) -> dict[str, Any]:
+    if paths is not None:
+        project_root = paths.root
+    if project_root is None:
+        raise ValueError("project_root or paths is required")
     artifact_metadata = _attempt_artifact_metadata(attempt, project_root=project_root)
     payload = {
         "id": str(attempt.id),
@@ -1611,6 +1617,8 @@ def _attempt_dict(
         payload["validation_status"] = artifact_metadata.get("validation_status")
     if failure_summary:
         payload["failure_summary"] = failure_summary
+    if paths is not None:
+        payload.update(_latest_validation_failure_fields(paths, attempt.id))
     return payload
 
 
@@ -1715,13 +1723,13 @@ def _retry_response_payload(attempt_id: UUID) -> dict[str, Any]:
 def _list_item_dict(
     item: BuildAttemptListItem,
     *,
-    project_root: Path,
+    paths,
     summaries: dict[str, str] | None = None,
     execution_summary: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     row = _attempt_dict(
         item,
-        project_root=project_root,
+        paths=paths,
         failure_summary=(summaries or {}).get(item.shard_basename) or _derive_failure_summary([], item.error),
     )
     row.update(
@@ -1742,6 +1750,35 @@ def _list_item_dict(
         }
     )
     return row
+
+
+def _latest_validation_failure_fields(paths, attempt_id: UUID) -> dict[str, Any]:
+    latest = latest_failed_validation(paths, attempt_id)
+    if not latest or latest.get("failed_count"):
+        return {}
+    fields = {
+        key: latest.get(key)
+        for key in (
+            "challenge_id",
+            "validation_status",
+            "validation_failure_class",
+            "validation_failure_signature",
+            "validation_failure_details",
+            "validation_contract_errors",
+            "validation_stdout_tail",
+            "validation_stderr_tail",
+            "validation_command",
+            "validation_returncode",
+            "validation_final_flag_candidate",
+            "validation_diagnostic_unavailable",
+        )
+        if latest.get(key) not in (None, "", [])
+    }
+    if latest.get("source"):
+        fields["validation_failure_source"] = latest["source"]
+    if latest.get("round") is not None:
+        fields["validation_failure_round"] = latest["round"]
+    return fields
 
 
 def _failure_summaries(

@@ -18,6 +18,22 @@ const FILTER_INTERACTION_HOLD_MS = 1500;
 const LIST_LIMIT = 200;
 const STATUSES = ["queued", "running", "succeeded", "failed", "lost"];
 const CATEGORIES = ["web", "pwn", "re"];
+const VALIDATION_FAILURE_LABELS = {
+  timeout: "校验超时",
+  "service-readiness": "服务就绪失败",
+  contract: "产物合约失败",
+  solver: "exp 利用失败",
+};
+const VALIDATION_DETAIL_LABELS = {
+  pwn_prompt_eof: "菜单/提示同步 EOF",
+  pwn_service_readiness_failed: "服务未就绪",
+  pwn_port_only_readiness: "端口探活不足",
+  pwn_bad_readiness_probe: "就绪探针不可靠",
+  missing_dependency: "缺少依赖",
+  flag_mismatch: "flag 不匹配",
+  nonzero_exit: "validate.sh 非零退出",
+  timeout: "超时",
+};
 const state = appState.buildAttempts;
 const detailEventNodes = new Map();
 const EMPTY_FILTERS = {
@@ -843,7 +859,7 @@ function renderTable(rows) {
               </td>
               <td>
                 <div class="ba-title">${escapeHtml(attempt.title || attempt.challenge_id || attempt.id)}</div>
-                ${attempt.failure_summary ? `<div class="ba-failure-line">${escapeHtml(attempt.failure_summary)}</div>` : ""}
+                ${failureSummary(attempt) ? `<div class="ba-failure-line">${escapeHtml(failureSummary(attempt))}</div>` : ""}
               </td>
               <td>${softPill(categoryLabel(attempt.category))}</td>
               <td>${escapeHtml(attempt.difficulty || "-")}</td>
@@ -890,7 +906,7 @@ function renderAttemptCards(rows) {
             ${buildStatusIndicator(attempt.status)}
             ${artifactPill(attempt.artifact_status)}
           </div>
-          ${attempt.failure_summary ? `<div class="ba-card-failure">${escapeHtml(attempt.failure_summary)}</div>` : ""}
+          ${failureSummary(attempt) ? `<div class="ba-card-failure">${escapeHtml(failureSummary(attempt))}</div>` : ""}
           <dl class="ba-card-meta">
             <div><dt>难度</dt><dd>${escapeHtml(attempt.difficulty || "-")}</dd></div>
             <div><dt>进度</dt><dd>${renderProgressCell(attempt)}</dd></div>
@@ -972,7 +988,7 @@ function renderDetail(root) {
           <span>${escapeHtml(formatDateTime(attempt.created_at))}</span>
         </div>
       </div>
-      ${failureSummary(attempt) ? `<div class="ba-detail-failure"><strong>失败原因</strong><span>${escapeHtml(failureSummary(attempt))}</span></div>` : ""}
+      ${renderDetailFailure(attempt)}
     </section>
 
     <section class="card ba-info-card">
@@ -1182,6 +1198,8 @@ function artifactLabel(value) {
 }
 
 function failureSummary(attempt) {
+  const structured = validationFailureSummary(attempt);
+  if (structured) return structured;
   if (attempt.failure_summary) return attempt.failure_summary;
   // Short-circuit on the newest validate/complete terminal — if it's passed
   // (e.g. a successful revalidate), there is no failure to display even if
@@ -1198,6 +1216,53 @@ function failureSummary(attempt) {
   }
   if (attempt.error === "shard execution failed") return "构建执行失败";
   return attempt.error || "";
+}
+
+function validationFailureSummary(attempt) {
+  const failureClass = String(attempt.validation_failure_class || "").trim();
+  if (!failureClass) return "";
+  const parts = [VALIDATION_FAILURE_LABELS[failureClass] || failureClass];
+  const detail = latestValidationDetail(attempt);
+  const detailCode = String(detail?.code || "").trim();
+  if (detailCode) parts.push(VALIDATION_DETAIL_LABELS[detailCode] || detailCode);
+  const status = String(attempt.validation_status || "").trim();
+  if (status && status !== detailCode) parts.push(status);
+  return parts.join(" · ");
+}
+
+function latestValidationDetail(attempt) {
+  const details = Array.isArray(attempt.validation_failure_details)
+    ? attempt.validation_failure_details
+    : [];
+  return details.find((item) => item && typeof item === "object") || null;
+}
+
+function validationFailureEvidence(attempt) {
+  const detail = latestValidationDetail(attempt);
+  const chunks = [];
+  const hint = String(detail?.hint || "").trim();
+  if (hint) chunks.push(hint);
+  const signature = String(attempt.validation_failure_signature || "").trim();
+  const prompt = signature.match(/prompt=([^|]+)/)?.[1];
+  if (prompt) chunks.push(`等待提示 ${prompt}`);
+  const stderr = String(attempt.validation_stderr_tail || "").trim();
+  if (stderr) chunks.push(stderr.replace(/\s+/g, " ").slice(0, 220));
+  return chunks.find(Boolean) || "";
+}
+
+function renderDetailFailure(attempt) {
+  const summary = failureSummary(attempt);
+  if (!summary) return "";
+  const evidence = validationFailureEvidence(attempt);
+  return `
+    <div class="ba-detail-failure">
+      <strong>失败原因</strong>
+      <span>
+        ${escapeHtml(summary)}
+        ${evidence ? `<small>${escapeHtml(evidence)}</small>` : ""}
+      </span>
+    </div>
+  `;
 }
 
 function failureMessageReason(message) {

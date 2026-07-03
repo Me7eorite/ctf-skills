@@ -16,6 +16,7 @@ import signal
 import subprocess
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,9 @@ DEFAULT_HERMES_TIMEOUT = 1500  # 默认超时秒数（25 分钟）
 HERMES_TIMEOUT_RETURNCODE = 124  # 超时返回码（与 timeout 命令兼容）
 TERMINATION_WAIT_TIMEOUT = 10
 _ERROR_MARKER_MAX_BYTES = 64 * 1024
+_CTF_HERMES_LABEL_KEY = "ctf-skills-hermes-run"
+_CTF_HERMES_OWNER_LABEL_KEY = "ctf-skills-owner"
+_CTF_HERMES_LABEL_ENV = "CTF_SKILLS_HERMES_DOCKER_LABEL"
 # The probe starts a full Hermes CLI process. On server-side custom providers,
 # plugin loading plus model metadata probing can take over a minute before the
 # first terminal/file tool call is made, so keep this comfortably above that
@@ -252,6 +256,7 @@ def configure_terminal_workspace(
     *,
     cwd: Path,
     terminal_backend: str | None,
+    docker_cleanup_label: str | None = None,
 ) -> None:
     """Align Hermes terminal tool cwd with the host-owned execution workspace.
 
@@ -273,6 +278,48 @@ def configure_terminal_workspace(
     # previous attempt. Build workspaces are per-attempt, so force the backend to
     # start with the current cwd/mount contract instead of reusing stale state.
     environment["TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES"] = "false"
+    label = docker_cleanup_label or docker_invocation_label(cwd)
+    environment[_CTF_HERMES_LABEL_ENV] = label
+    _append_docker_extra_args(
+        environment,
+        [
+            "--label",
+            f"{_CTF_HERMES_OWNER_LABEL_KEY}=ctf-skills",
+            "--label",
+            f"{_CTF_HERMES_LABEL_KEY}={label}",
+        ],
+    )
+
+
+def docker_invocation_label(cwd: Path) -> str:
+    """Return a Docker-label-safe identifier for one Hermes terminal run."""
+    attempt = _attempt_id_from_execution_cwd(cwd)
+    raw = f"{attempt or 'workspace'}-{os.getpid()}-{uuid.uuid4().hex[:10]}"
+    return _sanitize_docker_label(raw)[:63] or uuid.uuid4().hex[:12]
+
+
+def _attempt_id_from_execution_cwd(cwd: Path) -> str | None:
+    parts = cwd.resolve().parts
+    for index in range(len(parts) - 2):
+        if parts[index] == "work" and parts[index + 1] == "executions":
+            return parts[index + 2]
+    return None
+
+
+def _append_docker_extra_args(environment: dict[str, str], extra_args: list[str]) -> None:
+    current: list[Any]
+    raw = environment.get("TERMINAL_DOCKER_EXTRA_ARGS")
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            current = parsed if isinstance(parsed, list) else []
+        except json.JSONDecodeError:
+            current = []
+    else:
+        current = []
+    merged = [str(item) for item in current if isinstance(item, str)]
+    merged.extend(extra_args)
+    environment["TERMINAL_DOCKER_EXTRA_ARGS"] = json.dumps(merged)
 
 
 def _docker_workspace_mapping(cwd: Path) -> tuple[str, list[str]]:
@@ -482,6 +529,52 @@ def _invoke_terminal_workspace_probe(
         environment=environment,
         timeout=timeout,
     )
+
+
+def cleanup_invocation_hermes_containers(*, environment: dict[str, str]) -> str:
+    """Remove Hermes Docker terminal containers created for one invocation."""
+    label = environment.get(_CTF_HERMES_LABEL_ENV, "").strip()
+    if not label:
+        return "skipped Hermes Docker invocation cleanup: invocation label is absent"
+    docker = shutil.which("docker")
+    if not docker:
+        return "skipped Hermes Docker invocation cleanup: docker is unavailable"
+    filters = [
+        "--filter",
+        f"label={_CTF_HERMES_OWNER_LABEL_KEY}=ctf-skills",
+        "--filter",
+        f"label={_CTF_HERMES_LABEL_KEY}={_sanitize_docker_label(label)}",
+    ]
+    try:
+        ps = subprocess.run(
+            [docker, "ps", "-aq", *filters],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            stdin=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"Hermes Docker invocation cleanup skipped: docker ps failed: {exc}"
+    if ps.returncode != 0:
+        return f"Hermes Docker invocation cleanup skipped: docker ps exited {ps.returncode}: {ps.stderr.strip()}"
+    ids = [line.strip() for line in ps.stdout.splitlines() if line.strip()]
+    if not ids:
+        return f"Hermes Docker invocation cleanup found no containers for label {label!r}"
+    try:
+        rm = subprocess.run(
+            [docker, "rm", "-f", *ids],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+            stdin=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"Hermes Docker invocation cleanup failed: docker rm failed: {exc}"
+    if rm.returncode != 0:
+        return f"Hermes Docker invocation cleanup failed: docker rm exited {rm.returncode}: {rm.stderr.strip()}"
+    return f"removed {len(ids)} Hermes Docker terminal container(s) for invocation label {label!r}: {', '.join(ids)}"
 
 
 def cleanup_hermes_terminal_containers(*, arguments: list[str]) -> str:
@@ -709,8 +802,9 @@ def invoke(
             output,
             stop_event=tail_stop,
         )
+        process: subprocess.Popen[str] | None = None
         try:
-            process = subprocess.run(
+            process = subprocess.Popen(
                 full_arguments,
                 cwd=cwd,
                 env=environment,
@@ -718,23 +812,34 @@ def invoke(
                 text=True,
                 stdout=output,           # stdout 直接写入日志文件
                 stderr=subprocess.STDOUT, # stderr 合并到 stdout
-                timeout=timeout,
-                check=False,              # 不抛异常，由调用方处理返回码
+                start_new_session=os.name != "nt",
             )
+            returncode = process.wait(timeout=timeout)
         except (FileNotFoundError, PermissionError):
             output.write(
                 "Hermes command not found or not executable. Set HERMES_CMD or install Hermes.\n"
             )
             returncode = 127  # 标准 POSIX 返回码：命令未找到
         except subprocess.TimeoutExpired:
+            if process is not None:
+                _terminate(process)
+                _wait_after_terminate(process)
             output.write(f"\nHermes command timed out after {timeout}s.\n")
             returncode = HERMES_TIMEOUT_RETURNCODE
+        except BaseException:
+            if process is not None:
+                _terminate(process)
+                _wait_after_terminate(process)
+            raise
         else:
-            returncode = process.returncode
+            returncode = returncode if returncode is not None else 0
         finally:
             tail_stop.set()
             if tail_thread is not None:
                 tail_thread.join(timeout=2)
+            cleanup = cleanup_invocation_hermes_containers(environment=environment)
+            if cleanup and not cleanup.startswith("skipped"):
+                output.write(f"\n[hermes-docker-cleanup] {cleanup}\n")
             output.flush()
     _write_error_marker_from_log(log_path)
     return returncode

@@ -432,20 +432,34 @@ class HermesRunnerTests(unittest.TestCase):
             captured["environment"]["TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES"],
             "false",
         )
+        extra_args = json.loads(captured["environment"]["TERMINAL_DOCKER_EXTRA_ARGS"])
+        self.assertIn("--label", extra_args)
+        self.assertIn("ctf-skills-owner=ctf-skills", extra_args)
+        self.assertTrue(
+            any(arg.startswith("ctf-skills-hermes-run=attempt-") for arg in extra_args)
+        )
+        self.assertIn("CTF_SKILLS_HERMES_DOCKER_LABEL", captured["environment"])
         self.assertIn("profile_log_path", captured)
 
     def test_invoke_flushes_header_before_blocking_run(self):
         log = self.paths.logs / "live.log"
         profile_log = self.paths.root / ".hermes" / "profiles" / "cf-pwn" / "logs" / "agent.log"
 
-        def fake_run(*args, **kwargs):
-            text = log.read_text(encoding="utf-8")
-            self.assertIn("timeout: 9s", text)
-            self.assertIn(f"profile_log: {profile_log}", text)
-            self.assertIs(kwargs["stdin"], subprocess.DEVNULL)
-            return subprocess.CompletedProcess(args[0], 0)
+        class FakeProcess:
+            def __init__(self, *args, **kwargs):
+                self.returncode = 0
+                self.pid = 12345
+                self.args = args
+                self.kwargs = kwargs
 
-        with patch("hermes.process.subprocess.run", side_effect=fake_run):
+            def wait(self, timeout=None):
+                text = log.read_text(encoding="utf-8")
+                assert "timeout: 9s" in text
+                assert f"profile_log: {profile_log}" in text
+                assert self.kwargs["stdin"] is subprocess.DEVNULL
+                return 0
+
+        with patch("hermes.process.subprocess.Popen", FakeProcess):
             returncode = hermes_process.invoke(
                 "prompt",
                 arguments=["hermes", "chat", "-Q", "-q"],
@@ -458,16 +472,71 @@ class HermesRunnerTests(unittest.TestCase):
 
         self.assertEqual(returncode, 0)
 
+    def test_invoke_cleans_labeled_hermes_container(self):
+        log = self.paths.logs / "cleanup.log"
+        environment = {"CTF_SKILLS_HERMES_DOCKER_LABEL": "attempt-123"}
+
+        class FakeProcess:
+            pid = 12345
+
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def wait(self, timeout=None):
+                return 0
+
+        commands = []
+
+        def fake_run(command, **_kwargs):
+            commands.append(command)
+            if command[:3] == ["/usr/bin/docker", "ps", "-aq"]:
+                return subprocess.CompletedProcess(command, 0, stdout="abc123\n", stderr="")
+            if command[:3] == ["/usr/bin/docker", "rm", "-f"]:
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+            raise AssertionError(f"unexpected command: {command!r}")
+
+        with (
+            patch("hermes.process.subprocess.Popen", FakeProcess),
+            patch("hermes.process.shutil.which", return_value="/usr/bin/docker"),
+            patch("hermes.process.subprocess.run", side_effect=fake_run),
+        ):
+            returncode = hermes_process.invoke(
+                "prompt",
+                arguments=["hermes", "chat", "-Q", "-q"],
+                log_path=log,
+                cwd=self.paths.root,
+                environment=environment,
+                timeout=9,
+            )
+
+        self.assertEqual(returncode, 0)
+        self.assertIn(
+            ["--filter", "label=ctf-skills-hermes-run=attempt-123"],
+            [commands[0][index:index + 2] for index in range(len(commands[0]) - 1)],
+        )
+        self.assertEqual(commands[1][:4], ["/usr/bin/docker", "rm", "-f", "abc123"])
+        self.assertIn("[hermes-docker-cleanup] removed 1", log.read_text(encoding="utf-8"))
+
     def test_invoke_returns_timeout_status(self):
         runner = HermesRunner(self.paths)
         log = self.paths.logs / "timeout.log"
+
+        class SlowProcess:
+            pid = 12345
+
+            def __init__(self, *_args, **_kwargs):
+                self.returncode = None
+
+            def wait(self, timeout=None):
+                raise subprocess.TimeoutExpired("hermes", timeout)
+
         with (
             patch.dict("os.environ", {"HERMES_CMD": "hermes"}),
             patch.object(runner, "_apply_legacy_custom_provider", return_value=False),
-            patch(
-                "hermes.process.subprocess.run",
-                side_effect=__import__("subprocess").TimeoutExpired("hermes", 1),
-            ),
+            patch("hermes.process.subprocess.Popen", SlowProcess),
+            patch("hermes.process._terminate"),
+            patch("hermes.process._wait_after_terminate"),
+            patch("hermes.process.shutil.which", return_value=None),
         ):
             returncode = runner._invoke("prompt", log, dry_run=False, timeout=1)
 

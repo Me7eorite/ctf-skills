@@ -30,7 +30,7 @@
 ## 3. Batch isolation and orchestration
 
 - [ ] 3.1 Verify build orchestration so one attempt's validation/repair failure cannot block sibling attempts in the same batch.
-- [ ] 3.2 Preserve per-attempt failure summaries and expose `validation_failure_class` in build-attempt API list/detail responses only for validation-phase failures, deriving from the shared latest-failed-validation helper.
+- [x] 3.2 Preserve per-attempt failure summaries and expose `validation_failure_class` in build-attempt API list/detail responses only for validation-phase failures, deriving from the shared latest-failed-validation helper.
 - [ ] 3.3 Keep retry and revalidate flows bounded by the latest attempt and its own invocation-local diagnostic history.
 - [ ] 3.4 Preserve existing sequential consecutive-infrastructure fail-fast behavior.
 - [ ] 3.5 Ensure validation-phase failures remain `failure_type=validation` and do not increment the sequential `consecutive_infra` streak.

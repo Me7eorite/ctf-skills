@@ -460,6 +460,64 @@ def test_detail_exposes_siblings_and_progress_events(
     assert any(event["message"].startswith("carry-forward:") for event in payload["progress_events"])
 
 
+def test_list_and_detail_expose_latest_validation_failure_context(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory, category="pwn")
+    with transaction(factory=session_factory) as session:
+        repo = BuildAttemptsRepository(session)
+        attempt = repo.create_attempt(task_id, f"{uuid4()}.json")
+        repo.update_to_terminal(attempt.id, status="failed", error="shard execution failed")
+
+    state_dir = (
+        client.app.state.project_paths.executions
+        / str(attempt.id)
+        / "current"
+        / "state"
+    )
+    state_dir.mkdir(parents=True)
+    write_json(
+        state_dir / "validation-history.json",
+        [
+            {
+                "round": 1,
+                "results": [
+                    {
+                        "challenge_id": "pwn-0001",
+                        "solve_status": "failed",
+                        "validation_status": "nonzero_exit",
+                        "validation_failure_details": [
+                            {
+                                "phase": "validate",
+                                "code": "pwn_prompt_eof",
+                                "message": "EOF waiting for Choice:",
+                                "path": "validate.sh",
+                            }
+                        ],
+                        "validation_stderr_tail": "EOFError while waiting for Choice:",
+                    }
+                ],
+            }
+        ],
+    )
+
+    list_response = client.get("/api/build-attempts")
+    assert list_response.status_code == 200
+    [row] = list_response.json()
+    assert row["validation_failure_class"] == "service-readiness"
+    assert row["validation_failure_details"][0]["code"] == "pwn_prompt_eof"
+    assert "pwn_prompt_eof" in row["validation_failure_signature"]
+    assert row["validation_failure_source"] == "validation-history"
+    assert row["validation_failure_round"] == 1
+
+    detail_response = client.get(f"/api/build-attempts/{attempt.id}")
+    assert detail_response.status_code == 200
+    detail = detail_response.json()
+    assert detail["validation_failure_class"] == "service-readiness"
+    assert detail["validation_stderr_tail"] == "EOFError while waiting for Choice:"
+
+
 def test_detail_exposes_execution_iterations(
     client: TestClient,
     session_factory: SessionFactory,

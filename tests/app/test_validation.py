@@ -598,6 +598,19 @@ class ValidationFailureClassificationTests(unittest.TestCase):
         self.assertEqual(details[0]["code"], "pwn_service_readiness_failed")
         self.assertIn("readiness", details[0]["hint"])
 
+    def test_classifies_service_not_ready_attempt_loop(self):
+        details = classify_validation_failure(
+            status="nonzero_exit",
+            stderr=(
+                "[validate] Waiting for service readiness...\n"
+                "[validate] Service not ready after 30 attempts\n"
+                " * Starting internet superserver xinetd\n"
+                "   ...done.\n"
+            ),
+        )
+
+        self.assertEqual(details[0]["code"], "pwn_service_readiness_failed")
+
     def test_classifies_chroot_flag_path_failure(self):
         details = classify_validation_failure(
             status="nonzero_exit",

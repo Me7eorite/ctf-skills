@@ -4500,6 +4500,14 @@ pre {
   overflow-wrap: anywhere;
 }
 
+.ba-detail-failure small {
+  display: block;
+  margin-top: 3px;
+  color: var(--ink-600);
+  font-size: var(--font-xs);
+  line-height: 1.45;
+}
+
 .ba-info-card {
   margin-bottom: var(--space-lg);
 }

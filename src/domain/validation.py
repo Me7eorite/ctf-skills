@@ -418,6 +418,12 @@ def _looks_like_pwn_service_readiness_failure(text: str) -> bool:
     lower = text.lower()
     if "service failed to start within" in lower:
         return True
+    if (
+        "service not ready after" in lower
+        or "service did not become ready" in lower
+        or "did not become ready within" in lower
+    ):
+        return True
     return (
         "waiting for service" in lower
         and ("container" in lower or "docker-compose" in lower)
