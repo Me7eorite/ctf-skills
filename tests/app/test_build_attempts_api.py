@@ -518,6 +518,69 @@ def test_list_and_detail_expose_latest_validation_failure_context(
     assert detail["validation_stderr_tail"] == "EOFError while waiting for Choice:"
 
 
+def test_successful_attempt_does_not_expose_stale_validation_failure_context(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory, category="pwn")
+    with transaction(factory=session_factory) as session:
+        repo = BuildAttemptsRepository(session)
+        attempt = repo.create_attempt(task_id, f"{uuid4()}.json")
+        repo.update_to_terminal(
+            attempt.id,
+            status="succeeded",
+            artifact_status="present",
+            resulting_challenge_dir=f"work/challenges/{attempt.id}",
+        )
+
+    state_dir = (
+        client.app.state.project_paths.executions
+        / str(attempt.id)
+        / "current"
+        / "state"
+    )
+    state_dir.mkdir(parents=True)
+    write_json(
+        state_dir / "validation-history.json",
+        [
+            {
+                "round": 1,
+                "results": [
+                    {
+                        "challenge_id": "pwn-0001",
+                        "solve_status": "failed",
+                        "validation_status": "nonzero_exit",
+                        "validation_failure_details": [
+                            {
+                                "phase": "validate",
+                                "code": "pwn_prompt_eof",
+                                "message": "EOF waiting for Choice:",
+                                "path": "validate.sh",
+                            }
+                        ],
+                        "validation_stderr_tail": "EOFError while waiting for Choice:",
+                    }
+                ],
+            }
+        ],
+    )
+
+    list_response = client.get("/api/build-attempts")
+    assert list_response.status_code == 200
+    [row] = list_response.json()
+    assert row["status"] == "succeeded"
+    assert "validation_failure_class" not in row
+    assert row.get("failure_summary") is None
+
+    detail_response = client.get(f"/api/build-attempts/{attempt.id}")
+    assert detail_response.status_code == 200
+    detail = detail_response.json()
+    assert detail["status"] == "succeeded"
+    assert "validation_failure_class" not in detail
+    assert detail.get("failure_summary") is None
+    assert detail.get("validation_failure_details") is None
+
+
 def test_detail_exposes_execution_iterations(
     client: TestClient,
     session_factory: SessionFactory,

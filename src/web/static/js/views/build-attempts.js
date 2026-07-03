@@ -1198,6 +1198,7 @@ function artifactLabel(value) {
 }
 
 function failureSummary(attempt) {
+  if (!["failed", "lost"].includes(String(attempt.status || ""))) return "";
   const structured = validationFailureSummary(attempt);
   if (structured) return structured;
   if (attempt.failure_summary) return attempt.failure_summary;

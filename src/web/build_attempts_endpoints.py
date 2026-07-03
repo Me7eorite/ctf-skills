@@ -1617,7 +1617,9 @@ def _attempt_dict(
         payload["validation_status"] = artifact_metadata.get("validation_status")
     if failure_summary:
         payload["failure_summary"] = failure_summary
-    if paths is not None:
+    if attempt.status not in {"failed", "lost"}:
+        payload.pop("failure_summary", None)
+    if paths is not None and attempt.status in {"failed", "lost"}:
         payload.update(_latest_validation_failure_fields(paths, attempt.id))
     return payload
 
