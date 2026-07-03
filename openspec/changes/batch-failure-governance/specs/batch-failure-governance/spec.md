@@ -2,7 +2,7 @@
 
 ### Requirement: Batch failure taxonomy is normalized and stable
 
-The system SHALL map build-attempt validation-phase failures into a normalized, closed set of failure classes that is stable across runner invocations. The first-rollout closed set SHALL be exactly `timeout`, `service-readiness`, `contract`, and `solver`. These exact slugs are the canonical API and repair-policy values for attempts whose terminal runner phase is `validation`. Every failed validation-phase attempt SHALL have exactly one class assigned for the latest validation round. Attempts that fail before or outside validation, including runner phases such as `hermes_auth`, `hermes_rate_limit`, `hermes_timeout`, `terminal_workspace`, `materialize`, and `contract_prepare`, SHALL NOT be assigned a normalized validation failure class by this capability. The class SHALL be derivable from the final validation result and existing diagnostic evidence without requiring new storage tables or a new durable source-of-truth field. Derivation SHALL prefer structured `validation_failure_details` from the latest failed validation result in `work/executions/<attempt_id>/current/state/validation-history.json` when present, then fall back to report entries that preserve `validation_failure_details`, `validation_status`, `validation_contract_errors`, latest terminal validation progress-event messages, and artifact metadata. The system MAY copy the derived class into existing progress-event or attempt-summary payloads for visibility, but such copies SHALL NOT replace derivation as the source of truth.
+The system SHALL map build-attempt validation-phase failures into a normalized, closed set of failure classes that is stable across runner invocations. The first-rollout closed set SHALL be exactly `timeout`, `service-readiness`, `contract`, and `solver`. These exact slugs are the canonical API and repair-policy values for attempts whose terminal runner phase is `validation`. For the current one-build-attempt-to-one-challenge flow, every failed validation-phase attempt SHALL have exactly one attempt-level class assigned for the latest validation round. If a future flow reintroduces multi-challenge build-attempt shards, the system SHALL expose per-challenge classes or define an explicit aggregation rule before emitting one attempt-level `validation_failure_class`. Attempts that fail before or outside validation, including runner phases such as `hermes_auth`, `hermes_rate_limit`, `hermes_timeout`, `terminal_workspace`, `materialize`, and `contract_prepare`, SHALL NOT be assigned a normalized validation failure class by this capability. The class SHALL be derivable from the final validation result and existing diagnostic evidence without requiring new storage tables or a new durable source-of-truth field. Phase 1 derivation SHALL use structured `validation_failure_details` from the latest failed validation result in `work/executions/<attempt_id>/current/state/validation-history.json` as the primary source when present, then fall back to report entries that preserve `validation_failure_details`, `validation_status`, `validation_contract_errors`, latest terminal validation progress-event messages, and artifact metadata. The system MAY copy the derived class into existing progress-event or attempt-summary payloads for visibility, but such copies SHALL NOT replace derivation as the source of truth.
 
 #### Scenario: Timeout is classified deterministically
 - **WHEN** a build attempt fails because `validate.sh` exceeds its allotted time during validation
@@ -69,14 +69,14 @@ The system SHALL enforce stable Web/Pwn reference solver behavior before or duri
 - **THEN** the next Hermes repair prompt SHALL include the latest `writenup/exp.py`, `validate.sh`, structured `validation_failure_details`, stdout/stderr tails, concise failure summary, and `writenup/pwn_debug_report.json` when present
 - **AND** the repair route SHALL preserve whether the failure appears to be dependency, synchronization, flag mismatch, offset/payload, leak parsing, or remote/local mismatch evidence
 
-### Requirement: Initial reference solver quality is gated
+### Requirement: Initial reference solver quality is diagnostic-first
 
-The system SHALL treat initial `writenup/exp.py` quality as a validation-governed deliverable, not merely as a file-existence requirement. Before a Web/Pwn challenge proceeds past validation/documentation, the reference solver SHALL satisfy static stability contracts and SHALL provide bounded solve evidence appropriate to the challenge complexity. Pwn challenges with non-trivial payload logic SHALL preserve structured debug evidence for offsets, mitigations, libc/PIE assumptions, gadgets, menu synchronization, leak parsing, local smoke results, and remote/container solve results when available. Simple Pwn challenges MAY provide concise evidence, but missing evidence or an explicit inability to run a bounded smoke test SHALL be recorded rather than hidden.
+The system SHALL treat initial `writenup/exp.py` quality as a validation-governed diagnostic surface, not merely as a file-existence check. In Phase 1, Web/Pwn solver stability and evidence gaps SHALL be emitted as structured validation diagnostics and repair context, without adding new document-completion blockers or solver-quality gates. Later enforcement phases MAY require the reference solver to satisfy static stability contracts and bounded solve evidence before documentation completion. Pwn challenges with non-trivial payload logic SHOULD preserve structured debug evidence for offsets, mitigations, libc/PIE assumptions, gadgets, menu synchronization, leak parsing, local smoke results, and remote/container solve results when available. Simple Pwn challenges MAY provide concise evidence, and missing evidence or an explicit inability to run a bounded smoke test SHALL be recorded rather than hidden.
 
-#### Scenario: Poor initial exp is rejected before document completion
-- **WHEN** a generated Web/Pwn challenge contains `writenup/exp.py` but the solver violates default-target, dependency, bounded-I/O, or basic evidence requirements
-- **THEN** the attempt SHALL NOT be treated as document-complete solely because `exp.py` exists
-- **AND** the failure SHALL carry contract or solver diagnostics that identify the missing solver-quality evidence
+#### Scenario: Poor initial exp produces diagnostics before hard enforcement
+- **WHEN** a generated Web/Pwn challenge contains `writenup/exp.py` but the solver violates default-target, dependency, bounded-I/O, or basic evidence expectations
+- **THEN** Phase 1 SHALL preserve contract or solver diagnostics that identify the missing solver-quality evidence
+- **AND** later enforcement phases MAY block document completion after those diagnostics are visible and covered by tests
 
 #### Scenario: Pwn payload assumptions are evidence-backed
 - **WHEN** a Pwn solver uses overflow offsets, libc symbols, PIE bases, ROP gadgets, leak parsing, or menu synchronization assumptions
@@ -88,18 +88,19 @@ The system SHALL treat initial `writenup/exp.py` quality as a validation-governe
 - **THEN** the diagnostics SHALL preserve whether the service readiness probe saw the prompt on a fresh connection
 - **AND** a solver menu-sync failure SHALL be distinguishable from a service-readiness failure in the normalized class and signature evidence
 
-#### Scenario: Solver dependencies are reproducible
+#### Scenario: Solver dependency gaps are diagnostic in Phase 1
 - **WHEN** `writenup/exp.py` imports a non-standard helper module
-- **THEN** the helper SHALL be generated under `writenup/` or otherwise declared as supported by the validation runtime
+- **THEN** Phase 1 SHALL record whether the helper is present under `writenup/` or otherwise declared as supported by the validation runtime
 - **AND** a missing helper SHALL produce a solver dependency signature containing the missing module name
+- **AND** later enforcement phases MAY require the helper to be generated or declared before document completion
 
-#### Scenario: Simple Pwn evidence uses a lighter profile
-- **WHEN** a Pwn challenge is a simple ret2text, ret2win, or otherwise single-stage non-PIE/no-libc-leak exploit
+#### Scenario: Later simple Pwn enforcement uses a lighter profile
+- **WHEN** a later enforcement phase evaluates a simple ret2text, ret2win, or otherwise single-stage non-PIE/no-libc-leak exploit
 - **THEN** the solver-quality gate SHALL accept concise evidence covering binary path, mitigation summary, offset source, menu token if any, and a bounded local or container smoke result
 - **AND** the gate SHALL NOT require a full advanced `pwn_debug_report.json` solely because the category is Pwn
 
-#### Scenario: Complex Pwn evidence uses a richer profile
-- **WHEN** a Pwn challenge uses canaries, PIE, libc leaks, ret2libc, multi-stage ROP, heap behavior, custom protocols, or timing-sensitive interaction
+#### Scenario: Later complex Pwn enforcement uses a richer profile
+- **WHEN** a later enforcement phase evaluates a Pwn challenge that uses canaries, PIE, libc leaks, ret2libc, multi-stage ROP, heap behavior, custom protocols, or timing-sensitive interaction
 - **THEN** the solver-quality gate SHALL require richer structured evidence for leak parsing, base calculations, gadget source, libc/ld source, synchronization, and local plus remote/container observations when available
 - **AND** missing rich evidence SHALL produce a solver-quality diagnostic rather than a generic validation failure
 
@@ -124,7 +125,7 @@ The validation path SHALL emit and preserve a bounded diagnostic envelope whenev
 
 ### Requirement: Automatic repair stops after repeated identical failures
 
-The system SHALL stop automatic validation repair for a build attempt when the same normalized validation failure class and essentially the same failure signature repeat across repair rounds inside the same active runner validation/repair invocation without observable progress. The signature SHOULD be derived from structured `validation_failure_details` code/message/path data when available, then fall back to validation status, concise error text, and stdout/stderr tail evidence. The stop condition SHALL be attempt-local and invocation-local. Reaching that stop condition SHALL leave the attempt failed and SHALL not affect the repair budget or progress of sibling attempts in the same batch. Cross-request suppression across separate retry or revalidate requests is out of scope unless a future change adds durable failure-signature storage.
+The system SHALL stop runner automatic validation repair for a build attempt when the same normalized validation failure class and essentially the same failure signature repeat across repair rounds inside the same active runner validation/repair invocation without observable progress. The signature SHOULD be derived from structured `validation_failure_details` code/message/path data when available, then fall back to validation status, concise error text, and stdout/stderr tail evidence. The stop condition SHALL be attempt-local and invocation-local. Reaching that stop condition SHALL leave the attempt failed and SHALL not affect the repair budget or progress of sibling attempts in the same batch. Cross-request suppression across separate dashboard manual repair, retry, or revalidate requests is out of scope unless a future change adds durable failure-signature storage. Those operator-triggered paths SHALL receive the latest class and signature as context but SHALL NOT be suppressed by Phase 1 invocation-local state.
 
 #### Scenario: Repeated timeout stops repair for one attempt
 - **WHEN** the same build attempt times out repeatedly with the same structured-or-derived signature and no progress change inside one validation/repair invocation
@@ -149,7 +150,7 @@ The system SHALL stop automatic validation repair for a build attempt when the s
 
 ### Requirement: Batch processing isolates attempts
 
-The system SHALL treat each build attempt in a batch as an independent failure domain for validation and repair. One attempt's timeout, service-readiness failure, solver failure, contract failure, or validation repair exhaustion SHALL NOT block other attempts in the same batch from being validated, repaired, or reported. This capability SHALL NOT disable the existing sequential consecutive-infrastructure fail-fast behavior for non-validation infrastructure failures.
+The system SHALL treat each build attempt in a batch as an independent failure domain for validation and repair. One attempt's timeout, service-readiness failure, solver failure, contract failure, or validation repair exhaustion SHALL NOT block other attempts in the same batch from being validated, repaired, or reported. Validation-phase failures SHALL remain validation failures and SHALL NOT increment the sequential driver's consecutive infrastructure streak. This capability SHALL NOT disable the existing sequential consecutive-infrastructure fail-fast behavior for non-validation infrastructure failures.
 
 #### Scenario: One failed attempt does not stall its siblings
 - **GIVEN** a batch contains attempts A, B, and C
