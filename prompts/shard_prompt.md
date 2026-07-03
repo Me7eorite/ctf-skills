@@ -146,6 +146,12 @@ confirming `test -f ./input/shard.json`.
 
 The terminal tool does not protect you from a stale current directory. Do not
 use `eval`, ad-hoc quoted command strings, or chained `cd ./output/...` guesses.
+Do not run any terminal command that contains `cd ./output/challenges/...`
+unless it first proves it is at the workspace root with
+`test -f ./input/shard.json`. The common failure mode is being in
+`./output/challenges/<category>/<id>-<slug>/deploy/src` and then running
+`cd ./output/challenges/...`, which looks for a nested `output/` directory that
+does not exist.
 When a terminal command needs challenge files, start with this exact shape and
 replace only the `<category>` / `<challenge-id>` values:
 

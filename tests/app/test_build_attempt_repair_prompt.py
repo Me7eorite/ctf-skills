@@ -39,6 +39,7 @@ def test_build_attempt_repair_prompt_anchors_terminal_to_allowed_root() -> None:
     assert "Do not run broad `docker image prune`" in prompt
     assert "apt mirror" in prompt
     assert "Do not replace it with one hardcoded mirror" in prompt
+    assert "Do not run any terminal command that contains `cd ./output/challenges/...`" in prompt
     normalized = " ".join(prompt.split())
     assert "Do not replace it with `${FLAG}`" in normalized
     assert "forbidden in player-facing `attachments/`" in normalized

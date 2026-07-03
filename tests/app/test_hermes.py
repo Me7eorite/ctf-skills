@@ -61,6 +61,8 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertIn("workspace-scoped dangling managed images", prompt)
         self.assertIn("apt mirror fallback loop and mirror\n  order", prompt)
         self.assertIn("Do not replace it with one hardcoded mirror", prompt)
+        self.assertIn("Do not run any terminal command that contains `cd ./output/challenges/...`", prompt)
+        self.assertIn("deploy/src` and then running", prompt)
 
     def test_shard_prompt_guides_pwntools_exp_debugging(self):
         prompt = (ROOT / "prompts" / "shard_prompt.md").read_text(encoding="utf-8")
@@ -136,6 +138,7 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertIn("workspace-scoped pattern", prompt)
         self.assertIn("ctf-factory.*", prompt)
         self.assertIn("apt mirror fallback loop and mirror\n  order", prompt)
+        self.assertIn("Do not run any terminal command that contains `cd ./output/challenges/...`", prompt)
 
     def test_shard_prompt_enforces_workspace_path_discipline(self):
         prompt = (ROOT / "prompts" / "shard_prompt.md").read_text(encoding="utf-8")
@@ -154,6 +157,7 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertIn("/workspace/executions/...", prompt)
         self.assertIn("Before reading optional files such as `deploy/src/Makefile`", prompt)
         self.assertIn("Do not `chmod` files under `attachments/`", prompt)
+        self.assertIn("Do not run any terminal command that contains `cd ./output/challenges/...`", prompt)
 
     def test_repair_prompt_uses_pwn_failure_details(self):
         prompt = render_validation_repair_prompt(

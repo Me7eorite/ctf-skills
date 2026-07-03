@@ -476,6 +476,11 @@ Terminal tool usage:
 - The terminal may start in `/`, the workspace root, or a prior challenge root.
   Do not trust `pwd` and do not use relative guesses such as
   `output/challenges/...` or `cd ./output/challenges/...`.
+- Do not run any terminal command that contains `cd ./output/challenges/...`
+  unless it first proves it is at the workspace root with
+  `test -f ./input/shard.json`. If `pwd` is already under
+  `output/challenges/<category>/<id>-<slug>/deploy/src`, that relative `cd`
+  will look for a nested `output/` directory and fail.
 - Start every terminal command that touches challenge files by assigning the
   allowed repair root literally, then `cd` to it:
   ```bash

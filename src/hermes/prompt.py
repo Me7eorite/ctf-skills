@@ -150,6 +150,12 @@ Terminal tool usage:
 - Do not use `eval`, ad-hoc quoted command strings, or chained
   `cd ./output/challenges/...` guesses. The terminal may still be in a prior
   challenge root from an earlier command.
+- Do not run any terminal command that contains `cd ./output/challenges/...`
+  unless it first proves it is at the workspace root with
+  `test -f ./input/shard.json`. The common failure mode is being in
+  `./output/challenges/<category>/<id>-<slug>/deploy/src` and then running
+  `cd ./output/challenges/...`, which looks for a nested `output/` directory
+  that does not exist.
 - For terminal commands that inspect or edit challenge files, use this shape
   and replace only the category and challenge id:
   ```bash
