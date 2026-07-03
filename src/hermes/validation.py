@@ -25,6 +25,7 @@ from domain.resume import (
     validator_message,
 )
 from domain.validation import ChallengeValidator, classify_validation_failure
+from domain.validation_failure_governance import annotate_validation_result
 
 
 class ProgressRecorder(Protocol):
@@ -104,16 +105,18 @@ def run_validation(
                 message=validator_message(status="contract_failed", error=gate_error),
             )
             results.append(
-                {
-                    "challenge_id": challenge_id,
-                    "solve_status": "failed",
-                    "validation_status": "contract_failed",
-                    "validation_error": gate_error,
-                    "validation_failure_details": classify_validation_failure(
-                        status="contract_failed",
-                        contract_errors=[gate_error],
-                    ),
-                }
+                annotate_validation_result(
+                    {
+                        "challenge_id": challenge_id,
+                        "solve_status": "failed",
+                        "validation_status": "contract_failed",
+                        "validation_error": gate_error,
+                        "validation_failure_details": classify_validation_failure(
+                            status="contract_failed",
+                            contract_errors=[gate_error],
+                        ),
+                    }
+                )
             )
             continue
 
@@ -180,15 +183,7 @@ def run_validation(
                     if isinstance(contract_errors, list)
                     else None,
                 )
-            state.record(
-                shard=original_shard_name,
-                challenge_id=challenge_id,
-                worker=worker,
-                stage="validate",
-                status="failed",
-                message=validator_message(status=status, elapsed=elapsed, error=error),
-            )
-            results.append(
+            failed_result = annotate_validation_result(
                 {
                     "challenge_id": challenge_id,
                     "solve_status": "failed",
@@ -202,6 +197,21 @@ def run_validation(
                     "validation_failure_details": failure_details,
                 }
             )
+            state.record(
+                shard=original_shard_name,
+                challenge_id=challenge_id,
+                worker=worker,
+                stage="validate",
+                status="failed",
+                message=validator_message(
+                    status=status,
+                    elapsed=elapsed,
+                    error=error,
+                    validation_failure_class=failed_result.get("validation_failure_class"),
+                    validation_failure_signature=failed_result.get("validation_failure_signature"),
+                ),
+            )
+            results.append(failed_result)
     return results
 
 

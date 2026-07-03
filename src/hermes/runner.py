@@ -41,6 +41,10 @@ from domain.resume import (
     implement_evidence,
 )
 from domain.validation import ChallengeValidator
+from domain.validation_failure_governance import (
+    annotate_validation_result,
+    attempt_level_validation_failure,
+)
 from hermes import process as hermes_process
 from hermes.build_publisher import (
     PublicationContract,
@@ -106,6 +110,10 @@ def _validation_failure_message(results: list[dict[str, Any]]) -> str:
     return "; ".join(failures) or "challenge validation failed"
 
 
+def _annotate_validation_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [annotate_validation_result(result) for result in results]
+
+
 def _validation_result_has_compose_cli_failure(result: Mapping[str, Any]) -> bool:
     if result.get("validation_status") != "nonzero_exit":
         return False
@@ -131,6 +139,7 @@ def _stamp_validation_results_into_outputs(
     """Persist host validation outcomes into generated challenge artifacts."""
     changed = False
     for result in per_results:
+        result = annotate_validation_result(result)
         challenge_id = result.get("challenge_id")
         if not isinstance(challenge_id, str):
             continue
@@ -145,6 +154,9 @@ def _stamp_validation_results_into_outputs(
                 "solve_status": result.get("solve_status", "failed"),
                 "validation_status": result.get("validation_status", ""),
             }
+            for field in ("validation_failure_class", "validation_failure_signature"):
+                if result.get(field):
+                    updates[field] = result[field]
             if result.get("validation_elapsed") is not None:
                 updates["validation_elapsed"] = result.get("validation_elapsed")
             if result.get("validation_error"):
@@ -1236,6 +1248,7 @@ class HermesRunner:
         any_failed = any(result.get("solve_status") == "failed" for result in per_results)
         if any_failed:
             failure_summary = _validation_failure_message(per_results)
+            validation_failure = attempt_level_validation_failure(per_results)
             # 有题目校验失败 → 标记分片为 failed
             self._record_per_challenge_complete(original_shard_name, worker, per_results)
             self._progress.record(
@@ -1262,7 +1275,7 @@ class HermesRunner:
                 ),
             )
             self.queue.complete(shard, "failed")
-            return fail_outcome(
+            outcome = fail_outcome(
                 hermes_phase="validation",
                 returncode=returncode if timed_out else 0,
                 failure_type="validation",
@@ -1270,6 +1283,15 @@ class HermesRunner:
                 elapsed_seconds=validation_elapsed,
                 workspace=workspace,
             )
+            for field in (
+                "challenge_id",
+                "validation_status",
+                "validation_failure_class",
+                "validation_failure_signature",
+            ):
+                if validation_failure.get(field):
+                    outcome[field] = validation_failure[field]
+            return outcome
 
         # 校验通过后重新捕获精确候选及 hash；任何校验后的修改都会阻止发布。
         try:
@@ -1588,7 +1610,7 @@ class HermesRunner:
             "output_manifest_hash": (
                 validation_set.output_manifest_hash if validation_set else None
             ),
-            "results": results,
+            "results": _annotate_validation_results(results),
         }
         history_path = workspace.state / "validation-history.json"
         history = read_json(history_path, [])

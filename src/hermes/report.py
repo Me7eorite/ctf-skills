@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from core.jsonio import read_json, write_json
+from domain.validation_failure_governance import annotate_validation_result
 
 
 def merge_validation_into_report(
@@ -53,6 +54,7 @@ def merge_validation_into_report(
     # 合并校验结果
     any_failed = False
     for result in per_results:
+        result = annotate_validation_result(result)
         challenge_id = result["challenge_id"]
         target = by_id.get(challenge_id)
         if target is None:
@@ -71,6 +73,9 @@ def merge_validation_into_report(
             "validation_stdout_tail",
             "validation_stderr_tail",
             "validation_contract_errors",
+            "validation_failure_details",
+            "validation_failure_class",
+            "validation_failure_signature",
         ):
             if field in result and result[field] is not None:
                 target[field] = result[field]

@@ -137,10 +137,11 @@ def test_contract_errors_are_recorded_as_validation_error(tmp_path: Path) -> Non
         for event in recorder.events
         if event.get("stage") == "validate" and event.get("status") == "failed"
     ]
-    assert failed_events[-1]["message"] == (
-        "validator: status=contract_failed "
-        "error=metadata.build_status is not passed; missing deploy/Dockerfile"
-    )
+    message = failed_events[-1]["message"]
+    assert message.startswith("validator: status=contract_failed ")
+    assert "validation_failure_class=contract" in message
+    assert "validation_failure_signature=contract|status=contract_failed" in message
+    assert "error=metadata.build_status is not passed; missing deploy/Dockerfile" in message
 
 
 def test_unnecessary_intended_path_reason_is_forwarded_to_repair(tmp_path: Path) -> None:
@@ -249,7 +250,10 @@ def test_validation_repair_prompt_describes_host_build_failure() -> None:
                 "validation_status": "contract_failed",
                 "validation_error": "host build failed: pwn-0001: docker build failed with exit 1",
                 "failure_kind": "missing_dependency",
-                "failure_hint": "The image is missing `make`; add it to the Dockerfile apt install list before the build step.",
+                "failure_hint": (
+                    "The image is missing `make`; add it to the Dockerfile apt install "
+                    "list before the build step."
+                ),
                 "failed_step": "Step 7: RUN make",
             }
         ],

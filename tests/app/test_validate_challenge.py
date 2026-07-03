@@ -226,6 +226,38 @@ class MergeValidationIntoReportTests(unittest.TestCase):
             self.assertIsInstance(raw["challenges"], list)
             self.assertEqual(raw["challenges"][0]["solve_status"], "failed")
 
+    def test_preserves_failure_details_and_normalized_class(self):
+        with TemporaryDirectory() as tmp:
+            report = Path(tmp) / "report.json"
+            merge_validation_into_report(
+                report,
+                [
+                    {
+                        "challenge_id": "pwn-0001",
+                        "solve_status": "failed",
+                        "validation_status": "contract_failed",
+                        "validation_failure_details": [
+                            {
+                                "phase": "contract",
+                                "code": "pwn_bad_readiness_probe",
+                                "message": "bad readiness probe",
+                                "path": "validate.sh",
+                            }
+                        ],
+                    }
+                ],
+                runner_status="failed",
+            )
+
+            raw = json.loads(report.read_text(encoding="utf-8"))
+            challenge = raw["challenges"][0]
+            self.assertEqual(challenge["validation_failure_class"], "service-readiness")
+            self.assertIn("pwn_bad_readiness_probe", challenge["validation_failure_signature"])
+            self.assertEqual(
+                challenge["validation_failure_details"][0]["code"],
+                "pwn_bad_readiness_probe",
+            )
+
     def test_preserves_existing_challenge_entries(self):
         with TemporaryDirectory() as tmp:
             report = Path(tmp) / "report.json"

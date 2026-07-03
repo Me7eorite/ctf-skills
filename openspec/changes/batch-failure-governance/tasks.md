@@ -2,16 +2,16 @@
 
 ## 1. Taxonomy and shared derivation
 
-- [ ] 1.1 Extend the validation failure classifier with normalized batch-oriented validation failure classes and an invocation-local stable failure signature.
-- [ ] 1.2 Define the first-rollout closed class set as `timeout`, `service-readiness`, `contract`, and `solver`; leave prompt-input failures unclassified until prompt capture points and diagnostics are added.
-- [ ] 1.3 Define the runner phase / validation status / `validation_failure_details` diagnostic-code mapping, including precedence rules and explicit `no normalized validation class` outcomes for non-validation runner phases.
-- [ ] 1.4 Keep existing detailed validation diagnostic codes as signature inputs and repair context; do not replace them with only the normalized class.
-- [ ] 1.5 Implement a shared latest-failed-validation derivation helper that reads `work/executions/<attempt_id>/current/state/validation-history.json` first, then falls back to report entries, validation status, contract errors, progress messages, and artifact metadata.
-- [ ] 1.6 Expose a single attempt-level `validation_failure_class` only for the current one-build-attempt-to-one-challenge flow; return no class or per-challenge data rather than guessing if a multi-challenge attempt is encountered.
-- [ ] 1.7 Thread the derived normalized validation failure class through runner progress messages and attempt summaries as `validation_failure_class` without adding a new durable source-of-truth table.
-- [ ] 1.8 Ensure repeated-failure signatures include class plus diagnostic detail such as missing module, detail code, path, traceback frame, prompt marker, validation status, or concise stderr marker so distinct solver failures are not collapsed solely because they share class `solver`.
-- [ ] 1.9 Normalize volatile values out of failure signatures, including elapsed time, container ids, random ports, execution workspace prefixes, and non-address-specific memory noise.
-- [ ] 1.10 Preserve `validation_failure_details` in validation report merge output as a compatibility fallback, while keeping `validation-history.json` as the primary structured derivation source.
+- [x] 1.1 Extend the validation failure classifier with normalized batch-oriented validation failure classes and an invocation-local stable failure signature.
+- [x] 1.2 Define the first-rollout closed class set as `timeout`, `service-readiness`, `contract`, and `solver`; leave prompt-input failures unclassified until prompt capture points and diagnostics are added.
+- [x] 1.3 Define the runner phase / validation status / `validation_failure_details` diagnostic-code mapping, including precedence rules and explicit `no normalized validation class` outcomes for non-validation runner phases.
+- [x] 1.4 Keep existing detailed validation diagnostic codes as signature inputs and repair context; do not replace them with only the normalized class.
+- [x] 1.5 Implement a shared latest-failed-validation derivation helper that reads `work/executions/<attempt_id>/current/state/validation-history.json` first, then falls back to report entries, validation status, contract errors, progress messages, and artifact metadata.
+- [x] 1.6 Expose a single attempt-level `validation_failure_class` only for the current one-build-attempt-to-one-challenge flow; return no class or per-challenge data rather than guessing if a multi-challenge attempt is encountered.
+- [x] 1.7 Thread the derived normalized validation failure class through runner progress messages and attempt summaries as `validation_failure_class` without adding a new durable source-of-truth table.
+- [x] 1.8 Ensure repeated-failure signatures include class plus diagnostic detail such as missing module, detail code, path, traceback frame, prompt marker, validation status, or concise stderr marker so distinct solver failures are not collapsed solely because they share class `solver`.
+- [x] 1.9 Normalize volatile values out of failure signatures, including elapsed time, container ids, random ports, execution workspace prefixes, and non-address-specific memory noise.
+- [x] 1.10 Preserve `validation_failure_details` in validation report merge output as a compatibility fallback, while keeping `validation-history.json` as the primary structured derivation source.
 
 ## 2. Attempt-scoped repair behavior
 

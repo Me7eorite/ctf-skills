@@ -584,6 +584,8 @@ def validator_message(
     elapsed: float | None = None,
     flag_matched: bool | None = None,
     error: str | None = None,
+    validation_failure_class: str | None = None,
+    validation_failure_signature: str | None = None,
 ) -> str:
     """生成校验器的状态消息。
 
@@ -594,6 +596,10 @@ def validator_message(
         parts.append(f"elapsed={elapsed:.2f}s")
     if flag_matched is not None:
         parts.append(f"flag_matched={'yes' if flag_matched else 'no'}")
+    if validation_failure_class:
+        parts.append(f"validation_failure_class={validation_failure_class}")
+    if validation_failure_signature:
+        parts.append(f"validation_failure_signature={validation_failure_signature}")
     if error:
         parts.append(f"error={error}")
     return " ".join(parts)

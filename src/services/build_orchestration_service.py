@@ -20,6 +20,7 @@ from core.paths import ProjectPaths
 from domain import challenge_designs as design_dto
 from domain import design_tasks as task_dto
 from domain.design.difficulty_review import DifficultyReviewResult
+from domain.validation_failure_governance import latest_failed_validation, summarize_validation_entry
 from persistence.models import build_attempts as build_model
 from persistence.models import design_tasks as task_model
 from persistence.models import executions as exec_model
@@ -755,56 +756,15 @@ def _design_challenge(payload: Mapping[str, Any]) -> Mapping[str, Any]:
 def _read_retry_diagnostics(paths: ProjectPaths, attempt_id: UUID) -> dict[str, Any]:
     workspace_state = paths.executions / str(attempt_id) / "current" / "state"
     diagnostics: dict[str, Any] = {}
-    first_failure = _summarize_validation_entry(
+    first_failure = summarize_validation_entry(
         read_json(workspace_state / "first-validation-failure.json", None)
     )
     if first_failure:
         diagnostics["first_failure"] = first_failure
-    history_payload = read_json(workspace_state / "validation-history.json", None)
-    if isinstance(history_payload, list):
-        latest_failure = None
-        for entry in reversed(history_payload):
-            latest_failure = _summarize_validation_entry(entry)
-            if latest_failure:
-                break
-        if latest_failure:
-            diagnostics["latest_failure"] = latest_failure
+    latest_failure = latest_failed_validation(paths, attempt_id)
+    if latest_failure:
+        diagnostics["latest_failure"] = latest_failure
     return diagnostics
-
-
-def _summarize_validation_entry(entry: Any) -> dict[str, Any] | None:
-    if not isinstance(entry, Mapping):
-        return None
-    results = entry.get("results")
-    if not isinstance(results, list):
-        return None
-    for result in results:
-        if not isinstance(result, Mapping):
-            continue
-        if result.get("solve_status") != "failed":
-            continue
-        summary = {
-            "round": entry.get("round"),
-            "challenge_id": result.get("challenge_id"),
-            "validation_status": result.get("validation_status"),
-            "validation_error": _trim_retry_text(result.get("validation_error")),
-            "failure_kind": result.get("failure_kind"),
-            "failure_hint": _trim_retry_text(result.get("failure_hint")),
-            "failed_step": _trim_retry_text(result.get("failed_step")),
-        }
-        return {key: value for key, value in summary.items() if value not in (None, "", [])}
-    return None
-
-
-def _trim_retry_text(value: Any, limit: int = 400) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    if not text:
-        return None
-    if len(text) <= limit:
-        return text
-    return text[: limit - 3] + "..."
 
 
 def _matrix_values(

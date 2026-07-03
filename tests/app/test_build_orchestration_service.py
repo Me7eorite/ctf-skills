@@ -847,6 +847,14 @@ def test_retry_carries_forward_workspace_failure_context(
                         "solve_status": "failed",
                         "validation_status": "contract_failed",
                         "validation_error": "COPY failed: file not found in build context",
+                        "validation_failure_details": [
+                            {
+                                "phase": "contract",
+                                "code": "missing_source",
+                                "message": "COPY failed: file not found in build context",
+                                "path": "deploy/Dockerfile",
+                            }
+                        ],
                         "failure_kind": "missing_source",
                         "failure_hint": "Use deploy/src paths in Dockerfile COPY commands.",
                         "failed_step": "Step 5: COPY src/app.py /app/app.py",
@@ -880,6 +888,8 @@ def test_retry_carries_forward_workspace_failure_context(
     assert payload["retry_context"]["source_build_attempt_id"] == str(container_id)
     assert payload["retry_context"]["first_failure"]["failure_hint"] == "Install make in the Dockerfile."
     assert payload["retry_context"]["latest_failure"]["failure_kind"] == "missing_source"
+    assert payload["retry_context"]["latest_failure"]["validation_failure_class"] == "contract"
+    assert "missing_source" in payload["retry_context"]["latest_failure"]["validation_failure_signature"]
     assert "repair_requested" not in payload
 
 
