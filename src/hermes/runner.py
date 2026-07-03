@@ -1099,15 +1099,24 @@ class HermesRunner:
         validation_round = 0
         deterministic_rounds = 0
         seen_failure_fingerprints = set(validation_failure_fingerprints(per_results))
+        repeated_failure_counts: dict[str, int] = {
+            fingerprint: 1 for fingerprint in seen_failure_fingerprints
+        }
         repeated_failure_stop = False
 
         def stop_if_repeated_failure() -> bool:
-            current = set(validation_failure_fingerprints(per_results))
-            repeated = current & seen_failure_fingerprints
-            if current:
-                seen_failure_fingerprints.update(current)
+            nonlocal repeated_failure_stop
+            current = validation_failure_fingerprints(per_results)
+            repeated = False
+            for fingerprint in current:
+                count = repeated_failure_counts.get(fingerprint, 0) + 1
+                repeated_failure_counts[fingerprint] = count
+                if count >= 2:
+                    repeated = True
+            seen_failure_fingerprints.update(current)
             if not repeated:
                 return False
+            repeated_failure_stop = True
             self._progress.record(
                 shard=original_shard_name,
                 worker=worker,
@@ -1115,7 +1124,7 @@ class HermesRunner:
                 status="running",
                 message=(
                     "validation repair stopped: repeated failure signature "
-                    + ", ".join(sorted(repeated)[:3])
+                    + ", ".join(sorted(set(current))[:3])
                 ),
             )
             return True

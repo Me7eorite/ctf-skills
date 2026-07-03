@@ -591,6 +591,10 @@ def _pwn_repair_steps_from_failure_details(
             "Fix service readiness and menu synchronization: wait for the real "
             "banner/menu prompt on a fresh connection, then align recv/send calls."
         )
+        steps.append(
+            "If validate.sh is involved, print bounded diagnostics for service ready state, "
+            "the first banner line, the last recv position, and the failing phase before exit."
+        )
     if "pwn_service_readiness_failed" in codes or "pwn_bad_readiness_probe" in codes:
         steps.append(
             "Fix the service readiness probe before exploit tuning: check that "
@@ -640,6 +644,11 @@ def _pwn_repair_steps_from_failure_details(
         steps.append(
             "After control-flow success, explicitly run the intended flag read "
             "command or function and verify a `flag{...}` token reaches stdout."
+        )
+    if "pwn_prompt_eof" in codes or "pwn_service_readiness_failed" in codes:
+        steps.append(
+            "Bound every `recvuntil` / `recvline` wait with short timeouts, and "
+            "cap brute-force or leak loops so a single bad stage fails fast."
         )
     if "pwn_remote_local_mismatch" in codes:
         steps.append(

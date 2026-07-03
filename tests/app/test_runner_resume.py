@@ -1184,6 +1184,58 @@ class RunnerRealRunTests(unittest.TestCase):
             self.assertGreaterEqual(len(observed_timeouts), 2)
             self.assertEqual(observed_timeouts[1], 600)
 
+    def test_repeated_validation_signature_stops_further_debug_rounds(self):
+        with TemporaryDirectory() as tmp:
+            paths = _Paths(root=Path(tmp))
+            paths.initialize()
+            _copy_real_prompt(paths)
+            _make_web_challenge(paths, "web-0001")
+            _make_shard(paths, "web-0001-0001.json", ["web-0001"])
+            runner = self._make_runner_with_fake_invoke(paths)
+            runner.validation_repair_attempts = 3
+            validation_calls = 0
+
+            def validate(_challenge_id: str) -> dict:
+                nonlocal validation_calls
+                validation_calls += 1
+                return {
+                    "status": "nonzero_exit",
+                    "elapsed": 1.2,
+                    "returncode": 1,
+                    "stdout_tail": "leak=0x0",
+                    "stderr_tail": "EOFError while waiting for Choice:",
+                }
+
+            runner.validator.validate_challenge = validate  # type: ignore[assignment]
+            runner.validator.validate_path = lambda *_args, **_kwargs: validate("web-0001")  # type: ignore[method-assign]
+            prompts: list[str] = []
+
+            def invoke(prompt: str, log: Path, dry_run: bool, *, timeout=None, **_kwargs) -> int:
+                prompts.append(prompt)
+                log.parent.mkdir(parents=True, exist_ok=True)
+                log.write_text("fake invoke\n", encoding="utf-8")
+                workspace = _kwargs.get("workspace")
+                if workspace is not None and len(prompts) == 2:
+                    challenge_root = workspace.output / "challenges" / "web" / "web-0001-demo"
+                    challenge_root.mkdir(parents=True, exist_ok=True)
+                    marker = challenge_root / "repair-marker.txt"
+                    marker.write_text("touched\n", encoding="utf-8")
+                return 0
+
+            runner._invoke = invoke  # type: ignore[assignment]
+
+            outcome = runner.process_one("worker-01", dry_run=False)
+
+            self.assertEqual(outcome["status"], "failed")
+            self.assertEqual(validation_calls, 2)
+            self.assertEqual(len(prompts), 2)
+            self.assertTrue(
+                any(
+                    event.get("message", "").startswith("validation repair stopped: repeated failure signature")
+                    for event in runner._progress._store._events
+                )
+            )
+
     def test_progress_write_failure_does_not_block_successful_shard(self):
         class RaisingWriteProgressStore(InMemoryProgressStore):
             def record(self, **kwargs):

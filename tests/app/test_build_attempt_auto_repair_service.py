@@ -397,6 +397,7 @@ def test_auto_repair_fixes_pwn_unexported_bash_nc_probe(tmp_path: Path) -> None:
 
     repaired = validate.read_text(encoding="utf-8")
     assert result.changed is True
+    assert "export CHAL_HOST CHAL_PORT" in repaired
     assert "bash -c" not in repaired
     assert "printf '3\\n' | timeout 3 nc \"$CHAL_HOST\" \"$CHAL_PORT\"" in repaired
 

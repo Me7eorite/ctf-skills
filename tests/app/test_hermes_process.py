@@ -360,7 +360,7 @@ class ConfigureTerminalWorkspaceTests(unittest.TestCase):
 
         self.assertEqual(environment["_HERMES_GATEWAY"], "1")
         self.assertEqual(environment["TERMINAL_CWD"], "/workspace/executions/attempt/current")
-        self.assertEqual(environment["TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE"], "0")
+        self.assertEqual(environment["TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE"], "1")
         self.assertEqual(json.loads(environment["TERMINAL_DOCKER_VOLUMES"]), [expected_volume])
         self.assertEqual(environment["TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES"], "false")
 
@@ -466,20 +466,11 @@ class TerminalWorkspaceVisibilityTests(unittest.TestCase):
                 timeout=10,
             )
 
-    def test_docker_probe_timeout_cleans_stale_containers_and_retries(self):
+    def test_docker_probe_timeout_cleans_stale_containers_and_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
             cwd = Path(tmp)
             (cwd / "state").mkdir()
             log = cwd / "logs" / "hermes.log"
-            marker = cwd / "state" / "terminal-workspace-probe.json"
-            invocations = {"count": 0}
-
-            def fake_invoke(*_args, **_kwargs):
-                invocations["count"] += 1
-                if invocations["count"] == 1:
-                    return HERMES_TIMEOUT_RETURNCODE
-                marker.write_text('{"ok": true}', encoding="utf-8")
-                return 0
 
             def fake_run(command, **_kwargs):
                 if command[:3] == ["/usr/bin/docker", "ps", "-aq"]:
@@ -488,27 +479,26 @@ class TerminalWorkspaceVisibilityTests(unittest.TestCase):
                     return subprocess.CompletedProcess(command, 0, stdout="abc123\n", stderr="")
                 raise AssertionError(f"unexpected command: {command!r}")
 
-            with patch("hermes.process.invoke", side_effect=fake_invoke):
+            with patch("hermes.process.invoke", return_value=HERMES_TIMEOUT_RETURNCODE):
                 with patch("hermes.process.shutil.which", return_value="/usr/bin/docker"):
                     with patch("hermes.process.subprocess.run", side_effect=fake_run):
-                        verify_terminal_workspace_visibility(
-                            arguments=["hermes", "-p", "cf-pwn", "chat", "-Q"],
-                            log_path=log,
-                            cwd=cwd,
-                            environment={
-                                "TERMINAL_CWD": "/workspace",
-                                "TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES": "false",
-                            },
-                            terminal_backend="docker",
-                            timeout=10,
-                        )
+                        with self.assertRaises(TerminalWorkspaceVisibilityError):
+                            verify_terminal_workspace_visibility(
+                                arguments=["hermes", "-p", "cf-pwn", "chat", "-Q"],
+                                log_path=log,
+                                cwd=cwd,
+                                environment={
+                                    "TERMINAL_CWD": "/workspace",
+                                    "TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES": "false",
+                                },
+                                terminal_backend="docker",
+                                timeout=10,
+                            )
 
-            self.assertEqual(invocations["count"], 2)
-            self.assertFalse(marker.exists())
             probe_log = log.with_name(log.name + ".terminal_probe.log")
             text = probe_log.read_text(encoding="utf-8")
             self.assertIn("removed 1 stale Hermes Docker terminal container", text)
-            self.assertIn("probe recovered", text)
+            self.assertNotIn("recovered", text)
 
 
 class InvokeLogMarkerTests(unittest.TestCase):

@@ -504,6 +504,7 @@ Rules:
   fallback loop and mirror order. Do not replace it with one hardcoded mirror or
   remove fallback entries; if package fetch fails, keep the loop and adjust only
   the mirror list deliberately.
+- For Pwn solver repairs, Bound every `recvuntil` / `recvline` wait with short timeouts, cap brute-force or leak loops, and print bounded diagnostics for service ready state, the first banner line, the last recv position, and the failing phase before exit.
 - Do not call `./bin/progress` or `$WORKSPACE_ROOT/bin/progress`; this repair
   service records repair progress outside Hermes.
 

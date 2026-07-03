@@ -272,7 +272,7 @@ def configure_terminal_workspace(
     container_cwd, volumes = _docker_workspace_mapping(cwd)
     environment["_HERMES_GATEWAY"] = "1"
     environment["TERMINAL_CWD"] = container_cwd
-    environment["TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE"] = "0"
+    environment["TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE"] = "1"
     environment["TERMINAL_DOCKER_VOLUMES"] = json.dumps(volumes)
     # A persisted Hermes docker terminal container can keep the mount set from a
     # previous attempt. Build workspaces are per-attempt, so force the backend to
@@ -380,75 +380,31 @@ def verify_terminal_workspace_visibility(
         if backend == "docker":
             cleanup = cleanup_hermes_terminal_containers(arguments=arguments)
             _append_probe_recovery_log(probe_log, cleanup)
-            try:
-                marker.unlink()
-            except FileNotFoundError:
-                pass
-            returncode = _invoke_terminal_workspace_probe(
-                prompt=prompt,
-                arguments=arguments,
-                log_path=probe_log,
-                cwd=cwd,
-                environment=environment,
-                timeout=probe_timeout,
+            raise TerminalWorkspaceVisibilityError(
+                "Hermes terminal workspace probe failed after cleaning stale "
+                f"Docker terminal containers (return code {returncode}); see {probe_log}"
             )
-            if returncode == 0:
-                _append_probe_recovery_log(
-                    probe_log,
-                    "terminal workspace probe recovered after cleaning stale Hermes Docker containers",
-                )
-            else:
-                raise TerminalWorkspaceVisibilityError(
-                    "Hermes terminal workspace probe failed after cleaning stale "
-                    f"Docker terminal containers (return code {returncode}); see {probe_log}"
-                )
         else:
             raise TerminalWorkspaceVisibilityError(
                 f"Hermes terminal workspace probe failed with return code {returncode}; "
                 f"see {probe_log}"
             )
-    if returncode != 0:
-        raise TerminalWorkspaceVisibilityError(
-            f"Hermes terminal workspace probe failed with return code {returncode}; "
-            f"see {probe_log}"
-        )
     if not marker.is_file():
         if backend == "docker":
             cleanup = cleanup_hermes_terminal_containers(arguments=arguments)
             _append_probe_recovery_log(probe_log, cleanup)
-            returncode = _invoke_terminal_workspace_probe(
-                prompt=prompt,
-                arguments=arguments,
-                log_path=probe_log,
-                cwd=cwd,
-                environment=environment,
-                timeout=probe_timeout,
+            backend_label = backend or "unknown"
+            env_detail = (
+                f"TERMINAL_CWD={environment.get('TERMINAL_CWD', '')!r}, "
+                "TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE="
+                f"{environment.get('TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE', '')!r}, "
+                "TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES="
+                f"{environment.get('TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES', '')!r}"
             )
-            if returncode == 0 and marker.is_file():
-                _append_probe_recovery_log(
-                    probe_log,
-                    "terminal workspace probe recovered after marker-miss cleanup",
-                )
-            elif returncode != 0:
-                raise TerminalWorkspaceVisibilityError(
-                    "Hermes terminal workspace probe failed after marker-miss cleanup "
-                    f"(return code {returncode}); see {probe_log}"
-                )
-            if marker.is_file():
-                pass
-            else:
-                backend_label = backend or "unknown"
-                env_detail = (
-                    f"TERMINAL_CWD={environment.get('TERMINAL_CWD', '')!r}, "
-                    "TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE="
-                    f"{environment.get('TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE', '')!r}, "
-                    "TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES="
-                    f"{environment.get('TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES', '')!r}"
-                )
-                raise TerminalWorkspaceVisibilityError(
-                    f"Hermes terminal backend ({backend_label}) did not write to the host execution workspace "
-                    f"after stale-container cleanup. cwd={cwd}; expected marker={marker}; {env_detail}."
-                )
+            raise TerminalWorkspaceVisibilityError(
+                f"Hermes terminal backend ({backend_label}) did not write to the host execution workspace "
+                f"after stale-container cleanup. cwd={cwd}; expected marker={marker}; {env_detail}."
+            )
         else:
             backend_label = backend or "unknown"
             env_detail = (
@@ -466,23 +422,6 @@ def verify_terminal_workspace_visibility(
                 "with TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE=1, or use a terminal "
                 "backend that writes directly to the host workspace."
             )
-    if not marker.is_file():
-        backend_label = backend or "unknown"
-        env_detail = (
-            f"TERMINAL_CWD={environment.get('TERMINAL_CWD', '')!r}, "
-            "TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE="
-            f"{environment.get('TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE', '')!r}, "
-            "TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES="
-            f"{environment.get('TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES', '')!r}"
-        )
-        raise TerminalWorkspaceVisibilityError(
-            f"Hermes terminal backend ({backend_label}) did not write to the host execution workspace. "
-            f"cwd={cwd}; expected marker={marker}; {env_detail}. "
-            "It likely wrote inside the container private cwd such as /home/hermes. "
-            "Stop stale hermes-* docker containers and ensure the backend starts "
-            "with TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE=1, or use a terminal "
-            "backend that writes directly to the host workspace."
-        )
     try:
         parsed = json.loads(marker.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:

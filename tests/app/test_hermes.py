@@ -422,7 +422,7 @@ class HermesRunnerTests(unittest.TestCase):
         )
         self.assertEqual(
             captured["environment"]["TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE"],
-            "0",
+            "1",
         )
         volume = json.loads(captured["environment"]["TERMINAL_DOCKER_VOLUMES"])[0]
         self.assertTrue(volume.endswith("/workspace/executions"))

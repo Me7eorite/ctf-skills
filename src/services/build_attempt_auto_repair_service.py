@@ -451,7 +451,11 @@ def _repair_pwn_validate_readiness_probe(
 def _replace_unexported_bash_nc_probe(text: str) -> str:
     def replace(match: re.Match[str]) -> str:
         timeout_seconds = match.group(1)
-        return f"printf '3\\n' | timeout {timeout_seconds} nc \"$CHAL_HOST\" \"$CHAL_PORT\""
+        return (
+            "export CHAL_HOST CHAL_PORT\n"
+            f"printf '3\\n' | timeout {timeout_seconds} nc \"$CHAL_HOST\" \"$CHAL_PORT\" | "
+            r"grep -qE '(Choice:|Welcome|Menu)'"
+        )
 
     for pattern in (
         r"""timeout\s+(\d+)\s+bash\s+-c\s+'[^'\n]*\bnc\b[^'\n]*\$CHAL_HOST[^'\n]*\$CHAL_PORT[^'\n]*'""",
