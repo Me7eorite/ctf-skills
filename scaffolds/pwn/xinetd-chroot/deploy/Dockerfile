@@ -1,19 +1,20 @@
 FROM ubuntu:20.04
 
-LABEL auther_template="CTF-Archives"
+LABEL author_template="challenge Factory"
 
 RUN set -eux; \
     cp /etc/apt/sources.list /etc/apt/sources.list.orig; \
     success=0; \
     for mirror in \
-        http://mirror.tuna.tsinghua.edu.cn/ \
         http://mirrors.aliyun.com/ubuntu/ \
-        http://mirrors.zju.edu.cn/ \
-        http://mirrors.ustc.edu.cn/ubuntu/; do \
+        http://mirrors.ustc.edu.cn/ubuntu/ \
+        http://mirrors.zju.edu.cn/ubuntu/ \
+        http://archive.ubuntu.com/ubuntu/; do \
         mirror="${mirror%/}"; \
         sed -E \
             -e "s#http://archive.ubuntu.com/ubuntu/?#${mirror}#g" \
             -e "s#http://security.ubuntu.com/ubuntu/?#${mirror}#g" \
+            -e "s#http://mirror.tuna.tsinghua.edu.cn/ubuntu/?#${mirror}#g" \
             -e "s#http://mirrors.tuna.tsinghua.edu.cn/ubuntu/?#${mirror}#g" \
             /etc/apt/sources.list.orig > /etc/apt/sources.list; \
         rm -rf /var/lib/apt/lists/*; \

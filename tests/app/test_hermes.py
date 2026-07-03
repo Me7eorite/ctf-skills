@@ -140,6 +140,20 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertIn("apt mirror fallback loop and mirror\n  order", prompt)
         self.assertIn("Do not run any terminal command that contains `cd ./output/challenges/...`", prompt)
 
+    def test_pwn_scaffold_prefers_stable_apt_fallback_order(self):
+        dockerfile = ROOT / "scaffolds" / "pwn" / "xinetd-chroot" / "deploy" / "Dockerfile"
+        text = dockerfile.read_text(encoding="utf-8")
+
+        aliyun = text.index("http://mirrors.aliyun.com/ubuntu/")
+        ustc = text.index("http://mirrors.ustc.edu.cn/ubuntu/")
+        zju = text.index("http://mirrors.zju.edu.cn/ubuntu/")
+        official = text.index("http://archive.ubuntu.com/ubuntu/")
+        self.assertLess(aliyun, ustc)
+        self.assertLess(ustc, zju)
+        self.assertLess(zju, official)
+        self.assertNotIn("http://mirror.tuna.tsinghua.edu.cn/ \\", text)
+        self.assertIn("http://mirror.tuna.tsinghua.edu.cn/ubuntu/?", text)
+
     def test_shard_prompt_enforces_workspace_path_discipline(self):
         prompt = (ROOT / "prompts" / "shard_prompt.md").read_text(encoding="utf-8")
 

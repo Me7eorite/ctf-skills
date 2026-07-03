@@ -68,7 +68,7 @@ def test_auto_repair_adds_make_and_replaces_conflicting_chroot_copy(tmp_path: Pa
     assert "cp -a /lib/x86_64-linux-gnu/*.so*" in repaired
 
 
-def test_auto_repair_replaces_tuna_apt_mirror(tmp_path: Path) -> None:
+def test_auto_repair_normalizes_tuna_apt_mirror_fallback_order(tmp_path: Path) -> None:
     challenge_dir = tmp_path / "challenge"
     (challenge_dir / "deploy" / "src").mkdir(parents=True)
     (challenge_dir / "deploy" / "_files").mkdir(parents=True)
@@ -76,7 +76,45 @@ def test_auto_repair_replaces_tuna_apt_mirror(tmp_path: Path) -> None:
     dockerfile = challenge_dir / "deploy" / "Dockerfile"
     dockerfile.write_text(
         "FROM ubuntu:20.04\n"
-        "RUN sed -i 's#http://archive.ubuntu.com#http://mirrors.tuna.tsinghua.edu.cn#g' "
+        "RUN set -eux; \\\n"
+        "    cp /etc/apt/sources.list /etc/apt/sources.list.orig; \\\n"
+        "    for mirror in \\\n"
+        "        http://mirror.tuna.tsinghua.edu.cn/ \\\n"
+        "        http://mirrors.aliyun.com/ubuntu/ \\\n"
+        "        http://mirrors.zju.edu.cn/ \\\n"
+        "        http://mirrors.ustc.edu.cn/ubuntu/; do \\\n"
+        "        sed -E \\\n"
+        "            -e \"s#http://archive.ubuntu.com/ubuntu/?#${mirror}#g\" \\\n"
+        "            -e \"s#http://security.ubuntu.com/ubuntu/?#${mirror}#g\" \\\n"
+        "            -e \"s#http://mirrors.tuna.tsinghua.edu.cn/ubuntu/?#${mirror}#g\" \\\n"
+        "            /etc/apt/sources.list.orig > /etc/apt/sources.list; \\\n"
+        "        apt-get update && apt-get install -y gcc xinetd && break; \\\n"
+        "    done\n",
+        encoding="utf-8",
+    )
+
+    result = auto_repair_challenge(challenge_dir)
+
+    repaired = dockerfile.read_text(encoding="utf-8")
+    assert result.changed is True
+    assert "http://mirrors.aliyun.com/ubuntu/" in repaired
+    assert "http://mirrors.ustc.edu.cn/ubuntu/" in repaired
+    assert "http://mirrors.zju.edu.cn/ubuntu/" in repaired
+    assert "http://archive.ubuntu.com/ubuntu/" in repaired
+    assert repaired.index("http://mirrors.aliyun.com/ubuntu/") < repaired.index("http://archive.ubuntu.com/ubuntu/")
+    assert "http://mirror.tuna.tsinghua.edu.cn/ \\" not in repaired
+    assert "http://mirror.tuna.tsinghua.edu.cn/ubuntu/ubuntu" not in repaired
+
+
+def test_auto_repair_replaces_legacy_single_tuna_apt_mirror(tmp_path: Path) -> None:
+    challenge_dir = tmp_path / "challenge"
+    (challenge_dir / "deploy" / "src").mkdir(parents=True)
+    (challenge_dir / "deploy" / "_files").mkdir(parents=True)
+    _write_metadata(challenge_dir)
+    dockerfile = challenge_dir / "deploy" / "Dockerfile"
+    dockerfile.write_text(
+        "FROM ubuntu:20.04\n"
+        "RUN sed -i 's#http://archive.ubuntu.com/ubuntu#http://mirrors.tuna.tsinghua.edu.cn/ubuntu#g' "
         "/etc/apt/sources.list && apt-get update && apt-get install -y gcc xinetd\n",
         encoding="utf-8",
     )
@@ -86,7 +124,7 @@ def test_auto_repair_replaces_tuna_apt_mirror(tmp_path: Path) -> None:
     repaired = dockerfile.read_text(encoding="utf-8")
     assert result.changed is True
     assert "mirrors.tuna.tsinghua.edu.cn" not in repaired
-    assert "mirrors.163.com" in repaired
+    assert "http://mirrors.aliyun.com/ubuntu/" in repaired
 
 
 def test_auto_repair_adds_i386_multilib_packages(tmp_path: Path) -> None:

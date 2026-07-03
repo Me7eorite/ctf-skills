@@ -642,10 +642,10 @@ def _repair_deploy_dockerfile(challenge_dir: Path, metadata: dict[str, Any]) -> 
     if text != original:
         actions.append("normalized Dockerfile COPY sources to challenge-root build context")
 
-    if "mirrors.tuna.tsinghua.edu.cn" in text:
-        text = text.replace("https://mirrors.tuna.tsinghua.edu.cn", "http://mirrors.163.com")
-        text = text.replace("http://mirrors.tuna.tsinghua.edu.cn", "http://mirrors.163.com")
-        actions.append("replaced unavailable TUNA apt mirror with approved 163 mirror")
+    updated = _normalize_apt_mirror_fallback_order(text)
+    if updated != text:
+        text = updated
+        actions.append("normalized Dockerfile apt mirror fallback order")
 
     if _dockerfile_needs_make_install(text, challenge_dir):
         text = _inject_make_install_layer(text)
@@ -753,6 +753,52 @@ def _dockerfile_needs_make_install(text: str, challenge_dir: Path) -> bool:
     if not _dockerfile_uses_make(text):
         return False
     return not _dockerfile_install_block_contains_package(text, "make")
+
+
+def _normalize_apt_mirror_fallback_order(text: str) -> str:
+    if "mirrors.tuna.tsinghua.edu.cn" not in text and "mirror.tuna.tsinghua.edu.cn" not in text:
+        return text
+    mirror_block = (
+        "for mirror in \\\n"
+        "        http://mirrors.aliyun.com/ubuntu/ \\\n"
+        "        http://mirrors.ustc.edu.cn/ubuntu/ \\\n"
+        "        http://mirrors.zju.edu.cn/ubuntu/ \\\n"
+        "        http://archive.ubuntu.com/ubuntu/; do"
+    )
+    mirror_loop_re = (
+        r"for mirror in \\\n"
+        r"(?:\s+https?://[A-Za-z0-9_.-]+(?:/ubuntu)?/ \\\n)*"
+        r"\s+https?://[A-Za-z0-9_.-]+(?:/ubuntu)?/; do"
+    )
+    if not re.search(mirror_loop_re, text):
+        text = re.sub(
+            r"https?://mirrors?\.tuna\.tsinghua\.edu\.cn/ubuntu/?",
+            "http://mirrors.aliyun.com/ubuntu/",
+            text,
+        )
+        return re.sub(
+            r"https?://mirrors?\.tuna\.tsinghua\.edu\.cn/?",
+            "http://mirrors.aliyun.com/",
+            text,
+        )
+
+    text = re.sub(mirror_loop_re, mirror_block, text, count=1)
+    text = re.sub(
+        r"http://mirror\.tuna\.tsinghua\.edu\.cn/(?!ubuntu\b)",
+        "http://mirror.tuna.tsinghua.edu.cn/ubuntu/",
+        text,
+    )
+    if "mirror.tuna.tsinghua.edu.cn/ubuntu" in text and "mirrors.tuna.tsinghua.edu.cn/ubuntu" in text:
+        return text
+    sed_anchor = '-e "s#http://security.ubuntu.com/ubuntu/?#${mirror}#g" \\'
+    extra = (
+        sed_anchor
+        + "\n"
+        + '            -e "s#http://mirror.tuna.tsinghua.edu.cn/ubuntu/?#${mirror}#g" \\'
+    )
+    if sed_anchor in text and "mirror.tuna.tsinghua.edu.cn/ubuntu" not in text:
+        text = text.replace(sed_anchor, extra, 1)
+    return text
 
 
 def _dockerfile_needs_i386_packages(
