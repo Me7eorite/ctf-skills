@@ -351,6 +351,7 @@ def verify_terminal_workspace_visibility(
     visibility with a tiny marker before the expensive build prompt runs.
     """
     backend = terminal_backend.strip().lower() if isinstance(terminal_backend, str) else ""
+    probe_timeout = min(timeout, TERMINAL_WORKSPACE_PROBE_TIMEOUT)
     marker = cwd / "state" / "terminal-workspace-probe.json"
     try:
         marker.unlink()
@@ -373,7 +374,7 @@ def verify_terminal_workspace_visibility(
         log_path=probe_log,
         cwd=cwd,
         environment=environment,
-        timeout=timeout,
+        timeout=probe_timeout,
     )
     if returncode != 0:
         if backend == "docker":
@@ -389,7 +390,7 @@ def verify_terminal_workspace_visibility(
                 log_path=probe_log,
                 cwd=cwd,
                 environment=environment,
-                timeout=timeout,
+                timeout=probe_timeout,
             )
             if returncode == 0:
                 _append_probe_recovery_log(
@@ -421,7 +422,7 @@ def verify_terminal_workspace_visibility(
                 log_path=probe_log,
                 cwd=cwd,
                 environment=environment,
-                timeout=timeout,
+                timeout=probe_timeout,
             )
             if returncode == 0 and marker.is_file():
                 _append_probe_recovery_log(

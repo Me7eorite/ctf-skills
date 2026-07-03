@@ -423,6 +423,32 @@ class TerminalWorkspaceVisibilityTests(unittest.TestCase):
                     timeout=10,
                 )
 
+    def test_docker_probe_caps_timeout_to_probe_budget(self):
+        captured = {}
+
+        def fake_probe(**kwargs):
+            captured["timeout"] = kwargs["timeout"]
+            marker = Path(kwargs["cwd"]) / "state" / "terminal-workspace-probe.json"
+            marker.write_text('{"ok": true}', encoding="utf-8")
+            return 0
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            (cwd / "state").mkdir()
+            log = cwd / "logs" / "hermes.log"
+
+            with patch("hermes.process._invoke_terminal_workspace_probe", side_effect=fake_probe):
+                verify_terminal_workspace_visibility(
+                    arguments=_python("pass"),
+                    log_path=log,
+                    cwd=cwd,
+                    environment={},
+                    terminal_backend="docker",
+                    timeout=3600,
+                )
+
+        self.assertEqual(captured["timeout"], 240)
+
     def test_non_docker_backend_still_requires_host_visible_marker(self):
         with tempfile.TemporaryDirectory() as tmp:
             cwd = Path(tmp)
