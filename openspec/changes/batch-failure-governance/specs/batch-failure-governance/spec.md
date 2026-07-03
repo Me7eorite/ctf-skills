@@ -44,6 +44,84 @@ The system SHALL map build-attempt validation-phase failures into a normalized, 
 - **THEN** the attempt SHALL be classified as `solver`
 - **AND** the summary SHALL preserve the solver-runtime evidence instead of routing the failure as a contract or service-readiness problem
 
+#### Scenario: Solver dependency failures stay repairable as solver failures
+- **WHEN** validation fails because `writenup/exp.py` raises `ModuleNotFoundError`, imports an undeclared local helper, or otherwise cannot load a solver dependency after validation has started
+- **THEN** the attempt SHALL be classified as `solver`
+- **AND** the failure signature SHALL include the missing module or dependency name when available
+- **AND** the repair summary SHALL point toward standard-library, vendored-helper, or declared-runtime fixes rather than service-readiness tuning
+
+### Requirement: Reference solver stability is contract-governed
+
+The system SHALL enforce stable Web/Pwn reference solver behavior before or during validation repair. For Web/Pwn challenges, the default solver path SHALL connect to the live validation target using `CHAL_HOST` and `CHAL_PORT` rather than hardcoded loopback hosts, container names, or fixed challenge ports. Explicit local debug paths such as `LOCAL=1` MAY use local binaries, loopback hosts, or `process()` for bounded smoke tests, but they SHALL NOT be the default validation path. Pwn solvers SHALL use bounded reads, receives, and subprocess/process interactions for prompt synchronization, leaks, shell interaction, and flag reads so solver mistakes become bounded validation diagnostics instead of worker hangs.
+
+#### Scenario: Web/Pwn solver default path uses validation target environment
+- **WHEN** a Web or Pwn challenge provides `writenup/exp.py`
+- **THEN** the default validation path SHALL use `CHAL_HOST` and `CHAL_PORT` to reach the running service
+- **AND** hardcoded `127.0.0.1`, `localhost`, container names, or fixed challenge ports SHALL be allowed only inside explicit local debug branches
+
+#### Scenario: Pwn solver interactions are bounded
+- **WHEN** a Pwn solver uses pwntools, sockets, subprocesses, or local process execution
+- **THEN** prompt reads, leak reads, shell reads, and local process runs SHALL be bounded by short timeouts or equivalent deterministic limits
+- **AND** an unbounded receive or process interaction SHALL be surfaced as contract or solver diagnostic evidence before it can hang a worker indefinitely
+
+#### Scenario: Solver repair receives complete exp evidence
+- **WHEN** a validation failure is classified as `solver`
+- **THEN** the next Hermes repair prompt SHALL include the latest `writenup/exp.py`, `validate.sh`, structured `validation_failure_details`, stdout/stderr tails, concise failure summary, and `writenup/pwn_debug_report.json` when present
+- **AND** the repair route SHALL preserve whether the failure appears to be dependency, synchronization, flag mismatch, offset/payload, leak parsing, or remote/local mismatch evidence
+
+### Requirement: Initial reference solver quality is gated
+
+The system SHALL treat initial `writenup/exp.py` quality as a validation-governed deliverable, not merely as a file-existence requirement. Before a Web/Pwn challenge proceeds past validation/documentation, the reference solver SHALL satisfy static stability contracts and SHALL provide bounded solve evidence appropriate to the challenge complexity. Pwn challenges with non-trivial payload logic SHALL preserve structured debug evidence for offsets, mitigations, libc/PIE assumptions, gadgets, menu synchronization, leak parsing, local smoke results, and remote/container solve results when available. Simple Pwn challenges MAY provide concise evidence, but missing evidence or an explicit inability to run a bounded smoke test SHALL be recorded rather than hidden.
+
+#### Scenario: Poor initial exp is rejected before document completion
+- **WHEN** a generated Web/Pwn challenge contains `writenup/exp.py` but the solver violates default-target, dependency, bounded-I/O, or basic evidence requirements
+- **THEN** the attempt SHALL NOT be treated as document-complete solely because `exp.py` exists
+- **AND** the failure SHALL carry contract or solver diagnostics that identify the missing solver-quality evidence
+
+#### Scenario: Pwn payload assumptions are evidence-backed
+- **WHEN** a Pwn solver uses overflow offsets, libc symbols, PIE bases, ROP gadgets, leak parsing, or menu synchronization assumptions
+- **THEN** those assumptions SHALL be derived from the actual shipped ELF/libc/container path or recorded debug evidence
+- **AND** guessed or stale constants SHALL be surfaced as solver-quality diagnostics before repeated blind repair attempts consume the budget
+
+#### Scenario: Menu synchronization evidence separates solver bugs from readiness bugs
+- **WHEN** a Pwn solver fails while waiting for a banner, prompt, or menu token
+- **THEN** the diagnostics SHALL preserve whether the service readiness probe saw the prompt on a fresh connection
+- **AND** a solver menu-sync failure SHALL be distinguishable from a service-readiness failure in the normalized class and signature evidence
+
+#### Scenario: Solver dependencies are reproducible
+- **WHEN** `writenup/exp.py` imports a non-standard helper module
+- **THEN** the helper SHALL be generated under `writenup/` or otherwise declared as supported by the validation runtime
+- **AND** a missing helper SHALL produce a solver dependency signature containing the missing module name
+
+#### Scenario: Simple Pwn evidence uses a lighter profile
+- **WHEN** a Pwn challenge is a simple ret2text, ret2win, or otherwise single-stage non-PIE/no-libc-leak exploit
+- **THEN** the solver-quality gate SHALL accept concise evidence covering binary path, mitigation summary, offset source, menu token if any, and a bounded local or container smoke result
+- **AND** the gate SHALL NOT require a full advanced `pwn_debug_report.json` solely because the category is Pwn
+
+#### Scenario: Complex Pwn evidence uses a richer profile
+- **WHEN** a Pwn challenge uses canaries, PIE, libc leaks, ret2libc, multi-stage ROP, heap behavior, custom protocols, or timing-sensitive interaction
+- **THEN** the solver-quality gate SHALL require richer structured evidence for leak parsing, base calculations, gadget source, libc/ld source, synchronization, and local plus remote/container observations when available
+- **AND** missing rich evidence SHALL produce a solver-quality diagnostic rather than a generic validation failure
+
+### Requirement: Validation diagnostics are sufficient for repair
+
+The validation path SHALL emit and preserve a bounded diagnostic envelope whenever validation or solver execution fails. The envelope SHALL include, when applicable, compose or container service state, recent service logs, readiness probe result, exact solver command, solver stdout tail, solver stderr tail, solver exit code, validation status, structured `validation_failure_details`, and any final stdout flag candidate. Diagnostic commands invoked by traps SHALL write to stderr so stdout remains reserved for the recovered flag. Repair contexts and API summaries SHALL preserve missing diagnostic fields explicitly as unavailable rather than silently dropping the diagnostic section. Diagnostic text included in repair prompts SHALL be capped by line and byte budgets and SHALL mark truncation explicitly.
+
+#### Scenario: Solver failure captures stdout and stderr evidence
+- **WHEN** `writenup/exp.py` exits non-zero or prints the wrong flag during validation
+- **THEN** the latest validation result SHALL preserve bounded solver stdout and stderr tails
+- **AND** the next repair prompt SHALL include those tails and the solver exit code
+
+#### Scenario: Insufficient diagnostics becomes actionable
+- **WHEN** validation fails but the latest result lacks solver stdout/stderr tails, readiness evidence, service logs, or structured failure details needed for repair
+- **THEN** the attempt SHALL expose a diagnostic-quality failure summary or detail
+- **AND** the next repair route SHALL first improve validation diagnostics before attempting speculative exploit payload changes
+
+#### Scenario: Repair context marks truncated diagnostics
+- **WHEN** solver stdout, solver stderr, service logs, or debug reports exceed the repair-context budget
+- **THEN** the repair prompt SHALL include the most relevant bounded tail or summary
+- **AND** it SHALL explicitly mark that content was truncated so the repair agent does not treat the evidence as complete
+
 ### Requirement: Automatic repair stops after repeated identical failures
 
 The system SHALL stop automatic validation repair for a build attempt when the same normalized validation failure class and essentially the same failure signature repeat across repair rounds inside the same active runner validation/repair invocation without observable progress. The signature SHOULD be derived from structured `validation_failure_details` code/message/path data when available, then fall back to validation status, concise error text, and stdout/stderr tail evidence. The stop condition SHALL be attempt-local and invocation-local. Reaching that stop condition SHALL leave the attempt failed and SHALL not affect the repair budget or progress of sibling attempts in the same batch. Cross-request suppression across separate retry or revalidate requests is out of scope unless a future change adds durable failure-signature storage.
@@ -52,6 +130,16 @@ The system SHALL stop automatic validation repair for a build attempt when the s
 - **WHEN** the same build attempt times out repeatedly with the same structured-or-derived signature and no progress change inside one validation/repair invocation
 - **THEN** the system SHALL stop further automatic repair for that attempt
 - **AND** the attempt SHALL remain failed with the latest timeout diagnostic
+
+#### Scenario: Different solver signatures can continue within budget
+- **WHEN** a build attempt first fails with a solver dependency signature and then fails with a materially different solver signature such as flag mismatch or prompt EOF after a repair changed the output
+- **THEN** the system SHALL NOT treat the second failure as the same repeated failure solely because both are classified as `solver`
+- **AND** the attempt MAY continue through its bounded repair policy if budget remains
+
+#### Scenario: Volatile values do not create fake new signatures
+- **WHEN** repeated validation failures differ only by elapsed time, container id, random port, absolute execution workspace prefix, or non-address-specific memory address noise
+- **THEN** the signature comparison SHALL normalize those volatile values before deciding whether the failure is repeated
+- **AND** stable values such as detail code, missing module, path, traceback frame, prompt marker, and validation status SHALL remain part of the signature
 
 #### Scenario: A different attempt still gets its own budget
 - **GIVEN** attempt A has already exhausted its automatic repair budget

@@ -36,6 +36,27 @@ The system SHALL route validation and repair for validation-phase build-attempt 
 - **AND** the next automatic repair step SHALL pass the latest validation evidence, file context, and stdout/stderr tails into the Hermes repair prompt unless the policy chooses no-op/escalation
 - **AND** it SHALL not prioritize service startup repair unless new service-readiness evidence appears
 
+#### Scenario: Solver repair carries exp-specific context
+- **WHEN** the repair policy routes a solver-class validation failure to Hermes repair
+- **THEN** the repair context SHALL include the current `writenup/exp.py`, `validate.sh`, relevant solver debug reports, latest `validation_failure_details`, stdout/stderr tails, and failure summary
+- **AND** the context SHALL identify dependency, synchronization, flag mismatch, offset/payload, leak parsing, or remote/local mismatch evidence when the classifier can derive it
+- **AND** the repair prompt SHALL instruct the repair agent to retest through the validation service path rather than only local/offline solver paths
+
+#### Scenario: Pwn solver repair is evidence-backed
+- **WHEN** a solver-class Pwn failure involves overflow offsets, libc/PIE bases, ROP gadgets, leak parsing, or menu synchronization
+- **THEN** the repair route SHALL request recalculation or verification against the actual shipped ELF, libc, attachments, or container/chroot path
+- **AND** it SHALL prefer updating or creating structured debug evidence over replacing constants with new guesses
+
+#### Scenario: Missing diagnostics are repaired before payload guesses
+- **WHEN** a solver-class validation failure lacks bounded solver stdout/stderr tails, readiness evidence, service logs, or structured failure details
+- **THEN** the selected route SHALL first normalize `validate.sh` or the validation wrapper to capture those diagnostics
+- **AND** Hermes repair SHALL NOT be asked to tune arbitrary payload logic from an empty or generic failure summary
+
+#### Scenario: Exp stability contract failures get bounded repair
+- **WHEN** a Web/Pwn solver violates stable validation-target requirements such as hardcoded service host/port in the default path or unbounded Pwn receive/process interactions
+- **THEN** the failure SHALL be routed as a bounded validation repair with contract or solver evidence according to the diagnostic
+- **AND** the route SHALL normalize the solver toward `CHAL_HOST`/`CHAL_PORT`, bounded reads, and explicit local debug branches without consuming sibling attempts' budgets
+
 #### Scenario: One attempt cannot consume another attempt's budget
 - **WHEN** two attempts in the same batch fail during validation
 - **THEN** each attempt SHALL have its own retry budget, derived validation class, invocation-local signature state, and failure summary
@@ -58,3 +79,17 @@ The system SHALL expose the normalized validation failure class in build-attempt
 #### Scenario: Non-validation attempts do not claim a validation failure class
 - **WHEN** a build attempt is queued, running, succeeded, or failed before validation with a runner-phase failure
 - **THEN** it SHALL NOT include `validation_failure_class`
+
+### Requirement: Risky enforcement is staged and observable
+
+The system SHALL roll out validation failure governance in stages so operators can see classifications and diagnostics before stricter solver-quality blockers affect batch throughput. Classification, diagnostic preservation, and API visibility SHALL be enabled before hard exp-stability blockers. Pwn evidence-profile enforcement SHALL apply to new generation paths after profile-specific tests are in place. Existing runner-phase taxonomy and historical artifacts SHALL continue to be readable without requiring a schema migration or retroactive evidence generation.
+
+#### Scenario: Diagnostics are visible before hard blockers
+- **WHEN** the governance change is first enabled
+- **THEN** validation failure classes, signatures, and diagnostic envelopes SHALL be visible in attempt detail and repair prompts
+- **AND** hard exp-stability blockers SHALL NOT be enabled until those diagnostics are available for repair decisions
+
+#### Scenario: Existing artifacts remain inspectable
+- **WHEN** an older failed attempt lacks new solver-quality evidence or diagnostic-envelope fields
+- **THEN** the API SHALL still expose available legacy diagnostics
+- **AND** missing new fields SHALL be represented as unavailable rather than breaking attempt detail rendering
