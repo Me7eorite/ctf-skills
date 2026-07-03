@@ -778,6 +778,19 @@ class SolverIntegrityTests(unittest.TestCase):
         errors = self.validator.contract_errors(challenge, metadata)
         self.assertTrue(any("destructive Docker cleanup" in e for e in errors))
 
+    def test_validate_sh_hardcoded_execution_path_is_rejected(self):
+        challenge, metadata = self._web_challenge(
+            exp_py="import os,requests\nprint(requests.get('http://target/').text)\n"
+        )
+        (challenge / "validate.sh").write_text(
+            "#!/bin/sh\n"
+            "cd /workspace/executions/attempt/current/output/challenges/web/web-0001-demo\n"
+            "python3 writenup/exp.py\n",
+            encoding="utf-8",
+        )
+        errors = self.validator.contract_errors(challenge, metadata)
+        self.assertTrue(any("hardcodes an execution workspace path" in e for e in errors))
+
     def test_validate_sh_compose_down_volumes_is_rejected(self):
         challenge, metadata = self._web_challenge(
             exp_py="import os,requests\nprint(requests.get('http://target/').text)\n"

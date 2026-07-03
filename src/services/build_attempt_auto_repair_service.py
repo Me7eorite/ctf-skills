@@ -41,7 +41,9 @@ def auto_repair_challenge(
     actions.extend(_repair_artifact_metadata(challenge_dir, metadata))
     actions.extend(_repair_validate_wrapper(challenge_dir, metadata))
     actions.extend(_repair_compose_validate_wrapper(challenge_dir, metadata))
+    actions.extend(_repair_validate_workspace_paths(challenge_dir, metadata))
     actions.extend(_repair_pwn_validate_readiness_probe(challenge_dir, metadata))
+    actions.extend(_repair_docker_logs_no_color(challenge_dir))
     actions.extend(_repair_validate_solver_capture(challenge_dir, metadata))
     actions.extend(_repair_pwn_xinetd_scaffold(challenge_dir, metadata))
     actions.extend(_repair_deploy_dockerfile(challenge_dir, metadata))
@@ -305,6 +307,72 @@ def _repair_compose_validate_wrapper(challenge_dir: Path, metadata: dict[str, An
         return []
     validate.write_text(text, encoding="utf-8")
     return ["normalized validate.sh to use docker-compose only"]
+
+
+def _repair_validate_workspace_paths(challenge_dir: Path, metadata: dict[str, Any]) -> list[str]:
+    validate = challenge_dir / "validate.sh"
+    if not validate.is_file():
+        return []
+    try:
+        original = validate.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return []
+    challenge_id = str(metadata.get("id") or "")
+    if not challenge_id or not _validate_has_hardcoded_execution_path(original):
+        return []
+
+    text = _replace_absolute_challenge_root_assignments(original)
+    text = _replace_absolute_challenge_root_find(text, challenge_id)
+    if text == original:
+        return []
+    validate.write_text(text, encoding="utf-8")
+    return ["rewrote validate.sh hardcoded execution path to script-relative challenge root"]
+
+
+def _validate_has_hardcoded_execution_path(text: str) -> bool:
+    return "/workspace/executions/" in text or "/root/ctf-skills/work/executions/" in text
+
+
+def _replace_absolute_challenge_root_assignments(text: str) -> str:
+    script_root = 'CHAL_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"'
+    patterns = (
+        r'(?m)^(\s*)(?:CHAL_ROOT|CHALLENGE_ROOT)\s*=\s*["\']/(?:workspace/executions|root/ctf-skills/work/executions)/[^"\']*["\']\s*$',
+        r'(?m)^(\s*)cd\s+["\']/(?:workspace/executions|root/ctf-skills/work/executions)/[^"\']*["\']\s*(?:\|\|\s*exit\s*1)?\s*$',
+    )
+    for pattern in patterns:
+        text = re.sub(pattern, lambda match: f"{match.group(1)}{script_root}", text)
+    return text
+
+
+def _replace_absolute_challenge_root_find(text: str, challenge_id: str) -> str:
+    script_root = 'CHAL_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"'
+    pattern = (
+        r'(?ms)^(\s*)(?:CHAL_ROOT|CHALLENGE_ROOT)\s*=\s*\$\(find\s+["\']?'
+        r'/(?:workspace/executions|root/ctf-skills/work/executions)/[^"\')\n]*'
+        r'["\']?\s+[^\n)]*'
+        + re.escape(challenge_id)
+        + r'[^\n)]*\)\s*$'
+    )
+    return re.sub(pattern, lambda match: f"{match.group(1)}{script_root}", text)
+
+
+def _repair_docker_logs_no_color(challenge_dir: Path) -> list[str]:
+    validate = challenge_dir / "validate.sh"
+    if not validate.is_file():
+        return []
+    try:
+        original = validate.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return []
+    repaired = re.sub(
+        r"(?m)(\bdocker\s+logs\b[^\n]*?)\s+--no-color\b",
+        r"\1",
+        original,
+    )
+    if repaired == original:
+        return []
+    validate.write_text(repaired, encoding="utf-8")
+    return ["removed unsupported --no-color flag from docker logs diagnostics"]
 
 
 def _remove_compose_helper(text: str) -> str:
@@ -583,6 +651,18 @@ def _repair_deploy_dockerfile(challenge_dir: Path, metadata: dict[str, Any]) -> 
         text = _inject_make_install_layer(text)
         actions.append("added Dockerfile layer installing make before build steps")
 
+    if _dockerfile_needs_i386_packages(text, challenge_dir, metadata):
+        updated = _add_apt_packages(text, ("gcc-multilib", "libc6-dev-i386", "lib32z1"))
+        if updated != text:
+            text = updated
+            actions.append("added Dockerfile i386 multilib packages")
+
+    binary_name = _pwn_binary_name(challenge_dir, metadata)
+    updated = _replace_missing_pwn_copy_target(text, binary_name)
+    if updated != text:
+        text = updated
+        actions.append(f"aligned Dockerfile binary copy target to {binary_name}")
+
     replaced = re.sub(
         (
             r"cp -R /lib\* /home/ctf/?(?:\s*\\)?"
@@ -673,6 +753,65 @@ def _dockerfile_needs_make_install(text: str, challenge_dir: Path) -> bool:
     if not _dockerfile_uses_make(text):
         return False
     return not _dockerfile_install_block_contains_package(text, "make")
+
+
+def _dockerfile_needs_i386_packages(
+    text: str,
+    challenge_dir: Path,
+    metadata: dict[str, Any],
+) -> bool:
+    haystack = "\n".join(
+        [
+            text,
+            _read_optional(challenge_dir / "deploy" / "src" / "Makefile"),
+            str(metadata.get("architecture") or ""),
+            str(metadata.get("target_architecture") or ""),
+        ]
+    ).lower()
+    if not any(token in haystack for token in ("-m32", "i386", "x86_32", "linux/386")):
+        return False
+    return not all(
+        _dockerfile_install_block_contains_package(text, package)
+        for package in ("gcc-multilib", "libc6-dev-i386", "lib32z1")
+    )
+
+
+def _read_optional(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return ""
+
+
+def _add_apt_packages(text: str, packages: tuple[str, ...]) -> str:
+    install_re = re.compile(
+        r"(?P<prefix>apt-get\s+install\s+(?:-[^\n&;]+\s+)*)"
+        r"(?P<body>.*?)(?P<suffix>\s*(?:&&|;|\\\n|$))",
+        flags=re.I | re.S,
+    )
+
+    def replace(match: re.Match[str]) -> str:
+        body = match.group("body")
+        missing = [
+            package
+            for package in packages
+            if not re.search(rf"(?<![\w.-]){re.escape(package)}(?![\w.-])", body)
+        ]
+        if not missing:
+            return match.group(0)
+        return match.group("prefix") + body.rstrip() + " " + " ".join(missing) + match.group("suffix")
+
+    return install_re.sub(replace, text, count=1)
+
+
+def _replace_missing_pwn_copy_target(text: str, binary_name: str) -> str:
+    if binary_name == "pwn":
+        return text
+    return re.sub(
+        r"(?m)(\bcp\s+)(?:\./)?pwn(\s+/home/ctf/)pwn\b",
+        rf"\1{binary_name}\2{binary_name}",
+        text,
+    )
 
 
 def _dockerfile_uses_make(text: str) -> bool:

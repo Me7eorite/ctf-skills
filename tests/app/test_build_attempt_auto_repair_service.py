@@ -89,6 +89,95 @@ def test_auto_repair_replaces_tuna_apt_mirror(tmp_path: Path) -> None:
     assert "mirrors.163.com" in repaired
 
 
+def test_auto_repair_adds_i386_multilib_packages(tmp_path: Path) -> None:
+    challenge_dir = tmp_path / "challenge"
+    (challenge_dir / "deploy" / "src").mkdir(parents=True)
+    (challenge_dir / "deploy" / "src" / "Makefile").write_text(
+        "all:\n\tgcc -m32 -o vuln vuln.c\n",
+        encoding="utf-8",
+    )
+    _write_metadata(challenge_dir)
+    dockerfile = challenge_dir / "deploy" / "Dockerfile"
+    dockerfile.write_text(
+        "FROM ubuntu:20.04\n"
+        "RUN apt-get update && apt-get install -y --no-install-recommends "
+        "gcc make xinetd && rm -rf /var/lib/apt/lists/*\n"
+        "RUN cd /tmp/src && make\n",
+        encoding="utf-8",
+    )
+
+    result = auto_repair_challenge(challenge_dir)
+
+    repaired = dockerfile.read_text(encoding="utf-8")
+    assert result.changed is True
+    assert "gcc-multilib" in repaired
+    assert "libc6-dev-i386" in repaired
+    assert "lib32z1" in repaired
+
+
+def test_auto_repair_aligns_dockerfile_binary_copy_target(tmp_path: Path) -> None:
+    challenge_dir = tmp_path / "challenge"
+    (challenge_dir / "deploy" / "src").mkdir(parents=True)
+    (challenge_dir / "deploy" / "src" / "Makefile").write_text(
+        "TARGET = aslr_chal\nall:\n\tgcc vuln.c -o $(TARGET)\n",
+        encoding="utf-8",
+    )
+    _write_metadata(challenge_dir)
+    dockerfile = challenge_dir / "deploy" / "Dockerfile"
+    dockerfile.write_text(
+        "FROM ubuntu:20.04\n"
+        "RUN cd /tmp/src && make clean && make && cp pwn /home/ctf/pwn && rm -rf /tmp/src\n",
+        encoding="utf-8",
+    )
+
+    result = auto_repair_challenge(challenge_dir)
+
+    repaired = dockerfile.read_text(encoding="utf-8")
+    assert result.changed is True
+    assert "cp aslr_chal /home/ctf/aslr_chal" in repaired
+    assert "cp pwn /home/ctf/pwn" not in repaired
+
+
+def test_auto_repair_rewrites_validate_hardcoded_workspace_path(tmp_path: Path) -> None:
+    challenge_dir = tmp_path / "challenge"
+    challenge_dir.mkdir()
+    _write_metadata(challenge_dir, category="pwn")
+    validate = challenge_dir / "validate.sh"
+    validate.write_text(
+        "#!/bin/bash\n"
+        "CHAL_ROOT=\"/workspace/executions/attempt/current/output/challenges/pwn/pwn-0001-demo\"\n"
+        "cd \"$CHAL_ROOT\" || exit 1\n",
+        encoding="utf-8",
+    )
+
+    result = auto_repair_challenge(challenge_dir)
+
+    repaired = validate.read_text(encoding="utf-8")
+    assert result.changed is True
+    assert "/workspace/executions/" not in repaired
+    assert 'CHAL_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"' in repaired
+
+
+def test_auto_repair_removes_unsupported_docker_logs_no_color(tmp_path: Path) -> None:
+    challenge_dir = tmp_path / "challenge"
+    challenge_dir.mkdir()
+    _write_metadata(challenge_dir, category="pwn")
+    validate = challenge_dir / "validate.sh"
+    validate.write_text(
+        "#!/bin/bash\n"
+        "docker logs --no-color --tail=120 pwn-demo\n"
+        "docker-compose logs --no-color --tail=120\n",
+        encoding="utf-8",
+    )
+
+    result = auto_repair_challenge(challenge_dir)
+
+    repaired = validate.read_text(encoding="utf-8")
+    assert result.changed is True
+    assert "docker logs --tail=120 pwn-demo" in repaired
+    assert "docker-compose logs --no-color --tail=120" in repaired
+
+
 def test_auto_repair_replaces_multiline_conflicting_chroot_copy(tmp_path: Path) -> None:
     challenge_dir = tmp_path / "challenge"
     (challenge_dir / "deploy" / "src").mkdir(parents=True)
@@ -283,10 +372,12 @@ def test_auto_repair_fixes_pwn_echo_bash_nc_probe_variant(tmp_path: Path) -> Non
         "#!/bin/bash\n"
         "CHAL_HOST=localhost\n"
         "CHAL_PORT=9004\n"
-        "if timeout 5 bash -c 'echo \"\" | nc \"$CHAL_HOST\" \"$CHAL_PORT\"' 2>/dev/null | grep -qE \"(Choice:|Welcome)\"; then\n"
+        "if timeout 5 bash -c 'echo \"\" | nc \"$CHAL_HOST\" \"$CHAL_PORT\"' "
+        "2>/dev/null | grep -qE \"(Choice:|Welcome)\"; then\n"
         "    echo ready\n"
         "fi\n"
-        "if timeout 3 bash -c 'nc \"$CHAL_HOST\" \"$CHAL_PORT\" < /dev/null' 2>/dev/null | head -c 100 | grep -q .; then\n"
+        "if timeout 3 bash -c 'nc \"$CHAL_HOST\" \"$CHAL_PORT\" < /dev/null' "
+        "2>/dev/null | head -c 100 | grep -q .; then\n"
         "    echo data\n"
         "fi\n",
         encoding="utf-8",

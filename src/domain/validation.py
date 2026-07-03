@@ -490,6 +490,16 @@ def _read_text(path: Path) -> str | None:
         return None
 
 
+def _contains_hardcoded_execution_path(text: str) -> bool:
+    return any(
+        token in text
+        for token in (
+            "/workspace/executions/",
+            "/root/ctf-skills/work/executions/",
+        )
+    )
+
+
 def _dockerfile_installs_root_start(dockerfile: Path) -> bool:
     text = _read_text(dockerfile)
     if not text:
@@ -1523,6 +1533,11 @@ class ChallengeValidator:
         for name, text in (("validate.sh", validate_text), ("writenup/exp.py", exp_text)):
             if not text:
                 continue
+            if _contains_hardcoded_execution_path(text):
+                errors.append(
+                    f"{name} hardcodes an execution workspace path; locate the "
+                    "challenge root from the script location or current workspace instead"
+                )
             for token in ("metadata.json", "challenge.yml"):
                 if token in text:
                     errors.append(
