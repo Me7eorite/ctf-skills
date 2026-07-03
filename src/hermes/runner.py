@@ -45,6 +45,12 @@ from domain.validation_failure_governance import (
     annotate_validation_result,
     attempt_level_validation_failure,
 )
+from domain.validation_repair_policy import (
+    automatic_hermes_allowed,
+    policies_by_challenge,
+    repair_policy_summary,
+    validation_failure_fingerprints,
+)
 from hermes import process as hermes_process
 from hermes.build_publisher import (
     PublicationContract,
@@ -1092,14 +1098,44 @@ class HermesRunner:
         repair_timeout = _resolve_validation_repair_timeout(effective_timeout)
         validation_round = 0
         deterministic_rounds = 0
+        seen_failure_fingerprints = set(validation_failure_fingerprints(per_results))
+        repeated_failure_stop = False
+
+        def stop_if_repeated_failure() -> bool:
+            current = set(validation_failure_fingerprints(per_results))
+            repeated = current & seen_failure_fingerprints
+            if current:
+                seen_failure_fingerprints.update(current)
+            if not repeated:
+                return False
+            self._progress.record(
+                shard=original_shard_name,
+                worker=worker,
+                stage="validate",
+                status="running",
+                message=(
+                    "validation repair stopped: repeated failure signature "
+                    + ", ".join(sorted(repeated)[:3])
+                ),
+            )
+            return True
 
         def run_deterministic_repairs() -> None:
-            nonlocal deterministic_rounds, per_results, validated_set, validation_round
+            nonlocal deterministic_rounds, per_results, validated_set, validation_round, repeated_failure_stop
             while (
                 any(result.get("solve_status") == "failed" for result in per_results)
                 and self._validation_results_allow_auto_repair(per_results)
+                and not repeated_failure_stop
             ):
-                if deterministic_rounds >= 3:
+                deterministic_limit = max(
+                    (
+                        policy.max_deterministic_rounds
+                        for policy in policies_by_challenge(per_results).values()
+                        if policy.deterministic_mechanics
+                    ),
+                    default=0,
+                )
+                if deterministic_rounds >= deterministic_limit:
                     self._progress.record(
                         shard=original_shard_name,
                         worker=worker,
@@ -1111,6 +1147,7 @@ class HermesRunner:
                 auto_actions = self._auto_repair_workspace_outputs(
                     workspace,
                     challenge_ids,
+                    per_results,
                 )
                 if not auto_actions:
                     break
@@ -1141,7 +1178,19 @@ class HermesRunner:
 
         run_deterministic_repairs()
         for repair_attempt in range(1, repair_budget + 1):
+            if repeated_failure_stop:
+                break
             if not any(result.get("solve_status") == "failed" for result in per_results):
+                break
+            if not automatic_hermes_allowed(per_results):
+                summary = repair_policy_summary(per_results) or "no automatic Hermes repair route"
+                self._progress.record(
+                    shard=original_shard_name,
+                    worker=worker,
+                    stage="validate",
+                    status="running",
+                    message=f"validation repair escalated: {summary}",
+                )
                 break
             for result in per_results:
                 for contract_error in result.get("validation_contract_errors") or []:
@@ -1154,7 +1203,9 @@ class HermesRunner:
                 stage="validate",
                 status="running",
                 message=(
-                    "validation debug: continuing Hermes with host diagnostics "
+                    "validation debug: continuing Hermes with host diagnostics; "
+                    + (repair_policy_summary(per_results) or "class-aware route")
+                    + " "
                     f"({repair_attempt}/{repair_budget})"
                 ),
             )
@@ -1242,6 +1293,7 @@ class HermesRunner:
                 workspace, validation_round, per_results, validated_set
             )
             merge_validation_into_report(report, per_results)
+            repeated_failure_stop = stop_if_repeated_failure()
             run_deterministic_repairs()
 
         # 步骤 10: 根据校验结果判定最终状态
@@ -1659,10 +1711,20 @@ class HermesRunner:
     def _auto_repair_workspace_outputs(
         workspace: ExecutionWorkspace,
         challenge_ids: list[str],
+        per_results: list[dict[str, Any]] | None = None,
     ) -> list[str]:
         actions: list[str] = []
         output_root = workspace.output / "challenges"
+        policies = policies_by_challenge(per_results or [])
         for challenge_id in challenge_ids:
+            policy = policies.get(challenge_id)
+            allowed_mechanics = (
+                policy.deterministic_mechanics
+                if policy is not None
+                else None
+            )
+            if policy is not None and not allowed_mechanics:
+                continue
             for challenge_dir in sorted(output_root.glob("*/*")):
                 if not challenge_dir.is_dir():
                     continue
@@ -1672,6 +1734,7 @@ class HermesRunner:
                 result = auto_repair_challenge(
                     challenge_dir,
                     challenge_id=challenge_id,
+                    allowed_mechanics=allowed_mechanics,
                 )
                 actions.extend(result.actions)
                 break
@@ -1681,12 +1744,9 @@ class HermesRunner:
     def _validation_results_allow_auto_repair(
         per_results: list[dict[str, Any]],
     ) -> bool:
-        return any(
-            result.get("validation_status") == "contract_failed"
-            or bool(result.get("validation_contract_errors"))
-            or _validation_result_has_compose_cli_failure(result)
-            for result in per_results
-        )
+        if any(policy.deterministic_mechanics for policy in policies_by_challenge(per_results).values()):
+            return True
+        return any(_validation_result_has_compose_cli_failure(result) for result in per_results)
 
     # ------------------------------------------------------------------
     # State helpers

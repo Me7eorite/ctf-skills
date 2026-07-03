@@ -221,6 +221,7 @@ class BuildOrchestrationService:
                 "source_shard_basename": source.shard_basename,
                 "failure_summary": failure_summary,
             }
+            repair_context.update(_read_retry_diagnostics(self.paths, source.id))
         return self._submit(
             [source.design_task_id],
             retry_sources={source.design_task_id: source.id},

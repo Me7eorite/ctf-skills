@@ -410,7 +410,7 @@ class RunnerRealRunTests(unittest.TestCase):
             observed: dict[str, int | None] = {}
 
             def fake_invoke(prompt: str, log: Path, dry_run: bool, *, timeout=None, **_kwargs) -> int:
-                observed["timeout"] = timeout
+                observed.setdefault("timeout", timeout)
                 log.parent.mkdir(parents=True, exist_ok=True)
                 log.write_text("fake invoke\n", encoding="utf-8")
                 return 0

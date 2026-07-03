@@ -10,6 +10,22 @@ from pathlib import Path
 from typing import Any
 
 from core.jsonio import read_json, write_json
+from domain.validation_repair_policy import (
+    MECHANIC_ARTIFACT_METADATA,
+    MECHANIC_CHALLENGE_YML,
+    MECHANIC_COMPOSE_VALIDATE_WRAPPER,
+    MECHANIC_DEPLOY_DOCKERFILE,
+    MECHANIC_DOCKER_LOGS_NO_COLOR,
+    MECHANIC_DOCUMENT_PAIR,
+    MECHANIC_PROMOTE_NESTED_ROOT,
+    MECHANIC_PWN_READINESS_PROBE,
+    MECHANIC_PWN_XINETD_SCAFFOLD,
+    MECHANIC_REMOVE_NESTED_OUTPUT,
+    MECHANIC_SOURCE_EVIDENCE,
+    MECHANIC_VALIDATE_SOLVER_CAPTURE,
+    MECHANIC_VALIDATE_WORKSPACE_PATHS,
+    MECHANIC_VALIDATE_WRAPPER,
+)
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 _PWN_XINETD_SCAFFOLD = _REPOSITORY_ROOT / "scaffolds" / "pwn" / "xinetd-chroot"
@@ -26,27 +42,47 @@ def auto_repair_challenge(
     challenge_dir: Path,
     *,
     challenge_id: str | None = None,
+    allowed_mechanics: tuple[str, ...] | set[str] | None = None,
 ) -> AutoRepairResult:
     """Apply safe local repairs that do not require challenge redesign."""
+    allowed = set(allowed_mechanics) if allowed_mechanics is not None else None
+
+    def can_run(mechanic: str) -> bool:
+        return allowed is None or mechanic in allowed
+
     actions: list[str] = []
-    actions.extend(_promote_nested_challenge_root(challenge_dir, challenge_id))
+    if can_run(MECHANIC_PROMOTE_NESTED_ROOT):
+        actions.extend(_promote_nested_challenge_root(challenge_dir, challenge_id))
     metadata = read_json(challenge_dir / "metadata.json", None)
     if not isinstance(metadata, dict):
         return AutoRepairResult(changed=bool(actions), actions=tuple(actions))
 
-    actions.extend(_remove_nested_output_trees(challenge_dir))
-    actions.extend(_repair_challenge_yml(challenge_dir, metadata))
-    actions.extend(_repair_document_pair(challenge_dir))
-    actions.extend(_repair_source_evidence(challenge_dir, metadata))
-    actions.extend(_repair_artifact_metadata(challenge_dir, metadata))
-    actions.extend(_repair_validate_wrapper(challenge_dir, metadata))
-    actions.extend(_repair_compose_validate_wrapper(challenge_dir, metadata))
-    actions.extend(_repair_validate_workspace_paths(challenge_dir, metadata))
-    actions.extend(_repair_pwn_validate_readiness_probe(challenge_dir, metadata))
-    actions.extend(_repair_docker_logs_no_color(challenge_dir))
-    actions.extend(_repair_validate_solver_capture(challenge_dir, metadata))
-    actions.extend(_repair_pwn_xinetd_scaffold(challenge_dir, metadata))
-    actions.extend(_repair_deploy_dockerfile(challenge_dir, metadata))
+    if can_run(MECHANIC_REMOVE_NESTED_OUTPUT):
+        actions.extend(_remove_nested_output_trees(challenge_dir))
+    if can_run(MECHANIC_CHALLENGE_YML):
+        actions.extend(_repair_challenge_yml(challenge_dir, metadata))
+    if can_run(MECHANIC_DOCUMENT_PAIR):
+        actions.extend(_repair_document_pair(challenge_dir))
+    if can_run(MECHANIC_SOURCE_EVIDENCE):
+        actions.extend(_repair_source_evidence(challenge_dir, metadata))
+    if can_run(MECHANIC_ARTIFACT_METADATA):
+        actions.extend(_repair_artifact_metadata(challenge_dir, metadata))
+    if can_run(MECHANIC_VALIDATE_WRAPPER):
+        actions.extend(_repair_validate_wrapper(challenge_dir, metadata))
+    if can_run(MECHANIC_COMPOSE_VALIDATE_WRAPPER):
+        actions.extend(_repair_compose_validate_wrapper(challenge_dir, metadata))
+    if can_run(MECHANIC_VALIDATE_WORKSPACE_PATHS):
+        actions.extend(_repair_validate_workspace_paths(challenge_dir, metadata))
+    if can_run(MECHANIC_PWN_READINESS_PROBE):
+        actions.extend(_repair_pwn_validate_readiness_probe(challenge_dir, metadata))
+    if can_run(MECHANIC_DOCKER_LOGS_NO_COLOR):
+        actions.extend(_repair_docker_logs_no_color(challenge_dir))
+    if can_run(MECHANIC_VALIDATE_SOLVER_CAPTURE):
+        actions.extend(_repair_validate_solver_capture(challenge_dir, metadata))
+    if can_run(MECHANIC_PWN_XINETD_SCAFFOLD):
+        actions.extend(_repair_pwn_xinetd_scaffold(challenge_dir, metadata))
+    if can_run(MECHANIC_DEPLOY_DOCKERFILE):
+        actions.extend(_repair_deploy_dockerfile(challenge_dir, metadata))
 
     if actions:
         write_json(challenge_dir / "metadata.json", metadata)

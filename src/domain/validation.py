@@ -233,6 +233,45 @@ def classify_validation_failure(
     ]
 
 
+def _tail_text(value: Any, *, limit: int = 2000) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        text = value.decode("utf-8", errors="replace")
+    else:
+        text = str(value)
+    text = text.strip()
+    return text[-limit:] if text else None
+
+
+def _missing_validation_diagnostics(
+    *,
+    stdout_tail: Any,
+    stderr_tail: Any,
+    returncode: int | None,
+    final_flag_candidate: Any,
+) -> list[str]:
+    missing: list[str] = []
+    if not stdout_tail:
+        missing.append("solver stdout tail unavailable")
+    if not stderr_tail:
+        missing.append("solver stderr tail unavailable")
+    if returncode is None:
+        missing.append("solver exit code unavailable")
+    if not final_flag_candidate:
+        missing.append("final stdout flag candidate unavailable")
+    # validate.sh implementations may emit these details in stdout/stderr; the
+    # host validator cannot synthesize them when the script omits them.
+    missing.extend(
+        [
+            "service state unavailable",
+            "recent service logs unavailable",
+            "readiness probe result unavailable",
+        ]
+    )
+    return missing
+
+
 def _classify_contract_error(message: str, *, status: str = "contract_failed") -> dict[str, str]:
     phase = "contract"
     code = "contract_failed"
@@ -1231,9 +1270,11 @@ class ChallengeValidator:
 
         # 第三步：执行参考解题脚本
         started = time.monotonic()
+        validation_command = [self.shell, str(validation_script)]
+        record["command"] = validation_command
         try:
             process = subprocess.run(
-                [self.shell, str(validation_script)],
+                validation_command,
                 cwd=challenge_dir,
                 env=self._validation_env(),
                 text=True,
@@ -1241,11 +1282,21 @@ class ChallengeValidator:
                 timeout=self.timeout,
                 check=False,
             )
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
             record_status("failed", "validation timed out")
+            stdout_tail = _tail_text(exc.stdout)
+            stderr_tail = _tail_text(exc.stderr)
             return {
                 **record,
                 "status": "timeout",
+                **({"stdout_tail": stdout_tail} if stdout_tail else {}),
+                **({"stderr_tail": stderr_tail} if stderr_tail else {}),
+                "diagnostic_unavailable": _missing_validation_diagnostics(
+                    stdout_tail=stdout_tail,
+                    stderr_tail=stderr_tail,
+                    returncode=None,
+                    final_flag_candidate=None,
+                ),
                 "failure_details": classify_validation_failure(
                     status="timeout",
                     error="validation timed out",
@@ -1257,6 +1308,12 @@ class ChallengeValidator:
                 **record,
                 "status": "no_shell",
                 "error": str(exc),
+                "diagnostic_unavailable": _missing_validation_diagnostics(
+                    stdout_tail=None,
+                    stderr_tail=str(exc),
+                    returncode=None,
+                    final_flag_candidate=None,
+                ),
                 "failure_details": classify_validation_failure(
                     status="no_shell",
                     error=str(exc),
@@ -1273,6 +1330,9 @@ class ChallengeValidator:
         )
         if process.stderr.strip():
             record["stderr_tail"] = process.stderr[-2000:]
+        matches = FLAG_TOKEN_RE.findall(process.stdout)
+        if matches:
+            record["final_flag_candidate"] = matches[-1]
 
         # 非零退出 → 失败
         if process.returncode != 0:
@@ -1280,6 +1340,12 @@ class ChallengeValidator:
             return {
                 **record,
                 "status": "nonzero_exit",
+                "diagnostic_unavailable": _missing_validation_diagnostics(
+                    stdout_tail=record.get("stdout_tail"),
+                    stderr_tail=record.get("stderr_tail"),
+                    returncode=process.returncode,
+                    final_flag_candidate=record.get("final_flag_candidate"),
+                ),
                 "failure_details": classify_validation_failure(
                     status="nonzero_exit",
                     stderr="\n".join(
@@ -1295,7 +1361,6 @@ class ChallengeValidator:
             }
 
         # 比对 flag
-        matches = FLAG_TOKEN_RE.findall(process.stdout)
         printed_flag = matches[-1] if matches else ""
         record["printed_flag"] = printed_flag
         if expected_flag and printed_flag == expected_flag:
@@ -1326,6 +1391,12 @@ class ChallengeValidator:
         return {
             **record,
             "status": "flag_mismatch",
+            "diagnostic_unavailable": _missing_validation_diagnostics(
+                stdout_tail=record.get("stdout_tail"),
+                stderr_tail=record.get("stderr_tail"),
+                returncode=process.returncode,
+                final_flag_candidate=record.get("final_flag_candidate"),
+            ),
             "failure_details": classify_validation_failure(
                 status="flag_mismatch",
                 error="flag did not match metadata",

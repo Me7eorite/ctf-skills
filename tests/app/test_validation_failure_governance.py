@@ -34,6 +34,26 @@ def test_non_validation_phase_has_no_class() -> None:
     assert normalized_validation_failure_class(result, runner_phase="hermes_timeout") is None
 
 
+def test_prompt_eof_is_readiness_until_readiness_is_established() -> None:
+    result = {
+        "solve_status": "failed",
+        "validation_status": "nonzero_exit",
+        "validation_failure_details": [
+            {
+                "phase": "validate",
+                "code": "pwn_prompt_eof",
+                "message": "EOF waiting for Choice:",
+            }
+        ],
+    }
+
+    assert normalized_validation_failure_class(result) == "service-readiness"
+
+    result["validation_failure_details"][0]["readiness_established"] = True
+
+    assert normalized_validation_failure_class(result) == "solver"
+
+
 def test_solver_dependency_signature_keeps_missing_module_and_normalizes_noise() -> None:
     result = {
         "solve_status": "failed",

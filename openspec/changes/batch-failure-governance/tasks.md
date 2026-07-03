@@ -15,17 +15,17 @@
 
 ## 2. Attempt-scoped repair behavior
 
-- [ ] 2.1 Define a small policy object for class-specific retry ceilings, route types (`deterministic`, `hermes`, `escalate`), and stop conditions.
-- [ ] 2.2 Split the current deterministic auto-repair entrypoint behind a class-aware policy router instead of wrapping the existing all-repairs function with ad hoc call-site checks.
-- [ ] 2.3 Make the policy router choose bounded route types from the normalized validation failure class: deterministic mechanical repair for known safe fixes, Hermes repair for solver/runtime tuning, or no-op/escalation when automatic repair is unsafe.
-- [ ] 2.4 Keep deterministic repair limited to safe wrapper/diagnostic normalization for solver failures; do not treat arbitrary payload, ROP, offset, leak parsing, or flag extraction tuning as deterministic auto-repair.
-- [ ] 2.5 Thread latest `validation_failure_details`, stdout/stderr tails, concise `failure_summary`, normalized class, and signature into `BuildAttemptRepairService` direct repair context while preserving `validation_contract_errors` / `contract_errors` compatibility.
-- [ ] 2.6 Extend retry/repair submission diagnostics so `BuildOrchestrationService` carries `validation_failure_details`, normalized class, and signature from the same latest failed validation result used by direct repair and attempt-detail APIs.
-- [ ] 2.7 Stop runner automatic repair when the same validation failure class and structured-or-derived signature repeats within the same runner validation/repair invocation without progress.
-- [ ] 2.8 Do not suppress dashboard manual repair, retry, or revalidate across invocations in Phase 1; pass the latest class/signature as context only.
-- [ ] 2.9 Route solver-class failures to Hermes repair with exp-specific context, including current `writenup/exp.py`, `validate.sh`, `writenup/pwn_debug_report.json` when present, structured failure details, stdout/stderr tails, concise failure summary, class, and signature.
-- [ ] 2.10 Normalize validation diagnostics so failed `validate.sh` captures service state, recent logs, readiness probe result, exact solver command, solver stdout/stderr tails, exit code, and final flag candidate without polluting stdout when those fields are available.
-- [ ] 2.11 Add repair-context budgets for solver stdout/stderr, service logs, debug reports, and file context; include explicit truncation markers when caps are hit.
+- [x] 2.1 Define a small policy object for class-specific retry ceilings, route types (`deterministic`, `hermes`, `escalate`), and stop conditions, including the evidence rule that prompt/menu EOF is `service-readiness` only when readiness is not established and `solver` once readiness evidence exists.
+- [x] 2.2 Split the current deterministic auto-repair entrypoint behind a class-aware policy router instead of wrapping the existing all-repairs function with ad hoc call-site checks.
+- [x] 2.3 Make the policy router choose bounded route types from the normalized validation failure class: deterministic mechanical repair for known safe fixes, Hermes repair for solver/runtime tuning, or no-op/escalation when automatic repair is unsafe.
+- [x] 2.4 Keep deterministic repair limited to safe wrapper/diagnostic normalization for solver failures; do not treat arbitrary payload, ROP, offset, leak parsing, or flag extraction tuning as deterministic auto-repair.
+- [x] 2.5 Thread latest `validation_failure_details`, stdout/stderr tails, concise `failure_summary`, normalized class, and signature into `BuildAttemptRepairService` direct repair context while preserving `validation_contract_errors` / `contract_errors` compatibility.
+- [x] 2.6 Extend retry/repair submission diagnostics so `BuildOrchestrationService` carries `validation_failure_details`, normalized class, and signature from the same latest failed validation result used by direct repair and attempt-detail APIs.
+- [x] 2.7 Stop runner automatic repair when the same validation failure class and structured-or-derived signature repeats within the same runner validation/repair invocation without progress.
+- [x] 2.8 Do not suppress dashboard manual repair, retry, or revalidate across invocations in Phase 1; pass the latest class/signature as context only.
+- [x] 2.9 Route solver-class failures to Hermes repair with exp-specific context, including current `writenup/exp.py`, `validate.sh`, `writenup/pwn_debug_report.json` when present, structured failure details, stdout/stderr tails, concise failure summary, class, and signature.
+- [x] 2.10 Normalize validation diagnostics so failed `validate.sh` captures service state, recent logs, readiness probe result, exact solver command, solver stdout/stderr tails, exit code, and final flag candidate without polluting stdout when those fields are available.
+- [x] 2.11 Add repair-context budgets for solver stdout/stderr, service logs, debug reports, and file context; include explicit truncation markers when caps are hit.
 
 ## 3. Batch isolation and orchestration
 
@@ -37,7 +37,7 @@
 
 ## 4. Phase 1 verification
 
-- [ ] 4.1 Add classifier mapping tests for timeout, service-readiness, contract, solver, `validation_failure_details` precedence, and non-validation runner phases that should have no normalized validation class.
+- [ ] 4.1 Add classifier mapping tests for timeout, service-readiness, contract, solver, `validation_failure_details` precedence, context-sensitive prompt/menu EOF classification, and non-validation runner phases that should have no normalized validation class.
 - [ ] 4.2 Add shared derivation tests proving `validation-history.json` is preferred over report/progress/metadata fallbacks and legacy attempts remain readable when history is missing.
 - [ ] 4.3 Add API response field tests proving failed validation attempts expose `validation_failure_class` from the shared derivation helper and non-validation failures do not include it.
 - [ ] 4.4 Add a multi-challenge guard test proving an attempt-level class is not guessed when a build attempt contains multiple failed challenge results.
@@ -50,7 +50,7 @@
 - [ ] 4.11 Add a no-regression test proving `consecutive_infra` can still abort sequential tail attempts for non-validation infrastructure failures.
 - [ ] 4.12 Add a no-regression test proving validation failures do not increment the `consecutive_infra` streak.
 - [ ] 4.13 Add solver repair-context tests proving Hermes repair receives `writenup/exp.py`, `validate.sh`, pwn debug report context, structured failure details, stdout/stderr tails, failure summary, class, and signature.
-- [ ] 4.14 Add repeated-signature tests proving `solver:missing_dependency:<module>` and `solver:flag_mismatch` or `solver:pwn_prompt_eof:<marker>` are treated as materially different failures within the same bounded budget.
+- [ ] 4.14 Add repeated-signature tests proving `solver:missing_dependency:<module>`, `solver:flag_mismatch`, `solver:pwn_prompt_eof:<marker>` after readiness is established, and `service-readiness:pwn_prompt_eof:<marker>` before readiness is established are treated as materially different failures within the same bounded budget.
 - [ ] 4.15 Add validation-diagnostic-envelope tests proving failed validation preserves solver stdout/stderr tails, service logs/readiness evidence, exact solver command, exit code, and structured failure details for the next repair prompt when those fields are available.
 - [ ] 4.16 Add signature-normalization tests proving volatile fields do not create fake new failures and stable diagnostic markers still distinguish materially different failures.
 - [ ] 4.17 Add repair-context budget tests proving oversized logs/debug reports are truncated with explicit markers and useful tails/summaries remain present.

@@ -50,18 +50,18 @@ The system SHALL map build-attempt validation-phase failures into a normalized, 
 - **AND** the failure signature SHALL include the missing module or dependency name when available
 - **AND** the repair summary SHALL point toward standard-library, vendored-helper, or declared-runtime fixes rather than service-readiness tuning
 
-### Requirement: Reference solver stability is contract-governed
+### Requirement: Reference solver stability is diagnostic-first before hard enforcement
 
-The system SHALL enforce stable Web/Pwn reference solver behavior before or during validation repair. For Web/Pwn challenges, the default solver path SHALL connect to the live validation target using `CHAL_HOST` and `CHAL_PORT` rather than hardcoded loopback hosts, container names, or fixed challenge ports. Explicit local debug paths such as `LOCAL=1` MAY use local binaries, loopback hosts, or `process()` for bounded smoke tests, but they SHALL NOT be the default validation path. Pwn solvers SHALL use bounded reads, receives, and subprocess/process interactions for prompt synchronization, leaks, shell interaction, and flag reads so solver mistakes become bounded validation diagnostics instead of worker hangs.
+The system SHALL treat stable Web/Pwn reference solver behavior as validation-governed evidence before later hard enforcement. In Phase 1, default-target, dependency, bounded-I/O, and evidence gaps SHALL be emitted as structured validation diagnostics and repair context, without adding new document-completion blockers or solver-quality gates. For Web/Pwn challenges, the default solver path SHOULD connect to the live validation target using `CHAL_HOST` and `CHAL_PORT` rather than hardcoded loopback hosts, container names, or fixed challenge ports. Explicit local debug paths such as `LOCAL=1` MAY use local binaries, loopback hosts, or `process()` for bounded smoke tests, but they SHALL NOT be the default validation path once hard enforcement is enabled. Pwn solvers SHOULD use bounded reads, receives, and subprocess/process interactions for prompt synchronization, leaks, shell interaction, and flag reads so solver mistakes become bounded validation diagnostics instead of worker hangs. Later enforcement phases MAY turn deterministic stability gaps into hard blockers after the diagnostics and repair paths are visible and covered by tests.
 
 #### Scenario: Web/Pwn solver default path uses validation target environment
 - **WHEN** a Web or Pwn challenge provides `writenup/exp.py`
-- **THEN** the default validation path SHALL use `CHAL_HOST` and `CHAL_PORT` to reach the running service
-- **AND** hardcoded `127.0.0.1`, `localhost`, container names, or fixed challenge ports SHALL be allowed only inside explicit local debug branches
+- **THEN** Phase 1 SHALL emit contract or solver diagnostics when the default validation path does not use `CHAL_HOST` and `CHAL_PORT` to reach the running service
+- **AND** later hard enforcement MAY require hardcoded `127.0.0.1`, `localhost`, container names, or fixed challenge ports to appear only inside explicit local debug branches
 
 #### Scenario: Pwn solver interactions are bounded
 - **WHEN** a Pwn solver uses pwntools, sockets, subprocesses, or local process execution
-- **THEN** prompt reads, leak reads, shell reads, and local process runs SHALL be bounded by short timeouts or equivalent deterministic limits
+- **THEN** Phase 1 SHALL emit contract or solver diagnostics when prompt reads, leak reads, shell reads, or local process runs are not bounded by short timeouts or equivalent deterministic limits
 - **AND** an unbounded receive or process interaction SHALL be surfaced as contract or solver diagnostic evidence before it can hang a worker indefinitely
 
 #### Scenario: Solver repair receives complete exp evidence
@@ -86,7 +86,8 @@ The system SHALL treat initial `writenup/exp.py` quality as a validation-governe
 #### Scenario: Menu synchronization evidence separates solver bugs from readiness bugs
 - **WHEN** a Pwn solver fails while waiting for a banner, prompt, or menu token
 - **THEN** the diagnostics SHALL preserve whether the service readiness probe saw the prompt on a fresh connection
-- **AND** a solver menu-sync failure SHALL be distinguishable from a service-readiness failure in the normalized class and signature evidence
+- **AND** prompt/menu EOF SHALL classify as `service-readiness` when readiness evidence shows no real application prompt on a fresh connection
+- **AND** prompt/menu EOF SHALL classify as `solver` when readiness is established and the reference solver later loses synchronization
 
 #### Scenario: Solver dependency gaps are diagnostic in Phase 1
 - **WHEN** `writenup/exp.py` imports a non-standard helper module

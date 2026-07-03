@@ -15,6 +15,8 @@ import sqlalchemy as sa
 from core.clock import beijing_now_isoformat
 from core.jsonio import read_json
 from core.paths import ProjectPaths
+from domain.validation_failure_governance import latest_failed_validation
+from domain.validation_repair_policy import policy_for_validation_failure
 from hermes import process as hermes_process
 from hermes.runner import validation_repair_timeout_cap
 from persistence.models import build_attempts as build_model
@@ -73,11 +75,17 @@ class BuildAttemptRepairService:
         prompt_path = repair_dir / "prompt.md"
 
         self._record_event(events_path, "analysis", "started", "analysis started")
-        auto_result = auto_repair_challenge(
-            Path(context["challenge_dir"]),
-            challenge_id=context["challenge_id"],
+        policy = context["repair_policy"]
+        auto_result = (
+            auto_repair_challenge(
+                Path(context["challenge_dir"]),
+                challenge_id=context["challenge_id"],
+                allowed_mechanics=policy.deterministic_mechanics,
+            )
+            if policy.deterministic_mechanics
+            else None
         )
-        if auto_result.changed:
+        if auto_result is not None and auto_result.changed:
             self._record_event(
                 events_path,
                 "solve",
@@ -206,6 +214,7 @@ class BuildAttemptRepairService:
             if task is None or task.status != "build_failed":
                 raise BuildAttemptRepairError("repair requires a parent task in build_failed status")
             failure_summary = _failure_summary(session, row) or row.error
+            latest_failure = latest_failed_validation(self.paths, row.id)
             attempt = {
                 "id": row.id,
                 "shard_basename": row.shard_basename,
@@ -213,8 +222,9 @@ class BuildAttemptRepairService:
                 "design_task_id": row.design_task_id,
                 "category": task.category,
                 "failure_summary": failure_summary,
+                "latest_failure": latest_failure,
             }
-            failure_details = _failure_details(session, row)
+            failure_details = _failure_details(latest_failure)
 
         payload = _failed_payload(self.paths, attempt["shard_basename"])
         challenge_ids = _challenge_ids(payload)
@@ -233,6 +243,10 @@ class BuildAttemptRepairService:
             "challenge_id": challenge_id,
             "challenge_dir": str(challenge_dir),
             "failure_details": failure_details,
+            "repair_policy": policy_for_validation_failure(
+                latest_failure or {},
+                operator_triggered=True,
+            ),
             "file_context": _file_context(challenge_dir),
         }
 
@@ -416,6 +430,19 @@ def _failure_summary(session, source) -> str | None:
 
 
 def _repair_prompt(context: dict[str, Any]) -> str:
+    policy = context.get("repair_policy")
+    policy_summary = getattr(policy, "summary", None) or "(none)"
+    latest_failure = context.get("latest_failure") or {}
+    validation_class = (
+        latest_failure.get("validation_failure_class")
+        if isinstance(latest_failure, dict)
+        else None
+    )
+    validation_signature = (
+        latest_failure.get("validation_failure_signature")
+        if isinstance(latest_failure, dict)
+        else None
+    )
     return f"""You are repairing an existing CTF challenge artifact.
 
 This is not a new build, not a resume, and not a clean rebuild.
@@ -430,6 +457,14 @@ Failure summary:
 
 Structured failure details:
 {json.dumps(context.get("failure_details") or [], ensure_ascii=False, indent=2)}
+
+Validation class:
+- validation_failure_class: {validation_class or "(none)"}
+- validation_failure_signature: {validation_signature or "(none)"}
+- repair_policy: {policy_summary}
+
+Validation evidence:
+{json.dumps(_validation_evidence(latest_failure), ensure_ascii=False, indent=2)}
 
 Attempt:
 - build_attempt_id: {context["id"]}
@@ -543,9 +578,58 @@ def _hermes_environment(
     return environment
 
 
-def _failure_details(session, source) -> list[dict[str, Any]]:
-    del session, source
+def _failure_details(latest_failure: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not latest_failure:
+        return []
+    details = latest_failure.get("validation_failure_details")
+    if isinstance(details, list):
+        return [item for item in details if isinstance(item, dict)]
+    legacy = latest_failure.get("validation_contract_errors")
+    if isinstance(legacy, list):
+        return [
+            {
+                "phase": "contract",
+                "code": "contract_error",
+                "message": str(item),
+            }
+            for item in legacy
+            if item
+        ]
     return []
+
+
+def _validation_evidence(latest_failure: Any) -> dict[str, Any]:
+    if not isinstance(latest_failure, dict):
+        return {
+            "validation_stdout_tail": "(unavailable)",
+            "validation_stderr_tail": "(unavailable)",
+            "validation_returncode": "(unavailable)",
+            "validation_command": "(unavailable)",
+            "missing": ["latest failed validation result unavailable"],
+        }
+    missing = latest_failure.get("validation_diagnostic_unavailable")
+    if not isinstance(missing, list):
+        missing = []
+    evidence = {
+        "validation_status": latest_failure.get("validation_status") or "(unavailable)",
+        "validation_error": latest_failure.get("validation_error") or "(unavailable)",
+        "validation_command": latest_failure.get("validation_command") or "(unavailable)",
+        "validation_returncode": latest_failure.get("validation_returncode", "(unavailable)"),
+        "validation_stdout_tail": _budget_text(
+            latest_failure.get("validation_stdout_tail"),
+            label="validation_stdout_tail",
+        ),
+        "validation_stderr_tail": _budget_text(
+            latest_failure.get("validation_stderr_tail"),
+            label="validation_stderr_tail",
+        ),
+        "validation_final_flag_candidate": latest_failure.get("validation_final_flag_candidate")
+        or "(unavailable)",
+        "validation_contract_errors": latest_failure.get("validation_contract_errors")
+        or [],
+        "missing": missing,
+    }
+    return evidence
 
 
 def _file_context(challenge_dir: Path) -> str:
@@ -554,6 +638,7 @@ def _file_context(challenge_dir: Path) -> str:
         "metadata.json",
         "validate.sh",
         "writenup/exp.py",
+        "writenup/pwn_debug_report.json",
         "README.md",
         "writenup/wp.md",
     ):
@@ -561,7 +646,7 @@ def _file_context(challenge_dir: Path) -> str:
         if not path.is_file():
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
-        snippets.append(f"--- {relative} ---\n{_middle_truncate(text, 6000)}")
+        snippets.append(f"--- {relative} ---\n{_budget_text(text, label=relative, limit=6000)}")
     return "\n\n".join(snippets)
 
 
@@ -583,3 +668,15 @@ def _middle_truncate(text: str, limit: int) -> str:
     head = limit // 2
     tail = limit - head
     return f"{text[:head]}\n... <truncated> ...\n{text[-tail:]}"
+
+
+def _budget_text(value: Any, *, label: str, limit: int = 2000) -> str:
+    if value in (None, ""):
+        return "(unavailable)"
+    text = str(value)
+    if len(text) <= limit:
+        return text
+    return (
+        f"{_middle_truncate(text, limit)}\n"
+        f"... <{label} truncated from {len(text)} chars to {limit}> ..."
+    )

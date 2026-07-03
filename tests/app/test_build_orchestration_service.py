@@ -710,6 +710,33 @@ def test_repair_reuses_container_and_carries_failure_context(
     service = _service(tmp_path, session_factory)
 
     [container_id] = service.submit_batch([task])
+    workspace_state = service.paths.executions / str(container_id) / "current" / "state"
+    workspace_state.mkdir(parents=True)
+    write_json(
+        workspace_state / "validation-history.json",
+        [
+            {
+                "round": 0,
+                "results": [
+                    {
+                        "challenge_id": "web-0001",
+                        "solve_status": "failed",
+                        "validation_status": "contract_failed",
+                        "validation_failure_details": [
+                            {
+                                "phase": "contract",
+                                "code": "forbidden_solver_source",
+                                "message": "solver references metadata.json",
+                                "path": "writenup/exp.py",
+                            }
+                        ],
+                        "validation_stdout_tail": "solver output",
+                        "validation_stderr_tail": "metadata.json",
+                    }
+                ],
+            }
+        ],
+    )
     with session_factory() as session:
         repo = ExecutionsRepository(session)
         [initial] = repo.list_for_attempt(container_id)
@@ -737,6 +764,11 @@ def test_repair_reuses_container_and_carries_failure_context(
     assert payload["repair_requested"] is True
     assert payload["repair_context"]["source_build_attempt_id"] == str(container_id)
     assert "metadata.json" in payload["repair_context"]["failure_summary"]
+    assert payload["repair_context"]["latest_failure"]["validation_failure_class"] == "contract"
+    assert (
+        payload["repair_context"]["latest_failure"]["validation_failure_details"][0]["code"]
+        == "forbidden_solver_source"
+    )
     with session_factory() as session:
         execs = ExecutionsRepository(session).list_for_attempt(container_id)
         assert [item.iteration_no for item in execs] == [1, 2]

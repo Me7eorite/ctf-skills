@@ -29,7 +29,6 @@ _NO_VALIDATION_CLASS_PHASES = {
 }
 _READINESS_CODES = {
     "pwn_service_readiness_failed",
-    "pwn_prompt_eof",
     "pwn_port_only_readiness",
     "pwn_bad_readiness_probe",
 }
@@ -54,6 +53,7 @@ _SOLVER_CODES = {
     "pwn_pie_base_failed",
     "pwn_shell_no_flag",
     "pwn_remote_local_mismatch",
+    "pwn_prompt_eof",
 }
 _VOLATILE_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"/(?:workspace/executions|root/ctf-skills/work/executions)/[^\s\"')]+"), "<workspace-path>"),
@@ -88,6 +88,8 @@ def normalized_validation_failure_class(
     if status in _TIMEOUT_STATUSES or "timeout" in detail_codes:
         return "timeout"
     if detail_codes & _READINESS_CODES:
+        return "service-readiness"
+    if "pwn_prompt_eof" in detail_codes and not _readiness_established(result, detail_items):
         return "service-readiness"
     if status in _CONTRACT_STATUSES or detail_phases & {"contract", "gate"}:
         return "contract"
@@ -181,6 +183,10 @@ def attempt_level_validation_failure(results: Sequence[Mapping[str, Any]]) -> di
             "validation_contract_errors",
             "validation_stdout_tail",
             "validation_stderr_tail",
+            "validation_command",
+            "validation_returncode",
+            "validation_final_flag_candidate",
+            "validation_diagnostic_unavailable",
         )
         if (value := result.get(key)) not in (None, "", [])
     }
@@ -263,6 +269,13 @@ def _summarize_single_result(result: Mapping[str, Any], *, source: str) -> dict[
         "validation_contract_errors": normalized.get("validation_contract_errors"),
         "validation_stdout_tail": _stable_text(normalized.get("validation_stdout_tail"), limit=1000),
         "validation_stderr_tail": _stable_text(normalized.get("validation_stderr_tail"), limit=1000),
+        "validation_command": normalized.get("validation_command"),
+        "validation_returncode": normalized.get("validation_returncode"),
+        "validation_final_flag_candidate": _stable_text(
+            normalized.get("validation_final_flag_candidate"),
+            limit=200,
+        ),
+        "validation_diagnostic_unavailable": normalized.get("validation_diagnostic_unavailable"),
         "failure_kind": normalized.get("failure_kind"),
         "failure_hint": _stable_text(normalized.get("failure_hint"), limit=1000),
         "failed_step": _stable_text(normalized.get("failed_step"), limit=1000),
@@ -336,6 +349,39 @@ def _failure_details(result: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     if not isinstance(raw, list):
         return []
     return [item for item in raw if isinstance(item, Mapping)]
+
+
+def _readiness_established(
+    result: Mapping[str, Any],
+    details: Sequence[Mapping[str, Any]],
+) -> bool:
+    values: list[Any] = [
+        result.get("service_readiness"),
+        result.get("readiness_probe_status"),
+        result.get("readiness_status"),
+        result.get("readiness_established"),
+    ]
+    for detail in details:
+        values.extend(
+            [
+                detail.get("service_readiness"),
+                detail.get("readiness"),
+                detail.get("readiness_probe_status"),
+                detail.get("readiness_established"),
+            ]
+        )
+    for value in values:
+        if value is True:
+            return True
+        if isinstance(value, str) and value.strip().lower() in {
+            "ready",
+            "passed",
+            "ok",
+            "established",
+            "true",
+        }:
+            return True
+    return False
 
 
 def _combined_text(result: Mapping[str, Any]) -> str:

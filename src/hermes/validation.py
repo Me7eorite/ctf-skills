@@ -191,8 +191,11 @@ def run_validation(
                     "validation_elapsed": elapsed,
                     "validation_error": error,
                     "validation_returncode": outcome.get("returncode"),
+                    "validation_command": outcome.get("command"),
                     "validation_stdout_tail": outcome.get("stdout_tail"),
                     "validation_stderr_tail": outcome.get("stderr_tail"),
+                    "validation_final_flag_candidate": outcome.get("final_flag_candidate"),
+                    "validation_diagnostic_unavailable": outcome.get("diagnostic_unavailable"),
                     "validation_contract_errors": contract_errors,
                     "validation_failure_details": failure_details,
                 }
