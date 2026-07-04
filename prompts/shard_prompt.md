@@ -15,6 +15,11 @@ Generation profile: {generation_profile}
 Pwn scaffold reference: {pwn_scaffold_reference}
 ```
 
+These paths are already resolved for the active execution workspace. If a
+reference path fails, check `pwd` and use the printed path exactly; do not
+rebase it under the repository root, a skill directory, or another
+`references/` directory.
+
 Read only the materialized design references that exist in
 `{design_references}`:
 
@@ -130,8 +135,14 @@ confirming `test -f ./input/shard.json`.
   `./output/challenges/<category>/<id>-<slug>/deploy/Dockerfile`; if you need a
   workspace-root path, first verify `./input/shard.json` exists from that root.
 - Do not use absolute synthetic paths such as `/output/...`, `/attachments/...`,
-  `/writenup/...`, or `/workspace/executions/...` in write tools. Use paths
-  relative to the workspace root or the exact challenge root you have entered.
+  or `/writenup/...` in write tools. A real absolute path printed by `pwd -P`
+  or `find` is allowed and preferred for file tools when the tool cwd may have
+  drifted; do not invent or concatenate absolute paths from memory.
+- Before every `read_file`, `write_file`, or patch on a challenge file, decide
+  which root the path is relative to. If the path starts with
+  `./output/challenges/`, first verify the current tool cwd is the workspace
+  root; otherwise use the real absolute challenge path or a path relative to the
+  entered challenge root such as `writenup/wp.md`.
 - Before reading optional files such as `deploy/src/Makefile`, `attachments/*`,
   or `writenup/pwn_debug_report.json`, list the containing directory first.
   Missing optional files are a signal to create or adapt the expected file, not
