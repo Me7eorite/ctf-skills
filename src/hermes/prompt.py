@@ -197,8 +197,10 @@ Pwn exploit debugging acceleration:
   read an application prompt such as `Choice:`; a bare `nc -z` port check is too
   weak and can race xinetd startup, causing the exploit to receive EOF.
   Do not put `nc "$CHAL_HOST" "$CHAL_PORT"` behind `bash -c` unless both
-  variables are exported first; prefer probing in the current shell, for example
-  `printf '3\n' | timeout 3 nc "$CHAL_HOST" "$CHAL_PORT" | grep -q "Choice:"`.
+  variables are exported first. Prefer a bounded socket read probe that treats
+  received banner/prompt bytes as evidence even if the interactive connection
+  remains open; do not clear captured output merely because a timeout wrapper
+  exits non-zero.
 - If the service uses `chroot /home/ctf` and startup writes the host-container
   file `/home/ctf/flag`, the vulnerable program must open `/flag` from inside
   the chroot. A source path like `/home/ctf/flag` resolves to

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
@@ -205,6 +206,14 @@ class HostBuilder:
                 failed_step=_infer_docker_step(stdout_text, stderr_text),
             )
         image_id = _inspect_image_id(image, timeout=min(10.0, float(self.timeout_seconds)))
+        if metadata.get("category") == "pwn":
+            _sync_pwn_runtime_artifact(
+                challenge_id,
+                challenge_dir,
+                image=image,
+                metadata=metadata,
+                timeout=min(30.0, float(self.timeout_seconds)),
+            )
         prune_warning = _prune_workspace_dangling_images(
             workspace_id,
             timeout=min(60.0, float(self.timeout_seconds)),
@@ -367,6 +376,157 @@ def _prepare_pwn_image(
     metadata["docker_image"] = image
     write_json(challenge_dir / "metadata.json", metadata)
     _rewrite_compose_image(compose, image)
+
+
+def _sync_pwn_runtime_artifact(
+    challenge_id: str,
+    challenge_dir: Path,
+    *,
+    image: str,
+    metadata: Mapping[str, Any],
+    timeout: float,
+) -> None:
+    artifact = metadata.get("artifact")
+    if not isinstance(artifact, str) or not artifact.startswith("attachments/"):
+        return
+    artifact_path = _safe_child(challenge_dir, artifact)
+    runtime_path = _pwn_runtime_binary_path(challenge_dir, artifact_path.name)
+    container_id = _docker_create_for_copy(challenge_id, image, timeout=timeout)
+    try:
+        _docker_cp_from_container(
+            challenge_id,
+            container_id,
+            runtime_path,
+            artifact_path,
+            timeout=timeout,
+        )
+    finally:
+        _docker_rm_container(container_id, timeout=min(10.0, timeout))
+    _stamp_pwn_artifact_metadata(challenge_dir, artifact_path)
+
+
+def _pwn_runtime_binary_path(challenge_dir: Path, fallback_name: str) -> str:
+    xinetd = challenge_dir / "deploy" / "_files" / "ctf.xinetd"
+    try:
+        text = xinetd.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return f"/home/ctf/{fallback_name}"
+    match = re.search(r"(?m)^\s*server_args\s*=.*?/home/ctf\s+\./([^\s#]+)", text)
+    if not match:
+        return f"/home/ctf/{fallback_name}"
+    return f"/home/ctf/{match.group(1).lstrip('/')}"
+
+
+def _docker_create_for_copy(challenge_id: str, image: str, *, timeout: float) -> str:
+    command = ["docker", "create", image]
+    try:
+        result = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise HostBuildError(
+            "docker CLI is not available on host",
+            challenge_id=challenge_id,
+            command=command,
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise HostBuildError(
+            f"{challenge_id}: docker create timed out while syncing pwn artifact",
+            challenge_id=challenge_id,
+            command=command,
+            stdout_tail=_tail_text(_decode_output(exc.stdout)),
+            stderr_tail=_tail_text(_decode_output(exc.stderr)),
+            failure_kind="artifact_sync",
+            failure_hint="The host build could not create a container to copy the runtime ELF into attachments.",
+        ) from exc
+    if result.returncode != 0:
+        raise HostBuildError(
+            f"{challenge_id}: docker create failed while syncing pwn artifact",
+            challenge_id=challenge_id,
+            command=command,
+            stdout_tail=_tail_text(result.stdout),
+            stderr_tail=_tail_text(result.stderr),
+            failure_kind="artifact_sync",
+            failure_hint="The host build could not create a container to copy the runtime ELF into attachments.",
+        )
+    container_id = result.stdout.strip()
+    if not container_id:
+        raise HostBuildError(
+            f"{challenge_id}: docker create returned no container id while syncing pwn artifact",
+            challenge_id=challenge_id,
+            command=command,
+            failure_kind="artifact_sync",
+        )
+    return container_id
+
+
+def _docker_cp_from_container(
+    challenge_id: str,
+    container_id: str,
+    runtime_path: str,
+    artifact_path: Path,
+    *,
+    timeout: float,
+) -> None:
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    command = ["docker", "cp", f"{container_id}:{runtime_path}", str(artifact_path)]
+    try:
+        result = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise HostBuildError(
+            f"{challenge_id}: docker cp timed out while syncing pwn artifact",
+            challenge_id=challenge_id,
+            command=command,
+            stdout_tail=_tail_text(_decode_output(exc.stdout)),
+            stderr_tail=_tail_text(_decode_output(exc.stderr)),
+            failure_kind="artifact_sync",
+            failure_hint="The runtime ELF could not be copied from the built image into attachments.",
+        ) from exc
+    if result.returncode != 0 or not artifact_path.is_file():
+        raise HostBuildError(
+            f"{challenge_id}: docker cp failed while syncing pwn artifact",
+            challenge_id=challenge_id,
+            command=command,
+            stdout_tail=_tail_text(result.stdout),
+            stderr_tail=_tail_text(result.stderr),
+            failure_kind="artifact_sync",
+            failure_hint=(
+                f"Expected runtime ELF at {runtime_path}; align Dockerfile, "
+                "xinetd server_args, and metadata.artifact."
+            ),
+        )
+
+
+def _docker_rm_container(container_id: str, *, timeout: float) -> None:
+    try:
+        subprocess.run(
+            ["docker", "rm", container_id],
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return
+
+
+def _stamp_pwn_artifact_metadata(challenge_dir: Path, artifact_path: Path) -> None:
+    metadata_path = challenge_dir / "metadata.json"
+    metadata = read_json(metadata_path, {})
+    if not isinstance(metadata, dict):
+        raise HostBuildError(f"{challenge_dir.name}: metadata.json missing or invalid")
+    metadata["artifact_sha256"] = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+    write_json(metadata_path, metadata)
 
 
 def _pwn_workspace_image(workspace_id: str, challenge_name: str) -> str:

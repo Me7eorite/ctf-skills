@@ -30,6 +30,7 @@ def test_build_attempt_is_frozen():
         resulting_challenge_dir=None,
         artifact_status="unknown",
         error=None,
+        idempotency_key=None,
         created_at=datetime.now(UTC),
         started_at=None,
         finished_at=None,

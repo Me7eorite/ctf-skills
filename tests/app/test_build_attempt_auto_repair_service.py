@@ -381,6 +381,29 @@ def test_auto_repair_adds_compose_project_to_legacy_docker_compose_validate(tmp_
     assert second.changed is False
 
 
+def test_auto_repair_fixes_compose_file_variable_used_as_filename(tmp_path: Path) -> None:
+    challenge_dir = tmp_path / "challenge"
+    challenge_dir.mkdir()
+    _write_metadata(challenge_dir, category="pwn")
+    validate = challenge_dir / "validate.sh"
+    validate.write_text(
+        "#!/bin/bash\n"
+        "set -eu\n"
+        "CHALLENGE_ROOT=\"$PWD\"\n"
+        "COMPOSE_FILE=\"$CHALLENGE_ROOT/deploy/$COMPOSE.yml\"\n"
+        "docker-compose -f \"$COMPOSE_FILE\" up -d\n",
+        encoding="utf-8",
+    )
+
+    result = auto_repair_challenge(challenge_dir)
+
+    repaired = validate.read_text(encoding="utf-8")
+    assert result.changed is True
+    assert "$COMPOSE.yml" not in repaired
+    assert 'COMPOSE_FILE="$CHALLENGE_ROOT/deploy/docker-compose.yml"' in repaired
+    assert "$COMPOSE up -d" in repaired
+
+
 def test_auto_repair_preserves_exp_failure_diagnostics(tmp_path: Path) -> None:
     challenge_dir = tmp_path / "challenge"
     challenge_dir.mkdir()
@@ -430,9 +453,9 @@ def test_auto_repair_fixes_pwn_unexported_bash_nc_probe(tmp_path: Path) -> None:
 
     repaired = validate.read_text(encoding="utf-8")
     assert result.changed is True
-    assert "export CHAL_HOST CHAL_PORT" in repaired
+    assert "pwn_readiness_probe() {" in repaired
     assert "bash -c" not in repaired
-    assert "printf '3\\n' | timeout 3 nc \"$CHAL_HOST\" \"$CHAL_PORT\"" in repaired
+    assert 'pwn_readiness_probe "$CHAL_HOST" "$CHAL_PORT" 3' in repaired
 
 
 def test_auto_repair_fixes_pwn_echo_bash_nc_probe_variant(tmp_path: Path) -> None:
@@ -460,8 +483,8 @@ def test_auto_repair_fixes_pwn_echo_bash_nc_probe_variant(tmp_path: Path) -> Non
     repaired = validate.read_text(encoding="utf-8")
     assert result.changed is True
     assert "bash -c" not in repaired
-    assert "printf '3\\n' | timeout 5 nc \"$CHAL_HOST\" \"$CHAL_PORT\"" in repaired
-    assert "printf '3\\n' | timeout 3 nc \"$CHAL_HOST\" \"$CHAL_PORT\"" in repaired
+    assert 'pwn_readiness_probe "$CHAL_HOST" "$CHAL_PORT" 5' in repaired
+    assert 'pwn_readiness_probe "$CHAL_HOST" "$CHAL_PORT" 3' in repaired
 
 
 def test_auto_repair_replaces_pwn_nc_z_readiness_even_with_banner_probe(tmp_path: Path) -> None:
@@ -484,5 +507,33 @@ def test_auto_repair_replaces_pwn_nc_z_readiness_even_with_banner_probe(tmp_path
     repaired = validate.read_text(encoding="utf-8")
     assert result.changed is True
     assert "nc -z" not in repaired
-    assert "printf '3\\n' | timeout 2 nc \"$CHAL_HOST\" \"$CHAL_PORT\"" in repaired
-    assert "grep -qE '(Choice:|Welcome|Menu|Username:|Enter)'" in repaired
+    assert 'pwn_readiness_probe "$CHAL_HOST" "$CHAL_PORT" 2' in repaired
+    assert 'BANNER=$(pwn_readiness_probe "$CHAL_HOST" "$CHAL_PORT" 3 || true)' in repaired
+
+
+def test_auto_repair_replaces_timeout_nc_banner_capture_without_discarding_output(
+    tmp_path: Path,
+) -> None:
+    challenge_dir = tmp_path / "challenge"
+    challenge_dir.mkdir()
+    _write_metadata(challenge_dir, category="pwn")
+    validate = challenge_dir / "validate.sh"
+    validate.write_text(
+        "#!/bin/bash\n"
+        "set -eu\n"
+        "CHAL_HOST=127.0.0.1\n"
+        "CHAL_PORT=31337\n"
+        "BANNER=$(timeout 3 nc \"$CHAL_HOST\" \"$CHAL_PORT\" 2>/dev/null) || BANNER=\"\"\n"
+        "if [ -n \"$BANNER\" ] && echo \"$BANNER\" | grep -q \"Welcome\"; then\n"
+        "    echo ready\n"
+        "fi\n",
+        encoding="utf-8",
+    )
+
+    result = auto_repair_challenge(challenge_dir)
+
+    repaired = validate.read_text(encoding="utf-8")
+    assert result.changed is True
+    assert "pwn_readiness_probe() {" in repaired
+    assert 'BANNER=$(pwn_readiness_probe "$CHAL_HOST" "$CHAL_PORT" 3) || BANNER=""' in repaired
+    assert "timeout 3 nc" not in repaired

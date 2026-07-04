@@ -64,6 +64,10 @@ def _app_client(*, service_factory=None, challenge_repo=None, design_repo=None, 
             set_design_task_status=lambda _task_id, _status: None,
         )
         default_research_repo = SimpleNamespace()
+        default_difficulty_review_repo = SimpleNamespace(
+            summaries_for_tasks=lambda _task_ids: {},
+            summarize_for_design_task=lambda _task_id: None,
+        )
         patches = [
             patch("persistence.session.transaction", _ctx),
             patch(
@@ -77,6 +81,10 @@ def _app_client(*, service_factory=None, challenge_repo=None, design_repo=None, 
             patch(
                 "persistence.repositories.ResearchRepository",
                 return_value=research_repo or default_research_repo,
+            ),
+            patch(
+                "persistence.repositories.DesignDifficultyReviewRepository",
+                return_value=default_difficulty_review_repo,
             ),
         ]
         if service_factory is not None:

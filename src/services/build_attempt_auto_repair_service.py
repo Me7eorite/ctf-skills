@@ -30,6 +30,46 @@ from domain.validation_repair_policy import (
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 _PWN_XINETD_SCAFFOLD = _REPOSITORY_ROOT / "scaffolds" / "pwn" / "xinetd-chroot"
 _PWN_DEFAULT_SERVICE_PORT = "9999"
+_PWN_READINESS_PROBE_FUNCTION = """\
+pwn_readiness_probe() {
+  python3 - "$1" "$2" "${3:-3}" <<'PY'
+import re
+import socket
+import sys
+import time
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+deadline = time.monotonic() + max(0.1, float(sys.argv[3]))
+chunks = []
+
+try:
+    sock = socket.create_connection((host, port), timeout=min(2.0, max(0.1, deadline - time.monotonic())))
+    sock.settimeout(0.2)
+    while time.monotonic() < deadline and sum(len(chunk) for chunk in chunks) < 4096:
+        try:
+            data = sock.recv(4096)
+        except (TimeoutError, socket.timeout):
+            if chunks:
+                break
+            continue
+        if not data:
+            break
+        chunks.append(data)
+        text = b"".join(chunks).decode("latin-1", errors="replace")
+        if re.search(r"(Choice:|Welcome|Menu|Username:|Enter)", text):
+            break
+    sock.close()
+except OSError:
+    pass
+
+text = b"".join(chunks).decode("latin-1", errors="replace")
+if text:
+    print(text, end="")
+sys.exit(0 if re.search(r"(Choice:|Welcome|Menu|Username:|Enter)", text) else 1)
+PY
+}
+"""
 
 
 @dataclass(frozen=True)
@@ -332,12 +372,21 @@ def _repair_compose_validate_wrapper(challenge_dir: Path, metadata: dict[str, An
         return []
 
     text = _remove_compose_helper(original)
+    text = _repair_bad_compose_file_variable(text)
     text = _replace_compose_invocations(text)
     text = _isolate_compose_project(text)
     if text == original:
         return []
     validate.write_text(text, encoding="utf-8")
     return ["normalized validate.sh docker-compose usage with an isolated compose project"]
+
+
+def _repair_bad_compose_file_variable(text: str) -> str:
+    return re.sub(
+        r"(?P<prefix>COMPOSE_FILE\s*=\s*[\"'][^\"']*/deploy/)\$\{?COMPOSE\}?(?P<suffix>\.ya?ml[\"'])",
+        r"\g<prefix>docker-compose\g<suffix>",
+        text,
+    )
 
 
 def _repair_validate_workspace_paths(challenge_dir: Path, metadata: dict[str, Any]) -> list[str]:
@@ -481,7 +530,7 @@ def _replace_raw_docker_compose_commands(text: str) -> str:
     lines: list[str] = []
     for line in text.splitlines(keepends=True):
         stripped = line.lstrip()
-        if stripped.startswith("#") or re.match(r"(?:export\s+)?COMPOSE=", stripped):
+        if stripped.startswith("#") or re.match(r"(?:export\s+)?COMPOSE(?:_FILE)?=", stripped):
             lines.append(line)
             continue
         lines.append(compose_command_re.sub("$COMPOSE", line))
@@ -502,20 +551,25 @@ def _repair_pwn_validate_readiness_probe(
         return []
     repaired = _replace_unexported_bash_nc_probe(text)
     repaired = _replace_port_only_nc_probe(repaired)
+    repaired = _replace_timeout_nc_banner_capture(repaired)
+    if repaired != text:
+        repaired = _ensure_pwn_readiness_probe_function(repaired)
     if repaired == text:
         return []
     validate.write_text(repaired, encoding="utf-8")
     return ["fixed pwn validate.sh readiness probe to read an application prompt"]
 
 
+def _ensure_pwn_readiness_probe_function(text: str) -> str:
+    if re.search(r"(?m)^pwn_readiness_probe\(\) \{", text):
+        return text
+    return _insert_after_shell_preamble(text, _PWN_READINESS_PROBE_FUNCTION)
+
+
 def _replace_unexported_bash_nc_probe(text: str) -> str:
     def replace(match: re.Match[str]) -> str:
         timeout_seconds = match.group(1)
-        return (
-            "export CHAL_HOST CHAL_PORT\n"
-            f"printf '3\\n' | timeout {timeout_seconds} nc \"$CHAL_HOST\" \"$CHAL_PORT\" | "
-            r"grep -qE '(Choice:|Welcome|Menu|Username:|Enter)'"
-        )
+        return f"pwn_readiness_probe \"$CHAL_HOST\" \"$CHAL_PORT\" {timeout_seconds}"
 
     for pattern in (
         r"""timeout\s+(\d+)\s+bash\s+-c\s+'[^'\n]*\bnc\b[^'\n]*\$CHAL_HOST[^'\n]*\$CHAL_PORT[^'\n]*'""",
@@ -525,6 +579,22 @@ def _replace_unexported_bash_nc_probe(text: str) -> str:
     return text
 
 
+def _replace_timeout_nc_banner_capture(text: str) -> str:
+    host = r"(?:\"[^\"]+\"|'[^']+'|[^\s;&|)]+)"
+    port = r"(?:\"[^\"]+\"|'[^']+'|[^\s;&|)]+)"
+    pattern = re.compile(
+        rf"timeout\s+(?P<timeout>\d+)\s+nc\s+(?!-z\b)(?P<host>{host})\s+(?P<port>{port})(?:\s+2>/dev/null)?"
+    )
+
+    def replace(match: re.Match[str]) -> str:
+        return (
+            "pwn_readiness_probe "
+            f"{match.group('host')} {match.group('port')} {match.group('timeout')}"
+        )
+
+    return pattern.sub(replace, text)
+
+
 def _replace_port_only_nc_probe(text: str) -> str:
     host = r"(?:\"[^\"]+\"|'[^']+'|[^\s;&|]+)"
     port = r"(?:\"[^\"]+\"|'[^']+'|[^\s;&|]+)"
@@ -532,11 +602,7 @@ def _replace_port_only_nc_probe(text: str) -> str:
 
     def replace(match: re.Match[str]) -> str:
         timeout_seconds = match.group("timeout") or "3"
-        return (
-            f"printf '3\\n' | timeout {timeout_seconds} nc "
-            f"{match.group('host')} {match.group('port')} 2>/dev/null | "
-            "grep -qE '(Choice:|Welcome|Menu|Username:|Enter)'"
-        )
+        return f"pwn_readiness_probe {match.group('host')} {match.group('port')} {timeout_seconds}"
 
     return pattern.sub(replace, text)
 

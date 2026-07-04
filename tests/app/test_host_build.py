@@ -114,6 +114,25 @@ def _pwn_challenge(workspace: ExecutionWorkspace, *, name: str = "pwn-0001-baby-
     return challenge
 
 
+def _pwn_challenge_with_artifact(workspace: ExecutionWorkspace) -> Path:
+    challenge = _pwn_challenge(workspace)
+    (challenge / "attachments").mkdir()
+    (challenge / "attachments" / "vuln").write_bytes(b"host-elf")
+    (challenge / "deploy" / "_files").mkdir(parents=True)
+    (challenge / "deploy" / "_files" / "ctf.xinetd").write_text(
+        "service ctf\n{\n"
+        "  server = /usr/sbin/chroot\n"
+        "  server_args = --userspec=1000:1000 /home/ctf ./vuln\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    metadata = read_json(challenge / "metadata.json")
+    metadata["artifact"] = "attachments/vuln"
+    metadata["artifact_sha256"] = "old"
+    (challenge / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    return challenge
+
+
 def test_host_builder_runs_fixed_docker_build_and_stamps_metadata(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     challenge = _web_challenge(workspace)
@@ -191,6 +210,42 @@ def test_host_builder_rewrites_pwn_image_to_workspace_scoped_tag(tmp_path: Path)
     assert metadata["docker_image"] == expected_image
     assert f"image: {expected_image}" in compose
     assert "container_name: pwn-exec-baby-stack" in compose
+
+
+def test_host_builder_syncs_pwn_runtime_elf_to_attachment(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    challenge = _pwn_challenge_with_artifact(workspace)
+    validation_set = WorkspaceValidationSet(
+        candidates={"pwn-0001": challenge},
+        output_manifest_hash="sha256:before",
+    )
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[:3] == ["docker", "image", "inspect"]:
+            return subprocess.CompletedProcess(command, 0, stdout="sha256:image\n", stderr="")
+        if command[:2] == ["docker", "create"]:
+            return subprocess.CompletedProcess(command, 0, stdout="container123\n", stderr="")
+        if command[:2] == ["docker", "cp"]:
+            Path(command[3]).write_bytes(b"runtime-elf")
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if command[:2] == ["docker", "rm"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if command[:3] == ["docker", "image", "prune"]:
+            return subprocess.CompletedProcess(command, 0, stdout="Total reclaimed space: 0B\n", stderr="")
+        assert kwargs["cwd"] == challenge
+        return subprocess.CompletedProcess(command, 0, stdout="built\n", stderr="")
+
+    with patch("hermes.host_build.subprocess.run", side_effect=fake_run):
+        HostBuilder().build_workspace(workspace, validation_set)
+
+    expected_image = "pwn-exec-baby-stack:latest"
+    assert ["docker", "create", expected_image] in calls
+    assert ["docker", "cp", "container123:/home/ctf/vuln", str(challenge / "attachments" / "vuln")] in calls
+    assert (challenge / "attachments" / "vuln").read_bytes() == b"runtime-elf"
+    metadata = read_json(challenge / "metadata.json")
+    assert metadata["artifact_sha256"] == "7b890f6cd0e6fa34864e726aa2cda390c35f43277e388d2e6b5c455dae01ba9b"
 
 
 def test_host_builder_uses_short_pwn_slug_for_workspace_image(tmp_path: Path) -> None:
