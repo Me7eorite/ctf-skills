@@ -34,6 +34,13 @@ _READINESS_CODES = {
     "pwn_port_only_readiness",
     "pwn_bad_readiness_probe",
 }
+_READINESS_UNAVAILABLE_MARKERS = {
+    "readiness probe result unavailable",
+    "service readiness unavailable",
+    "fresh readiness observation unavailable",
+    "fresh-connection readiness unavailable",
+    "missing readiness evidence",
+}
 _CONTRACT_STATUSES = {
     "contract_failed",
     "missing_validation",
@@ -43,6 +50,37 @@ _CONTRACT_STATUSES = {
 }
 _SOLVER_STATUSES = {"nonzero_exit", "flag_mismatch"}
 _TIMEOUT_STATUSES = {"timeout"}
+_TIMEOUT_SUBREASON_ALIASES = {
+    "solver_io": {
+        "solver_io",
+        "solver-io",
+        "solver_io_timeout",
+        "solver_timeout",
+        "pwn_bruteforce_timeout",
+        "unbounded_solver_read",
+    },
+    "service_readiness": {
+        "service_readiness",
+        "service-readiness",
+        "service_readiness_timeout",
+        "readiness_timeout",
+        "pwn_service_readiness_failed",
+        "pwn_port_only_readiness",
+    },
+    "wrapper_bound": {
+        "wrapper_bound",
+        "wrapper-bound",
+        "wrapper_no_bound",
+        "missing_timeout_bound",
+        "missing_wrapper_timeout",
+    },
+    "missing_diagnostics": {
+        "missing_diagnostics",
+        "missing-diagnostics",
+        "diagnostic_unavailable",
+        "missing_diagnostic_capture",
+    },
+}
 _SOLVER_CODES = {
     "missing_dependency",
     "flag_mismatch",
@@ -92,8 +130,14 @@ def normalized_validation_failure_class(
 
     if status in _TIMEOUT_STATUSES or "timeout" in detail_codes:
         return "timeout"
+    readiness_observation = _readiness_observation(result, detail_items)
+
     if detail_codes & _READINESS_CODES:
         return "service-readiness"
+    if "pwn_prompt_eof" in detail_codes and readiness_observation == "failed-fresh-connection":
+        return "service-readiness"
+    if "pwn_prompt_eof" in detail_codes and readiness_observation in {"established", "unavailable"}:
+        return "solver"
     if "pwn_prompt_eof" in detail_codes and not _readiness_established(result, detail_items):
         return "service-readiness"
     if status in _CONTRACT_STATUSES or detail_phases & {"contract", "gate"}:
@@ -121,6 +165,10 @@ def validation_failure_signature(
     status = str(result.get("validation_status") or result.get("status") or "").strip()
     if status:
         parts.append(f"status={status}")
+    if failure_class == "timeout":
+        timeout_subreason = timeout_failure_subreason(result)
+        if timeout_subreason:
+            parts.append(f"timeout_subreason={timeout_subreason}")
 
     details = _failure_details(result)
     if details:
@@ -151,6 +199,38 @@ def validation_failure_signature(
 
     signature = "|".join(part for part in parts if part)
     return _normalize_signature_text(signature)[:400]
+
+
+def timeout_failure_subreason(result: Mapping[str, Any]) -> str | None:
+    """Return a stable timeout subreason when diagnostics make one visible."""
+    detail_items = _failure_details(result)
+    detail_values: list[str] = []
+    for detail in detail_items:
+        for key in ("timeout_subreason", "subreason", "code", "message"):
+            value = detail.get(key)
+            if value not in (None, ""):
+                detail_values.append(str(value))
+    diagnostic_unavailable = result.get("validation_diagnostic_unavailable")
+    if isinstance(diagnostic_unavailable, Sequence) and not isinstance(diagnostic_unavailable, (str, bytes)):
+        detail_values.extend(str(item) for item in diagnostic_unavailable)
+    text = "\n".join([*detail_values, _combined_text(result)]).lower()
+    normalized_tokens = {
+        re.sub(r"[^a-z0-9]+", "_", token).strip("_")
+        for token in re.split(r"[\s,;|:/]+", text)
+        if token.strip()
+    }
+    for subreason, aliases in _TIMEOUT_SUBREASON_ALIASES.items():
+        if normalized_tokens & aliases:
+            return subreason
+    if re.search(r"\b(recvuntil|recvline|readuntil|pwntools|socket read|read loop)\b", text):
+        return "solver_io"
+    if re.search(r"\b(readiness|banner|menu|prompt probe|port only|xinetd)\b", text):
+        return "service_readiness"
+    if re.search(r"\b(no timeout|without timeout|unbounded|timeout wrapper|timeout command)\b", text):
+        return "wrapper_bound"
+    if re.search(r"\b(diagnostic.*unavailable|missing.*diagnostic|stdout.*unavailable|stderr.*unavailable)\b", text):
+        return "missing_diagnostics"
+    return None
 
 
 def annotate_validation_result(result: Mapping[str, Any]) -> dict[str, Any]:
@@ -310,6 +390,9 @@ def _summarize_progress_message(message: str) -> dict[str, Any] | None:
     text = message.strip()
     if not text:
         return None
+    phase_match = re.search(r"\b(?:hermes_phase|phase|runner_phase)=([^\s]+)", text)
+    if not phase_match or phase_match.group(1) != "validation":
+        return None
     status_match = re.search(r"\bstatus=([^\s]+)", text)
     if not status_match:
         return None
@@ -387,6 +470,52 @@ def _readiness_established(
         }:
             return True
     return False
+
+
+def _readiness_observation(
+    result: Mapping[str, Any],
+    details: Sequence[Mapping[str, Any]],
+) -> str:
+    values: list[Any] = [
+        result.get("service_readiness"),
+        result.get("readiness_probe_status"),
+        result.get("readiness_status"),
+        result.get("readiness_established"),
+        result.get("readiness_observation"),
+    ]
+    for detail in details:
+        values.extend(
+            [
+                detail.get("service_readiness"),
+                detail.get("readiness"),
+                detail.get("readiness_probe_status"),
+                detail.get("readiness_established"),
+                detail.get("readiness_observation"),
+            ]
+        )
+    for value in values:
+        normalized = str(value).strip().lower() if value is not None else ""
+        if value is True or normalized in {"ready", "passed", "ok", "established", "true"}:
+            return "established"
+        if normalized in {
+            "failed",
+            "failed-fresh-connection",
+            "fresh-failed",
+            "not_ready",
+            "not-ready",
+            "unready",
+        }:
+            return "failed-fresh-connection"
+
+    unavailable = result.get("validation_diagnostic_unavailable")
+    if isinstance(unavailable, Sequence) and not isinstance(unavailable, (str, bytes)):
+        unavailable_text = " ".join(str(item).strip().lower() for item in unavailable)
+        if any(marker in unavailable_text for marker in _READINESS_UNAVAILABLE_MARKERS):
+            return "unavailable"
+    text = _combined_text(result).lower()
+    if any(marker in text for marker in _READINESS_UNAVAILABLE_MARKERS):
+        return "unavailable"
+    return "unavailable"
 
 
 def _combined_text(result: Mapping[str, Any]) -> str:

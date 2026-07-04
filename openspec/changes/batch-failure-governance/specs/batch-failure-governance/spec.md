@@ -2,7 +2,7 @@
 
 ### Requirement: Batch failure taxonomy is normalized and stable
 
-The system SHALL map build-attempt validation-phase failures into a normalized, closed set of failure classes that is stable across runner invocations. The first-rollout closed set SHALL be exactly `timeout`, `service-readiness`, `contract`, and `solver`. These exact slugs are the canonical API and repair-policy values for attempts whose terminal runner phase is `validation`. For the current one-build-attempt-to-one-challenge flow, every failed validation-phase attempt SHALL have exactly one attempt-level class assigned for the latest validation round. If a future flow reintroduces multi-challenge build-attempt shards, the system SHALL expose per-challenge classes or define an explicit aggregation rule before emitting one attempt-level `validation_failure_class`. Attempts that fail before or outside validation, including runner phases such as `hermes_auth`, `hermes_rate_limit`, `hermes_timeout`, `terminal_workspace`, `materialize`, and `contract_prepare`, SHALL NOT be assigned a normalized validation failure class by this capability. The class SHALL be derivable from the final validation result and existing diagnostic evidence without requiring new storage tables or a new durable source-of-truth field. Phase 1 derivation SHALL use structured `validation_failure_details` from the latest failed validation result in `work/executions/<attempt_id>/current/state/validation-history.json` as the primary source when present, then fall back to report entries that preserve `validation_failure_details`, `validation_status`, `validation_contract_errors`, latest terminal validation progress-event messages, and artifact metadata. The system MAY copy the derived class into existing progress-event or attempt-summary payloads for visibility, but such copies SHALL NOT replace derivation as the source of truth.
+The system SHALL map build-attempt validation-phase failures into a normalized, closed set of failure classes whose allowed slugs are stable across runner invocations. The first-rollout closed set SHALL be exactly `timeout`, `service-readiness`, `contract`, and `solver`. These exact slugs are the canonical API and repair-policy values for attempts whose terminal runner phase is `validation`. Phase 1 assumes the current one-build-attempt-to-one-challenge flow: under that precondition, every failed validation-phase attempt SHALL have exactly one attempt-level class assigned for the latest validation round. If a future flow reintroduces multi-challenge build-attempt shards, the system SHALL expose per-challenge classes or define an explicit aggregation rule before emitting one attempt-level `validation_failure_class`. Attempts that fail before or outside validation, including runner phases such as `hermes_auth`, `hermes_rate_limit`, `hermes_timeout`, `terminal_workspace`, `materialize`, and `contract_prepare`, SHALL NOT be assigned a normalized validation failure class by this capability. The class SHALL be derivable from the final validation result and existing diagnostic evidence without requiring new storage tables or a new durable source-of-truth field. Phase 1 derivation SHALL use structured `validation_failure_details` from the latest failed validation result in `work/executions/<attempt_id>/current/state/validation-history.json` as the primary source when present, then fall back to report entries that preserve `validation_failure_details`, `validation_status`, `validation_contract_errors`, latest terminal validation progress-event messages, and artifact metadata. The system MAY copy the derived class into existing progress-event or attempt-summary payloads for visibility, but such copies SHALL NOT replace derivation as the source of truth. Pwn readiness evidence SHALL be interpreted as one of `established`, `failed-fresh-connection`, or `unavailable`; classifiers SHALL NOT collapse missing readiness evidence into a failed readiness observation. A missing field, absent probe, or bare `readiness_established=false` value SHALL be treated as not-established evidence, not as explicit failed-fresh-connection evidence, unless accompanied by a readiness-failure diagnostic code or an explicit `failed-fresh-connection` observation.
 
 #### Scenario: Timeout is classified deterministically
 - **WHEN** a build attempt fails because `validate.sh` exceeds its allotted time during validation
@@ -10,9 +10,15 @@ The system SHALL map build-attempt validation-phase failures into a normalized, 
 - **AND** the failure summary SHALL preserve the timeout cause
 
 #### Scenario: Service readiness is distinguished from exploit logic
-- **WHEN** a pwn attempt fails during validation because the reference solver cannot observe a real banner or menu on a fresh connection
+- **WHEN** a pwn attempt fails during validation because a fresh readiness probe cannot observe a real banner or menu before solver payloads are sent
 - **THEN** the attempt SHALL be classified as `service-readiness`
 - **AND** the summary SHALL point the operator toward probe or startup issues rather than exploit payload tuning
+
+#### Scenario: Missing readiness evidence is not treated as failed readiness
+- **WHEN** a pwn attempt fails with generic prompt/menu EOF evidence
+- **AND** the latest failed validation result lacks a fresh readiness observation
+- **THEN** the attempt SHALL preserve a missing-readiness-evidence diagnostic
+- **AND** after required contracts have passed, the attempt SHALL prefer the `solver` route rather than `service-readiness`
 
 #### Scenario: Latest validation history supplies structured details
 - **WHEN** a failed validation attempt has `validation_failure_details` recorded in `current/state/validation-history.json`
@@ -50,9 +56,15 @@ The system SHALL map build-attempt validation-phase failures into a normalized, 
 - **AND** the failure signature SHALL include the missing module or dependency name when available
 - **AND** the repair summary SHALL point toward standard-library, vendored-helper, or declared-runtime fixes rather than service-readiness tuning
 
-### Requirement: Reference solver stability is diagnostic-first before hard enforcement
+#### Scenario: Timeout signatures preserve the actionable subreason
+- **WHEN** validation times out and available diagnostics identify a stable cause such as solver I/O, service readiness, wrapper bounds, or missing diagnostic capture
+- **THEN** the attempt SHALL still expose normalized class `timeout`
+- **AND** the failure signature SHALL preserve the stable timeout subreason when available
+- **AND** the repair route MAY use that subreason to choose bounded diagnostic, solver-context, or escalation behavior without adding a fifth normalized class
 
-The system SHALL treat stable Web/Pwn reference solver behavior as validation-governed evidence before later hard enforcement. In Phase 1, default-target, dependency, bounded-I/O, and evidence gaps SHALL be emitted as structured validation diagnostics and repair context, without adding new document-completion blockers or solver-quality gates. For Web/Pwn challenges, the default solver path SHOULD connect to the live validation target using `CHAL_HOST` and `CHAL_PORT` rather than hardcoded loopback hosts, container names, or fixed challenge ports. Explicit local debug paths such as `LOCAL=1` MAY use local binaries, loopback hosts, or `process()` for bounded smoke tests, but they SHALL NOT be the default validation path once hard enforcement is enabled. Pwn solvers SHOULD use bounded reads, receives, and subprocess/process interactions for prompt synchronization, leaks, shell interaction, and flag reads so solver mistakes become bounded validation diagnostics instead of worker hangs. Later enforcement phases MAY turn deterministic stability gaps into hard blockers after the diagnostics and repair paths are visible and covered by tests.
+### Requirement: Observed reference solver stability gaps remain diagnostic-first
+
+The system SHALL preserve Web/Pwn reference solver stability diagnostics that are already visible in validation results, structured diagnostics, stdout/stderr tails, or repair context. Phase 1 SHALL NOT add broad static solver-quality scanners, new document-completion blockers, generation-quality gates, or hard rejection for default-target, dependency, bounded-I/O, or evidence gaps that are not already surfaced by validation evidence. For Web/Pwn challenges, diagnostics SHOULD make it clear when the default solver path does not connect to the live validation target through `CHAL_HOST` and `CHAL_PORT`, and when Pwn reads or local process interactions appear unbounded. Explicit local debug paths such as `LOCAL=1` MAY use local binaries, loopback hosts, or `process()` for bounded smoke tests, but Phase 1 SHALL treat local-only behavior as diagnostic evidence rather than a hard blocker. Later enforcement phases MAY turn deterministic stability gaps into hard blockers only after a follow-up change defines enforcement tests and acceptance criteria.
 
 #### Scenario: Local debug may adapt the loader with the shipped runtime pieces
 - **WHEN** a Pwn challenge provides a matching loader/`ld` alongside the binary
@@ -62,32 +74,32 @@ The system SHALL treat stable Web/Pwn reference solver behavior as validation-go
 
 #### Scenario: Web/Pwn solver default path uses validation target environment
 - **WHEN** a Web or Pwn challenge provides `writenup/exp.py`
-- **THEN** Phase 1 SHALL emit contract or solver diagnostics when the default validation path does not use `CHAL_HOST` and `CHAL_PORT` to reach the running service
+- **THEN** Phase 1 SHALL preserve contract or solver diagnostics when current validation evidence shows the default validation path does not use `CHAL_HOST` and `CHAL_PORT` to reach the running service
 - **AND** later hard enforcement MAY require hardcoded `127.0.0.1`, `localhost`, container names, or fixed challenge ports to appear only inside explicit local debug branches
 
 #### Scenario: Pwn solver interactions are bounded
 - **WHEN** a Pwn solver uses pwntools, sockets, subprocesses, or local process execution
-- **THEN** Phase 1 SHALL emit contract or solver diagnostics when prompt reads, leak reads, shell reads, or local process runs are not bounded by short timeouts or equivalent deterministic limits
-- **AND** an unbounded receive or process interaction SHALL be surfaced as contract or solver diagnostic evidence before it can hang a worker indefinitely
+- **THEN** Phase 1 SHALL preserve contract, solver, or timeout diagnostics when current validation evidence shows prompt reads, leak reads, shell reads, or local process runs are not bounded by short timeouts or equivalent deterministic limits
+- **AND** timeout or missing-diagnostic evidence SHALL route through bounded repair or escalation rather than unbounded repeated validation
 
 #### Scenario: Solver repair receives complete exp evidence
 - **WHEN** a validation failure is classified as `solver`
 - **THEN** the next Hermes repair prompt SHALL include the latest `writenup/exp.py`, `validate.sh`, structured `validation_failure_details`, stdout/stderr tails, concise failure summary, and `writenup/pwn_debug_report.json` when present
 - **AND** the repair route SHALL preserve whether the failure appears to be dependency, synchronization, flag mismatch, offset/payload, leak parsing, or remote/local mismatch evidence
 
-### Requirement: Initial reference solver quality is diagnostic-first
+### Requirement: Initial reference solver quality gaps are diagnostic-only in Phase 1
 
-The system SHALL treat initial `writenup/exp.py` quality as a validation-governed diagnostic surface, not merely as a file-existence check. In Phase 1, Web/Pwn solver stability and evidence gaps SHALL be emitted as structured validation diagnostics and repair context, without adding new document-completion blockers or solver-quality gates. Later enforcement phases MAY require the reference solver to satisfy static stability contracts and bounded solve evidence before documentation completion. Pwn challenges with non-trivial payload logic SHOULD preserve structured debug evidence for offsets, mitigations, libc/PIE assumptions, gadgets, menu synchronization, leak parsing, local smoke results, and remote/container solve results when available. Simple Pwn challenges MAY provide concise evidence, and missing evidence or an explicit inability to run a bounded smoke test SHALL be recorded rather than hidden.
+The system SHALL treat initial `writenup/exp.py` quality as a validation-governed diagnostic surface when validation evidence can observe the defect. In Phase 1, Web/Pwn solver stability and evidence gaps SHALL be preserved when they appear in structured validation diagnostics, stdout/stderr tails, failure summaries, or repair context, without adding new document-completion blockers, solver-quality gates, mandatory Pwn evidence profiles, or broad static inspection. Later enforcement phases MAY require the reference solver to satisfy static stability contracts and bounded solve evidence before documentation completion only after a follow-up change promotes those diagnostics into hard gates. Pwn challenges with non-trivial payload logic SHOULD preserve structured debug evidence for offsets, mitigations, libc/PIE assumptions, gadgets, menu synchronization, leak parsing, local smoke results, and remote/container solve results when available. Simple Pwn challenges MAY provide concise evidence, and missing evidence or an explicit inability to run a bounded smoke test SHALL be recorded rather than hidden when current validation evidence can observe it.
 
 #### Scenario: Poor initial exp produces diagnostics before hard enforcement
 - **WHEN** a generated Web/Pwn challenge contains `writenup/exp.py` but the solver violates default-target, dependency, bounded-I/O, or basic evidence expectations
-- **THEN** Phase 1 SHALL preserve contract or solver diagnostics that identify the missing solver-quality evidence
+- **THEN** Phase 1 SHALL preserve available contract or solver diagnostics that identify the missing solver-quality evidence
 - **AND** later enforcement phases MAY block document completion after those diagnostics are visible and covered by tests
 
 #### Scenario: Pwn payload assumptions are evidence-backed
 - **WHEN** a Pwn solver uses overflow offsets, libc symbols, PIE bases, ROP gadgets, leak parsing, or menu synchronization assumptions
-- **THEN** those assumptions SHALL be derived from the actual shipped ELF/libc/container path or recorded debug evidence
-- **AND** guessed or stale constants SHALL be surfaced as solver-quality diagnostics before repeated blind repair attempts consume the budget
+- **THEN** Phase 1 SHALL preserve any available validation or debug evidence that identifies the source of those assumptions
+- **AND** guessed or stale constants SHALL be surfaced as solver-quality diagnostics when current validation or repair evidence can identify them
 
 #### Scenario: Menu synchronization evidence separates solver bugs from readiness bugs
 - **WHEN** a Pwn solver fails while waiting for a banner, prompt, or menu token
@@ -95,26 +107,17 @@ The system SHALL treat initial `writenup/exp.py` quality as a validation-governe
 - **AND** prompt/menu EOF SHALL classify as `service-readiness` only when explicit readiness evidence shows no real application prompt on a fresh connection
 - **AND** prompt/menu EOF SHALL classify as `solver` when readiness is established and the reference solver later loses synchronization
 - **AND** generic EOF evidence without a fresh-connection readiness observation SHALL preserve a missing-readiness-evidence diagnostic and SHALL NOT be treated as `service-readiness` solely because readiness is unknown
+- **AND** after required contracts have passed, generic EOF without freshness/readiness evidence SHALL prefer the `solver` route until explicit failed readiness evidence appears
 
 #### Scenario: Solver dependency gaps are diagnostic in Phase 1
 - **WHEN** `writenup/exp.py` imports a non-standard helper module
-- **THEN** Phase 1 SHALL record whether the helper is present under `writenup/` or otherwise declared as supported by the validation runtime
+- **THEN** Phase 1 SHALL preserve the missing dependency diagnostic when validation or repair evidence identifies the missing helper
 - **AND** a missing helper SHALL produce a solver dependency signature containing the missing module name
 - **AND** later enforcement phases MAY require the helper to be generated or declared before document completion
 
-#### Scenario: Later simple Pwn enforcement uses a lighter profile
-- **WHEN** a later enforcement phase evaluates a simple ret2text, ret2win, or otherwise single-stage non-PIE/no-libc-leak exploit
-- **THEN** the solver-quality gate SHALL accept concise evidence covering binary path, mitigation summary, offset source, menu token if any, and a bounded local or container smoke result
-- **AND** the gate SHALL NOT require a full advanced `pwn_debug_report.json` solely because the category is Pwn
-
-#### Scenario: Later complex Pwn enforcement uses a richer profile
-- **WHEN** a later enforcement phase evaluates a Pwn challenge that uses canaries, PIE, libc leaks, ret2libc, multi-stage ROP, heap behavior, custom protocols, or timing-sensitive interaction
-- **THEN** the solver-quality gate SHALL require richer structured evidence for leak parsing, base calculations, gadget source, libc/ld source, synchronization, and local plus remote/container observations when available
-- **AND** missing rich evidence SHALL produce a solver-quality diagnostic rather than a generic validation failure
-
 ### Requirement: Validation diagnostics are sufficient for repair
 
-The validation path SHALL emit and preserve a bounded diagnostic envelope whenever validation or solver execution fails. The envelope SHALL include, when applicable, compose or container service state, recent service logs, readiness probe result, exact solver command, solver stdout tail, solver stderr tail, solver exit code, validation status, structured `validation_failure_details`, and any final stdout flag candidate. Diagnostic commands invoked by traps SHALL write to stderr so stdout remains reserved for the recovered flag. Repair contexts and API summaries SHALL preserve missing diagnostic fields explicitly as unavailable rather than silently dropping the diagnostic section. Diagnostic text included in repair prompts SHALL be capped by line and byte budgets and SHALL mark truncation explicitly.
+The validation path SHALL preserve a bounded diagnostic envelope whenever validation or solver execution fails and those fields are available from the current validator, wrapper, or report merge path. The envelope SHOULD include, when applicable, compose or container service state, recent service logs, readiness probe result, exact solver command, solver stdout tail, solver stderr tail, solver exit code, validation status, structured `validation_failure_details`, and any final stdout flag candidate. Phase 1 SHALL NOT require every existing `validate.sh` wrapper to be rewritten to capture every envelope field; instead, repair contexts and API summaries SHALL preserve available fields, synthesize explicit unavailable markers for missing fields needed by repair, and cap diagnostic text by line and byte budgets with truncation markers.
 
 #### Scenario: Solver failure captures stdout and stderr evidence
 - **WHEN** `writenup/exp.py` exits non-zero or prints the wrong flag during validation
@@ -124,7 +127,7 @@ The validation path SHALL emit and preserve a bounded diagnostic envelope whenev
 #### Scenario: Insufficient diagnostics becomes actionable
 - **WHEN** validation fails but the latest result lacks solver stdout/stderr tails, readiness evidence, service logs, or structured failure details needed for repair
 - **THEN** the attempt SHALL expose a diagnostic-quality failure summary or detail
-- **AND** the next repair route SHALL first improve validation diagnostics before attempting speculative exploit payload changes
+- **AND** the next repair route SHALL improve validation diagnostics before attempting speculative exploit payload changes when a safe wrapper or context-only diagnostic repair is available
 
 #### Scenario: Repair context marks truncated diagnostics
 - **WHEN** solver stdout, solver stderr, service logs, or debug reports exceed the repair-context budget
@@ -178,40 +181,14 @@ The system SHALL treat each build attempt in a batch as an independent failure d
 - **THEN** each attempt SHALL retain its own derived failure class, invocation-local signature state, and summary
 - **AND** neither attempt SHALL overwrite the other's diagnostic state
 
-### Requirement: Generated Web/Pwn artifacts are normalized before first validation
+### Requirement: Pwn validation preserves readiness and solver evidence before repair
 
-The system SHALL run a deterministic pre-validation normalization gate against the current attempt workspace before the first host validation run for generated Web/Pwn build attempts. The gate SHALL either repair known safe mechanical defects or fail with structured `validation_failure_details` before spending Hermes repair budget. The gate SHALL cover canonical challenge layout, required `metadata.json` and `validate.sh`, nested `output/challenges` promotion or rejection, Compose project isolation, invalid Compose file path construction, and required Pwn xinetd/chroot scaffold files when the design or metadata declares an xinetd/chroot service model. The gate SHALL be attempt-scoped and SHALL operate only on the current execution workspace for that attempt.
-
-#### Scenario: Nested generated output is normalized before validation
-- **WHEN** a generated attempt leaves a single canonical challenge root under a nested `output/challenges/<category>/<challenge-id>` tree instead of the expected current attempt output root
-- **THEN** the pre-validation gate SHALL promote or normalize that root using the existing safe deterministic mechanics
-- **AND** validation SHALL run against the normalized canonical challenge root
-- **AND** the gate SHALL fail with a contract diagnostic instead of guessing when multiple candidate roots exist
-
-#### Scenario: Compose isolation is enforced before validation
-- **WHEN** a Web/Pwn generated `validate.sh` or wrapper uses Docker Compose without an isolated project name
-- **THEN** the pre-validation gate SHALL either normalize the wrapper to use a stable `COMPOSE_PROJECT_NAME` and `docker-compose -p` for `up`, `ps`, `logs`, and `down`, or fail with detail code `compose_cross_talk`
-- **AND** the attempt SHALL NOT enter host validation with default Compose project names such as `deploy`
-
-#### Scenario: Bad compose path construction is rejected deterministically
-- **WHEN** validation commands construct paths such as `docker-compose.yml.yml` or otherwise point to a non-existent compose file while `deploy/docker-compose.yml` exists
-- **THEN** the pre-validation gate SHALL repair the path when the intended file is unambiguous
-- **AND** otherwise fail with a contract diagnostic that includes the bad path and the expected compose path
-
-#### Scenario: Pwn xinetd scaffold is a system-owned contract
-- **WHEN** a Pwn attempt declares or implies the default xinetd/chroot service model
-- **THEN** the gate SHALL verify the canonical scaffold files exist, including `deploy/Dockerfile`, `deploy/docker-compose.yml`, `deploy/_files/start.sh`, and an xinetd service file
-- **AND** missing or drifted scaffold files SHALL be normalized from the repository scaffold when safe
-- **AND** unresolved scaffold drift SHALL produce `service-readiness` or `contract` diagnostics before solver tuning is attempted
-
-### Requirement: Pwn validation distinguishes service readiness from solver quality before repair
-
-The system SHALL require Pwn validation failures to preserve enough application-level readiness and solver evidence to route repair accurately. A port-open check, container `Up` state, or xinetd `...done` log SHALL NOT by itself prove service readiness. The readiness evidence SHALL prefer a fresh connection that reads an application banner, menu, prompt, or other protocol-specific token before the reference solver sends exploit payloads. Solver repair SHALL receive bounded evidence from `validate.sh`, `writenup/exp.py`, solver stdout/stderr, service logs, readiness probes, and `writenup/pwn_debug_report.json` when present.
+The system SHALL preserve available Pwn application-level readiness and solver evidence before routing repair, and SHALL explicitly mark missing evidence as unavailable when that absence affects repair choice. A port-open check, container `Up` state, or xinetd `...done` log SHALL NOT by itself prove service readiness. The readiness evidence SHOULD prefer a fresh connection that reads an application banner, menu, prompt, or other protocol-specific token before the reference solver sends exploit payloads. Solver repair SHALL receive bounded available evidence from `validate.sh`, `writenup/exp.py`, solver stdout/stderr, service logs, readiness probes, and `writenup/pwn_debug_report.json` when present; Phase 1 SHALL NOT reject otherwise inspectable artifacts solely because every possible evidence field is not present.
 
 #### Scenario: Port-open readiness is insufficient
 - **WHEN** a Pwn validation script only proves the TCP port is open or xinetd has started
 - **THEN** the attempt SHALL record a readiness diagnostic such as `pwn_port_only_readiness` or `pwn_service_readiness_failed`
-- **AND** repair SHALL prioritize readiness/scaffold/probe normalization before exploit payload changes
+- **AND** repair SHALL prioritize readiness evidence, startup diagnostics, or probe normalization before exploit payload changes
 
 #### Scenario: Established readiness routes later failure to solver repair
 - **WHEN** a fresh readiness probe observes the application prompt or menu
@@ -221,8 +198,14 @@ The system SHALL require Pwn validation failures to preserve enough application-
 
 #### Scenario: Missing diagnostic envelope is repaired before payload guesses
 - **WHEN** a Pwn validation failure lacks solver stdout/stderr tails, service logs, readiness probe output, exact solver command, exit code, or structured failure details
-- **THEN** the next automatic route SHALL first normalize validation diagnostics when safe
+- **THEN** the next automatic route SHALL first normalize validation diagnostics when a safe wrapper or context-only diagnostic repair is available
 - **AND** Hermes SHALL NOT be asked to tune arbitrary offsets, gadgets, or leak parsing from an empty generic `nonzero_exit` summary
+- **AND** this diagnostic-normalization step SHALL NOT change the normalized class unless a new validation result supplies explicit evidence for a different class
+
+#### Scenario: Diagnostic-envelope completeness is evaluated after failure
+- **WHEN** pre-validation inspection can see `validate.sh` but no validation failure has occurred yet
+- **THEN** the system MAY normalize obvious diagnostic hooks in the wrapper
+- **AND** it SHALL defer the completeness judgement for captured stdout/stderr tails, service logs, readiness output, solver command, exit code, and structured details until a failed validation result exists
 
 #### Scenario: Deep exploit evidence is diagnostic-first in the first rollout
 - **WHEN** a non-trivial Pwn exploit lacks rich `pwn_debug_report.json` evidence for offsets, mitigations, gadgets, leak parsing, or local/container observations

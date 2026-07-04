@@ -110,6 +110,27 @@ def test_revalidate_repairs_failed_attempt_without_creating_sibling(
     )
     _write_failed_shard(paths, task_id, attempt_id, basename, challenge_id)
     _write_web_challenge(paths, challenge_id)
+    state_dir = paths.executions / str(attempt_id) / "current" / "state"
+    state_dir.mkdir(parents=True)
+    repeated_failure = {
+        "challenge_id": challenge_id,
+        "solve_status": "failed",
+        "validation_status": "nonzero_exit",
+        "validation_failure_details": [
+            {
+                "phase": "validate",
+                "code": "pwn_prompt_eof",
+                "message": "EOF waiting for Choice:",
+            }
+        ],
+    }
+    write_json(
+        state_dir / "validation-history.json",
+        [
+            {"round": 0, "results": [repeated_failure]},
+            {"round": 1, "results": [repeated_failure]},
+        ],
+    )
 
     service = BuildAttemptRevalidationService(
         paths=paths,
@@ -269,7 +290,6 @@ def test_repair_timeout_env_override_wins(monkeypatch):
     monkeypatch.setenv("BUILD_ATTEMPT_REPAIR_TIMEOUT_SECONDS", "1500")
 
     assert _default_timeout_seconds() == 1500
-        assert row.resulting_challenge_dir.endswith(f"{challenge_id}-demo")
 
 
 def test_revalidate_accepts_direct_current_attempt_output_root(
@@ -683,4 +703,3 @@ def _write_web_challenge(paths: ProjectPaths, challenge_id: str, *, root: Path |
     (challenge / "writenup" / "wp.md").write_text(body, encoding="utf-8")
     (challenge / "README.md").write_text(body, encoding="utf-8")
     return challenge
-

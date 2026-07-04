@@ -1184,6 +1184,7 @@ class HermesRunner:
                     workspace, validation_round, per_results, validated_set
                 )
                 merge_validation_into_report(report, per_results)
+                repeated_failure_stop = stop_if_repeated_failure()
 
         run_deterministic_repairs()
         for repair_attempt in range(1, repair_budget + 1):

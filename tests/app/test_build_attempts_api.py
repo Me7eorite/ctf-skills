@@ -496,6 +496,9 @@ def test_list_and_detail_expose_latest_validation_failure_context(
                             }
                         ],
                         "validation_stderr_tail": "EOFError while waiting for Choice:",
+                        "validation_diagnostic_unavailable": [
+                            "readiness probe result unavailable"
+                        ],
                     }
                 ],
             }
@@ -505,7 +508,7 @@ def test_list_and_detail_expose_latest_validation_failure_context(
     list_response = client.get("/api/build-attempts")
     assert list_response.status_code == 200
     [row] = list_response.json()
-    assert row["validation_failure_class"] == "service-readiness"
+    assert row["validation_failure_class"] == "solver"
     assert row["validation_failure_details"][0]["code"] == "pwn_prompt_eof"
     assert "pwn_prompt_eof" in row["validation_failure_signature"]
     assert row["validation_failure_source"] == "validation-history"
@@ -514,8 +517,49 @@ def test_list_and_detail_expose_latest_validation_failure_context(
     detail_response = client.get(f"/api/build-attempts/{attempt.id}")
     assert detail_response.status_code == 200
     detail = detail_response.json()
-    assert detail["validation_failure_class"] == "service-readiness"
+    assert detail["validation_failure_class"] == "solver"
     assert detail["validation_stderr_tail"] == "EOFError while waiting for Choice:"
+
+
+def test_list_derives_validation_context_only_for_returned_rows(
+    client: TestClient,
+    session_factory: SessionFactory,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    task_a = _seed_designed_task(session_factory, task_no=1)
+    task_b = _seed_designed_task(session_factory, task_no=2)
+    with transaction(factory=session_factory) as session:
+        repo = BuildAttemptsRepository(session)
+        first = repo.create_attempt(task_a, f"{uuid4()}.json")
+        second = repo.create_attempt(task_b, f"{uuid4()}.json")
+        repo.update_to_terminal(first.id, status="failed", error="first failed")
+        repo.update_to_terminal(second.id, status="failed", error="second failed")
+
+    calls: list[UUID] = []
+
+    def fake_latest_failed_validation(_paths, attempt_id):
+        calls.append(UUID(str(attempt_id)))
+        return {
+            "source": "validation-history",
+            "challenge_id": "web-0001",
+            "validation_status": "timeout",
+            "validation_failure_class": "timeout",
+            "validation_failure_signature": "timeout|status=timeout",
+        }
+
+    monkeypatch.setattr(
+        build_attempts_endpoints,
+        "latest_failed_validation",
+        fake_latest_failed_validation,
+    )
+
+    response = client.get("/api/build-attempts?limit=1")
+
+    assert response.status_code == 200
+    [row] = response.json()
+    assert row["validation_failure_class"] == "timeout"
+    assert calls == [UUID(row["id"])]
+    assert set(calls).issubset({first.id, second.id})
 
 
 def test_successful_attempt_does_not_expose_stale_validation_failure_context(
@@ -579,6 +623,101 @@ def test_successful_attempt_does_not_expose_stale_validation_failure_context(
     assert "validation_failure_class" not in detail
     assert detail.get("failure_summary") is None
     assert detail.get("validation_failure_details") is None
+
+
+def test_non_validation_failure_does_not_expose_validation_failure_class(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory, category="pwn")
+    with transaction(factory=session_factory) as session:
+        repo = BuildAttemptsRepository(session)
+        attempt = repo.create_attempt(task_id, f"{uuid4()}.json")
+        repo.update_to_terminal(attempt.id, status="failed", error="Hermes timed out before validation")
+
+    state_dir = (
+        client.app.state.project_paths.executions
+        / str(attempt.id)
+        / "current"
+        / "state"
+    )
+    state_dir.mkdir(parents=True)
+    write_json(
+        state_dir / "validation-history.json",
+        [
+            {
+                "round": 1,
+                "results": [
+                    {
+                        "challenge_id": "pwn-0001",
+                        "hermes_phase": "hermes_timeout",
+                        "solve_status": "failed",
+                        "validation_status": "timeout",
+                        "validation_error": "Hermes timed out before validation",
+                    }
+                ],
+            }
+        ],
+    )
+
+    list_response = client.get("/api/build-attempts")
+    assert list_response.status_code == 200
+    [row] = list_response.json()
+    assert row["status"] == "failed"
+    assert "validation_failure_class" not in row
+    assert "validation_failure_signature" not in row
+
+    detail_response = client.get(f"/api/build-attempts/{attempt.id}")
+    assert detail_response.status_code == 200
+    detail = detail_response.json()
+    assert detail["status"] == "failed"
+    assert "validation_failure_class" not in detail
+    assert "validation_failure_signature" not in detail
+
+
+def test_detail_reads_legacy_report_when_new_validation_history_is_missing(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory, category="pwn")
+    with transaction(factory=session_factory) as session:
+        repo = BuildAttemptsRepository(session)
+        attempt = repo.create_attempt(task_id, f"{uuid4()}.json")
+        repo.update_to_terminal(attempt.id, status="failed", error="legacy validation failed")
+
+    report_path = (
+        client.app.state.project_paths.executions
+        / str(attempt.id)
+        / "current"
+        / "logs"
+        / "report.json"
+    )
+    report_path.parent.mkdir(parents=True)
+    write_json(
+        report_path,
+        {
+            "challenges": [
+                {
+                    "id": "pwn-legacy",
+                    "solve_status": "failed",
+                    "validation_status": "flag_mismatch",
+                }
+            ]
+        },
+    )
+
+    response = client.get(f"/api/build-attempts/{attempt.id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["validation_failure_source"] == "report"
+    assert payload["challenge_id"] == "pwn-legacy"
+    assert payload["validation_status"] == "flag_mismatch"
+    assert payload["validation_failure_class"] == "solver"
+    assert "validation_failure_signature" in payload
+    assert "validation_failure_details" not in payload
+    assert "validation_stdout_tail" not in payload
+    assert "validation_stderr_tail" not in payload
 
 
 def test_detail_exposes_execution_iterations(

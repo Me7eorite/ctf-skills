@@ -730,6 +730,32 @@ def test_repair_reuses_container_and_carries_failure_context(
                                 "path": "writenup/exp.py",
                             }
                         ],
+                        "validation_contract_errors": [
+                            "writenup/exp.py must not read metadata.json"
+                        ],
+                        "validation_stdout_tail": "solver output",
+                        "validation_stderr_tail": "metadata.json",
+                    }
+                ],
+            },
+            {
+                "round": 1,
+                "results": [
+                    {
+                        "challenge_id": "web-0001",
+                        "solve_status": "failed",
+                        "validation_status": "contract_failed",
+                        "validation_failure_details": [
+                            {
+                                "phase": "contract",
+                                "code": "forbidden_solver_source",
+                                "message": "solver references metadata.json",
+                                "path": "writenup/exp.py",
+                            }
+                        ],
+                        "validation_contract_errors": [
+                            "writenup/exp.py must not read metadata.json"
+                        ],
                         "validation_stdout_tail": "solver output",
                         "validation_stderr_tail": "metadata.json",
                     }
@@ -765,10 +791,18 @@ def test_repair_reuses_container_and_carries_failure_context(
     assert payload["repair_context"]["source_build_attempt_id"] == str(container_id)
     assert "metadata.json" in payload["repair_context"]["failure_summary"]
     assert payload["repair_context"]["latest_failure"]["validation_failure_class"] == "contract"
+    assert "forbidden_solver_source" in (
+        payload["repair_context"]["latest_failure"]["validation_failure_signature"]
+    )
     assert (
         payload["repair_context"]["latest_failure"]["validation_failure_details"][0]["code"]
         == "forbidden_solver_source"
     )
+    assert payload["repair_context"]["latest_failure"]["validation_contract_errors"] == [
+        "writenup/exp.py must not read metadata.json"
+    ]
+    assert payload["repair_context"]["latest_failure"]["validation_stdout_tail"] == "solver output"
+    assert payload["repair_context"]["latest_failure"]["validation_stderr_tail"] == "metadata.json"
     with session_factory() as session:
         execs = ExecutionsRepository(session).list_for_attempt(container_id)
         assert [item.iteration_no for item in execs] == [1, 2]
@@ -887,6 +921,38 @@ def test_retry_carries_forward_workspace_failure_context(
                                 "path": "deploy/Dockerfile",
                             }
                         ],
+                        "validation_contract_errors": [
+                            "deploy/Dockerfile references a missing source path"
+                        ],
+                        "validation_stdout_tail": "docker build output",
+                        "validation_stderr_tail": "COPY failed",
+                        "failure_kind": "missing_source",
+                        "failure_hint": "Use deploy/src paths in Dockerfile COPY commands.",
+                        "failed_step": "Step 5: COPY src/app.py /app/app.py",
+                    }
+                ],
+            },
+            {
+                "round": 2,
+                "results": [
+                    {
+                        "challenge_id": "web-0001",
+                        "solve_status": "failed",
+                        "validation_status": "contract_failed",
+                        "validation_error": "COPY failed: file not found in build context",
+                        "validation_failure_details": [
+                            {
+                                "phase": "contract",
+                                "code": "missing_source",
+                                "message": "COPY failed: file not found in build context",
+                                "path": "deploy/Dockerfile",
+                            }
+                        ],
+                        "validation_contract_errors": [
+                            "deploy/Dockerfile references a missing source path"
+                        ],
+                        "validation_stdout_tail": "docker build output",
+                        "validation_stderr_tail": "COPY failed",
                         "failure_kind": "missing_source",
                         "failure_hint": "Use deploy/src paths in Dockerfile COPY commands.",
                         "failed_step": "Step 5: COPY src/app.py /app/app.py",
@@ -922,6 +988,12 @@ def test_retry_carries_forward_workspace_failure_context(
     assert payload["retry_context"]["latest_failure"]["failure_kind"] == "missing_source"
     assert payload["retry_context"]["latest_failure"]["validation_failure_class"] == "contract"
     assert "missing_source" in payload["retry_context"]["latest_failure"]["validation_failure_signature"]
+    assert payload["retry_context"]["latest_failure"]["validation_failure_details"][0]["path"] == "deploy/Dockerfile"
+    assert payload["retry_context"]["latest_failure"]["validation_contract_errors"] == [
+        "deploy/Dockerfile references a missing source path"
+    ]
+    assert payload["retry_context"]["latest_failure"]["validation_stdout_tail"] == "docker build output"
+    assert payload["retry_context"]["latest_failure"]["validation_stderr_tail"] == "COPY failed"
     assert "repair_requested" not in payload
 
 

@@ -85,7 +85,44 @@ def test_build_attempt_repair_prompt_includes_validation_evidence_and_debug_repo
     assert "solver|code=pwn_prompt_eof" in prompt
     assert '"validation_stdout_tail": "banner"' in prompt
     assert '"validation_stderr_tail": "EOFError"' in prompt
+    assert "Failure summary:\nvalidate failed" in prompt
+    assert "--- validate.sh ---" in prompt
+    assert "--- writenup/exp.py ---" in prompt
     assert "--- writenup/pwn_debug_report.json ---" in prompt
     assert "pwn_prompt_eof" in prompt
     assert "Bound every `recvuntil` / `recvline` wait with short" in prompt
     assert "print bounded diagnostics for service ready state" in prompt
+
+
+def test_build_attempt_repair_prompt_marks_truncated_evidence(tmp_path: Path) -> None:
+    challenge_dir = tmp_path / "pwn-0001-demo"
+    (challenge_dir / "writenup").mkdir(parents=True)
+    (challenge_dir / "metadata.json").write_text('{"id":"pwn-0001","category":"pwn"}', encoding="utf-8")
+    (challenge_dir / "validate.sh").write_text("#!/bin/sh\npython3 writenup/exp.py\n", encoding="utf-8")
+    (challenge_dir / "writenup" / "exp.py").write_text("print('start')\n" + ("E" * 7000), encoding="utf-8")
+    (challenge_dir / "writenup" / "pwn_debug_report.json").write_text("D" * 7000, encoding="utf-8")
+
+    prompt = _repair_prompt(
+        {
+            "id": "attempt",
+            "design_task_id": "task",
+            "challenge_id": "pwn-0001",
+            "category": "pwn",
+            "challenge_dir": challenge_dir,
+            "failure_summary": "validate failed",
+            "failure_details": [],
+            "latest_failure": {
+                "validation_status": "nonzero_exit",
+                "validation_failure_class": "solver",
+                "validation_failure_signature": "solver|status=nonzero_exit",
+                "validation_stdout_tail": "A" * 2500,
+                "validation_stderr_tail": "B" * 2500,
+            },
+            "file_context": _file_context(challenge_dir),
+        }
+    )
+
+    assert "<validation_stdout_tail truncated from 2500 chars to 2000>" in prompt
+    assert "<validation_stderr_tail truncated from 2500 chars to 2000>" in prompt
+    assert "<writenup/exp.py truncated from 7015 chars to 6000>" in prompt
+    assert "<writenup/pwn_debug_report.json truncated from 7000 chars to 6000>" in prompt

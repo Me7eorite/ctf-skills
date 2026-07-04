@@ -7,6 +7,7 @@ from typing import Any, Literal, Mapping, Sequence
 
 from domain.validation_failure_governance import (
     normalized_validation_failure_class,
+    timeout_failure_subreason,
     validation_failure_signature,
 )
 
@@ -40,7 +41,6 @@ CONTRACT_MECHANICS = (
     MECHANIC_PWN_READINESS_PROBE,
     MECHANIC_DOCKER_LOGS_NO_COLOR,
     MECHANIC_VALIDATE_SOLVER_CAPTURE,
-    MECHANIC_PWN_XINETD_SCAFFOLD,
     MECHANIC_DEPLOY_DOCKERFILE,
 )
 READINESS_MECHANICS = (
@@ -49,7 +49,6 @@ READINESS_MECHANICS = (
     MECHANIC_PWN_READINESS_PROBE,
     MECHANIC_DOCKER_LOGS_NO_COLOR,
     MECHANIC_VALIDATE_SOLVER_CAPTURE,
-    MECHANIC_PWN_XINETD_SCAFFOLD,
     MECHANIC_DEPLOY_DOCKERFILE,
 )
 SOLVER_DIAGNOSTIC_MECHANICS = (
@@ -98,7 +97,7 @@ def policy_for_validation_failure(
             deterministic_mechanics=READINESS_MECHANICS,
             hermes_allowed=True,
             max_deterministic_rounds=2,
-            summary="service-readiness: repair readiness wrappers/scaffold before exploit tuning",
+            summary="service-readiness: repair readiness wrappers/diagnostics before exploit tuning",
         )
     if failure_class == "solver":
         return ValidationRepairPolicy(
@@ -110,6 +109,34 @@ def policy_for_validation_failure(
             summary="solver: Hermes repair with exp and validation diagnostics",
         )
     if failure_class == "timeout":
+        timeout_subreason = timeout_failure_subreason(result)
+        if timeout_subreason == "solver_io":
+            return ValidationRepairPolicy(
+                failure_class=failure_class,
+                route_type="hermes",
+                deterministic_mechanics=SOLVER_DIAGNOSTIC_MECHANICS,
+                hermes_allowed=True,
+                max_deterministic_rounds=1,
+                summary="timeout: bounded solver-context repair for solver I/O timeout",
+            )
+        if timeout_subreason == "service_readiness":
+            return ValidationRepairPolicy(
+                failure_class=failure_class,
+                route_type="deterministic",
+                deterministic_mechanics=READINESS_MECHANICS,
+                hermes_allowed=False,
+                max_deterministic_rounds=1,
+                summary="timeout: bounded readiness diagnostic repair",
+            )
+        if timeout_subreason in {"wrapper_bound", "missing_diagnostics"}:
+            return ValidationRepairPolicy(
+                failure_class=failure_class,
+                route_type="deterministic",
+                deterministic_mechanics=SOLVER_DIAGNOSTIC_MECHANICS,
+                hermes_allowed=False,
+                max_deterministic_rounds=1,
+                summary=f"timeout: bounded diagnostic repair for {timeout_subreason}",
+            )
         return ValidationRepairPolicy(
             failure_class=failure_class,
             route_type="hermes" if operator_triggered else "escalate",

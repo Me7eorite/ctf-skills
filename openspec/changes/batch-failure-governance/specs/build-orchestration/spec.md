@@ -2,7 +2,7 @@
 
 ### Requirement: Build-attempt repair is failure-class aware and attempt-scoped
 
-The system SHALL route validation and repair for validation-phase build-attempt failures according to the normalized failure class of the latest validation round. A class route SHALL select one of the bounded repair actions supported by current services: deterministic mechanical repair, Hermes repair with structured diagnostics, or no-op/escalation when automatic repair is unsafe. Runner automatic validation repair budgets SHALL be scoped to a single attempt and a single runner invocation, not shared across a batch. Dashboard manual repair, retry, and revalidate requests SHALL use the latest validation class and signature for context, but Phase 1 SHALL NOT suppress those operator-triggered requests across invocations. The system SHALL keep sibling attempts in the same batch independent so that one attempt's timeout, service-readiness failure, contract failure, solver failure, or validation repair exhaustion cannot block another attempt's validation, retry, or reporting. This requirement SHALL NOT change existing runner-phase failure taxonomy or sequential consecutive-infrastructure fail-fast behavior.
+The system SHALL route validation and repair for validation-phase build-attempt failures according to the normalized failure class and signature derived by the `batch-failure-governance` capability for the latest validation round. This capability consumes that derivation; it SHALL NOT redefine the class set or readiness semantics. A class route SHALL select one of the bounded repair actions supported by current services: deterministic mechanical repair, Hermes repair with structured diagnostics, or no-op/escalation when automatic repair is unsafe. Runner automatic validation repair budgets SHALL be scoped to a single attempt and a single runner invocation, not shared across a batch. Dashboard manual repair, retry, and revalidate requests SHALL use the latest validation class and signature for context, but Phase 1 SHALL NOT suppress those operator-triggered requests across invocations. The system SHALL keep sibling attempts in the same batch independent so that one attempt's timeout, service-readiness failure, contract failure, solver failure, or validation repair exhaustion cannot block another attempt's validation, retry, or reporting. This requirement SHALL NOT change existing runner-phase failure taxonomy or sequential consecutive-infrastructure fail-fast behavior.
 
 #### Scenario: Each validation class selects a repair policy route
 - **WHEN** a validation-phase failed attempt has normalized class `timeout`, `service-readiness`, `contract`, or `solver`
@@ -12,13 +12,15 @@ The system SHALL route validation and repair for validation-phase build-attempt 
 
 #### Scenario: Timeout follows its own repair path
 - **WHEN** a build attempt fails with a validation timeout
-- **THEN** the attempt SHALL use the timeout-specific recovery path
+- **THEN** the attempt SHALL preserve timeout evidence and use a timeout-specific bounded route
+- **AND** when the timeout signature contains a stable subreason such as solver I/O, service readiness, wrapper bounds, or missing diagnostic capture, the route MAY use that subreason to choose bounded diagnostic, solver-context, or escalation behavior while keeping `validation_failure_class=timeout`
+- **AND** the route SHALL apply only safe wrapper or diagnostic normalization when the missing bound is obvious, otherwise no-op/escalate rather than blindly increasing timeouts or looping Hermes repair
 - **AND** the failure summary SHALL remain associated with that attempt only
 
 #### Scenario: Readiness failures prioritize service startup evidence
-- **WHEN** a pwn attempt fails because the solver cannot observe a live prompt or menu during validation
+- **WHEN** a pwn attempt fails because a fresh readiness probe cannot observe a live application prompt or menu before solver payloads are sent
 - **THEN** the next repair step SHALL prioritize service readiness evidence before exploit payload tuning
-- **AND** deterministic repair SHALL be limited to known safe readiness mechanics such as validate.sh probe normalization and scaffold normalization
+- **AND** deterministic repair SHALL be limited to known safe readiness mechanics such as validate.sh probe normalization and diagnostic capture
 
 #### Scenario: Prompt-input failures are not auto-repaired as validation failures
 - **WHEN** a build attempt fails before validation because prompt inputs cannot be rendered or supplied
@@ -50,22 +52,30 @@ The system SHALL route validation and repair for validation-phase build-attempt 
 
 #### Scenario: Missing diagnostics are repaired before payload guesses
 - **WHEN** a solver-class validation failure lacks bounded solver stdout/stderr tails, readiness evidence, service logs, or structured failure details
-- **THEN** the selected route SHALL first normalize `validate.sh` or the validation wrapper to capture those diagnostics
+- **THEN** the selected route SHALL first normalize `validate.sh` or the validation wrapper to capture those diagnostics when a safe wrapper or context-only diagnostic repair is available
+- **AND** otherwise the selected route SHALL no-op/escalate rather than rewrite challenge-specific solver or scaffold logic without proof
 - **AND** Hermes repair SHALL NOT be asked to tune arbitrary payload logic from an empty or generic failure summary
+- **AND** diagnostic normalization inside the solver route SHALL NOT reclassify missing readiness evidence as `service-readiness`; only a later validation result with explicit failed-fresh-connection evidence may change that class
 
 #### Scenario: Exp stability contract failures get bounded repair
 - **WHEN** a Web/Pwn solver violates stable validation-target requirements such as hardcoded service host/port in the default path or unbounded Pwn receive/process interactions
 - **THEN** the failure SHALL be routed as a bounded validation repair with contract or solver evidence according to the diagnostic
-- **AND** the route SHALL normalize the solver toward `CHAL_HOST`/`CHAL_PORT`, bounded reads, and explicit local debug branches without consuming sibling attempts' budgets
+- **AND** when the repair is safe and evidence-backed, the route MAY normalize the solver toward `CHAL_HOST`/`CHAL_PORT`, bounded reads, and explicit local debug branches without consuming sibling attempts' budgets
+- **AND** Phase 1 SHALL only act on such violations when they are visible in validation evidence or repair context; broad static solver-quality scanning and hard document-completion gates remain out of scope
 
 #### Scenario: One attempt cannot consume another attempt's budget
 - **WHEN** two attempts in the same batch fail during validation
 - **THEN** each attempt SHALL have its own retry budget, derived validation class, invocation-local signature state, and failure summary
 - **AND** exhausting one attempt's repair loop SHALL not reduce the other attempt's opportunities
 
+#### Scenario: Repeated signatures are checked after deterministic reruns
+- **WHEN** deterministic validation repair changes or normalizes wrapper/diagnostic files and then reruns validation
+- **THEN** orchestration SHALL compare the new normalized class/signature against prior failures in the same runner invocation before any further deterministic or Hermes repair
+- **AND** a repeated class/signature without progress SHALL stop automatic repair for that attempt
+
 ### Requirement: Build-attempt diagnostics expose the normalized failure class
 
-The system SHALL expose the normalized validation failure class in build-attempt diagnostics and API-facing summaries whenever a build attempt fails in the validation phase. API payloads SHALL use the field name `validation_failure_class` for this value. The exposed class SHALL be derived from the latest validation result and existing diagnostic evidence, preferring structured `validation_failure_details` from `work/executions/<attempt_id>/current/state/validation-history.json` when present, and MAY be copied into existing progress-event or attempt-summary payloads. The class SHALL be visible alongside the existing concise `failure_summary` so operators can distinguish timeout, service-readiness, contract, and solver validation failures without reading raw logs first. Non-validation runner failures SHALL continue to expose their existing runner failure category and SHALL NOT claim a normalized validation class. Repair diagnostics SHALL preserve `validation_contract_errors` / `contract_errors` compatibility while adding structured `validation_failure_details` where available. Direct repair, retry/repair submission, attempt-list payloads, and attempt-detail API responses SHALL use the same shared latest-failed-validation derivation helper when deriving route, class, signature, and repair context data.
+The system SHALL expose the normalized validation failure class in build-attempt diagnostics and API-facing summaries whenever a build attempt fails in the validation phase. API payloads SHALL use the field name `validation_failure_class` for this value. The exposed class SHALL be derived from the latest validation result and existing diagnostic evidence, preferring structured `validation_failure_details` from `work/executions/<attempt_id>/current/state/validation-history.json` when present, and MAY be copied into existing progress-event or attempt-summary payloads. The class SHALL be visible alongside the existing concise `failure_summary` so operators can distinguish timeout, service-readiness, contract, and solver validation failures without reading raw logs first. Non-validation runner failures SHALL continue to expose their existing runner failure category and SHALL NOT claim a normalized validation class. Repair diagnostics SHALL preserve `validation_contract_errors` / `contract_errors` compatibility while adding structured `validation_failure_details` where available. Direct repair, retry/repair submission, and attempt-detail API responses SHALL use the same shared latest-failed-validation derivation helper when deriving route, class, signature, and repair context data. Attempt-list payloads SHALL expose the same class/signature/summary semantics for the returned folded rows, but SHALL keep derivation bounded to the returned attempt set by using copied progress/summary fields or bounded per-row history reads rather than scanning unrelated execution histories.
 
 #### Scenario: Failed validation attempt summary includes the class
 - **WHEN** the dashboard loads a validation-phase failed build attempt
@@ -81,9 +91,15 @@ The system SHALL expose the normalized validation failure class in build-attempt
 - **WHEN** a build attempt is queued, running, succeeded, or failed before validation with a runner-phase failure
 - **THEN** it SHALL NOT include `validation_failure_class`
 
+#### Scenario: Attempt list derives failure summaries without global history scans
+- **WHEN** the dashboard requests a bounded build-attempt list
+- **THEN** the list response SHALL expose `validation_failure_class`, normalized signature, and concise summary for returned validation-phase failed attempts when available
+- **AND** the derivation work SHALL be bounded to the returned folded attempt rows
+- **AND** the list path SHALL NOT scan execution histories for attempts outside the returned row set
+
 ### Requirement: Risky enforcement is staged and observable
 
-The system SHALL roll out validation failure governance in stages so operators can see classifications and diagnostics before stricter solver-quality blockers affect batch throughput. Phase 1 SHALL enable classification, signature derivation, diagnostic preservation, API visibility, repair context, class-aware deterministic repair routing, and runner invocation-local repeated-signature stops before hard exp-stability blockers. Pwn evidence-profile enforcement SHALL apply to new generation paths after profile-specific tests are in place. Existing runner-phase taxonomy and historical artifacts SHALL continue to be readable without requiring a schema migration or retroactive evidence generation.
+The system SHALL roll out validation failure governance in stages so operators can see classifications and diagnostics before stricter artifact-normalization or solver-quality blockers affect batch throughput. Phase 1 SHALL enable classification, signature derivation, diagnostic preservation, API visibility, repair context, class-aware deterministic repair routing, and runner invocation-local repeated-signature stops before pre-validation normalization, scaffold overwrite, or hard exp-stability blockers. Pwn evidence-profile enforcement is out of scope for Phase 1 and SHOULD be introduced by a follow-up change after profile-specific tests are in place. Existing runner-phase taxonomy and historical artifacts SHALL continue to be readable without requiring a schema migration or retroactive evidence generation.
 
 #### Scenario: Diagnostics are visible before hard blockers
 - **WHEN** the governance change is first enabled
@@ -94,32 +110,3 @@ The system SHALL roll out validation failure governance in stages so operators c
 - **WHEN** an older failed attempt lacks new solver-quality evidence or diagnostic-envelope fields
 - **THEN** the API SHALL still expose available legacy diagnostics
 - **AND** missing new fields SHALL be represented as unavailable rather than breaking attempt detail rendering
-
-### Requirement: Build orchestration runs pre-validation normalization for generated Web/Pwn attempts
-
-The build orchestration path SHALL invoke the deterministic pre-validation normalization gate for generated Web/Pwn attempts before the first host validation run and before any Hermes validation repair round. The gate SHALL run in the current attempt execution workspace and SHALL NOT scan unrelated execution directories to discover challenge roots. If the gate applies safe repairs, the orchestration path SHALL continue with host build/validation using the normalized output. If the gate emits a hard deterministic blocker, the attempt SHALL fail as a validation/contract or validation/service-readiness failure with structured details, and sibling attempts SHALL continue independently.
-
-#### Scenario: Normalization precedes first validation
-- **WHEN** a generated Web/Pwn attempt reaches the build/validation orchestration path
-- **THEN** orchestration SHALL run pre-validation normalization before calling `ChallengeValidator.validate_one` for that attempt
-- **AND** validation SHALL use the normalized current attempt workspace output
-
-#### Scenario: Normalization is attempt-scoped
-- **WHEN** multiple attempts are present in `work/executions/`
-- **THEN** orchestration SHALL bind normalization, validation, repair, and revalidation to the current attempt workspace
-- **AND** it SHALL NOT select stale roots from older attempts or sibling attempts
-
-#### Scenario: Deterministic blockers stop only the current attempt
-- **WHEN** the pre-validation gate finds an unsafe or ambiguous deterministic blocker in attempt A
-- **THEN** attempt A SHALL be failed with structured validation details and a concise summary
-- **AND** attempts B and C in the same batch SHALL continue through their own normalization and validation paths
-
-#### Scenario: Safe normalization avoids spending Hermes repair budget
-- **WHEN** the gate safely repairs layout, scaffold, Compose isolation, validate wrapper, or diagnostic-envelope defects
-- **THEN** orchestration SHALL run validation on the repaired output before invoking Hermes repair
-- **AND** Hermes repair SHALL be skipped when the repaired output passes validation
-
-#### Scenario: Hard solver-stability blockers are enforced before validation can hang
-- **WHEN** a Web/Pwn default solver path hardcodes a non-validation target, performs unbounded reads/process interaction, or lacks a runnable validation entrypoint
-- **THEN** orchestration SHALL surface a structured validation diagnostic before the worker can hang or repeatedly consume repair budget
-- **AND** explicit local debug branches such as `LOCAL=1` MAY remain as long as the default validation path uses `CHAL_HOST` and `CHAL_PORT`

@@ -91,6 +91,19 @@ def test_runtime_failures_do_not_abort():
     assert result["aborted"] == []
 
 
+def test_validation_failures_continue_and_do_not_increment_infra_streak():
+    result = _run(
+        ["validation", "validation", "hermes_auth", "validation", "hermes_auth", "success"],
+        ids=IDS[:6],
+    )
+
+    assert result["abort_reason"] is None
+    assert result["processed"] == 6
+    assert result["failed"] == 5
+    assert result["aborted"] == []
+    assert [item["shard"] for item in result["outcomes"]] == [str(item) for item in IDS[:6]]
+
+
 def test_failfast_threshold_zero_disables_streak():
     result = _run(["hermes_auth", "hermes_auth", "success"], threshold=0, ids=IDS[:3])
 

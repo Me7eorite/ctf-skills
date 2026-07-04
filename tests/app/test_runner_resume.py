@@ -628,6 +628,19 @@ class RunnerRealRunTests(unittest.TestCase):
             self.assertTrue((paths.challenges / "web" / "web-0001-old").is_dir())
             workspace = next((paths.root / "work" / "executions").iterdir())
             self.assertFalse((workspace / "quarantine" / "web" / "web-0001-old").exists())
+            history = read_json(
+                workspace / "current" / "state" / "validation-history.json",
+                [],
+            )
+            self.assertEqual(history[0]["round"], 0)
+            self.assertEqual(
+                history[0]["results"][0]["validation_status"],
+                "contract_failed",
+            )
+            self.assertEqual(
+                history[0]["results"][0]["validation_failure_class"],
+                "contract",
+            )
 
     def test_resume_source_field_is_optional_for_first_run(self):
         with TemporaryDirectory() as tmp:
@@ -930,7 +943,7 @@ class RunnerRealRunTests(unittest.TestCase):
             self.assertIn("leak=0x0", prompts[1])
             self.assertIn("EOFError", prompts[1])
 
-    def test_deterministic_validation_failure_gets_focused_ai_repair(self):
+    def test_deterministic_validation_failure_stops_on_repeated_signature(self):
         with TemporaryDirectory() as tmp:
             paths = _Paths(root=Path(tmp))
             paths.initialize()
@@ -962,12 +975,13 @@ class RunnerRealRunTests(unittest.TestCase):
             outcome = runner.process_one("worker-01", dry_run=False)
 
             self.assertEqual(outcome["status"], "failed")
-            self.assertEqual(len(prompts), 2)
-            self.assertIn("Focused debug plan:", prompts[1])
-            self.assertIn("Inherited build context:", prompts[1])
-            self.assertIn("Root cause: `metadata.json` still reports an incomplete build.", prompts[1])
-            self.assertIn("the host runner will run the controlled Docker build", prompts[1])
-            self.assertIn("metadata.build_status is not passed", prompts[1])
+            self.assertEqual(len(prompts), 1)
+            self.assertTrue(
+                any(
+                    event.get("message", "").startswith("validation repair stopped: repeated failure signature")
+                    for event in runner._progress._store._events
+                )
+            )
 
     def test_compose_cli_validation_failure_allows_deterministic_repair(self):
         runner = HermesRunner(
@@ -988,7 +1002,7 @@ class RunnerRealRunTests(unittest.TestCase):
             ]
         )
 
-    def test_host_build_failure_is_forwarded_to_validation_repair_prompt(self):
+    def test_repeated_host_build_failure_stops_before_hermes_repair(self):
         class FailingHostBuilder:
             def build_workspace(self, _workspace, _validation_set):
                 raise HostBuildError(
@@ -1041,13 +1055,15 @@ class RunnerRealRunTests(unittest.TestCase):
             outcome = runner.process_one("worker-01", dry_run=False)
 
             self.assertEqual(outcome["status"], "failed")
-            self.assertGreaterEqual(len(prompts), 2)
-            self.assertIn("missing deploy/src/app.py", prompts[1])
-            self.assertIn("missing_source", prompts[1])
-            self.assertIn("Step 7: RUN cp -R /lib* /home/ctf", prompts[1])
-            self.assertIn("deploy/src files exist", prompts[1])
+            self.assertEqual(len(prompts), 1)
+            self.assertTrue(
+                any(
+                    event.get("message", "").startswith("validation repair stopped: repeated failure signature")
+                    for event in runner._progress._store._events
+                )
+            )
 
-    def test_deterministic_repair_fixes_host_build_without_ai_budget(self):
+    def test_deterministic_repair_normalizes_dockerfile_without_scaffold_overwrite(self):
         class BuildOnceAfterAutoRepair:
             def __init__(self):
                 self.calls = 0
@@ -1073,7 +1089,7 @@ class RunnerRealRunTests(unittest.TestCase):
                         stderr_tail="failed to calculate checksum of ref src: not found\n",
                     )
                 assert "COPY deploy/src/ /tmp/src/" in dockerfile
-                assert "cp vuln /home/ctf/vuln" in dockerfile
+                assert "cp vuln /home/ctf/vuln" not in dockerfile
                 return NoopHostBuilder().build_workspace(workspace, validation_set)
 
         with TemporaryDirectory() as tmp:
@@ -1132,7 +1148,7 @@ class RunnerRealRunTests(unittest.TestCase):
 
             outcome = runner.process_one("worker-01", dry_run=False)
 
-            self.assertEqual(outcome["status"], "done")
+            self.assertEqual(outcome["status"], "failed")
             self.assertEqual(host_builder.calls, 2)
             self.assertEqual(len(prompts), 1)
 
@@ -1229,6 +1245,58 @@ class RunnerRealRunTests(unittest.TestCase):
             self.assertEqual(outcome["status"], "failed")
             self.assertEqual(validation_calls, 2)
             self.assertEqual(len(prompts), 2)
+            self.assertTrue(
+                any(
+                    event.get("message", "").startswith("validation repair stopped: repeated failure signature")
+                    for event in runner._progress._store._events
+                )
+            )
+
+    def test_repeated_validation_signature_stops_after_deterministic_rerun(self):
+        with TemporaryDirectory() as tmp:
+            paths = _Paths(root=Path(tmp))
+            paths.initialize()
+            _copy_real_prompt(paths)
+            _make_web_challenge(paths, "web-0001")
+            _make_shard(paths, "web-0001-0001.json", ["web-0001"])
+            runner = self._make_runner_with_fake_invoke(paths)
+            runner.validation_repair_attempts = 3
+            validation_calls = 0
+
+            def validate(_challenge_id: str) -> dict:
+                nonlocal validation_calls
+                validation_calls += 1
+                return {
+                    "status": "contract_failed",
+                    "elapsed": 0.1,
+                    "returncode": 1,
+                    "stderr_tail": "metadata.flag missing",
+                    "validation_failure_details": [
+                        {
+                            "phase": "contract",
+                            "code": "missing_metadata_field",
+                            "path": "metadata.json",
+                        }
+                    ],
+                }
+
+            def auto_repair(_workspace, _challenge_ids, _per_results=None):
+                return ["diagnostic wrapper normalized"]
+
+            runner.validator.validate_challenge = validate  # type: ignore[assignment]
+            runner.validator.validate_path = lambda *_args, **_kwargs: validate("web-0001")  # type: ignore[method-assign]
+            runner._auto_repair_workspace_outputs = auto_repair  # type: ignore[method-assign]
+
+            outcome = runner.process_one("worker-01", dry_run=False)
+
+            self.assertEqual(outcome["status"], "failed")
+            self.assertEqual(validation_calls, 2)
+            self.assertFalse(
+                any(
+                    event.get("message", "").startswith("validation debug: continuing Hermes")
+                    for event in runner._progress._store._events
+                )
+            )
             self.assertTrue(
                 any(
                     event.get("message", "").startswith("validation repair stopped: repeated failure signature")

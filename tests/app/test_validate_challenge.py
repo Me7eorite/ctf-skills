@@ -114,6 +114,42 @@ class ValidateChallengeFlagExtractionTests(unittest.TestCase):
         self.assertEqual(result["status"], "flag_mismatch")
         self.assertEqual(result["printed_flag"], "")
 
+    def test_nonzero_exit_preserves_validation_diagnostic_envelope(self):
+        temp = TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        paths = _seed_paths(Path(temp.name))
+        directory = _make_challenge_dir(paths, "web-0001")
+        write_json(directory / "metadata.json", {"flag": "flag{expected-value}"})
+        validation_script = directory / "validate.sh"
+        validation_script.write_text("#!/bin/sh\npython3 writenup/exp.py\n", encoding="utf-8")
+        validator = ChallengeValidator(paths)  # type: ignore[arg-type]
+        validator.contract_errors = lambda *_: []  # type: ignore[method-assign]
+
+        with patch(
+            "domain.validation.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                ["bash", str(validation_script)],
+                3,
+                "banner\nflag{candidate-value}\n",
+                "Traceback: solver failed\n",
+            ),
+        ):
+            result = validator.validate_one(directory)
+
+        self.assertEqual(result["status"], "nonzero_exit")
+        self.assertEqual(result["command"], ["bash", str(validation_script)])
+        self.assertEqual(result["returncode"], 3)
+        self.assertEqual(result["stdout_tail"], "banner\nflag{candidate-value}\n")
+        self.assertEqual(result["stderr_tail"], "Traceback: solver failed\n")
+        self.assertEqual(result["final_flag_candidate"], "flag{candidate-value}")
+        self.assertIn("service state unavailable", result["diagnostic_unavailable"])
+        self.assertIn("recent service logs unavailable", result["diagnostic_unavailable"])
+        self.assertIn("readiness probe result unavailable", result["diagnostic_unavailable"])
+        self.assertNotIn("solver stdout tail unavailable", result["diagnostic_unavailable"])
+        self.assertNotIn("solver stderr tail unavailable", result["diagnostic_unavailable"])
+        self.assertNotIn("solver exit code unavailable", result["diagnostic_unavailable"])
+        self.assertNotIn("final stdout flag candidate unavailable", result["diagnostic_unavailable"])
+
     def test_validate_path_is_identity_bound_and_does_not_mutate_metadata(self):
         temp = TemporaryDirectory()
         self.addCleanup(temp.cleanup)
