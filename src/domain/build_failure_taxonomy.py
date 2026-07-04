@@ -13,6 +13,7 @@ BuildFailureCategory = Literal[
     "contract_prepare",
     "hermes_auth",
     "hermes_rate_limit",
+    "hermes_invoke",
     "hermes_runtime",
     "hermes_timeout",
     "hermes_cancelled",
@@ -45,6 +46,8 @@ def classify_hermes_exit(
         return "hermes_rate_limit"
 
     tail = "" if log_tail is None else str(log_tail)
+    if _tail_is_embedded_nul_invoke(tail):
+        return "hermes_invoke"
     if (
         returncode == 1
         and elapsed_seconds < _fail_fast_min_seconds()
@@ -54,6 +57,16 @@ def classify_hermes_exit(
     if _tail_is_rate_limit(tail):
         return "hermes_rate_limit"
     return "hermes_runtime"
+
+
+def _tail_is_embedded_nul_invoke(log_tail: str) -> bool:
+    lower = log_tail.lower()
+    return (
+        "embedded null byte" in lower
+        or "embedded nul byte" in lower
+        or "prompt contained nul bytes" in lower
+        or "hermes invocation contained embedded nul byte" in lower
+    )
 
 
 def _fail_fast_min_seconds() -> int:

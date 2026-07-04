@@ -172,3 +172,36 @@ def test_build_attempt_repair_prompt_marks_truncated_evidence(tmp_path: Path) ->
     assert "<validation_stderr_tail truncated from 2500 chars to 2000>" in prompt
     assert "<writenup/exp.py truncated from 7015 chars to 6000>" in prompt
     assert "<writenup/pwn_debug_report.json truncated from 7000 chars to 6000>" in prompt
+
+
+def test_build_attempt_repair_prompt_sanitizes_nul_text_context(tmp_path: Path) -> None:
+    challenge_dir = tmp_path / "pwn-0001-demo"
+    (challenge_dir / "writenup").mkdir(parents=True)
+    (challenge_dir / "metadata.json").write_text('{"id":"pwn-0001","category":"pwn"}', encoding="utf-8")
+    (challenge_dir / "validate.sh").write_text("printf 'ready\\x00done'\n", encoding="utf-8")
+    (challenge_dir / "writenup" / "exp.py").write_text("BINARY_SHA256='abc'\x00\n", encoding="utf-8")
+    (challenge_dir / "attachments").mkdir()
+    (challenge_dir / "attachments" / "vuln").write_bytes(b"\x7fELF\x00binary")
+
+    prompt = _repair_prompt(
+        {
+            "id": "attempt",
+            "design_task_id": "task",
+            "challenge_id": "pwn-0001",
+            "category": "pwn",
+            "challenge_dir": challenge_dir,
+            "failure_summary": "stale\x00evidence",
+            "failure_details": [],
+            "latest_failure": {
+                "validation_status": "nonzero_exit",
+                "validation_failure_class": "solver",
+                "validation_error": "solver stdout had NUL \x00 byte",
+            },
+            "file_context": _file_context(challenge_dir),
+        }
+    )
+
+    assert "\x00" not in prompt
+    assert r"stale\x00evidence" in prompt
+    assert r"BINARY_SHA256='abc'\x00" in prompt
+    assert "\x7fELF" not in prompt

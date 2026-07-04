@@ -10,6 +10,7 @@ import socket
 import sys
 import threading
 import time
+import traceback
 from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -45,6 +46,7 @@ _SEQUENTIAL_INFRA_PHASES = {
     "preflight_workspace",
     "contract_prepare",
     "hermes_auth",
+    "hermes_invoke",
     "hermes_rate_limit",
 }
 _SEQUENTIAL_CANCEL_PHASES = {"hermes_cancelled"}
@@ -307,15 +309,22 @@ def _run_build_attempt_sequence(
                 str(tail_id) for tail_id in build_attempt_sequence[index + 1 :]
             ]
             failed += 1
-            outcomes.append(
-                {
-                    "status": "failed",
-                    "shard": str(attempt_id),
-                    "hermes_phase": "worker_exception",
-                    "error": str(exc),
-                    "exception_type": type(exc).__name__,
-                }
-            )
+            item = {
+                "processed": 0,
+                "failed": 1,
+                "outcomes": [
+                    {
+                        "status": "failed",
+                        "shard": str(attempt_id),
+                        "hermes_phase": "worker_exception",
+                        "error": str(exc),
+                        "exception_type": type(exc).__name__,
+                        "traceback": traceback.format_exc(limit=20),
+                    }
+                ],
+            }
+            _finalize_build_attempt(attempt_id, worker, item)
+            outcomes.extend(item["outcomes"])
             break
 
         _finalize_build_attempt(attempt_id, worker, item)

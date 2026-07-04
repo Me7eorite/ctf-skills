@@ -9,7 +9,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from domain.resume import ChallengeResumePlan, ShardResumePlan
-from hermes.prompt import render_prompt
+from hermes.prompt import render_prompt, render_validation_repair_prompt
 
 PROGRESS_SHARD_RE = re.compile(r'progress --shard "?([^"\s]+)"? --worker')
 
@@ -165,6 +165,52 @@ class RenderPromptTests(unittest.TestCase):
             self.assertIn("Repair mode is enabled.", rendered)
             self.assertIn("Do not use carry-forward instructions", rendered)
             self.assertIn("metadata.json missing field", rendered)
+
+    def test_render_prompt_sanitizes_nul_and_does_not_inline_binary_artifact(self):
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            paths = _seed_paths(tmp_path)
+            running_shard = tmp_path / "running.json"
+            running_shard.write_text("{}", encoding="utf-8")
+            binary = paths.challenges / "pwn" / "pwn-0001-demo" / "attachments" / "vuln"
+            binary.parent.mkdir(parents=True, exist_ok=True)
+            binary.write_bytes(b"\x7fELF\x00\x01binary")
+
+            rendered = render_prompt(
+                paths,  # type: ignore[arg-type]
+                running_shard,
+                tmp_path / "repair-report.json",
+                worker="dry-01",
+                original_shard_name="pwn-0001.json",
+                repair_requested=True,
+                repair_context={
+                    "failure_summary": "bad\x00diagnostic",
+                    "artifact": "attachments/vuln",
+                },
+            )
+
+            self.assertNotIn("\x00", rendered)
+            self.assertIn(r"bad\x00diagnostic", rendered)
+            self.assertIn("attachments/vuln", rendered)
+            self.assertNotIn("\x7fELF", rendered)
+
+    def test_validation_repair_prompt_sanitizes_nul_terminator_diagnostics(self):
+        rendered = render_validation_repair_prompt(
+            attempt=1,
+            max_attempts=2,
+            validation_results=[
+                {
+                    "challenge_id": "pwn-0001",
+                    "solve_status": "failed",
+                    "validation_status": "nonzero_exit",
+                    "validation_error": "missing terminator \x00 in asm",
+                }
+            ],
+        )
+
+        self.assertNotIn("\x00", rendered)
+        self.assertIn(r"missing terminator \x00 in asm", rendered)
+        self.assertIn(r"\0", rendered)
 
     def test_retry_section_appears_when_context_is_present(self):
         with TemporaryDirectory() as tmp:

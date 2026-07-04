@@ -23,6 +23,8 @@ from unittest.mock import patch
 from core.jsonio import read_json
 from hermes.process import (
     HERMES_TIMEOUT_RETURNCODE,
+    NUL_BLOCKED_MESSAGE,
+    NUL_SANITIZED_MESSAGE,
     TERMINATION_WAIT_TIMEOUT,
     HermesProcessResult,
     TerminalWorkspaceVisibilityError,
@@ -33,6 +35,7 @@ from hermes.process import (
     invoke,
     invoke_capture,
     project_hermes_home_is_configured,
+    sanitize_prompt_text,
     verify_terminal_workspace_visibility,
 )
 
@@ -76,6 +79,66 @@ class InvokeCaptureTests(unittest.TestCase):
         self.assertIn("--- end stdout ---", log_text)
         self.assertIn("--- stderr ---", log_text)
         self.assertIn("debug line", log_text)
+
+    def test_invoke_capture_sanitizes_prompt_before_argv(self):
+        self.assertEqual(sanitize_prompt_text("prefix\x00suffix"), r"prefix\x00suffix")
+        arguments = _python(
+            "import sys",
+            "sys.stdout.write(sys.argv[-1])",
+        )
+        result = invoke_capture(
+            "prefix\x00suffix",
+            arguments=arguments,
+            log_path=self.log,
+            cwd=self.workdir,
+            environment={},
+            timeout=10,
+        )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, r"prefix\x00suffix")
+        log_text = self.log.read_text(encoding="utf-8")
+        self.assertIn(NUL_SANITIZED_MESSAGE, log_text)
+        self.assertNotIn("\x00", log_text)
+
+    def test_invoke_capture_embedded_nul_valueerror_is_normal_failure(self):
+        with patch(
+            "hermes.process.subprocess.Popen",
+            side_effect=ValueError("embedded null byte"),
+        ):
+            result = invoke_capture(
+                "safe",
+                arguments=["hermes", "chat", "-q"],
+                log_path=self.log,
+                cwd=self.workdir,
+                environment={},
+                timeout=10,
+            )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertFalse(result.cancelled)
+        log_text = self.log.read_text(encoding="utf-8")
+        self.assertIn(NUL_BLOCKED_MESSAGE, log_text)
+
+    def test_invoke_sanitizes_prompt_before_argv(self):
+        arguments = _python(
+            "import sys",
+            "sys.stdout.write(sys.argv[-1])",
+        )
+        returncode = invoke(
+            "alpha\x00omega",
+            arguments=arguments,
+            log_path=self.log,
+            cwd=self.workdir,
+            environment={},
+            timeout=10,
+        )
+
+        self.assertEqual(returncode, 0)
+        log_text = self.log.read_text(encoding="utf-8")
+        self.assertIn(r"alpha\x00omega", log_text)
+        self.assertIn(NUL_SANITIZED_MESSAGE, log_text)
+        self.assertNotIn("\x00", log_text)
 
     def test_cancel_event_terminates_subprocess(self):
         arguments = _python(

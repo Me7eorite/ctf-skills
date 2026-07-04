@@ -451,7 +451,7 @@ def _repair_prompt(context: dict[str, Any]) -> str:
         if isinstance(latest_failure, dict)
         else None
     )
-    return f"""You are repairing an existing CTF challenge artifact.
+    prompt = f"""You are repairing an existing CTF challenge artifact.
 
 This is not a new build, not a resume, and not a clean rebuild.
 
@@ -553,6 +553,7 @@ Terminal tool usage:
 Relevant file context:
 {context.get("file_context") or "(none)"}
 """
+    return hermes_process.sanitize_prompt_text(prompt)
 
 
 def _hermes_arguments(category: str) -> list[str]:
@@ -732,6 +733,7 @@ def _budget_text(value: Any, *, label: str, limit: int = 2000) -> str:
     if value in (None, ""):
         return "(unavailable)"
     text = str(value)
+    text = hermes_process.sanitize_prompt_text(text)
     if len(text) <= limit:
         return text
     return (

@@ -1041,11 +1041,17 @@ class HermesRunner:
         timed_out = returncode == HERMES_TIMEOUT_RETURNCODE
         if returncode != 0:
             if not timed_out:
+                log_tail = self._read_tail(log, 4096)
                 hermes_phase = classify_hermes_exit(
                     returncode,
-                    self._read_tail(log, 4096),
+                    log_tail,
                     invoke_elapsed,
                     self._read_error_marker(log),
+                )
+                error_message = (
+                    "Hermes prompt contained embedded NUL byte and was sanitized/blocked"
+                    if hermes_phase == "hermes_invoke"
+                    else f"Hermes exited with {returncode}"
                 )
                 self._mark_shard_failed(
                     shard,
@@ -1053,7 +1059,7 @@ class HermesRunner:
                     worker,
                     challenge_ids,
                     report,
-                    f"Hermes exited with {returncode}",
+                    error_message,
                     returncode,
                     hermes_phase=hermes_phase,
                     elapsed_seconds=invoke_elapsed,
@@ -1062,6 +1068,7 @@ class HermesRunner:
                 return fail_outcome(
                     hermes_phase=hermes_phase,
                     returncode=returncode,
+                    error=error_message,
                     elapsed_seconds=invoke_elapsed,
                     workspace=workspace,
                 )
@@ -1878,7 +1885,7 @@ class HermesRunner:
     ) -> int:
         if dry_run:
             log.parent.mkdir(parents=True, exist_ok=True)
-            log.write_text(prompt + "\n", encoding="utf-8")
+            log.write_text(hermes_process.sanitize_prompt_text(prompt) + "\n", encoding="utf-8")
             return 0
 
         effective_timeout = timeout if timeout is not None else DEFAULT_HERMES_TIMEOUT

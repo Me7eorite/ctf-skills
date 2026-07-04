@@ -4,6 +4,7 @@ from uuid import UUID
 
 import pytest
 
+import cli
 from cli import _parse_sequential_failfast_streak, _run_build_attempt_sequence
 
 IDS = [
@@ -131,7 +132,14 @@ def test_keyboard_interrupt_records_in_flight_and_aborts_tail():
     assert result["aborted"] == [str(IDS[2]), str(IDS[3])]
 
 
-def test_worker_exception_records_failed_attempt_and_aborts_tail():
+def test_worker_exception_records_failed_attempt_and_aborts_tail(monkeypatch):
+    finalized = []
+    monkeypatch.setattr(
+        cli,
+        "_finalize_build_attempt",
+        lambda attempt_id, worker, item: finalized.append((attempt_id, worker, item)),
+    )
+
     result = _run(["success", RuntimeError("postgres unavailable")], ids=IDS[:4])
 
     assert result["abort_reason"] == "worker_exception"
@@ -145,6 +153,17 @@ def test_worker_exception_records_failed_attempt_and_aborts_tail():
     assert failed["hermes_phase"] == "worker_exception"
     assert failed["exception_type"] == "RuntimeError"
     assert "postgres unavailable" in failed["error"]
+    assert "Traceback" in failed["traceback"]
+    assert "RuntimeError: postgres unavailable" in failed["traceback"]
+    assert finalized[-1] == (
+        IDS[1],
+        "worker-1",
+        {
+            "processed": 0,
+            "failed": 1,
+            "outcomes": [failed],
+        },
+    )
 
 
 def test_lab_incident_shape_stops_after_second_infra_failure():

@@ -53,6 +53,30 @@ class HermesProcessResult:
     cancelled: bool
 
 
+NUL_SANITIZED_MESSAGE = "prompt contained NUL bytes; sanitized before Hermes invocation"
+NUL_BLOCKED_MESSAGE = "Hermes invocation contained embedded NUL byte and was blocked"
+
+
+def sanitize_prompt_text(text: str) -> str:
+    """Replace real NUL bytes with printable text before Hermes invocation/logging."""
+    return re.sub(r"\\u0000", r"\\x00", text.replace("\x00", "\\x00"), flags=re.IGNORECASE)
+
+
+def _sanitize_invocation_values(values: list[str]) -> tuple[list[str], bool]:
+    sanitized = [sanitize_prompt_text(str(value)) for value in values]
+    return sanitized, sanitized != values
+
+
+def _sanitize_invocation_environment(
+    environment: dict[str, str],
+) -> tuple[dict[str, str], bool]:
+    sanitized = {
+        sanitize_prompt_text(str(key)): sanitize_prompt_text(str(value))
+        for key, value in environment.items()
+    }
+    return sanitized, sanitized != environment
+
+
 def hermes_arguments() -> list[str]:
     """定位 Hermes 可执行文件，并构造不含 prompt 的基础 argv。"""
     command = os.environ.get("HERMES_CMD")
@@ -715,7 +739,7 @@ def invoke(
     timeout: int,
     profile_log_path: Path | None = None,
 ) -> int:
-    """把 `prompt` 作为最后一个 argv 运行 Hermes，并记录完整日志。
+    """把 sanitized `prompt` 作为最后一个 argv 运行 Hermes，并记录完整日志。
 
     这是旧版 `invoke_hermes` 的等价抽取版本。函数返回子进程返回码；
     stdout/stderr 会直接写入 `log_path`。
@@ -727,7 +751,11 @@ def invoke(
       - 适用于分片执行流水线（不需要解析 stdout 的场景）
     """
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    full_arguments = [*arguments, prompt]
+    sanitized_prompt = sanitize_prompt_text(prompt)
+    prompt_sanitized = sanitized_prompt != prompt
+    safe_arguments, arguments_sanitized = _sanitize_invocation_values(arguments)
+    safe_environment, environment_sanitized = _sanitize_invocation_environment(environment)
+    full_arguments = [*safe_arguments, sanitized_prompt]
     returncode: int
     with log_path.open("w", encoding="utf-8") as output:
         # 日志头：显示命令（prompt 用 <prompt> 占位避免泄露）
@@ -736,6 +764,10 @@ def invoke(
             f"cwd: {cwd}\n"
             f"timeout: {timeout}s\n"
         )
+        if prompt_sanitized:
+            output.write(f"{NUL_SANITIZED_MESSAGE}\n")
+        if arguments_sanitized or environment_sanitized:
+            output.write("Hermes invocation argv/env contained NUL bytes; sanitized before launch\n")
         if profile_log_path is not None:
             output.write(f"profile_log: {profile_log_path}\n")
         output.write("\n")
@@ -751,7 +783,7 @@ def invoke(
             process = subprocess.Popen(
                 full_arguments,
                 cwd=cwd,
-                env=environment,
+                env=safe_environment,
                 stdin=subprocess.DEVNULL,
                 text=True,
                 stdout=output,           # stdout 直接写入日志文件
@@ -764,6 +796,11 @@ def invoke(
                 "Hermes command not found or not executable. Set HERMES_CMD or install Hermes.\n"
             )
             returncode = 127  # 标准 POSIX 返回码：命令未找到
+        except ValueError as exc:
+            if "embedded null byte" not in str(exc):
+                raise
+            output.write(f"{NUL_BLOCKED_MESSAGE}: {exc}\n")
+            returncode = 1
         except subprocess.TimeoutExpired:
             if process is not None:
                 _terminate(process)
@@ -781,7 +818,7 @@ def invoke(
             tail_stop.set()
             if tail_thread is not None:
                 tail_thread.join(timeout=2)
-            cleanup = cleanup_invocation_hermes_containers(environment=environment)
+            cleanup = cleanup_invocation_hermes_containers(environment=safe_environment)
             if cleanup and not cleanup.startswith("skipped"):
                 output.write(f"\n[hermes-docker-cleanup] {cleanup}\n")
             output.flush()
@@ -935,10 +972,14 @@ def invoke_capture(
     方便无需重跑 Hermes 就能诊断失败。
     """
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    full_arguments = [*arguments, prompt]
+    sanitized_prompt = sanitize_prompt_text(prompt)
+    prompt_sanitized = sanitized_prompt != prompt
+    safe_arguments, arguments_sanitized = _sanitize_invocation_values(arguments)
+    safe_environment, environment_sanitized = _sanitize_invocation_environment(environment)
+    full_arguments = [*safe_arguments, sanitized_prompt]
 
     env_summary_lines = [
-        f"{key}={environment[key]}" for key in _LOGGED_ENV_KEYS if key in environment
+        f"{key}={safe_environment[key]}" for key in _LOGGED_ENV_KEYS if key in safe_environment
     ]
     header = (
         f"$ {' '.join(shlex.quote(arg) for arg in full_arguments[:-1])} <prompt>\n"
@@ -947,13 +988,17 @@ def invoke_capture(
         f"env:\n"
         + ("  " + "\n  ".join(env_summary_lines) + "\n" if env_summary_lines else "  (none)\n")
     )
+    if prompt_sanitized:
+        header += f"{NUL_SANITIZED_MESSAGE}\n"
+    if arguments_sanitized or environment_sanitized:
+        header += "Hermes invocation argv/env contained NUL bytes; sanitized before launch\n"
 
     # 启动 Hermes 子进程（使用 Popen 而非 run，以便同时捕获 stdout+stderr）
     try:
         process = subprocess.Popen(
             full_arguments,
             cwd=cwd,
-            env=environment,
+            env=safe_environment,
             stdin=subprocess.DEVNULL,     # 关闭 stdin
             stdout=subprocess.PIPE,       # 捕获 stdout
             stderr=subprocess.PIPE,       # 捕获 stderr（与 stdout 分开）
@@ -968,6 +1013,14 @@ def invoke_capture(
             encoding="utf-8",
         )
         return HermesProcessResult(returncode=127, stdout="", cancelled=False)
+    except ValueError as exc:
+        if "embedded null byte" not in str(exc):
+            raise
+        log_path.write_text(
+            header + f"\n{NUL_BLOCKED_MESSAGE}: {exc}\n",
+            encoding="utf-8",
+        )
+        return HermesProcessResult(returncode=1, stdout="", cancelled=False)
 
     stdout_chunks: list[str] = []  # 捕获的 stdout 行
     stderr_chunks: list[str] = []  # 捕获的 stderr 行

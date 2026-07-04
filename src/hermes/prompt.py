@@ -12,6 +12,7 @@ from core.paths import ProjectPaths
 from domain.design.technique_taxonomy import render_family_vocabulary
 from domain.research import GenerationRequest
 from domain.resume import ShardResumePlan
+from hermes.process import sanitize_prompt_text
 
 RESEARCH_PROMPT_TEMPLATE_PATH = Path(__file__).resolve().parents[2] / "prompts" / "research_prompt.md"
 SHARED_GENERATION_STRATEGY_PATH = Path(__file__).resolve().parents[2] / "prompts" / "shared_generation_strategy.md"
@@ -66,7 +67,7 @@ def render_validation_repair_prompt(
     repair_plan = _render_repair_plan(diagnostics)
     non_regression = _render_non_regression_section(prior_contract_errors)
     context_section = _render_validation_debug_context(debug_context)
-    return f"""You are continuing CTF challenge implementation after authoritative host validation failed.
+    prompt = f"""You are continuing CTF challenge implementation after authoritative host validation failed.
 
 Validation debug round {attempt} of {max_attempts}. Work only inside the existing claimed challenge
 directories under `./output/challenges`. Read `./input/shard.json` and inspect the current
@@ -293,6 +294,7 @@ Before you finish, self-check every challenge you touched with real file searche
   `attachments/`.
 A repair that fixes one diagnostic by violating a different rule above still fails host validation.
 """
+    return sanitize_prompt_text(prompt)
 
 
 def _render_validation_debug_context(context: Mapping[str, object] | None) -> str:
@@ -1015,7 +1017,7 @@ def render_prompt(
     }
     for placeholder, rendered_value in replacement_map.items():
         prompt_text = prompt_text.replace(placeholder, rendered_value)
-    return prompt_text
+    return sanitize_prompt_text(prompt_text)
 
 
 def _design_context_instruction(shard: Path) -> str:
@@ -1218,4 +1220,4 @@ def render_research_prompt(generation_request: GenerationRequest) -> str:
     }
     for placeholder, rendered_value in replacement_map.items():
         prompt_template = prompt_template.replace(placeholder, rendered_value)
-    return prompt_template
+    return sanitize_prompt_text(prompt_template)
