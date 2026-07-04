@@ -1,4 +1,4 @@
-﻿"""Focused AI repair for an existing failed build attempt."""
+"""Focused AI repair for an existing failed build attempt."""
 
 from __future__ import annotations
 
@@ -12,13 +12,13 @@ from uuid import UUID, uuid4
 
 import sqlalchemy as sa
 
+from core.build_timeout import validation_repair_timeout_cap
 from core.clock import beijing_now_isoformat
 from core.jsonio import read_json
 from core.paths import ProjectPaths
 from domain.validation_failure_governance import latest_failed_validation
 from domain.validation_repair_policy import policy_for_validation_failure
 from hermes import process as hermes_process
-from hermes.runner import validation_repair_timeout_cap
 from persistence.models import build_attempts as build_model
 from persistence.models import design_tasks as task_model
 from persistence.models.progress import ProgressEvent

@@ -6,6 +6,8 @@ from typing import Any, Mapping
 
 from core.queue import SUPPORTED_CATEGORIES
 
+VALIDATION_REPAIR_TIMEOUT_CAP = 600
+
 
 def shard_timeout_policy(payload: Mapping[str, Any]) -> int:
     challenges = payload.get("challenges")
@@ -29,3 +31,8 @@ def shard_timeout_policy(payload: Mapping[str, Any]) -> int:
     ):
         return 5400
     return 3600
+
+
+def validation_repair_timeout_cap() -> int:
+    """Return the default upper bound applied to one validation repair round."""
+    return VALIDATION_REPAIR_TIMEOUT_CAP

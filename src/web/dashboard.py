@@ -13,13 +13,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
 
+from core.build_timeout import validation_repair_timeout_cap
 from core.clock import beijing_isoformat_seconds
 from core.jsonio import read_json
 from core.paths import ProjectPaths
 from core.queue import ShardQueue
 from core.state import InMemoryProgressStore, ProgressStore
 from domain.seeds import SeedStore
-from hermes.runner import validation_repair_timeout_cap
 
 
 def relative_time(timestamp: float) -> str:

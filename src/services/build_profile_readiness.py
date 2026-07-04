@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from core.paths import ProjectPaths
-from hermes.process import effective_terminal_backend, profile_exists
+from hermes.process import effective_terminal_backend, hermes_profile_health, profile_exists
 
 BUILD_PROFILES = {
     "web": "cf-web",

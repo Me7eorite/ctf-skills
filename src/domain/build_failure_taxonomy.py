@@ -6,8 +6,6 @@ import os
 from collections.abc import Mapping
 from typing import Any, Literal
 
-from hermes.process import HERMES_TIMEOUT_RETURNCODE
-
 BuildFailureCategory = Literal[
     "preflight_workspace",
     "terminal_workspace",
@@ -20,6 +18,7 @@ BuildFailureCategory = Literal[
     "hermes_cancelled",
     "validation",
 ]
+HERMES_TIMEOUT_RETURNCODE = 124
 
 _FAIL_FAST_ENV = "BUILD_HERMES_FAIL_FAST_MIN_SECONDS"
 _DEFAULT_FAIL_FAST_SECONDS = 30

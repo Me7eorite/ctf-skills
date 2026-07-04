@@ -1,4 +1,4 @@
-﻿"""可复用的 Hermes 子进程基础能力。
+"""可复用的 Hermes 子进程基础能力。
 
 分片执行路径（`hermes.runner.HermesRunner`）和 research 路径（第 7 节新增的
 `hermes.research`）共用这里的子进程逻辑。这里不依赖 `ProjectPaths`，
@@ -497,8 +497,10 @@ def cleanup_invocation_hermes_containers(*, environment: dict[str, str]) -> str:
     except (OSError, subprocess.TimeoutExpired) as exc:
         return f"Hermes Docker invocation cleanup skipped: docker ps failed: {exc}"
     if ps.returncode != 0:
-        return f"Hermes Docker invocation cleanup skipped: docker ps exited {ps.returncode}: {ps.stderr.strip()}"
-    ids = [line.strip() for line in ps.stdout.splitlines() if line.strip()]
+        stderr = getattr(ps, "stderr", "") or ""
+        return f"Hermes Docker invocation cleanup skipped: docker ps exited {ps.returncode}: {stderr.strip()}"
+    stdout = getattr(ps, "stdout", "") or ""
+    ids = [line.strip() for line in stdout.splitlines() if line.strip()]
     if not ids:
         return f"Hermes Docker invocation cleanup found no containers for label {label!r}"
     try:
@@ -550,8 +552,10 @@ def cleanup_hermes_terminal_containers(*, arguments: list[str]) -> str:
     except (OSError, subprocess.TimeoutExpired) as exc:
         return f"stale Hermes Docker cleanup skipped: docker ps failed: {exc}"
     if ps.returncode != 0:
-        return f"stale Hermes Docker cleanup skipped: docker ps exited {ps.returncode}: {ps.stderr.strip()}"
-    ids = [line.strip() for line in ps.stdout.splitlines() if line.strip()]
+        stderr = getattr(ps, "stderr", "") or ""
+        return f"stale Hermes Docker cleanup skipped: docker ps exited {ps.returncode}: {stderr.strip()}"
+    stdout = getattr(ps, "stdout", "") or ""
+    ids = [line.strip() for line in stdout.splitlines() if line.strip()]
     if not ids:
         return f"stale Hermes Docker cleanup found no containers for profile {profile!r}"
     try:

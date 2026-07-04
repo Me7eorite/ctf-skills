@@ -138,9 +138,17 @@ class ProgressStore(Protocol):
 
 # ========== 工具函数 ==========
 
+def utc_now() -> str:
+    """Return the current timestamp string used by in-memory progress events.
+
+    Kept as a patchable compatibility seam for older tests and callers.
+    """
+    return beijing_now_isoformat()
+
+
 def display_now() -> str:
     """返回当前北京时间的 ISO 8601 格式字符串，用于看板展示。"""
-    return beijing_now_isoformat()
+    return utc_now()
 
 
 # ========== 内存实现（用于测试和单进程使用）==========

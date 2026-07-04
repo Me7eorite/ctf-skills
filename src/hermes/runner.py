@@ -22,13 +22,14 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from core.build_timeout import shard_timeout_policy
+from core.build_timeout import VALIDATION_REPAIR_TIMEOUT_CAP, shard_timeout_policy
 from core.docker import image_exists as default_image_exists
 from core.execution_config import execution_minting_enabled
 from core.jsonio import read_json, write_json
 from core.paths import ProjectPaths, category_of
 from core.queue import ShardQueue
 from core.state import InMemoryProgressStore, ProgressEventInput, ProgressStore
+from domain.build_attempt_auto_repair import auto_repair_challenge
 from domain.build_failure_taxonomy import BuildFailureCategory, classify_hermes_exit
 from domain.resume import (
     ChallengeResumePlan,
@@ -85,7 +86,6 @@ from hermes.workspace import (
     record_effective_timeout,
 )
 from hermes.workspace_progress import WorkspaceProgressTailer, materialize_progress_shim
-from services.build_attempt_auto_repair_service import auto_repair_challenge
 
 __all__ = [
     "DEFAULT_HERMES_COMMAND",
@@ -256,13 +256,11 @@ def _iteration_from_shard_name(original_shard_name: str | None) -> int:
 _LOGGER = logging.getLogger(__name__)
 DEFAULT_VALIDATION_REPAIR_ATTEMPTS = 2
 _VALIDATION_REPAIR_TIMEOUT_ENV = "HERMES_VALIDATION_REPAIR_TIMEOUT"
-_DEFAULT_REPAIR_TIMEOUT_CAP = 600
-
 
 def _resolve_validation_repair_timeout(effective_timeout: int) -> int:
     raw_timeout = os.environ.get(_VALIDATION_REPAIR_TIMEOUT_ENV)
     if raw_timeout is None or not raw_timeout.strip():
-        return min(effective_timeout, _DEFAULT_REPAIR_TIMEOUT_CAP)
+        return min(effective_timeout, VALIDATION_REPAIR_TIMEOUT_CAP)
     try:
         configured = int(raw_timeout)
     except ValueError:
@@ -271,20 +269,15 @@ def _resolve_validation_repair_timeout(effective_timeout: int) -> int:
             _VALIDATION_REPAIR_TIMEOUT_ENV,
             raw_timeout,
         )
-        return min(effective_timeout, _DEFAULT_REPAIR_TIMEOUT_CAP)
+        return min(effective_timeout, VALIDATION_REPAIR_TIMEOUT_CAP)
     if configured <= 0:
         _LOGGER.warning(
             "invalid %s=%r; using capped default",
             _VALIDATION_REPAIR_TIMEOUT_ENV,
             raw_timeout,
         )
-        return min(effective_timeout, _DEFAULT_REPAIR_TIMEOUT_CAP)
+        return min(effective_timeout, VALIDATION_REPAIR_TIMEOUT_CAP)
     return min(configured, effective_timeout)
-
-
-def validation_repair_timeout_cap() -> int:
-    """Return the default upper bound applied to one repair round."""
-    return _DEFAULT_REPAIR_TIMEOUT_CAP
 
 
 class _BestEffortProgressStore:

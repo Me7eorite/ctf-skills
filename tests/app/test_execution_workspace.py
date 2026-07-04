@@ -1107,15 +1107,20 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         )
         captured: dict = {}
 
-        def fake_run(arguments, **kwargs):
-            captured["arguments"] = arguments
-            captured.update(kwargs)
-            return type("Result", (), {"returncode": 0})()
+        class FakeProcess:
+            def __init__(self, arguments, **kwargs):
+                captured["arguments"] = arguments
+                captured.update(kwargs)
+
+            def wait(self, timeout):
+                captured["timeout"] = timeout
+                return 0
 
         runner = HermesRunner(self.paths)
         with (
             patch.object(hermes_process, "hermes_arguments", return_value=["hermes", "chat", "-q"]),
-            patch.object(hermes_process.subprocess, "run", side_effect=fake_run),
+            patch.object(hermes_process.subprocess, "Popen", side_effect=FakeProcess),
+            patch.object(hermes_process, "cleanup_invocation_hermes_containers", return_value="skipped"),
         ):
             result = runner._invoke(
                 "prompt",

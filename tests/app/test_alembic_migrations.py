@@ -41,16 +41,19 @@ def alembic_env() -> dict[str, str]:
     return env
 
 
-def _drop_alembic_version(url: str) -> None:
+def _drop_all_tables(url: str) -> None:
     engine = create_engine(url)
     with engine.begin() as conn:
-        conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
+        tables = inspect(conn).get_table_names()
+        for table in tables:
+            safe_table = table.replace('"', '""')
+            conn.execute(text(f'DROP TABLE IF EXISTS "{safe_table}" CASCADE'))
     engine.dispose()
 
 
 def test_baseline_upgrade_and_downgrade_cycle(alembic_env):
     url = alembic_env["DATABASE_URL"]
-    _drop_alembic_version(url)
+    _drop_all_tables(url)
     try:
         # Explicitly target the baseline revision rather than "head" so this
         # test stays focused on the empty no-op migration even as later
@@ -75,4 +78,4 @@ def test_baseline_upgrade_and_downgrade_cycle(alembic_env):
         application_tables = tables_after - {"alembic_version"}
         assert application_tables == set()
     finally:
-        _drop_alembic_version(url)
+        _drop_all_tables(url)

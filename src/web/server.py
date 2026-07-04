@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import logging
 import mimetypes
 import shutil
@@ -20,7 +21,6 @@ from starlette.background import BackgroundTask
 
 from core.jsonio import read_json
 from core.paths import ProjectPaths
-from packing import Packer, PackerOptions, PackingError
 from persistence import make_postgres_progress_store
 from services import ResourceDeletionService
 from services.build_profile_readiness import check_build_profile_readiness
@@ -32,6 +32,11 @@ from web.research_endpoints import register_research_endpoints
 from web.research_worker_manager import ResearchWorkerManager
 
 LOG = logging.getLogger(__name__)
+
+
+def _packing_api():
+    packing = importlib.import_module("packing")
+    return packing.Packer, packing.PackerOptions, packing.PackingError
 
 
 def create_app(
@@ -89,11 +94,12 @@ def create_app(
     @app.get("/api/challenges/delivery/download")
     def download_challenge_delivery() -> FileResponse:
         temp_root: Path | None = None
+        packing_error = _packing_api()[2]
         try:
             archive_path, temp_root = _prepare_challenge_delivery_archive(
                 service.paths
             )
-        except PackingError as exc:
+        except packing_error as exc:
             if temp_root is not None:
                 shutil.rmtree(temp_root, ignore_errors=True)
             raise HTTPException(
@@ -117,12 +123,13 @@ def create_app(
     @app.get("/api/challenges/{challenge_id}/delivery/download")
     def download_single_challenge_delivery(challenge_id: str) -> FileResponse:
         temp_root: Path | None = None
+        packing_error = _packing_api()[2]
         try:
             archive_path, temp_root = _prepare_single_challenge_delivery_archive(
                 service.paths,
                 challenge_id,
             )
-        except PackingError as exc:
+        except packing_error as exc:
             if temp_root is not None:
                 shutil.rmtree(temp_root, ignore_errors=True)
             raise HTTPException(
@@ -253,14 +260,15 @@ def _prepare_challenge_delivery_archive(paths: ProjectPaths) -> tuple[Path, Path
     )
     try:
         bundle_dir = temp_root / "bundle"
-        summary = Packer(
+        packer_cls, options_cls, packing_error = _packing_api()
+        summary = packer_cls(
             paths,
-            PackerOptions(
+            options_cls(
                 skip_docker=True,
             ),
         ).pack(bundle_dir)
         if int(summary.get("challenges") or 0) <= 0:
-            raise PackingError("没有可交付题目：需要构建通过且 EXP 校验通过")
+            raise packing_error("没有可交付题目：需要构建通过且 EXP 校验通过")
         archive_path = temp_root / "完成题目交付包.zip"
         _zip_directory(bundle_dir, archive_path)
         return archive_path, temp_root
@@ -280,15 +288,16 @@ def _prepare_single_challenge_delivery_archive(
     )
     try:
         bundle_dir = temp_root / "bundle"
-        summary = Packer(
+        packer_cls, options_cls, packing_error = _packing_api()
+        summary = packer_cls(
             paths,
-            PackerOptions(
+            options_cls(
                 skip_docker=True,
                 include_ids={challenge_id},
             ),
         ).pack(bundle_dir)
         if int(summary.get("challenges") or 0) <= 0:
-            raise PackingError(f"没有可交付题目：{challenge_id}")
+            raise packing_error(f"没有可交付题目：{challenge_id}")
         archive_path = temp_root / f"{challenge_id}-交付包.zip"
         _zip_directory(bundle_dir, archive_path)
         return archive_path, temp_root

@@ -23,7 +23,6 @@ from core.jsonio import read_json
 from core.queue import SUPPORTED_CATEGORIES
 from domain.build_attempts import BuildAttempt, BuildAttemptListItem, BuildAttemptStatus
 from domain.validation_failure_governance import latest_failed_validation
-from hermes.process import hermes_profile_health
 from persistence.models import build_attempts as build_model
 from persistence.models import design_tasks as task_model
 from persistence.models import executions as exec_model
@@ -42,7 +41,7 @@ from services.build_attempt_revalidation_service import (
     BuildAttemptRevalidationNotFoundError,
     BuildAttemptRevalidationService,
 )
-from services.build_profile_readiness import unavailable_build_profiles
+from services.build_profile_readiness import hermes_profile_health, unavailable_build_profiles
 
 LOG = logging.getLogger(__name__)
 DEFAULT_LIST_LIMIT = 200
