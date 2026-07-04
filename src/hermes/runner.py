@@ -1089,10 +1089,10 @@ class HermesRunner:
         self._record_validation_round(workspace, 0, per_results, validated_set)
         merge_validation_into_report(report, per_results)
 
-        # Host validation is authoritative. First apply deterministic mechanical
-        # fixes (path normalization, scaffold alignment, metadata/doc wrappers)
-        # without consuming AI repair budget; then use Hermes only for failures
-        # that still require challenge-specific reasoning.
+        # Host validation is authoritative. First apply bounded deterministic
+        # fixes (path normalization, diagnostics, metadata/doc wrappers) without
+        # consuming AI repair budget; scaffold and payload rewrites stay out of
+        # this Phase 1 path.
         seen_contract_errors: list[str] = []
         repair_budget = self.validation_repair_attempts
         repair_timeout = _resolve_validation_repair_timeout(effective_timeout)
@@ -1669,6 +1669,7 @@ class HermesRunner:
         """Persist first-failure evidence and append bounded repair diagnostics."""
         entry = {
             "round": round_no,
+            "runner_phase": "validation",
             "output_manifest_hash": (
                 validation_set.output_manifest_hash if validation_set else None
             ),

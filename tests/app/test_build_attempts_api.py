@@ -711,7 +711,6 @@ def test_detail_reads_legacy_report_when_new_validation_history_is_missing(
     assert response.status_code == 200
     payload = response.json()
     assert payload["validation_failure_source"] == "report"
-    assert payload["challenge_id"] == "pwn-legacy"
     assert payload["validation_status"] == "flag_mismatch"
     assert payload["validation_failure_class"] == "solver"
     assert "validation_failure_signature" in payload

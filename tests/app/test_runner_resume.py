@@ -633,6 +633,7 @@ class RunnerRealRunTests(unittest.TestCase):
                 [],
             )
             self.assertEqual(history[0]["round"], 0)
+            self.assertEqual(history[0]["runner_phase"], "validation")
             self.assertEqual(
                 history[0]["results"][0]["validation_status"],
                 "contract_failed",
@@ -1063,34 +1064,32 @@ class RunnerRealRunTests(unittest.TestCase):
                 )
             )
 
-    def test_deterministic_repair_normalizes_dockerfile_without_scaffold_overwrite(self):
-        class BuildOnceAfterAutoRepair:
+    def test_phase1_deterministic_repair_leaves_dockerfile_semantics_deferred(self):
+        class BuildAlwaysFailingDockerfile:
             def __init__(self):
                 self.calls = 0
+                self.seen_dockerfiles: list[str] = []
 
             def build_workspace(self, workspace, validation_set):
                 self.calls += 1
                 challenge = next(iter(validation_set.candidates.values()))
                 dockerfile = (challenge / "deploy" / "Dockerfile").read_text(encoding="utf-8")
-                if self.calls == 1:
-                    raise HostBuildError(
-                        "pwn-0001: docker build failed with exit 1",
-                        challenge_id="pwn-0001",
-                        command=[
-                            "docker",
-                            "build",
-                            "-t",
-                            "pwn-demo:latest",
-                            "-f",
-                            "deploy/Dockerfile",
-                            ".",
-                        ],
-                        stdout_tail="COPY src/ /tmp/src/\n",
-                        stderr_tail="failed to calculate checksum of ref src: not found\n",
-                    )
-                assert "COPY deploy/src/ /tmp/src/" in dockerfile
-                assert "cp vuln /home/ctf/vuln" not in dockerfile
-                return NoopHostBuilder().build_workspace(workspace, validation_set)
+                self.seen_dockerfiles.append(dockerfile)
+                raise HostBuildError(
+                    "pwn-0001: docker build failed with exit 1",
+                    challenge_id="pwn-0001",
+                    command=[
+                        "docker",
+                        "build",
+                        "-t",
+                        "pwn-demo:latest",
+                        "-f",
+                        "deploy/Dockerfile",
+                        ".",
+                    ],
+                    stdout_tail="COPY src/ /tmp/src/\n",
+                    stderr_tail="failed to calculate checksum of ref src: not found\n",
+                )
 
         with TemporaryDirectory() as tmp:
             paths = _Paths(root=Path(tmp))
@@ -1124,7 +1123,7 @@ class RunnerRealRunTests(unittest.TestCase):
                 encoding="utf-8",
             )
             _make_shard(paths, "pwn-0001-0001.json", ["pwn-0001"])
-            host_builder = BuildOnceAfterAutoRepair()
+            host_builder = BuildAlwaysFailingDockerfile()
             runner = HermesRunner(
                 paths,
                 image_exists=lambda _: True,
@@ -1149,7 +1148,14 @@ class RunnerRealRunTests(unittest.TestCase):
             outcome = runner.process_one("worker-01", dry_run=False)
 
             self.assertEqual(outcome["status"], "failed")
-            self.assertEqual(host_builder.calls, 2)
+            self.assertGreaterEqual(host_builder.calls, 1)
+            self.assertTrue(host_builder.seen_dockerfiles)
+            self.assertTrue(
+                all("COPY src/ /tmp/src/" in item for item in host_builder.seen_dockerfiles)
+            )
+            self.assertTrue(
+                all("COPY deploy/src/ /tmp/src/" not in item for item in host_builder.seen_dockerfiles)
+            )
             self.assertEqual(len(prompts), 1)
 
     def test_validation_repair_uses_capped_timeout(self):

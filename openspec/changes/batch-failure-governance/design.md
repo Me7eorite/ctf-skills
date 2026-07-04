@@ -54,7 +54,7 @@ If both specs mention the same behavior, `batch-failure-governance` is the sourc
 ## Decisions
 
 1. Use a normalized validation failure classification layer instead of ad hoc log parsing in each service.
-   The first rollout classifies only attempts whose terminal runner phase is `validation`. The closed API/repair-level class set for validation failures is `timeout`, `service-readiness`, `contract`, and `solver`. These slugs are the canonical wire values; lower-level validation statuses and diagnostic codes remain input evidence, not separate members of this set. Prompt-input failures are reserved until prompt rendering has stable capture points and diagnostic fields.
+   The first rollout classifies only attempts whose terminal runner phase is `validation`. The closed API/repair-level class set for validation failures is `timeout`, `service-readiness`, `contract`, and `solver`. These slugs are the canonical wire values; lower-level validation statuses and diagnostic codes remain input evidence, not separate members of this set. The `timeout` class means a validator or `validate.sh` wrapper timeout during validation; Hermes subprocess timeouts remain runner-phase failures such as `hermes_timeout` and are not classified here. Prompt-input failures are reserved until prompt rendering has stable capture points and diagnostic fields.
 
 2. Keep runner-phase failures outside this normalized validation class unless an explicit mapping exists.
    Existing runner-phase categories remain authoritative for non-validation failures. API responses should not invent a validation failure class for phases such as `hermes_auth`, `hermes_rate_limit`, `hermes_timeout`, `terminal_workspace`, `materialize`, or `contract_prepare`.
@@ -82,7 +82,32 @@ If both specs mention the same behavior, `batch-failure-governance` is the sourc
 4. Persist only stable outcomes, not a new retry-state table.
    The normalized class is derived from the latest validation result and existing diagnostics for the current attempt. Phase 1 SHALL use the latest failed result in `work/executions/<attempt_id>/current/state/validation-history.json` as the primary structured source, because artifact `metadata.json` and the current report merge path do not preserve `validation_failure_details` reliably. If history is unavailable, derivation may fall back to report challenge entries that preserve `validation_failure_details`, then to `validation_status`, `validation_contract_errors`, progress-event terminal messages, and artifact metadata. The shared derivation helper should be used by attempt-detail/list API payloads, retry context, and manual repair context so those paths classify the same failure consistently. It may copy `validation_failure_class` into existing progress-event or attempt-summary payloads for operator visibility, but those copies are not the durable source of truth and no new table or required schema field is introduced.
 
-   Runner-owned validation gates that are already part of the mandatory validation phase are in scope for Phase 1. For example, if the runner rejects an attempt because design, implement, build, document, `validate.sh`, or `writenup/exp.py` prerequisites are incomplete, that gate should append a failed validation-history round before API, repair context, or repeated-signature logic runs. This closes the gap between the existing runner behavior that writes `validate/failed` without calling `ChallengeValidator` and the new derivation helper. Broader follow-up pre-validation normalization gates outside the current validation phase must not bypass this source chain; if they fail before `ChallengeValidator.validate_one`, they should use the same synthetic-history pattern before implementation promotes them.
+   Phase 1 validation history should use a minimal interoperable JSON shape so runner, API, and repair services do not infer different structures:
+
+   ```json
+   [
+     {
+       "round": 1,
+       "runner_phase": "validation",
+       "results": [
+         {
+           "challenge_id": "pwn-0001",
+           "solve_status": "failed",
+           "validation_status": "nonzero_exit",
+           "validation_error": "validate.sh exited non-zero",
+           "validation_failure_details": [],
+           "validation_stdout_tail": "",
+           "validation_stderr_tail": "",
+           "validation_diagnostic_unavailable": []
+         }
+       ]
+     }
+   ]
+   ```
+
+   Writers should append round entries and readers should walk from newest to oldest. A single failed result may produce an attempt-level class; multiple failed results should return per-challenge data or no attempt-level class rather than guessing an aggregate.
+
+   Runner-owned validation gates that are already part of the mandatory validation phase are in scope for Phase 1. For example, if the runner rejects an attempt because design, implement, build, document, `validate.sh`, or `writenup/exp.py` prerequisites are incomplete, that gate should append a failed validation-history round before API, repair context, or repeated-signature logic runs. This closes the gap between the existing runner behavior that writes `validate/failed` without calling `ChallengeValidator` and the new derivation helper. Broader follow-up pre-validation normalization gates outside the current validation phase must not bypass this source chain; if they fail before `ChallengeValidator.validate_challenge`, they should use the same synthetic-history pattern before implementation promotes them.
 
    Attempt-detail, retry, revalidate, and manual repair paths may read the complete latest failed validation record. Attempt-list payloads should stay bounded: they may use the copied class/signature/summary already present in progress snapshots or attempt summaries, or perform a bounded read for only the returned folded rows. They must not scan arbitrary execution-history files outside the returned attempt set or make the list query proportional to the global execution population.
 
@@ -95,6 +120,8 @@ If both specs mention the same behavior, `batch-failure-governance` is the sourc
    A diagnostic-normalization step selected inside the solver route does not reclassify the failure as `service-readiness` or `contract`. For example, generic `pwn_prompt_eof` with unavailable readiness evidence remains solver-routed after required contracts pass; the solver route may first improve readiness/log/stdout/stderr capture before asking Hermes to tune payload logic.
 
    Timeout remains a top-level normalized class, but the timeout route should preserve a compact subreason in the signature when diagnostics point to solver I/O, service readiness, wrapper bounds, or missing diagnostics. For example, `timeout:solver_io:recvuntil menu` can stay API-classified as `timeout` while selecting a bounded solver-context route after diagnostic normalization, whereas `timeout:wrapper_no_bound` may only normalize wrapper limits. This prevents unbounded solver reads from being stranded in a generic no-op timeout path while preserving the closed API class set.
+
+   Phase 1 diagnostic normalization is intentionally narrower than pre-validation artifact normalization. Before a failed validation result exists, the system may only add context-only diagnostic hooks to existing validation wrappers, such as bounded command capture, explicit unavailable markers, truncation markers, or application-readiness observation capture. It must not rewrite challenge-specific solver payload logic, scaffold layout, Dockerfile behavior, xinetd startup, flag placement, service ports, or generated source as part of Phase 1 diagnostic normalization.
 
 7. Keep sibling attempts independent during validation and repair.
    The orchestration path should continue processing other attempts in the batch when one attempt has a validation/repair failure or exhausts validation repair budget. Validation-phase failures must remain `failure_type=validation` and must not increment the sequential infrastructure streak. This does not override the sequential driver's existing consecutive infrastructure fail-fast behavior, which may still abort tail attempts for repeated non-validation infrastructure failures.
@@ -137,7 +164,7 @@ If any area lacks a marker/hash or has ambiguous custom semantics, the follow-up
     The default validation environment should not depend on undeclared Python packages or ungenerated helper modules. Phase 1 can allow known runtime-provided tools such as pwntools/requests where the environment already supports them, and should record missing non-standard helper modules as solver dependency diagnostics with the missing module name, import location when available, and a repair hint to vendor the helper, switch to the standard library, or declare the supported runtime dependency. Later enforcement phases may require any non-standard helper module imported by `writenup/exp.py` to be present under `writenup/` or otherwise declared by the challenge.
 
 15. Define a minimum validation diagnostic envelope.
-    `validate.sh` failures should preserve enough bounded evidence for Hermes to repair without guessing: compose/service state, recent container logs, readiness probe result, exact solver command, solver stdout/stderr tails, exit code, and final stdout flag candidate when present. Phase 1 should not require rewriting every existing wrapper to emit every field; it should carry available evidence consistently, keep diagnostics off stdout when wrappers already separate streams, and synthesize missing fields explicitly as unavailable rather than silently omitting the section.
+    `validate.sh` failures should preserve enough bounded evidence for Hermes to repair without guessing: compose/service state, recent container logs, readiness probe result, exact validation command, `validate.sh` stdout/stderr tails, solver stdout/stderr tails when the wrapper exposes them separately, exit code, and final stdout flag candidate when present. Phase 1 should not require rewriting every existing wrapper to emit every field; it should carry available evidence consistently, keep diagnostics off stdout when wrappers already separate streams, and synthesize missing fields explicitly as unavailable rather than silently omitting the section.
 
 16. Use graduated enforcement to avoid false rejects.
     The quality gate should distinguish existing validation hard failures from new pre-validation structural gates and later solver-quality blockers. Phase 1 may still classify failures already produced by the current validator, such as missing metadata or missing validation entrypoints, but it should not add a broad new pre-validation structural gate in the first milestone. Solver-quality blockers such as default-path hardcoded service targets, missing imported helper modules, unbounded solver I/O, hardcoded flags, forbidden organizer-file reads, and absent rich exploit evidence remain diagnostics and repair hints in Phase 1; later phases can hard-fail deterministic structural or solver blockers and then require richer Pwn evidence according to exploit complexity.

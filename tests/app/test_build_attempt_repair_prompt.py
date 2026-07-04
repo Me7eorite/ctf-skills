@@ -90,8 +90,9 @@ def test_build_attempt_repair_prompt_includes_validation_evidence_and_debug_repo
     assert "--- writenup/exp.py ---" in prompt
     assert "--- writenup/pwn_debug_report.json ---" in prompt
     assert "pwn_prompt_eof" in prompt
-    assert "Bound every `recvuntil` / `recvline` wait with short" in prompt
-    assert "print bounded diagnostics for service ready state" in prompt
+    normalized = " ".join(prompt.split())
+    assert "Bound every `recvuntil` / `recvline` wait with short" in normalized
+    assert "print bounded diagnostics for service ready state" in normalized
 
 
 def test_build_attempt_repair_prompt_marks_truncated_evidence(tmp_path: Path) -> None:

@@ -321,6 +321,9 @@ def latest_failed_validation(
 def summarize_validation_entry(entry: Any, *, source: str = "validation-history") -> dict[str, Any] | None:
     if not isinstance(entry, Mapping):
         return None
+    runner_phase = entry.get("runner_phase")
+    if runner_phase is not None and runner_phase != "validation":
+        return None
     results = entry.get("results")
     if not isinstance(results, list):
         return None

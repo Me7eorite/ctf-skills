@@ -2,12 +2,13 @@
 
 ### Requirement: Batch failure taxonomy is normalized and stable
 
-The system SHALL map build-attempt validation-phase failures into a normalized, closed set of failure classes whose allowed slugs are stable across runner invocations. The first-rollout closed set SHALL be exactly `timeout`, `service-readiness`, `contract`, and `solver`. These exact slugs are the canonical API and repair-policy values for attempts whose terminal runner phase is `validation`. Phase 1 assumes the current one-build-attempt-to-one-challenge flow: under that precondition, every failed validation-phase attempt SHALL have exactly one attempt-level class assigned for the latest validation round. If a future flow reintroduces multi-challenge build-attempt shards, the system SHALL expose per-challenge classes or define an explicit aggregation rule before emitting one attempt-level `validation_failure_class`. Attempts that fail before or outside validation, including runner phases such as `hermes_auth`, `hermes_rate_limit`, `hermes_timeout`, `terminal_workspace`, `materialize`, and `contract_prepare`, SHALL NOT be assigned a normalized validation failure class by this capability. The class SHALL be derivable from the final validation result and existing diagnostic evidence without requiring new storage tables or a new durable source-of-truth field. Phase 1 derivation SHALL use structured `validation_failure_details` from the latest failed validation result in `work/executions/<attempt_id>/current/state/validation-history.json` as the primary source when present, then fall back to report entries that preserve `validation_failure_details`, `validation_status`, `validation_contract_errors`, latest terminal validation progress-event messages, and artifact metadata. The system MAY copy the derived class into existing progress-event or attempt-summary payloads for visibility, but such copies SHALL NOT replace derivation as the source of truth. Pwn readiness evidence SHALL be interpreted as one of `established`, `failed-fresh-connection`, or `unavailable`; classifiers SHALL NOT collapse missing readiness evidence into a failed readiness observation. A missing field, absent probe, or bare `readiness_established=false` value SHALL be treated as not-established evidence, not as explicit failed-fresh-connection evidence, unless accompanied by a readiness-failure diagnostic code or an explicit `failed-fresh-connection` observation.
+The system SHALL map build-attempt validation-phase failures into a normalized, closed set of failure classes whose allowed slugs are stable across runner invocations. The first-rollout closed set SHALL be exactly `timeout`, `service-readiness`, `contract`, and `solver`. These exact slugs are the canonical API and repair-policy values for attempts whose terminal runner phase is `validation`. The `timeout` class SHALL mean a validator or `validate.sh` wrapper timeout during validation; Hermes subprocess timeouts, including `hermes_timeout` runner-phase failures and `HERMES_TIMEOUT` selection, SHALL remain outside this validation taxonomy. Phase 1 assumes the current one-build-attempt-to-one-challenge flow: under that precondition, every failed validation-phase attempt SHALL have exactly one attempt-level class assigned for the latest validation round. If a future flow reintroduces multi-challenge build-attempt shards, the system SHALL expose per-challenge classes or define an explicit aggregation rule before emitting one attempt-level `validation_failure_class`. Attempts that fail before or outside validation, including runner phases such as `hermes_auth`, `hermes_rate_limit`, `hermes_timeout`, `terminal_workspace`, `materialize`, and `contract_prepare`, SHALL NOT be assigned a normalized validation failure class by this capability. The class SHALL be derivable from the final validation result and existing diagnostic evidence without requiring new storage tables or a new durable source-of-truth field. Phase 1 derivation SHALL use structured `validation_failure_details` from the latest failed validation result in `work/executions/<attempt_id>/current/state/validation-history.json` as the primary source when present, then fall back to report entries that preserve `validation_failure_details`, `validation_status`, `validation_contract_errors`, latest terminal validation progress-event messages, and artifact metadata. The system MAY copy the derived class into existing progress-event or attempt-summary payloads for visibility, but such copies SHALL NOT replace derivation as the source of truth. Pwn readiness evidence SHALL be interpreted as one of `established`, `failed-fresh-connection`, or `unavailable`; classifiers SHALL NOT collapse missing readiness evidence into a failed readiness observation. A missing field, absent probe, or bare `readiness_established=false` value SHALL be treated as not-established evidence, not as explicit failed-fresh-connection evidence, unless accompanied by a readiness-failure diagnostic code or an explicit `failed-fresh-connection` observation.
 
-#### Scenario: Timeout is classified deterministically
-- **WHEN** a build attempt fails because `validate.sh` exceeds its allotted time during validation
+#### Scenario: Validation timeout is classified deterministically
+- **WHEN** a build attempt fails because the validator or `validate.sh` wrapper exceeds its allotted validation time
 - **THEN** the attempt SHALL be classified as `timeout`
 - **AND** the failure summary SHALL preserve the timeout cause
+- **AND** a Hermes subprocess timeout SHALL remain a non-validation runner-phase failure instead of receiving this class
 
 #### Scenario: Service readiness is distinguished from exploit logic
 - **WHEN** a pwn attempt fails during validation because a fresh readiness probe cannot observe a real banner or menu before solver payloads are sent
@@ -24,6 +25,13 @@ The system SHALL map build-attempt validation-phase failures into a normalized, 
 - **WHEN** a failed validation attempt has `validation_failure_details` recorded in `current/state/validation-history.json`
 - **THEN** the classifier SHALL use the latest failed validation result from that history as the primary structured source
 - **AND** it SHALL NOT rely only on artifact `metadata.json` or progress messages when structured history is available
+
+#### Scenario: Validation history has an interoperable shape
+- **WHEN** a fresh failed validation round is written for a build-attempt-attributed challenge
+- **THEN** `current/state/validation-history.json` SHALL contain a JSON array of round objects
+- **AND** each round object SHALL contain `runner_phase="validation"` and a `results` array
+- **AND** each failed result SHALL preserve `challenge_id`, `solve_status`, `validation_status`, concise validation error or summary, `validation_failure_details` when available, bounded stdout/stderr tails when available, and explicit unavailable markers for repair-critical fields that were not captured
+- **AND** readers SHALL derive an attempt-level class only when the latest usable failed round contains exactly one failed challenge result
 
 #### Scenario: Readiness detail codes outrank contract status
 - **WHEN** a validation result has `validation_status` `contract_failed` but `validation_failure_details` includes readiness-specific codes such as `pwn_port_only_readiness` or `pwn_bad_readiness_probe`
@@ -117,12 +125,14 @@ The system SHALL treat initial `writenup/exp.py` quality as a validation-governe
 
 ### Requirement: Validation diagnostics are sufficient for repair
 
-The validation path SHALL preserve a bounded diagnostic envelope whenever validation or solver execution fails and those fields are available from the current validator, wrapper, or report merge path. The envelope SHOULD include, when applicable, compose or container service state, recent service logs, readiness probe result, exact solver command, solver stdout tail, solver stderr tail, solver exit code, validation status, structured `validation_failure_details`, and any final stdout flag candidate. Phase 1 SHALL NOT require every existing `validate.sh` wrapper to be rewritten to capture every envelope field; instead, repair contexts and API summaries SHALL preserve available fields, synthesize explicit unavailable markers for missing fields needed by repair, and cap diagnostic text by line and byte budgets with truncation markers.
+The validation path SHALL preserve a bounded diagnostic envelope whenever validation or solver execution fails and those fields are available from the current validator, wrapper, or report merge path. The envelope SHOULD include, when applicable, compose or container service state, recent service logs, readiness probe result, exact validation command, `validate.sh` stdout tail, `validate.sh` stderr tail, solver stdout/stderr tails when the wrapper exposes them separately, solver exit code when available, validation status, structured `validation_failure_details`, and any final stdout flag candidate. Phase 1 SHALL NOT require every existing `validate.sh` wrapper to be rewritten to capture every envelope field; instead, repair contexts and API summaries SHALL preserve available fields, synthesize explicit unavailable markers for missing fields needed by repair, and cap diagnostic text by line and byte budgets with truncation markers.
 
 #### Scenario: Solver failure captures stdout and stderr evidence
 - **WHEN** `writenup/exp.py` exits non-zero or prints the wrong flag during validation
-- **THEN** the latest validation result SHALL preserve bounded solver stdout and stderr tails
-- **AND** the next repair prompt SHALL include those tails and the solver exit code
+- **THEN** the latest validation result SHALL preserve bounded `validate.sh` stdout and stderr tails
+- **AND** it SHALL preserve bounded solver stdout and stderr tails plus the solver exit code when the wrapper exposes solver-specific streams or status separately
+- **AND** otherwise it SHALL mark solver-specific streams or exit status as unavailable when those fields are needed for repair
+- **AND** the next repair prompt SHALL include the captured tails and unavailable markers
 
 #### Scenario: Insufficient diagnostics becomes actionable
 - **WHEN** validation fails but the latest result lacks solver stdout/stderr tails, readiness evidence, service logs, or structured failure details needed for repair
@@ -204,7 +214,8 @@ The system SHALL preserve available Pwn application-level readiness and solver e
 
 #### Scenario: Diagnostic-envelope completeness is evaluated after failure
 - **WHEN** pre-validation inspection can see `validate.sh` but no validation failure has occurred yet
-- **THEN** the system MAY normalize obvious diagnostic hooks in the wrapper
+- **THEN** the system MAY normalize only context-only diagnostic hooks in the wrapper, such as bounded output capture, truncation markers, unavailable markers, or readiness-observation capture
+- **AND** it SHALL NOT rewrite challenge-specific solver payload logic, scaffold layout, Dockerfile behavior, xinetd startup, flag placement, service ports, or generated source in Phase 1 diagnostic normalization
 - **AND** it SHALL defer the completeness judgement for captured stdout/stderr tails, service logs, readiness output, solver command, exit code, and structured details until a failed validation result exists
 
 #### Scenario: Deep exploit evidence is diagnostic-first in the first rollout

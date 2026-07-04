@@ -28,11 +28,11 @@ from persistence.repositories import (
     PostgresProgressStore,
 )
 from persistence.session import SessionFactory, transaction
+from services.build_attempt_repair_service import _default_timeout_seconds
 from services.build_attempt_revalidation_service import (
     BuildAttemptRevalidationError,
     BuildAttemptRevalidationService,
 )
-from services.build_attempt_repair_service import _default_timeout_seconds
 
 ROOT = Path(__file__).resolve().parents[2]
 

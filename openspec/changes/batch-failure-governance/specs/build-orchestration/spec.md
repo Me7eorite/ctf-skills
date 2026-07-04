@@ -11,7 +11,7 @@ The system SHALL route validation and repair for validation-phase build-attempt 
 - **AND** the selected route SHALL be recorded in the existing diagnostic or progress summary for operator visibility
 
 #### Scenario: Timeout follows its own repair path
-- **WHEN** a build attempt fails with a validation timeout
+- **WHEN** a build attempt fails with a validator or `validate.sh` wrapper timeout during validation
 - **THEN** the attempt SHALL preserve timeout evidence and use a timeout-specific bounded route
 - **AND** when the timeout signature contains a stable subreason such as solver I/O, service readiness, wrapper bounds, or missing diagnostic capture, the route MAY use that subreason to choose bounded diagnostic, solver-context, or escalation behavior while keeping `validation_failure_class=timeout`
 - **AND** the route SHALL apply only safe wrapper or diagnostic normalization when the missing bound is obvious, otherwise no-op/escalate rather than blindly increasing timeouts or looping Hermes repair

@@ -28,7 +28,7 @@ def test_policy_routes_contract_to_mechanical_repairs() -> None:
     assert MECHANIC_DOCUMENT_PAIR in policy.deterministic_mechanics
 
 
-def test_policy_keeps_deferred_pwn_scaffold_out_of_contract_repairs() -> None:
+def test_policy_keeps_deferred_scaffold_and_dockerfile_out_of_contract_repairs() -> None:
     policy = policy_for_validation_failure(
         {
             "solve_status": "failed",
@@ -37,10 +37,10 @@ def test_policy_keeps_deferred_pwn_scaffold_out_of_contract_repairs() -> None:
     )
 
     assert MECHANIC_PWN_XINETD_SCAFFOLD not in policy.deterministic_mechanics
-    assert MECHANIC_DEPLOY_DOCKERFILE in policy.deterministic_mechanics
+    assert MECHANIC_DEPLOY_DOCKERFILE not in policy.deterministic_mechanics
 
 
-def test_policy_keeps_deferred_pwn_scaffold_out_of_readiness_repairs() -> None:
+def test_policy_keeps_deferred_scaffold_and_dockerfile_out_of_readiness_repairs() -> None:
     policy = policy_for_validation_failure(
         {
             "solve_status": "failed",
@@ -53,7 +53,7 @@ def test_policy_keeps_deferred_pwn_scaffold_out_of_readiness_repairs() -> None:
 
     assert policy.failure_class == "service-readiness"
     assert MECHANIC_PWN_XINETD_SCAFFOLD not in policy.deterministic_mechanics
-    assert MECHANIC_DEPLOY_DOCKERFILE in policy.deterministic_mechanics
+    assert MECHANIC_DEPLOY_DOCKERFILE not in policy.deterministic_mechanics
 
 
 def test_policy_routes_solver_to_hermes_with_diagnostic_mechanics_only() -> None:

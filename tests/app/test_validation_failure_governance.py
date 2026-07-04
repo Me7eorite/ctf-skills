@@ -35,6 +35,31 @@ def test_non_validation_phase_has_no_class() -> None:
     assert normalized_validation_failure_class(result, runner_phase="hermes_timeout") is None
 
 
+def test_validation_history_ignores_explicit_non_validation_round(tmp_path: Path) -> None:
+    attempt_id = uuid4()
+    paths = ProjectPaths(root=tmp_path, repository=tmp_path)
+    state_dir = paths.executions / str(attempt_id) / "current" / "state"
+    state_dir.mkdir(parents=True)
+    write_json(
+        state_dir / "validation-history.json",
+        [
+            {
+                "round": 1,
+                "runner_phase": "hermes_timeout",
+                "results": [
+                    {
+                        "challenge_id": "pwn-0001",
+                        "solve_status": "failed",
+                        "validation_status": "timeout",
+                    }
+                ],
+            }
+        ],
+    )
+
+    assert latest_failed_validation(paths, attempt_id) is None
+
+
 def test_prompt_eof_without_readiness_evidence_prefers_solver() -> None:
     result = {
         "solve_status": "failed",
@@ -290,7 +315,8 @@ def test_signature_normalization_ignores_volatile_values_but_keeps_stable_marker
         "solve_status": "failed",
         "validation_status": "nonzero_exit",
         "validation_stderr_tail": (
-            '  File "/workspace/executions/11111111-1111-1111-1111-111111111111/current/output/challenges/pwn/x/writenup/exp.py", line 7, in <module>\n'
+            '  File "/workspace/executions/11111111-1111-1111-1111-111111111111/'
+            'current/output/challenges/pwn/x/writenup/exp.py", line 7, in <module>\n'
             "ModuleNotFoundError: No module named 'pwn'\n"
             "elapsed=13.52s container=abcdef1234567890 port=31337 leaked=0x7ffff7dd18c0"
         ),
@@ -299,7 +325,8 @@ def test_signature_normalization_ignores_volatile_values_but_keeps_stable_marker
         "solve_status": "failed",
         "validation_status": "nonzero_exit",
         "validation_stderr_tail": (
-            '  File "/workspace/executions/22222222-2222-2222-2222-222222222222/current/output/challenges/pwn/x/writenup/exp.py", line 7, in <module>\n'
+            '  File "/workspace/executions/22222222-2222-2222-2222-222222222222/'
+            'current/output/challenges/pwn/x/writenup/exp.py", line 7, in <module>\n'
             "ModuleNotFoundError: No module named 'pwn'\n"
             "elapsed=27.01s container=123456abcdef9876 port=40123 leaked=0x7ffff7aa9000"
         ),
