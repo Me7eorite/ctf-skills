@@ -204,6 +204,13 @@ Pwn exploit debugging acceleration:
   uses `process([binary_path])` for quick menu/offset smoke tests. The default
   validation path must still connect with
   `remote(os.environ['CHAL_HOST'], int(os.environ['CHAL_PORT']))`.
+- In local debug mode only, if the challenge ships a matching `ld`/loader
+  alongside the binary, it is acceptable to use `patchelf` to point the local
+  binary at that loader and reproduce the shipped runtime more closely. If the
+  challenge only ships `libc` without a matching loader, local reproduction may
+  use `xclibc` or an equivalent loader shim to attach the provided libc to the
+  local binary. These are debug aids only; they must not replace the default
+  remote validation path or become the source of truth for the delivered exploit.
 - Every local binary, pwntools `process()`, subprocess, and gdb run must be
   bounded and non-interactive. Never run bare `./<binary>` or a menu-driven
   ELF without input in headless mode. Use patterns like

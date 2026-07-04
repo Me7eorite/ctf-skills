@@ -54,6 +54,12 @@ The system SHALL map build-attempt validation-phase failures into a normalized, 
 
 The system SHALL treat stable Web/Pwn reference solver behavior as validation-governed evidence before later hard enforcement. In Phase 1, default-target, dependency, bounded-I/O, and evidence gaps SHALL be emitted as structured validation diagnostics and repair context, without adding new document-completion blockers or solver-quality gates. For Web/Pwn challenges, the default solver path SHOULD connect to the live validation target using `CHAL_HOST` and `CHAL_PORT` rather than hardcoded loopback hosts, container names, or fixed challenge ports. Explicit local debug paths such as `LOCAL=1` MAY use local binaries, loopback hosts, or `process()` for bounded smoke tests, but they SHALL NOT be the default validation path once hard enforcement is enabled. Pwn solvers SHOULD use bounded reads, receives, and subprocess/process interactions for prompt synchronization, leaks, shell interaction, and flag reads so solver mistakes become bounded validation diagnostics instead of worker hangs. Later enforcement phases MAY turn deterministic stability gaps into hard blockers after the diagnostics and repair paths are visible and covered by tests.
 
+#### Scenario: Local debug may adapt the loader with the shipped runtime pieces
+- **WHEN** a Pwn challenge provides a matching loader/`ld` alongside the binary
+- **THEN** the local debug path MAY use `patchelf` to point the local binary at that loader so the binary runs against the shipped runtime more closely
+- **AND** when only `libc` is provided without a matching loader, the local debug path MAY use `xclibc` or an equivalent loader shim to bind the delivered libc to the local binary
+- **AND** these local-only aids SHALL remain outside the default validation path and SHALL NOT replace `remote(CHAL_HOST, CHAL_PORT)` as the authoritative solve path
+
 #### Scenario: Web/Pwn solver default path uses validation target environment
 - **WHEN** a Web or Pwn challenge provides `writenup/exp.py`
 - **THEN** Phase 1 SHALL emit contract or solver diagnostics when the default validation path does not use `CHAL_HOST` and `CHAL_PORT` to reach the running service
