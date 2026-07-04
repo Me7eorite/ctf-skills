@@ -1,3 +1,6 @@
+import hashlib
+import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -100,6 +103,68 @@ def test_build_attempt_repair_prompt_includes_validation_evidence_and_debug_repo
     normalized = " ".join(prompt.split())
     assert "Bound every `recvuntil` / `recvline` wait with short" in normalized
     assert "print bounded diagnostics for service ready state" in normalized
+
+
+def test_build_attempt_repair_prompt_includes_final_pwn_artifact_evidence(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    challenge_dir = tmp_path / "pwn-0001-demo"
+    (challenge_dir / "attachments").mkdir(parents=True)
+    (challenge_dir / "writenup").mkdir()
+    artifact = b"\x7fELFfinal"
+    (challenge_dir / "attachments" / "vuln").write_bytes(artifact)
+    artifact_sha = hashlib.sha256(artifact).hexdigest()
+    (challenge_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "id": "pwn-0001",
+                "category": "pwn",
+                "artifact": "attachments/vuln",
+                "artifact_sha256": artifact_sha,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["readelf", "-sW"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=(
+                    "Symbol table '.symtab' contains 3 entries:\n"
+                    "  1: 000000000040149d    42 FUNC    GLOBAL DEFAULT   15 win\n"
+                    "  2: 0000000000401391    42 FUNC    GLOBAL DEFAULT   15 main\n"
+                    "  3: 00000000004012ad    42 FUNC    GLOBAL DEFAULT   15 vuln\n"
+                ),
+                stderr="",
+            )
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
+
+    monkeypatch.setattr("domain.pwn_artifact_evidence.subprocess.run", fake_run)
+
+    prompt = _repair_prompt(
+        {
+            "id": "attempt",
+            "design_task_id": "task",
+            "challenge_id": "pwn-0001",
+            "category": "pwn",
+            "challenge_dir": challenge_dir,
+            "failure_summary": "stale evidence",
+            "failure_details": [],
+            "file_context": _file_context(challenge_dir),
+        }
+    )
+
+    assert "FINAL SOLVER EVIDENCE SOURCE:" in prompt
+    assert "Use only ./attachments/vuln for exp.py and pwn_debug_report.json." in prompt
+    assert "Do not use deploy/src/vuln for solver offsets, symbols, gadgets, or report sha." in prompt
+    assert f"attachments/vuln sha256: {artifact_sha}" in prompt
+    assert f"metadata.artifact_sha256: {artifact_sha}" in prompt
+    assert "- win: 0x40149d" in prompt
+    assert "- main: 0x401391" in prompt
+    assert "- vuln: 0x4012ad" in prompt
 
 
 def test_file_context_omits_stale_pwn_debug_report_trusted_body(tmp_path: Path) -> None:

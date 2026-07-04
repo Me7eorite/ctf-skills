@@ -148,6 +148,8 @@ def test_host_builder_runs_fixed_docker_build_and_stamps_metadata(tmp_path: Path
             return subprocess.CompletedProcess(command, 0, stdout="sha256:image\n", stderr="")
         if command[:3] == ["docker", "image", "prune"]:
             return subprocess.CompletedProcess(command, 0, stdout="Total reclaimed space: 0B\n", stderr="")
+        if command[:2] == ["readelf", "-sW"] or command[:1] == ["checksec"]:
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
         assert kwargs["cwd"] == challenge
         return subprocess.CompletedProcess(command, 0, stdout="built\n", stderr="")
 
@@ -251,6 +253,8 @@ def test_host_builder_syncs_pwn_runtime_elf_to_attachment(tmp_path: Path) -> Non
             return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
         if command[:3] == ["docker", "image", "prune"]:
             return subprocess.CompletedProcess(command, 0, stdout="Total reclaimed space: 0B\n", stderr="")
+        if command[:2] == ["readelf", "-sW"] or command[:1] == ["checksec"]:
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
         assert kwargs["cwd"] == challenge
         return subprocess.CompletedProcess(command, 0, stdout="built\n", stderr="")
 
@@ -265,6 +269,12 @@ def test_host_builder_syncs_pwn_runtime_elf_to_attachment(tmp_path: Path) -> Non
     assert metadata["artifact_sha256"] == "7b890f6cd0e6fa34864e726aa2cda390c35f43277e388d2e6b5c455dae01ba9b"
     assert metadata["solver_evidence_stale"] is True
     assert "attachments/" in metadata["solver_evidence_stale_reason"]
+    debug_report = read_json(challenge / "writenup" / "pwn_debug_report.json")
+    assert debug_report["binary"] == {
+        "path": "attachments/vuln",
+        "sha256": "7b890f6cd0e6fa34864e726aa2cda390c35f43277e388d2e6b5c455dae01ba9b",
+        "source": "final_artifact",
+    }
     for field in (
         "solve_status",
         "solve_note",

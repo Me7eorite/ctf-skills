@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from core.jsonio import read_json, write_json
+from domain.pwn_artifact_evidence import PwnArtifactEvidenceError, refresh_pwn_debug_report
 from hermes.build_publisher import WorkspaceValidationSet
 from hermes.workspace import ExecutionWorkspace
 
@@ -227,6 +228,11 @@ class HostBuilder:
             prune_warning=prune_warning,
             pwn_artifact_sha_changed=pwn_artifact_sha_changed,
         )
+        if metadata.get("category") == "pwn":
+            try:
+                refresh_pwn_debug_report(challenge_dir)
+            except PwnArtifactEvidenceError:
+                pass
         return HostBuildResult(
             challenge_id=challenge_id,
             image=image,

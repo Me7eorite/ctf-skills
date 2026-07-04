@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -110,6 +111,73 @@ class ValidateChallengeLookupTests(unittest.TestCase):
                 "solver_evidence_stale",
             )
 
+    def test_pwn_debug_report_from_deploy_src_fails_before_validate_script(self):
+        with TemporaryDirectory() as tmp:
+            paths = _seed_paths(Path(tmp))
+            challenge = paths.challenges / "pwn" / "pwn-0001-demo"
+            (challenge / "attachments").mkdir(parents=True)
+            (challenge / "deploy" / "src").mkdir(parents=True)
+            (challenge / "writenup").mkdir()
+            (challenge / "attachments" / "vuln").write_bytes(b"final-artifact")
+            (challenge / "deploy" / "src" / "vuln").write_bytes(b"stale-deploy-artifact")
+            attachment_sha = hashlib.sha256(b"final-artifact").hexdigest()
+            deploy_sha = hashlib.sha256(b"stale-deploy-artifact").hexdigest()
+            (challenge / "metadata.json").write_text(
+                json.dumps(
+                    {
+                        "id": "pwn-0001",
+                        "category": "pwn",
+                        "artifact": "attachments/vuln",
+                        "artifact_sha256": attachment_sha,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (challenge / "writenup" / "pwn_debug_report.json").write_text(
+                json.dumps({"binary": {"path": "attachments/vuln", "sha256": deploy_sha}}),
+                encoding="utf-8",
+            )
+            validator = ChallengeValidator(paths)  # type: ignore[arg-type]
+
+            result = validator.validate_challenge("pwn-0001")
+
+            self.assertEqual(result["status"], "solver_evidence_stale")
+            self.assertEqual(result["failure_details"][0]["code"], "pwn_evidence_from_deploy_src")
+            self.assertIn("deploy/src/vuln", result["error"])
+
+    def test_pwn_debug_report_claiming_attachment_with_wrong_sha_fails_before_validate_script(self):
+        with TemporaryDirectory() as tmp:
+            paths = _seed_paths(Path(tmp))
+            challenge = paths.challenges / "pwn" / "pwn-0001-demo"
+            (challenge / "attachments").mkdir(parents=True)
+            (challenge / "writenup").mkdir()
+            (challenge / "attachments" / "vuln").write_bytes(b"final-artifact")
+            attachment_sha = hashlib.sha256(b"final-artifact").hexdigest()
+            (challenge / "metadata.json").write_text(
+                json.dumps(
+                    {
+                        "id": "pwn-0001",
+                        "category": "pwn",
+                        "artifact": "attachments/vuln",
+                        "artifact_sha256": attachment_sha,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (challenge / "writenup" / "pwn_debug_report.json").write_text(
+                json.dumps({"binary": {"path": "attachments/vuln", "sha256": "wrong-sha"}}),
+                encoding="utf-8",
+            )
+            validator = ChallengeValidator(paths)  # type: ignore[arg-type]
+
+            result = validator.validate_challenge("pwn-0001")
+
+            self.assertEqual(result["status"], "solver_evidence_stale")
+            self.assertEqual(
+                result["failure_details"][0]["code"],
+                "pwn_debug_report_claims_wrong_artifact",
+            )
+
     def test_pwn_hardcoded_win_offset_conflict_fails_before_validate_script(self):
         with TemporaryDirectory() as tmp:
             paths = _seed_paths(Path(tmp))
@@ -179,7 +247,117 @@ class ValidateChallengeLookupTests(unittest.TestCase):
 
             self.assertEqual(result["status"], "solver_evidence_stale")
             self.assertIn("exp.py recorded binary sha256", result["error"])
+            self.assertEqual(result["failure_details"][0]["code"], "pwn_exp_binary_sha_mismatch")
             self.assertEqual(result["failure_details"][0]["path"], "writenup/exp.py")
+
+    def test_pwn_exp_missing_binary_sha_fails_before_validate_script(self):
+        with TemporaryDirectory() as tmp:
+            paths = _seed_paths(Path(tmp))
+            challenge = paths.challenges / "pwn" / "pwn-0001-demo"
+            (challenge / "writenup").mkdir(parents=True)
+            (challenge / "writenup" / "exp.py").write_text(
+                "print('should not run')\n",
+                encoding="utf-8",
+            )
+            (challenge / "metadata.json").write_text(
+                json.dumps(
+                    {
+                        "id": "pwn-0001",
+                        "category": "pwn",
+                        "artifact_sha256": "current-sha",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            validator = ChallengeValidator(paths)  # type: ignore[arg-type]
+
+            result = validator.validate_challenge("pwn-0001")
+
+            self.assertEqual(result["status"], "solver_evidence_stale")
+            self.assertEqual(result["failure_details"][0]["code"], "pwn_exp_missing_binary_sha")
+
+    def test_host_validation_overwrites_manual_passed_solver_status(self):
+        with TemporaryDirectory() as tmp:
+            paths = _seed_paths(Path(tmp))
+            challenge = paths.challenges / "pwn" / "pwn-0001-demo"
+            (challenge / "writenup").mkdir(parents=True)
+            (challenge / "writenup" / "exp.py").write_text(
+                "print('should not run')\n",
+                encoding="utf-8",
+            )
+            metadata_path = challenge / "metadata.json"
+            metadata_path.write_text(
+                json.dumps(
+                    {
+                        "id": "pwn-0001",
+                        "category": "pwn",
+                        "artifact_sha256": "current-sha",
+                        "solve_status": "passed",
+                        "validation_status": "ready_for_validation",
+                        "solve_note": "agent claimed success",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            validator = ChallengeValidator(paths)  # type: ignore[arg-type]
+
+            result = validator.validate_challenge("pwn-0001")
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(result["status"], "solver_evidence_stale")
+            self.assertEqual(metadata["solve_status"], "failed")
+            self.assertEqual(metadata["validation_status"], "solver_evidence_stale")
+            self.assertIn("BINARY_SHA256", metadata["solve_note"])
+
+    def test_pwn_exp_deploy_src_win_addr_fails_before_validate_script(self):
+        with TemporaryDirectory() as tmp:
+            paths = _seed_paths(Path(tmp))
+            challenge = paths.challenges / "pwn" / "pwn-0001-demo"
+            (challenge / "attachments").mkdir(parents=True)
+            (challenge / "deploy" / "src").mkdir(parents=True)
+            (challenge / "writenup").mkdir()
+            attachment = b"\x7fELFfinal"
+            deploy = b"\x7fELFdeploy"
+            (challenge / "attachments" / "vuln").write_bytes(attachment)
+            (challenge / "deploy" / "src" / "vuln").write_bytes(deploy)
+            attachment_sha = hashlib.sha256(attachment).hexdigest()
+            (challenge / "writenup" / "exp.py").write_text(
+                f'BINARY_SHA256 = "{attachment_sha}"\nWIN_ADDR = 0x4014e0\n',
+                encoding="utf-8",
+            )
+            (challenge / "metadata.json").write_text(
+                json.dumps(
+                    {
+                        "id": "pwn-0001",
+                        "category": "pwn",
+                        "artifact": "attachments/vuln",
+                        "artifact_sha256": attachment_sha,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            validator = ChallengeValidator(paths)  # type: ignore[arg-type]
+
+            def fake_run(command, **kwargs):
+                if command[:2] == ["readelf", "-sW"]:
+                    stdout = (
+                        "Symbol table '.symtab' contains 1 entry:\n"
+                        "  12: 000000000040149d    42 FUNC    GLOBAL DEFAULT   15 win\n"
+                    )
+                    if str(command[-1]).endswith("deploy/src/vuln"):
+                        stdout = (
+                            "Symbol table '.symtab' contains 1 entry:\n"
+                            "  12: 00000000004014e0    42 FUNC    GLOBAL DEFAULT   15 win\n"
+                        )
+                    return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+                return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
+
+            with patch("domain.validation.subprocess.run", side_effect=fake_run):
+                result = validator.validate_challenge("pwn-0001")
+
+            self.assertEqual(result["status"], "solver_evidence_stale")
+            self.assertEqual(result["failure_details"][0]["code"], "pwn_evidence_from_deploy_src")
+            self.assertIn("matches deploy/src/vuln", result["error"])
 
 
 class ValidateChallengeFlagExtractionTests(unittest.TestCase):

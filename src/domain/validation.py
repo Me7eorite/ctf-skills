@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -79,7 +80,7 @@ _COMPOSE_PROJECT_RE = re.compile(
     r"(?:\bCOMPOSE_PROJECT_NAME\b|\bdocker-compose\b[^\n;&|]*\s-p\s+|\bdocker\s+compose\b[^\n;&|]*\s-p\s+)"
 )
 _PWN_NAMED_OFFSET_RE = re.compile(
-    r"(?im)^\s*(WIN|MAIN|LEAK)_OFFSET\s*=\s*(0x[0-9a-f]+|\d+)\b"
+    r"(?im)^\s*(WIN|MAIN|VULN|LEAK)_(?:OFFSET|ADDR|ADDRESS)\s*=\s*(0x[0-9a-f]+|\d+)\b"
 )
 _PWN_EXP_SHA_RE = re.compile(
     r"""(?im)(?:BINARY|ARTIFACT|ELF|EXPLOIT)_SHA256\s*=\s*["']([^"']+)["']"""
@@ -691,10 +692,58 @@ def _pwn_solver_evidence_stale(
         return []
 
     details: list[dict[str, str]] = []
+    artifact_sha = _sha256_if_file(challenge_dir / "attachments" / "vuln")
+    deploy_src_sha = _sha256_if_file(challenge_dir / "deploy" / "src" / "vuln")
     report_path = challenge_dir / "writenup" / "pwn_debug_report.json"
     if report_path.is_file() and not report_path.is_symlink():
-        report_sha = _pwn_debug_report_binary_sha(report_path)
-        if report_sha != expected_sha:
+        report_binary = _pwn_debug_report_binary(report_path)
+        report_sha = report_binary.get("sha256")
+        report_binary_path = report_binary.get("path")
+        if (
+            isinstance(report_sha, str)
+            and artifact_sha
+            and deploy_src_sha
+            and artifact_sha != deploy_src_sha
+            and report_sha == deploy_src_sha
+        ):
+            details.append(
+                validation_failure_detail(
+                    phase="validate",
+                    code="pwn_evidence_from_deploy_src",
+                    status="solver_evidence_stale",
+                    message=(
+                        "Report appears to be derived from deploy/src/vuln, not "
+                        "attachments/vuln. Recompute from the final player artifact only."
+                    ),
+                    path="writenup/pwn_debug_report.json",
+                    hint=(
+                        "Use only attachments/vuln for solver offsets, symbols, "
+                        "gadgets, and pwn_debug_report.json.binary.sha256."
+                    ),
+                )
+            )
+        elif (
+            report_binary_path == "attachments/vuln"
+            and artifact_sha
+            and report_sha != artifact_sha
+        ):
+            details.append(
+                validation_failure_detail(
+                    phase="validate",
+                    code="pwn_debug_report_claims_wrong_artifact",
+                    status="solver_evidence_stale",
+                    message=(
+                        "writenup/pwn_debug_report.json claims attachments/vuln "
+                        "but binary.sha256 does not match the actual attachments/vuln"
+                    ),
+                    path="writenup/pwn_debug_report.json",
+                    hint=(
+                        "Regenerate pwn_debug_report.json from the final "
+                        "attachments/vuln artifact on disk."
+                    ),
+                )
+            )
+        elif report_sha != expected_sha:
             details.append(
                 validation_failure_detail(
                     phase="validate",
@@ -713,12 +762,48 @@ def _pwn_solver_evidence_stale(
                 )
             )
 
-    exp_sha = _pwn_exp_binary_sha(challenge_dir / "writenup" / "exp.py")
-    if exp_sha is not None and exp_sha != expected_sha:
+    exp_path = challenge_dir / "writenup" / "exp.py"
+    exp_text = _read_text(exp_path)
+    exp_sha = _pwn_exp_binary_sha_from_text(exp_text)
+    if exp_text and exp_sha is None:
         details.append(
             validation_failure_detail(
                 phase="validate",
-                code="solver_evidence_stale",
+                code="pwn_exp_missing_binary_sha",
+                status="solver_evidence_stale",
+                message="writenup/exp.py must declare BINARY_SHA256 for the final artifact",
+                path="writenup/exp.py",
+                hint=(
+                    "Set BINARY_SHA256 to metadata.artifact_sha256 after deriving "
+                    "offsets from attachments/vuln."
+                ),
+            )
+        )
+    elif (
+        exp_sha is not None
+        and artifact_sha
+        and deploy_src_sha
+        and artifact_sha != deploy_src_sha
+        and exp_sha == deploy_src_sha
+    ):
+        details.append(
+            validation_failure_detail(
+                phase="validate",
+                code="pwn_evidence_from_deploy_src",
+                status="solver_evidence_stale",
+                message=(
+                    "writenup/exp.py records the sha256 of deploy/src/vuln, not "
+                    "attachments/vuln. Recompute from the final player artifact only."
+                ),
+                path="writenup/exp.py",
+                hint="Set BINARY_SHA256 to metadata.artifact_sha256 for attachments/vuln.",
+            )
+        )
+    elif exp_sha is not None and exp_sha != expected_sha:
+        details.append(
+            validation_failure_detail(
+                phase="validate",
+                code="pwn_exp_binary_sha_mismatch",
                 status="solver_evidence_stale",
                 message=(
                     "writenup/exp.py recorded binary sha256 does not match "
@@ -734,10 +819,15 @@ def _pwn_solver_evidence_stale(
 
     offset_conflicts = _pwn_exp_offset_conflicts(challenge_dir, metadata)
     for conflict in offset_conflicts:
+        code = (
+            "pwn_evidence_from_deploy_src"
+            if "matches deploy/src/vuln" in conflict
+            else "solver_evidence_stale"
+        )
         details.append(
             validation_failure_detail(
                 phase="validate",
-                code="solver_evidence_stale",
+                code=code,
                 status="solver_evidence_stale",
                 message=conflict,
                 path="writenup/exp.py",
@@ -751,21 +841,33 @@ def _pwn_solver_evidence_stale(
 
 
 def _pwn_debug_report_binary_sha(path: Path) -> str | None:
+    return _pwn_debug_report_binary(path).get("sha256")
+
+
+def _pwn_debug_report_binary(path: Path) -> dict[str, str]:
     try:
         report = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return None
+        return {}
     if not isinstance(report, dict):
-        return None
+        return {}
     binary = report.get("binary")
     if not isinstance(binary, dict):
-        return None
-    value = binary.get("sha256")
-    return value if isinstance(value, str) and value else None
+        return {}
+    values: dict[str, str] = {}
+    for key in ("path", "sha256"):
+        value = binary.get(key)
+        if isinstance(value, str) and value:
+            values[key] = value
+    return values
 
 
 def _pwn_exp_binary_sha(path: Path) -> str | None:
     text = _read_text(path)
+    return _pwn_exp_binary_sha_from_text(text)
+
+
+def _pwn_exp_binary_sha_from_text(text: str | None) -> str | None:
     if not text:
         return None
     match = _PWN_EXP_SHA_RE.search(text)
@@ -773,6 +875,19 @@ def _pwn_exp_binary_sha(path: Path) -> str | None:
         return None
     value = match.group(1).strip()
     return value or None
+
+
+def _sha256_if_file(path: Path) -> str | None:
+    if not path.is_file() or path.is_symlink():
+        return None
+    try:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return None
+    return digest.hexdigest()
 
 
 def _pwn_exp_offset_conflicts(challenge_dir: Path, metadata: dict[str, Any]) -> list[str]:
@@ -794,10 +909,24 @@ def _pwn_exp_offset_conflicts(challenge_dir: Path, metadata: dict[str, Any]) -> 
 
     conflicts: list[str] = []
     symbols = _elf_function_symbols(artifact_path)
-    for offset_name, symbol_name in (("win", "win"), ("main", "main")):
+    deploy_symbols: dict[str, int] = {}
+    deploy_artifact_path = challenge_dir / "deploy" / "src" / "vuln"
+    deploy_sha = _sha256_if_file(deploy_artifact_path)
+    artifact_sha = _sha256_if_file(artifact_path)
+    if deploy_sha and artifact_sha and deploy_sha != artifact_sha and is_elf(deploy_artifact_path):
+        deploy_symbols = _elf_function_symbols(deploy_artifact_path)
+    for offset_name, symbol_name in (("win", "win"), ("main", "main"), ("vuln", "vuln")):
         actual = symbols.get(symbol_name)
         expected = offsets.get(offset_name)
         if actual is not None and expected is not None and expected != actual:
+            deploy_actual = deploy_symbols.get(symbol_name)
+            if deploy_actual is not None and expected == deploy_actual:
+                conflicts.append(
+                    f"{offset_name.upper()}_ADDR={expected:#x} matches deploy/src/vuln "
+                    f"symbol {symbol_name}={deploy_actual:#x} but conflicts with "
+                    f"attachments/{artifact_path.name} symbol {symbol_name}={actual:#x}"
+                )
+                continue
             conflicts.append(
                 f"{offset_name.upper()}_OFFSET={expected:#x} conflicts with "
                 f"attachments/{artifact_path.name} symbol {symbol_name}={actual:#x}"
@@ -833,7 +962,7 @@ def _elf_function_symbols(path: Path) -> dict[str, int]:
         if len(parts) < 8 or parts[3] != "FUNC":
             continue
         name = parts[7].split("@", 1)[0]
-        if name in {"win", "main", "greet"}:
+        if name in {"win", "main", "vuln", "setup_fake_stack", "greet"}:
             try:
                 symbols[name] = int(parts[1], 16)
             except ValueError:
@@ -1579,14 +1708,23 @@ class ChallengeValidator:
         expected_flag = metadata.get("flag", "")
         record["expected_flag"] = expected_flag
 
-        def record_status(status: str, note: str | None = None) -> None:
+        def record_status(
+            solve_status: str,
+            validation_status: str,
+            note: str | None = None,
+        ) -> None:
             if persist_result:
-                self._update_metadata(metadata_path, status, note)
+                self._update_metadata(
+                    metadata_path,
+                    solve_status,
+                    validation_status,
+                    note,
+                )
 
         stale_solver_evidence = _pwn_solver_evidence_stale(challenge_dir, metadata)
         if stale_solver_evidence:
             error = "; ".join(item["message"] for item in stale_solver_evidence)
-            record_status("failed", error)
+            record_status("failed", "solver_evidence_stale", error)
             return {
                 **record,
                 "status": "solver_evidence_stale",
@@ -1597,7 +1735,7 @@ class ChallengeValidator:
         # 第一步：合约检查
         errors = self.contract_errors(challenge_dir, metadata)
         if errors:
-            record_status("failed", "; ".join(errors))
+            record_status("failed", "contract_failed", "; ".join(errors))
             return {
                 **record,
                 "status": "contract_failed",
@@ -1611,7 +1749,7 @@ class ChallengeValidator:
         # 第二步：检查 validate.sh 是否存在
         validation_script = challenge_dir / "validate.sh"
         if not validation_script.exists():
-            record_status("failed", "validate.sh missing")
+            record_status("failed", "missing_validation", "validate.sh missing")
             return {
                 **record,
                 "status": "missing_validation",
@@ -1636,7 +1774,7 @@ class ChallengeValidator:
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
-            record_status("failed", "validation timed out")
+            record_status("failed", "timeout", "validation timed out")
             stdout_tail = _tail_text(exc.stdout)
             stderr_tail = _tail_text(exc.stderr)
             return {
@@ -1661,7 +1799,7 @@ class ChallengeValidator:
                 ),
             }
         except FileNotFoundError as exc:
-            record_status("failed", "validation shell not found")
+            record_status("failed", "no_shell", "validation shell not found")
             return {
                 **record,
                 "status": "no_shell",
@@ -1694,7 +1832,7 @@ class ChallengeValidator:
 
         # 非零退出 → 失败
         if process.returncode != 0:
-            record_status("failed", f"validation exited {process.returncode}")
+            record_status("failed", "nonzero_exit", f"validation exited {process.returncode}")
             return {
                 **record,
                 "status": "nonzero_exit",
@@ -1729,7 +1867,7 @@ class ChallengeValidator:
                 challenge_dir, metadata, expected_flag
             )
             if necessity:
-                record_status("failed", necessity)
+                record_status("failed", "unnecessary_intended_path", necessity)
                 return {
                     **record,
                     "status": "unnecessary_intended_path",
@@ -1742,10 +1880,10 @@ class ChallengeValidator:
                         contract_errors=[necessity],
                     ),
                 }
-            record_status("passed")
+            record_status("passed", "passed")
             return {**record, "status": "passed"}
 
-        record_status("failed", "flag did not match metadata")
+        record_status("failed", "flag_mismatch", "flag did not match metadata")
         return {
             **record,
             "status": "flag_mismatch",
@@ -2021,13 +2159,28 @@ class ChallengeValidator:
         ]
 
     @staticmethod
-    def _update_metadata(path: Path, status: str, note: str | None = None) -> None:
+    def _update_metadata(
+        path: Path,
+        solve_status: str,
+        validation_status: str,
+        note: str | None = None,
+    ) -> None:
         """更新 metadata.json 中的解题状态。
 
-        在 metadata 中写入 solve_status 和可选的 solve_note 字段。
+        在 metadata 中写入 host validation 的真实状态。
         """
         metadata = read_json(path, {})
-        metadata["solve_status"] = status
+        metadata["solve_status"] = solve_status
+        metadata["validation_status"] = validation_status
         if note:
             metadata["solve_note"] = note
+        else:
+            metadata.pop("solve_note", None)
+        if solve_status == "passed":
+            for field in (
+                "validation_failure_class",
+                "validation_failure_signature",
+                "validation_failure_details",
+            ):
+                metadata.pop(field, None)
         write_json(path, metadata)

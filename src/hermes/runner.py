@@ -31,6 +31,7 @@ from core.queue import ShardQueue
 from core.state import InMemoryProgressStore, ProgressEventInput, ProgressStore
 from domain.build_attempt_auto_repair import auto_repair_challenge
 from domain.build_failure_taxonomy import BuildFailureCategory, classify_hermes_exit
+from domain.pwn_artifact_evidence import final_pwn_artifact_evidence
 from domain.resume import (
     ChallengeResumePlan,
     ShardResumePlan,
@@ -1713,6 +1714,10 @@ class HermesRunner:
                 workspace.output / "challenges",
                 failed_ids,
             ),
+            "pwn_final_artifact_evidence": _failed_pwn_final_artifact_evidence(
+                workspace.output / "challenges",
+                failed_ids,
+            ),
         }
 
     def _validate_gate(self, challenge_id: str, plan: ChallengeResumePlan | None) -> str | None:
@@ -2078,6 +2083,36 @@ def _failed_challenge_debug_reports(
             }
             break
     return reports
+
+
+def _failed_pwn_final_artifact_evidence(
+    challenges_root: Path,
+    failed_ids: set[str],
+) -> dict[str, Any]:
+    evidence_by_id: dict[str, Any] = {}
+    if not challenges_root.is_dir():
+        return evidence_by_id
+    for challenge_dir in sorted(challenges_root.glob("*/*")):
+        if not challenge_dir.is_dir() or challenge_dir.is_symlink():
+            continue
+        metadata = read_json(challenge_dir / "metadata.json", {})
+        if not isinstance(metadata, dict):
+            continue
+        challenge_id = str(metadata.get("id") or "")
+        if challenge_id not in failed_ids or metadata.get("category") != "pwn":
+            continue
+        evidence = final_pwn_artifact_evidence(challenge_dir)
+        if evidence is None:
+            continue
+        evidence_by_id[challenge_id] = {
+            **evidence,
+            "instruction": (
+                "FINAL SOLVER EVIDENCE SOURCE: Use only ./attachments/vuln for "
+                "exp.py and pwn_debug_report.json. Do not use deploy/src/vuln "
+                "for solver offsets, symbols, gadgets, or report sha."
+            ),
+        }
+    return evidence_by_id
 
 
 def _pwn_debug_report_binary_sha(content: object) -> str | None:

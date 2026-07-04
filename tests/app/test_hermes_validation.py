@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from domain.resume import ChallengeResumePlan
 from hermes.prompt import render_validation_repair_prompt
-from hermes.runner import _failed_challenge_debug_reports
+from hermes.runner import (
+    _failed_challenge_debug_reports,
+    _failed_pwn_final_artifact_evidence,
+)
 from hermes.validation import run_validation, validate_gate
 
 
@@ -337,6 +342,56 @@ def test_validation_debug_prompt_includes_inherited_context() -> None:
     assert "Inherited build context:" in prompt
     assert '"topic": "canary"' in prompt
     assert "writenup/exp.py" in prompt
+
+
+def test_validation_debug_context_includes_final_pwn_artifact_evidence(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    challenge = tmp_path / "challenges" / "pwn" / "pwn-0001-demo"
+    (challenge / "attachments").mkdir(parents=True)
+    artifact = b"\x7fELFfinal"
+    (challenge / "attachments" / "vuln").write_bytes(artifact)
+    artifact_sha = hashlib.sha256(artifact).hexdigest()
+    (challenge / "metadata.json").write_text(
+        json.dumps(
+            {
+                "id": "pwn-0001",
+                "category": "pwn",
+                "artifact": "attachments/vuln",
+                "artifact_sha256": artifact_sha,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["readelf", "-sW"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=(
+                    "Symbol table '.symtab' contains 2 entries:\n"
+                    "  1: 000000000040149d    42 FUNC    GLOBAL DEFAULT   15 win\n"
+                    "  2: 0000000000401391    42 FUNC    GLOBAL DEFAULT   15 main\n"
+                ),
+                stderr="",
+            )
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
+
+    monkeypatch.setattr("domain.pwn_artifact_evidence.subprocess.run", fake_run)
+
+    evidence = _failed_pwn_final_artifact_evidence(
+        tmp_path / "challenges",
+        {"pwn-0001"},
+    )
+
+    assert evidence["pwn-0001"]["path"] == "./attachments/vuln"
+    assert evidence["pwn-0001"]["sha256"] == artifact_sha
+    assert evidence["pwn-0001"]["metadata_artifact_sha256"] == artifact_sha
+    assert evidence["pwn-0001"]["symbols"]["win"] == "0x40149d"
+    assert "FINAL SOLVER EVIDENCE SOURCE" in evidence["pwn-0001"]["instruction"]
+    assert "Do not use deploy/src/vuln" in evidence["pwn-0001"]["instruction"]
 
 
 def test_pwn_debug_report_is_available_for_repair_context(tmp_path: Path) -> None:

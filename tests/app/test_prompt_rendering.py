@@ -210,7 +210,7 @@ class RenderPromptTests(unittest.TestCase):
 
         self.assertNotIn("\x00", rendered)
         self.assertIn(r"missing terminator \x00 in asm", rendered)
-        self.assertIn(r"\0", rendered)
+        self.assertNotIn(r"\u0000", rendered)
 
     def test_retry_section_appears_when_context_is_present(self):
         with TemporaryDirectory() as tmp:

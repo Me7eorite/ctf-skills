@@ -17,6 +17,11 @@ from core.build_timeout import validation_repair_timeout_cap
 from core.clock import beijing_now_isoformat
 from core.jsonio import read_json
 from core.paths import ProjectPaths
+from domain.pwn_artifact_evidence import (
+    PwnArtifactEvidenceError,
+    final_pwn_artifact_prompt_block,
+    refresh_pwn_debug_report,
+)
 from domain.validation_failure_governance import latest_failed_validation
 from domain.validation_repair_policy import policy_for_validation_failure
 from hermes import process as hermes_process
@@ -243,6 +248,10 @@ class BuildAttemptRepairService:
             attempt["resulting_challenge_dir"],
             category=attempt["category"],
         )
+        try:
+            refresh_pwn_debug_report(challenge_dir)
+        except PwnArtifactEvidenceError:
+            pass
         file_context = _file_context(challenge_dir)
         context = {
             **attempt,
@@ -473,6 +482,8 @@ Validation class:
 
 Validation evidence:
 {json.dumps(_validation_evidence(latest_failure), ensure_ascii=False, indent=2)}
+
+{final_pwn_artifact_prompt_block(Path(context["challenge_dir"]))}
 
 Attempt:
 - build_attempt_id: {context["id"]}
