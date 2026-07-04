@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from uuid import UUID
 from typing import Any
+from uuid import UUID
 
 from core.jsonio import read_json
 from core.paths import ProjectPaths

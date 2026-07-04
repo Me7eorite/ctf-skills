@@ -7,8 +7,6 @@ import time
 from types import SimpleNamespace
 from uuid import uuid4
 
-import pytest
-
 from services.research_agent_executor import ResearchAgentExecutor
 
 

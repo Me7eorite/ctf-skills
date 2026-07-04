@@ -16,7 +16,8 @@ import calendar
 import time
 from typing import Any
 
-from core.state import EXECUTION_STAGES as STAGE_ORDER, ProgressStore
+from core.state import EXECUTION_STAGES as STAGE_ORDER
+from core.state import ProgressStore
 
 # UTC 时间戳格式
 _TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"

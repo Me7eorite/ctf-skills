@@ -8,6 +8,13 @@ from typing import Any
 from core.paths import ProjectPaths
 from hermes.process import effective_terminal_backend, hermes_profile_health, profile_exists
 
+__all__ = [
+    "BUILD_PROFILES",
+    "check_build_profile_readiness",
+    "hermes_profile_health",
+    "unavailable_build_profiles",
+]
+
 BUILD_PROFILES = {
     "web": "cf-web",
     "pwn": "cf-pwn",

@@ -56,7 +56,11 @@ _CATEGORY_COPY: dict[FailureCategory, tuple[str, str, tuple[str, ...]]] = {
     "binding": (
         "研究 Agent 配置不可用",
         "研究阶段需要的 Hermes profile 绑定缺失、停用或指向不存在的 profile。",
-        ("检查 `challenge-factory profile show research`", "重新绑定可用 Hermes profile", "确认 profile 未被停用或删除"),
+        (
+            "检查 `challenge-factory profile show research`",
+            "重新绑定可用 Hermes profile",
+            "确认 profile 未被停用或删除",
+        ),
     ),
     "runtime": (
         "研究运行时错误",
