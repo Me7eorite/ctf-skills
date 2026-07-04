@@ -18,18 +18,18 @@
 ## 3. Repair Progress Enforcement
 
 - [ ] 3.1 Extend `validation_failure_fingerprints()` or its inputs with solver acceptance progress fingerprints using solver hash, validate wrapper hash, debug report hash, validation failure class/signature, solver-quality detail codes, output manifest hash, and concise runtime evidence.
-- [ ] 3.2 Compare fingerprints after deterministic repair, Hermes repair, solver regeneration, and challenge regeneration within one runner invocation.
+- [ ] 3.2 Compare fingerprints after deterministic repair, Hermes repair, and solver-only regeneration within one runner invocation.
 - [ ] 3.3 Stop automatic solver repair with an explicit blocked reason when a round changes no relevant file/evidence and repeats the same acceptance fingerprint.
 - [ ] 3.4 Treat materially different solver failures, such as missing helper becoming flag mismatch, as progress within the bounded budget.
 - [ ] 3.5 Add tests for no-progress stop, changed-solver continuation, changed-diagnostic continuation, same-signature blocked outcomes, and compatibility with existing repeated-failure tests.
 
-## 4. Solver and Challenge Regeneration Routes
+## 4. Solver Regeneration and Human-Action Blocked Routes
 
 - [ ] 4.1 Add a bounded solver-only regeneration route inside the existing current-attempt repair workflow that rewrites `writenup/exp.py` and supporting debug evidence while preserving challenge implementation/deployment files.
 - [ ] 4.2 Feed solver regeneration prompts with validation history, static diagnostics, runtime tails, current `exp.py`, `validate.sh`, debug report, shipped binaries/attachments summary, service-readiness evidence, and original design metadata when available.
-- [ ] 4.3 Add a guarded challenge-regeneration route only when evidence proves solver-only repair cannot resolve an artifact contradiction; record it as current-attempt context or an explicit retry/new lineage entry.
-- [ ] 4.4 Record route decisions and outcomes as `solver_regenerated`, `challenge_regeneration_required`, `solver_regeneration_failed`, or equivalent blocked/regeneration evidence.
-- [ ] 4.5 Define bounded default budgets before implementation and add tests proving solver-only regeneration is preferred for reachable-service solver failures and challenge regeneration requires explicit artifact contradiction evidence.
+- [ ] 4.3 Do not implement automated challenge regeneration in this change; when evidence proves solver-only repair cannot resolve an artifact contradiction, record `challenge_regeneration_required` as a human-action blocked reason.
+- [ ] 4.4 Record route decisions and outcomes as `solver_regenerated`, `challenge_regeneration_required`, `solver_regeneration_failed`, or equivalent failed-attempt diagnostic evidence.
+- [ ] 4.5 Define bounded default budgets before implementation and add tests proving solver-only regeneration is preferred for reachable-service solver failures while artifact contradictions fail with `challenge_regeneration_required`.
 
 ## 5. Orchestration, API, and Dashboard Visibility
 
@@ -37,7 +37,7 @@
 - [ ] 5.2 Expose solver acceptance status, fingerprint, diagnostic summary, regeneration route, output manifest hash, and blocked reason in attempt detail responses.
 - [ ] 5.3 Expose bounded solver acceptance summaries in attempt list responses only for returned rows or copied summaries, without scanning unrelated execution histories.
 - [ ] 5.4 Preserve sibling attempt independence so one solver-blocked attempt does not consume another attempt's repair or regeneration budget.
-- [ ] 5.5 Update dashboard rendering to show solver acceptance blocked/regenerated states alongside existing validation failure class/signature.
+- [ ] 5.5 Update dashboard rendering to show solver acceptance blocked/regenerated diagnostics alongside existing validation failure class/signature without adding a new attempt status.
 - [ ] 5.6 Add API/orchestration tests for failed solver acceptance, retry, manual repair, revalidate, sibling independence, bounded list derivation, older-history compatibility, and blocked reason exposure.
 
 ## 6. Verification and Rollout

@@ -1,4 +1,4 @@
-## ADDED Requirements
+﻿## ADDED Requirements
 
 ### Requirement: Web and Pwn solver acceptance is mandatory
 
@@ -24,7 +24,7 @@ The system SHALL treat Web and Pwn reference solver acceptance as a hard build-s
 
 ### Requirement: Solver static quality preflight blocks deterministic defects
 
-The system SHALL inspect Web and Pwn `writenup/exp.py` and validation wrappers before successful build completion for deterministic solver-quality defects. The preflight SHALL emit structured diagnostics for default-path hardcoded service targets, missing `CHAL_HOST` / `CHAL_PORT` use, hardcoded expected flags, organizer-only file reads, missing local helper modules, unbounded receive/read calls, unbounded brute-force or leak loops, and default-path local-only execution. Explicit local debug branches SHALL be allowed only when the default validation path remains service-bound and bounded.
+The system SHALL reuse and extend the existing validation contract checks, including `ChallengeValidator.contract_errors()` and `_solver_integrity_errors()`, to inspect Web and Pwn `writenup/exp.py` and validation wrappers before successful build completion for deterministic solver-quality defects. The preflight SHALL emit structured diagnostics for default-path hardcoded service targets, missing `CHAL_HOST` / `CHAL_PORT` use, hardcoded expected flags, organizer-only file reads, missing local helper modules, unbounded receive/read calls, unbounded brute-force or leak loops, and default-path local-only execution. Explicit local debug branches SHALL be allowed only when the default validation path remains service-bound and bounded.
 
 #### Scenario: Hardcoded validation target is blocked
 - **WHEN** the default solver path connects to `127.0.0.1`, `localhost`, a container name, or a fixed challenge port instead of `CHAL_HOST` and `CHAL_PORT`
@@ -53,7 +53,7 @@ The system SHALL inspect Web and Pwn `writenup/exp.py` and validation wrappers b
 
 ### Requirement: Solver repair must prove progress
 
-The system SHALL require each automatic solver repair or regeneration round to prove progress before consuming additional repair budget. Progress SHALL be measured from a bounded fingerprint that includes the current solver file hash, validation wrapper hash, debug report hash when present, validation failure class, validation failure signature, solver-quality diagnostic codes, and concise runtime evidence. A repair round that changes no relevant file, adds no useful diagnostic evidence, and repeats the same validation signature SHALL stop that automatic path and escalate.
+The system SHALL require each automatic solver repair or solver-only regeneration round to prove progress before consuming additional repair budget. Progress SHALL extend the existing validation failure fingerprint path rather than replacing it, and SHALL be measured from a bounded fingerprint that includes the current solver file hash, validation wrapper hash, debug report hash when present, validation failure class, validation failure signature, solver-quality diagnostic codes, output manifest hash, and concise runtime evidence. A repair round that changes no relevant file, adds no useful diagnostic evidence, and repeats the same validation failure fingerprint and solver acceptance fingerprint SHALL stop that automatic path and escalate.
 
 #### Scenario: Solver edit permits another validation round
 - **WHEN** a solver-class validation failure is repaired
@@ -71,9 +71,9 @@ The system SHALL require each automatic solver repair or regeneration round to p
 - **THEN** the system SHALL treat that as material progress
 - **AND** the attempt MAY continue within its bounded repair policy
 
-### Requirement: Solver regeneration and blocked outcomes are explicit
+### Requirement: Solver regeneration and failed-attempt blocked outcomes are explicit
 
-The system SHALL provide explicit bounded outcomes when automatic solver repair cannot make progress. If runtime evidence indicates the service is reachable and the solver is the failing component, the system SHALL prefer solver-only regeneration or rewrite before challenge regeneration. If evidence indicates the generated challenge artifact is internally inconsistent and solver-only regeneration cannot succeed, the system MAY route to challenge regeneration when configured. If neither route is safe or budget remains exhausted, the system SHALL fail the attempt with an explicit blocked reason.
+The system SHALL provide explicit bounded outcomes when automatic solver repair cannot make progress. If runtime evidence indicates the service is reachable and the solver is the failing component, the system SHALL prefer bounded solver-only regeneration or rewrite. Automated challenge regeneration is out of scope for this change. If evidence indicates the generated challenge artifact is internally inconsistent and solver-only regeneration cannot succeed, the system SHALL fail the attempt with an explicit human-action blocked reason such as `challenge_regeneration_required`. If neither route is safe or budget remains exhausted, the system SHALL fail the attempt with an explicit blocked reason.
 
 #### Scenario: Solver-only regeneration is selected
 - **WHEN** service readiness is established
@@ -84,13 +84,13 @@ The system SHALL provide explicit bounded outcomes when automatic solver repair 
 #### Scenario: Challenge regeneration requires evidence
 - **WHEN** solver repair fails
 - **AND** diagnostics show an artifact contradiction such as missing shipped binary, impossible service path, or metadata inconsistent with runtime behavior
-- **THEN** the system MAY route to challenge regeneration when configured
+- **THEN** the system SHALL record `challenge_regeneration_required` as a human-action blocked reason
 - **AND** the regeneration decision SHALL be recorded in validation history, report, or progress evidence
 
 #### Scenario: Unsafe regeneration blocks attempt
 - **WHEN** solver repair cannot make progress
-- **AND** solver regeneration or challenge regeneration is disabled, unsafe, or out of budget
-- **THEN** the attempt SHALL fail with an explicit blocked reason such as `solver_unrepairable`, `solver_quality_blocked`, `solver_regeneration_failed`, or `challenge_regeneration_required`
+- **AND** solver regeneration is disabled, unsafe, or out of budget
+- **THEN** the attempt SHALL remain in the existing `failed` status with an explicit blocked reason such as `solver_unrepairable`, `solver_quality_blocked`, `solver_regeneration_failed`, or `challenge_regeneration_required`
 
 ### Requirement: Solver acceptance evidence is preserved
 
