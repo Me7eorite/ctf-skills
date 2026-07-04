@@ -45,6 +45,32 @@ def _write_minimal_pwn_contract(challenge: Path) -> dict:
     }
 
 
+def _write_minimal_web_contract(challenge: Path) -> dict:
+    deploy = challenge / "deploy"
+    (deploy / "src").mkdir(parents=True, exist_ok=True)
+    (deploy / "src" / "app.py").write_text("print('ok')\n", encoding="utf-8")
+    _write_root_start_contract(deploy)
+    (deploy / "docker-compose.yml").write_text(
+        "services:\n  app:\n    environment:\n      - FLAG=flag{demo}\n",
+        encoding="utf-8",
+    )
+    (challenge / "writenup").mkdir(parents=True, exist_ok=True)
+    (challenge / "writenup" / "exp.py").write_text(
+        "import os\nprint(os.environ.get('CHAL_HOST', ''))\n",
+        encoding="utf-8",
+    )
+    return {
+        "id": "web-compose-project-001",
+        "title": "Demo",
+        "category": "web",
+        "difficulty": "easy",
+        "build_status": "passed",
+        "flag": "flag{demo}",
+        "runtime": "python",
+        "framework": "flask",
+    }
+
+
 class ValidationTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -330,7 +356,8 @@ class ValidationTests(unittest.TestCase):
         metadata = _write_minimal_pwn_contract(challenge)
         (challenge / "validate.sh").write_text(
             "#!/bin/sh\n"
-            "docker-compose up -d\n"
+            "export COMPOSE_PROJECT_NAME=cf_test\n"
+            "docker-compose -p \"$COMPOSE_PROJECT_NAME\" up -d\n"
             "python3 - <<'PY'\n"
             "from pwn import remote\n"
             "io = remote('127.0.0.1', 9999)\n"
@@ -343,6 +370,35 @@ class ValidationTests(unittest.TestCase):
         errors = self.validator.contract_errors(challenge, metadata)
 
         self.assertFalse(any("nc -z readiness" in e for e in errors))
+        self.assertFalse(any("without an isolated project" in e for e in errors))
+
+    def test_web_validate_requires_isolated_compose_project(self):
+        challenge = self.paths.challenges / "web" / "web-compose-project-001"
+        metadata = _write_minimal_web_contract(challenge)
+        (challenge / "validate.sh").write_text(
+            "#!/bin/sh\n"
+            "docker-compose -f deploy/docker-compose.yml up -d\n"
+            "docker-compose -f deploy/docker-compose.yml ps\n",
+            encoding="utf-8",
+        )
+
+        errors = self.validator.contract_errors(challenge, metadata)
+
+        self.assertTrue(any("without an isolated project" in e for e in errors))
+
+    def test_web_validate_allows_compose_project_name(self):
+        challenge = self.paths.challenges / "web" / "web-compose-project-ok-001"
+        metadata = _write_minimal_web_contract(challenge)
+        (challenge / "validate.sh").write_text(
+            "#!/bin/sh\n"
+            "export COMPOSE_PROJECT_NAME=cf_test\n"
+            "docker-compose -p \"$COMPOSE_PROJECT_NAME\" -f deploy/docker-compose.yml up -d\n",
+            encoding="utf-8",
+        )
+
+        errors = self.validator.contract_errors(challenge, metadata)
+
+        self.assertFalse(any("without an isolated project" in e for e in errors))
 
     def test_pwn_validate_rejects_unexported_bash_nc_probe(self):
         challenge = self.paths.challenges / "pwn" / "pwn-readiness-scope-001"
@@ -351,7 +407,8 @@ class ValidationTests(unittest.TestCase):
             "#!/bin/bash\n"
             "CHAL_HOST=localhost\n"
             "CHAL_PORT=9004\n"
-            "docker-compose up -d\n"
+            "export COMPOSE_PROJECT_NAME=cf_test\n"
+            "docker-compose -p \"$COMPOSE_PROJECT_NAME\" up -d\n"
             "if timeout 3 bash -c ': | nc \"$CHAL_HOST\" \"$CHAL_PORT\"' | grep -q 'Choice:'; then\n"
             "  echo ready\n"
             "fi\n"
@@ -371,7 +428,8 @@ class ValidationTests(unittest.TestCase):
             "CHAL_HOST=localhost\n"
             "CHAL_PORT=9004\n"
             "export CHAL_HOST CHAL_PORT\n"
-            "docker-compose up -d\n"
+            "export COMPOSE_PROJECT_NAME=cf_test\n"
+            "docker-compose -p \"$COMPOSE_PROJECT_NAME\" up -d\n"
             "if timeout 3 bash -c ': | nc \"$CHAL_HOST\" \"$CHAL_PORT\"' | grep -q 'Choice:'; then\n"
             "  echo ready\n"
             "fi\n"
@@ -611,6 +669,34 @@ class ValidationFailureClassificationTests(unittest.TestCase):
 
         self.assertEqual(details[0]["code"], "pwn_service_readiness_failed")
 
+    def test_classifies_compose_cross_talk(self):
+        details = classify_validation_failure(
+            status="nonzero_exit",
+            stderr=(
+                "docker-compose ps showed wrong other challenge container; "
+                "container was recreated from a different challenge"
+            ),
+        )
+
+        self.assertEqual(details[0]["code"], "compose_cross_talk")
+        self.assertIn("COMPOSE_PROJECT_NAME", details[0]["hint"])
+
+    def test_classifies_bad_binary_path_before_generic_nonzero(self):
+        details = classify_validation_failure(
+            status="nonzero_exit",
+            stderr="chroot: failed to run command './vuln': No such file or directory\n",
+        )
+
+        self.assertEqual(details[0]["code"], "pwn_bad_binary_path")
+
+    def test_classifies_payload_no_flag(self):
+        details = classify_validation_failure(
+            status="nonzero_exit",
+            stderr="service ready; Failed to extract flag from exploit output\n",
+        )
+
+        self.assertEqual(details[0]["code"], "pwn_payload_no_flag")
+
     def test_classifies_chroot_flag_path_failure(self):
         details = classify_validation_failure(
             status="nonzero_exit",
@@ -735,7 +821,10 @@ class SolverIntegrityTests(unittest.TestCase):
             encoding="utf-8",
         )
         (challenge / "validate.sh").write_text(
-            "#!/bin/sh\ndocker compose up -d\npython3 writenup/exp.py\n",
+            "#!/bin/sh\n"
+            "export COMPOSE_PROJECT_NAME=cf_test\n"
+            "docker compose -p \"$COMPOSE_PROJECT_NAME\" up -d\n"
+            "python3 writenup/exp.py\n",
             encoding="utf-8",
         )
         (challenge / "writenup").mkdir(parents=True, exist_ok=True)

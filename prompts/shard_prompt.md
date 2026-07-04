@@ -560,13 +560,27 @@ network-fetching dependency installation. Validation is offline-capable.
 
 After that gate, `validate.sh` must start the service, wait for
 health/readiness, run `writenup/exp.py`, and always clean up with a shell trap.
+It MUST isolate Docker Compose state for concurrent validation. Derive a stable
+project from the challenge root and run every compose command through that
+project, for example:
+```sh
+CHAL_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+PROJECT_HASH="$(printf '%s' "$CHAL_ROOT" | sha256sum | cut -c1-12)"
+export COMPOSE_PROJECT_NAME="cf_${PROJECT_HASH}"
+COMPOSE="docker-compose -p $COMPOSE_PROJECT_NAME -f $CHAL_ROOT/deploy/docker-compose.yml"
+```
+Use `$COMPOSE up -d`, `$COMPOSE ps`, `$COMPOSE logs --no-color --tail=120`, and
+`$COMPOSE down --remove-orphans`; do not rely on Compose's default project name
+such as `deploy`, and do not use `down -v` / `--volumes`.
 The fixed flag comes from `deploy/docker-compose.yml`; `validate.sh` must not
 override it with a host-side `FLAG` environment variable.
 When readiness or the exploit fails, `validate.sh` MUST emit bounded diagnostic
 evidence to stderr before exiting non-zero: the relevant `docker-compose ps`
 state, recent `docker-compose logs --no-color --tail=120` output, and the
-solver stdout/stderr tail. This is how the host runner feeds container/runtime
-failures back into repair prompts without giving Hermes Docker daemon access.
+solver stdout/stderr tail, including the compose project name, first banner or
+last probe output, and failure stage. This is how the host runner feeds
+container/runtime failures back into repair prompts without giving Hermes Docker
+daemon access.
 Every command and diagnostic in a function invoked by an `EXIT` or `ERR` trap
 MUST redirect its output to stderr (`>&2`); cleanup must never write to stdout.
 Before starting a container named `"$CONTAINER_NAME"`, remove a stale

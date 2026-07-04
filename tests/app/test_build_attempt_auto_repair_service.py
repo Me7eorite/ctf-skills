@@ -213,7 +213,8 @@ def test_auto_repair_removes_unsupported_docker_logs_no_color(tmp_path: Path) ->
     repaired = validate.read_text(encoding="utf-8")
     assert result.changed is True
     assert "docker logs --tail=120 pwn-demo" in repaired
-    assert "docker-compose logs --no-color --tail=120" in repaired
+    assert "$COMPOSE logs --no-color --tail=120" in repaired
+    assert "COMPOSE_PROJECT_NAME" in repaired
 
 
 def test_auto_repair_replaces_multiline_conflicting_chroot_copy(tmp_path: Path) -> None:
@@ -305,9 +306,11 @@ def test_auto_repair_makes_validate_sh_compose_compatible(tmp_path: Path) -> Non
     repaired = validate.read_text(encoding="utf-8")
     assert result.changed is True
     assert "compose() {" not in repaired
-    assert "docker-compose up -d" in repaired
-    assert "docker-compose ps" in repaired
-    assert "docker-compose logs --no-color --tail=120" in repaired
+    assert 'export COMPOSE_PROJECT_NAME="cf_${PROJECT_HASH}"' in repaired
+    assert 'COMPOSE="docker-compose -p $COMPOSE_PROJECT_NAME -f $CHAL_ROOT/deploy/docker-compose.yml"' in repaired
+    assert "$COMPOSE up -d" in repaired
+    assert "$COMPOSE ps" in repaired
+    assert "$COMPOSE logs --no-color --tail=120" in repaired
     assert "docker-compose version" not in repaired
     assert not re.search(r"(?m)^\s*compose\s+up\b", repaired)
     assert "docker compose up -d" not in repaired
@@ -343,9 +346,39 @@ def test_auto_repair_repairs_legacy_recursive_compose_helper(tmp_path: Path) -> 
     repaired = validate.read_text(encoding="utf-8")
     assert result.changed is True
     assert "compose() {" not in repaired
-    assert "docker-compose up -d" in repaired
+    assert "$COMPOSE up -d" in repaired
     assert "compose version" not in repaired
     assert "neither compose nor docker-compose" not in repaired
+
+
+def test_auto_repair_adds_compose_project_to_legacy_docker_compose_validate(tmp_path: Path) -> None:
+    challenge_dir = tmp_path / "challenge"
+    challenge_dir.mkdir()
+    _write_metadata(challenge_dir, category="web")
+    validate = challenge_dir / "validate.sh"
+    validate.write_text(
+        "#!/bin/bash\n"
+        "set -euo pipefail\n"
+        "docker-compose -f deploy/docker-compose.yml up -d\n"
+        "docker-compose -f deploy/docker-compose.yml ps\n"
+        "docker-compose -f deploy/docker-compose.yml logs --tail=120\n"
+        "docker-compose -f deploy/docker-compose.yml down --remove-orphans\n",
+        encoding="utf-8",
+    )
+
+    result = auto_repair_challenge(challenge_dir)
+
+    repaired = validate.read_text(encoding="utf-8")
+    assert result.changed is True
+    assert 'COMPOSE_PROJECT_NAME="cf_${PROJECT_HASH}"' in repaired
+    assert "$COMPOSE up -d" in repaired
+    assert "$COMPOSE ps" in repaired
+    assert "$COMPOSE logs --tail=120" in repaired
+    assert "$COMPOSE down --remove-orphans" in repaired
+    assert "docker-compose -f deploy/docker-compose.yml" not in repaired
+
+    second = auto_repair_challenge(challenge_dir)
+    assert second.changed is False
 
 
 def test_auto_repair_preserves_exp_failure_diagnostics(tmp_path: Path) -> None:
@@ -429,3 +462,27 @@ def test_auto_repair_fixes_pwn_echo_bash_nc_probe_variant(tmp_path: Path) -> Non
     assert "bash -c" not in repaired
     assert "printf '3\\n' | timeout 5 nc \"$CHAL_HOST\" \"$CHAL_PORT\"" in repaired
     assert "printf '3\\n' | timeout 3 nc \"$CHAL_HOST\" \"$CHAL_PORT\"" in repaired
+
+
+def test_auto_repair_replaces_pwn_nc_z_readiness_even_with_banner_probe(tmp_path: Path) -> None:
+    challenge_dir = tmp_path / "challenge"
+    challenge_dir.mkdir()
+    _write_metadata(challenge_dir, category="pwn")
+    validate = challenge_dir / "validate.sh"
+    validate.write_text(
+        "#!/bin/bash\n"
+        "CHAL_HOST=127.0.0.1\n"
+        "CHAL_PORT=31337\n"
+        "until timeout 2 nc -z \"$CHAL_HOST\" \"$CHAL_PORT\"; do sleep 1; done\n"
+        "BANNER=$(timeout 3 nc \"$CHAL_HOST\" \"$CHAL_PORT\" || true)\n"
+        "echo \"$BANNER\" | grep -qE '(Choice:|Welcome)'\n",
+        encoding="utf-8",
+    )
+
+    result = auto_repair_challenge(challenge_dir)
+
+    repaired = validate.read_text(encoding="utf-8")
+    assert result.changed is True
+    assert "nc -z" not in repaired
+    assert "printf '3\\n' | timeout 2 nc \"$CHAL_HOST\" \"$CHAL_PORT\"" in repaired
+    assert "grep -qE '(Choice:|Welcome|Menu|Username:|Enter)'" in repaired

@@ -328,21 +328,16 @@ def _repair_compose_validate_wrapper(challenge_dir: Path, metadata: dict[str, An
         original = validate.read_text(encoding="utf-8", errors="ignore")
     except OSError:
         return []
-    compose_repair_tokens = (
-        "docker compose",
-        "compose version",
-        "compose()",
-        "neither compose nor docker-compose",
-    )
-    if not any(token in original for token in compose_repair_tokens):
+    if not _validate_uses_compose(original):
         return []
 
     text = _remove_compose_helper(original)
     text = _replace_compose_invocations(text)
+    text = _isolate_compose_project(text)
     if text == original:
         return []
     validate.write_text(text, encoding="utf-8")
-    return ["normalized validate.sh to use docker-compose only"]
+    return ["normalized validate.sh docker-compose usage with an isolated compose project"]
 
 
 def _repair_validate_workspace_paths(challenge_dir: Path, metadata: dict[str, Any]) -> list[str]:
@@ -429,6 +424,70 @@ def _replace_compose_invocations(text: str) -> str:
     return "".join(lines)
 
 
+_COMPOSE_PROJECT_BLOCK = """\
+if [ -z "${CHAL_ROOT:-}" ]; then
+  CHAL_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+fi
+if command -v sha256sum >/dev/null 2>&1; then
+  PROJECT_HASH="$(printf '%s' "$CHAL_ROOT" | sha256sum | cut -c1-12)"
+else
+  PROJECT_HASH="$(printf '%s' "$CHAL_ROOT" | shasum -a 256 | cut -c1-12)"
+fi
+export COMPOSE_PROJECT_NAME="cf_${PROJECT_HASH}"
+COMPOSE="docker-compose -p $COMPOSE_PROJECT_NAME -f $CHAL_ROOT/deploy/docker-compose.yml"
+"""
+
+
+def _validate_uses_compose(text: str) -> bool:
+    compose_tokens = (
+        "docker-compose",
+        "docker compose",
+        "compose version",
+        "compose()",
+        "neither compose nor docker-compose",
+    )
+    return any(token in text for token in compose_tokens)
+
+
+def _isolate_compose_project(text: str) -> str:
+    if not _validate_uses_compose(text):
+        return text
+    text = _replace_raw_docker_compose_commands(text)
+    if "COMPOSE_PROJECT_NAME" not in text or "COMPOSE=" not in text:
+        text = _insert_after_shell_preamble(text, _COMPOSE_PROJECT_BLOCK)
+    return text
+
+
+def _insert_after_shell_preamble(text: str, block: str) -> str:
+    lines = text.splitlines(keepends=True)
+    index = 0
+    if lines and lines[0].startswith("#!"):
+        index = 1
+    while index < len(lines):
+        stripped = lines[index].strip()
+        if stripped == "" or re.fullmatch(r"set\s+[-+][A-Za-z0-9]+", stripped):
+            index += 1
+            continue
+        break
+    return "".join(lines[:index]) + block + "".join(lines[index:])
+
+
+def _replace_raw_docker_compose_commands(text: str) -> str:
+    option = r"(?:-[fp]|--file|--project-name)"
+    argument = r"(?:\"[^\"]+\"|'[^']+'|[^\s;&|]+)"
+    compose_command_re = re.compile(
+        rf"(?<![\w$-])docker-compose\b(?:\s+{option}\s+{argument})*"
+    )
+    lines: list[str] = []
+    for line in text.splitlines(keepends=True):
+        stripped = line.lstrip()
+        if stripped.startswith("#") or re.match(r"(?:export\s+)?COMPOSE=", stripped):
+            lines.append(line)
+            continue
+        lines.append(compose_command_re.sub("$COMPOSE", line))
+    return "".join(lines)
+
+
 def _repair_pwn_validate_readiness_probe(
     challenge_dir: Path, metadata: dict[str, Any]
 ) -> list[str]:
@@ -442,10 +501,11 @@ def _repair_pwn_validate_readiness_probe(
     except OSError:
         return []
     repaired = _replace_unexported_bash_nc_probe(text)
+    repaired = _replace_port_only_nc_probe(repaired)
     if repaired == text:
         return []
     validate.write_text(repaired, encoding="utf-8")
-    return ["fixed pwn validate.sh readiness probe to use CHAL_HOST/CHAL_PORT in the current shell"]
+    return ["fixed pwn validate.sh readiness probe to read an application prompt"]
 
 
 def _replace_unexported_bash_nc_probe(text: str) -> str:
@@ -454,7 +514,7 @@ def _replace_unexported_bash_nc_probe(text: str) -> str:
         return (
             "export CHAL_HOST CHAL_PORT\n"
             f"printf '3\\n' | timeout {timeout_seconds} nc \"$CHAL_HOST\" \"$CHAL_PORT\" | "
-            r"grep -qE '(Choice:|Welcome|Menu)'"
+            r"grep -qE '(Choice:|Welcome|Menu|Username:|Enter)'"
         )
 
     for pattern in (
@@ -463,6 +523,22 @@ def _replace_unexported_bash_nc_probe(text: str) -> str:
     ):
         text = re.sub(pattern, replace, text)
     return text
+
+
+def _replace_port_only_nc_probe(text: str) -> str:
+    host = r"(?:\"[^\"]+\"|'[^']+'|[^\s;&|]+)"
+    port = r"(?:\"[^\"]+\"|'[^']+'|[^\s;&|]+)"
+    pattern = re.compile(rf"(?:timeout\s+(?P<timeout>\d+)\s+)?nc\s+-z\s+(?P<host>{host})\s+(?P<port>{port})")
+
+    def replace(match: re.Match[str]) -> str:
+        timeout_seconds = match.group("timeout") or "3"
+        return (
+            f"printf '3\\n' | timeout {timeout_seconds} nc "
+            f"{match.group('host')} {match.group('port')} 2>/dev/null | "
+            "grep -qE '(Choice:|Welcome|Menu|Username:|Enter)'"
+        )
+
+    return pattern.sub(replace, text)
 
 
 def _repair_validate_solver_capture(challenge_dir: Path, metadata: dict[str, Any]) -> list[str]:

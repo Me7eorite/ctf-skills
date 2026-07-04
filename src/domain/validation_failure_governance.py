@@ -28,6 +28,8 @@ _NO_VALIDATION_CLASS_PHASES = {
     "contract_prepare",
 }
 _READINESS_CODES = {
+    "compose_cross_talk",
+    "pwn_bad_binary_path",
     "pwn_service_readiness_failed",
     "pwn_port_only_readiness",
     "pwn_bad_readiness_probe",
@@ -46,6 +48,9 @@ _SOLVER_CODES = {
     "flag_mismatch",
     "nonzero_exit",
     "pwn_bad_offset",
+    "pwn_bruteforce_timeout",
+    "pwn_payload_no_flag",
+    "pwn_prompt_mismatch",
     "pwn_rop_missing_gadget",
     "pwn_rop_stack_alignment",
     "pwn_bad_libc_base",

@@ -71,6 +71,9 @@ _PWN_CANARY_WIDTH_FILTER_RE = re.compile(
     r"(?:1\s*<<\s*48|2\s*\*\*\s*48|0x1_?0000_?0000_?0000)"
 )
 _PWN_BASH_C_RE = re.compile(r"\bbash\s+-c\b")
+_COMPOSE_PROJECT_RE = re.compile(
+    r"(?:\bCOMPOSE_PROJECT_NAME\b|\bdocker-compose\b[^\n;&|]*\s-p\s+|\bdocker\s+compose\b[^\n;&|]*\s-p\s+)"
+)
 
 
 def validation_failure_detail(
@@ -108,7 +111,31 @@ def classify_validation_failure(
     messages = contract_errors or ([error] if error else [])
     if status == "nonzero_exit":
         text = stderr or error or "validate.sh exited non-zero"
-        if "ModuleNotFoundError" in text or "No module named" in text:
+        if _looks_like_compose_cross_talk(text):
+            code = "compose_cross_talk"
+            hint = (
+                "Give validate.sh a unique COMPOSE_PROJECT_NAME or docker-compose -p "
+                "project derived from the challenge root before running up/ps/logs/down."
+            )
+        elif _looks_like_pwn_bad_binary_path(text):
+            code = "pwn_bad_binary_path"
+            hint = (
+                "Align xinetd server_args, Dockerfile copy target, Makefile TARGET, "
+                "and the shipped ELF name so chroot can exec the real binary."
+            )
+        elif _looks_like_pwn_bruteforce_timeout(text):
+            code = "pwn_bruteforce_timeout"
+            hint = (
+                "Bound canary/bruteforce/leak loops and replace timing-dependent "
+                "searches with deterministic local evidence before retrying remote validation."
+            )
+        elif _looks_like_pwn_payload_no_flag(text):
+            code = "pwn_payload_no_flag"
+            hint = (
+                "The service was reachable but the payload did not recover the flag; "
+                "recheck prompt sync, offsets, leak math, and the final flag extraction path."
+            )
+        elif "ModuleNotFoundError" in text or "No module named" in text:
             code = "missing_dependency"
             hint = "Make the solver offline-capable with the standard library or vendored helpers."
         elif _looks_like_pwn_service_readiness_failure(text):
@@ -382,6 +409,10 @@ def _classify_contract_error(message: str, *, status: str = "contract_failed") -
         code = "pwn_port_only_readiness"
         path = "validate.sh"
         hint = "Wait for an application banner/menu prompt such as Choice:, not only an open TCP port."
+    elif "validate.sh runs docker-compose without an isolated project" in message:
+        code = "compose_cross_talk"
+        path = "validate.sh"
+        hint = "Set COMPOSE_PROJECT_NAME or pass docker-compose -p for every compose command."
     elif "Pwn validate.sh uses CHAL_HOST/CHAL_PORT inside bash -c" in message:
         code = "pwn_bad_readiness_probe"
         path = "validate.sh"
@@ -429,6 +460,48 @@ def _looks_like_pwn_service_readiness_failure(text: str) -> bool:
         and ("container" in lower or "docker-compose" in lower)
         and ("started" in lower or "up " in lower or "xinetd" in lower)
         and ("choice:" in text or "menu prompt" in lower or "banner" in lower)
+    )
+
+
+def _looks_like_compose_cross_talk(text: str) -> bool:
+    lower = text.lower()
+    return (
+        "compose_cross_talk" in lower
+        or "cross talk" in lower
+        or "crosstalk" in lower
+        or (
+            "docker-compose" in lower
+            and "container" in lower
+            and ("recreate" in lower or "recreated" in lower or "orphan" in lower)
+            and ("wrong" in lower or "other challenge" in lower or "different challenge" in lower)
+        )
+    )
+
+
+def _looks_like_pwn_bad_binary_path(text: str) -> bool:
+    lower = text.lower()
+    return (
+        ("chroot:" in lower and "no such file or directory" in lower)
+        or ("failed to run command" in lower and "./" in lower and "no such file" in lower)
+        or ("server_args" in lower and "no such file" in lower)
+    )
+
+
+def _looks_like_pwn_bruteforce_timeout(text: str) -> bool:
+    lower = text.lower()
+    return (
+        ("timeout" in lower or "timed out" in lower)
+        and any(token in lower for token in ("brute", "bruteforce", "canary", "working offset", "leak loop"))
+    )
+
+
+def _looks_like_pwn_payload_no_flag(text: str) -> bool:
+    lower = text.lower()
+    return (
+        "failed to extract flag" in lower
+        or "flag not captured" in lower
+        or "failed to capture flag" in lower
+        or ("failed to find flag" in lower and "service" in lower)
     )
 
 
@@ -652,12 +725,10 @@ def _pwn_runtime_contract_errors(challenge_dir: Path) -> list[str]:
                     )
 
     validate_text = _read_text(challenge_dir / "validate.sh")
-    if validate_text and "nc -z" in validate_text and not _validate_has_app_readiness_probe(
-        validate_text
-    ):
+    if validate_text and "nc -z" in validate_text:
         errors.append(
-            "Pwn validate.sh uses nc -z readiness without proving the application "
-            "banner/menu is ready"
+            "Pwn validate.sh uses nc -z readiness; replace port-only checks with "
+            "a fresh connection that reads the application banner/menu"
         )
     if validate_text and _validate_uses_unexported_bash_nc_probe(validate_text):
         errors.append(
@@ -688,6 +759,12 @@ def _validate_has_app_readiness_probe(text: str) -> bool:
         "remote(",
     )
     return any(token in text for token in readiness_tokens)
+
+
+def _validate_uses_compose_without_project(text: str) -> bool:
+    if "docker-compose" not in text and "docker compose" not in text:
+        return False
+    return _COMPOSE_PROJECT_RE.search(text) is None
 
 
 def _validate_uses_unexported_bash_nc_probe(text: str) -> bool:
@@ -1631,6 +1708,11 @@ class ChallengeValidator:
             errors.append(
                 "validate.sh contains destructive Docker cleanup; it must not "
                 "remove/prune volumes or global Docker resources"
+            )
+        if category in {"web", "pwn"} and validate_text and _validate_uses_compose_without_project(validate_text):
+            errors.append(
+                "validate.sh runs docker-compose without an isolated project; concurrent "
+                "validation can cross-talk between generated deploy/ directories"
             )
 
         # C — a re solver must open the distributed artifact, never organizer files

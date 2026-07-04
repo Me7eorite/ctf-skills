@@ -570,7 +570,7 @@ def _pwn_repair_steps_from_failure_details(
 ) -> list[str]:
     details = [item for item in failure_details if isinstance(item, Mapping)]
     codes = {str(item.get("code") or "") for item in details}
-    if not any(code.startswith("pwn_") for code in codes):
+    if not any(code.startswith("pwn_") or code == "compose_cross_talk" for code in codes):
         return []
     hints = [
         str(item.get("hint"))
@@ -602,6 +602,19 @@ def _pwn_repair_steps_from_failure_details(
             "starts only this challenge's `docker-compose` service, and reads "
             "a real banner/menu prompt such as `Choice:` from a fresh TCP connection."
         )
+    if "compose_cross_talk" in codes:
+        steps.append(
+            "Fix Docker Compose isolation before exploit tuning: derive a unique "
+            "`COMPOSE_PROJECT_NAME` from the challenge root and use the same "
+            "`docker-compose -p \"$COMPOSE_PROJECT_NAME\" -f \"$CHAL_ROOT/deploy/docker-compose.yml\"` "
+            "wrapper for up, ps, logs, and down diagnostics."
+        )
+    if "pwn_bad_binary_path" in codes:
+        steps.append(
+            "Fix the container launcher before exploit tuning: align Makefile TARGET, "
+            "Dockerfile copy target, xinetd `server_args`, and the binary shipped "
+            "inside `/home/ctf` so chroot can execute the intended ELF."
+        )
     if "pwn_canary_leak_failed" in codes:
         steps.append(
             "Rescan stack leaks across a broad bounded `%n$p` range; choose "
@@ -616,6 +629,18 @@ def _pwn_repair_steps_from_failure_details(
         steps.append(
             "Recompute the overflow offset with cyclic/core/headless gdb against "
             "the actual shipped ELF, then update padding and saved frame layout."
+        )
+    if "pwn_payload_no_flag" in codes:
+        steps.append(
+            "The service was reachable but the final exploit did not recover a flag. "
+            "Recheck prompt synchronization, payload layout, leak math, and the final "
+            "`flag{...}` extraction path instead of relaxing validation."
+        )
+    if "pwn_bruteforce_timeout" in codes:
+        steps.append(
+            "Replace timing-dependent brute force with bounded local/container evidence: "
+            "cap attempts, record the attempted range in `pwn_debug_report.json`, and "
+            "fail fast when the primitive is not deterministic."
         )
     if "pwn_rop_missing_gadget" in codes:
         steps.append(
@@ -693,6 +718,11 @@ Web / Pwn:
   MUST read `FLAG`.
 - The exploit recovers the flag from the live service via `CHAL_HOST`/`CHAL_PORT`,
   never from the compose file that injects it.
+- `validate.sh` MUST isolate Docker Compose state for concurrent validation:
+  derive a stable project from the challenge root, export `COMPOSE_PROJECT_NAME`,
+  and run all `up` / `ps` / `logs` / `down` operations through
+  `docker-compose -p "$COMPOSE_PROJECT_NAME" -f "$CHAL_ROOT/deploy/docker-compose.yml"`.
+  Do not rely on Compose's default project name such as `deploy`.
 - Pwn solvers may use pwntools and should keep a local `ELF()`/`process()` debug
   path plus a default `remote(CHAL_HOST, CHAL_PORT)` validation path.
 - Do not run Docker from Hermes. The host runner rebuilds the exact image named by
@@ -709,8 +739,9 @@ Web / Pwn:
   builds. Do not run broad `docker image prune` or `docker builder prune`
   commands from Hermes.
 - `validate.sh` MUST print bounded service diagnostics to stderr on failure:
-  `docker-compose ps`, recent `docker-compose logs --no-color --tail=120`, and
-  solver stdout/stderr tails. The host runner forwards those tails into repair prompts.
+  isolated-project `docker-compose ps`, recent `docker-compose logs --no-color --tail=120`,
+  compose project name, service/container state, first banner or last probe output,
+  and solver stdout/stderr tails. The host runner forwards those tails into repair prompts.
 - Web additionally requires `metadata.runtime` and `metadata.framework`.
 
 Pwn container launcher:
