@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -67,12 +68,21 @@ _HOST_CHROOT_SETUP_TEXT_FIELDS = (
     "run_command",
 )
 _PWN_CHROOT_FLAG_PATH_RE = re.compile(r"""["']/home/ctf/flag(?:\.txt)?["']""")
+_PWN_UNTERMINATED_ASCII_PATH_RE = re.compile(
+    r"""(?im)^\s*\.ascii\s+["']/(?:flag|bin/sh|sh)(?:\.txt)?["']"""
+)
 _PWN_CANARY_WIDTH_FILTER_RE = re.compile(
     r"(?:1\s*<<\s*48|2\s*\*\*\s*48|0x1_?0000_?0000_?0000)"
 )
 _PWN_BASH_C_RE = re.compile(r"\bbash\s+-c\b")
 _COMPOSE_PROJECT_RE = re.compile(
     r"(?:\bCOMPOSE_PROJECT_NAME\b|\bdocker-compose\b[^\n;&|]*\s-p\s+|\bdocker\s+compose\b[^\n;&|]*\s-p\s+)"
+)
+_PWN_NAMED_OFFSET_RE = re.compile(
+    r"(?im)^\s*(WIN|MAIN|LEAK)_OFFSET\s*=\s*(0x[0-9a-f]+|\d+)\b"
+)
+_PWN_EXP_SHA_RE = re.compile(
+    r"""(?im)(?:BINARY|ARTIFACT|ELF|EXPLOIT)_SHA256\s*=\s*["']([^"']+)["']"""
 )
 
 
@@ -111,6 +121,7 @@ def classify_validation_failure(
     messages = contract_errors or ([error] if error else [])
     if status == "nonzero_exit":
         text = stderr or error or "validate.sh exited non-zero"
+        stage = _pwn_validation_stage(text)
         if _looks_like_compose_cross_talk(text):
             code = "compose_cross_talk"
             hint = (
@@ -138,7 +149,7 @@ def classify_validation_failure(
         elif "ModuleNotFoundError" in text or "No module named" in text:
             code = "missing_dependency"
             hint = "Make the solver offline-capable with the standard library or vendored helpers."
-        elif _looks_like_pwn_service_readiness_failure(text):
+        elif _looks_like_pwn_service_readiness_failure(text) and stage != "exploit":
             code = "pwn_service_readiness_failed"
             hint = (
                 "Fix validate.sh service readiness first: verify CHAL_HOST/CHAL_PORT "
@@ -214,9 +225,10 @@ def classify_validation_failure(
         else:
             code = "nonzero_exit"
             hint = "Inspect validate.sh stderr/stdout and repair the failing command."
+        detail_phase = stage if stage in {"readiness", "exploit", "cleanup"} else "validate"
         return [
             validation_failure_detail(
-                phase="validate",
+                phase=detail_phase,
                 code=code,
                 status=status,
                 message=text.strip(),
@@ -235,7 +247,44 @@ def classify_validation_failure(
                 hint="Make the final stdout flag token match metadata.flag.",
             )
         ]
-    if status in {"missing_validation", "timeout", "no_shell", "invalid_metadata"}:
+    if status == "solver_evidence_stale":
+        return [
+            validation_failure_detail(
+                phase="validate",
+                code="solver_evidence_stale",
+                status=status,
+                message=error or "Pwn solver evidence is stale",
+                path="writenup/exp.py",
+                hint=(
+                    "Ignore stale pwn_debug_report.json, recompute offsets and "
+                    "return chains from attachments/vuln with readelf/objdump/checksec, "
+                    "and update exp.py."
+                ),
+            )
+        ]
+    if status == "timeout":
+        text = "\n".join(value for value in (error, stderr) if value)
+        stage = _pwn_validation_stage(text)
+        code = {
+            "readiness": "readiness_timeout",
+            "exploit": "exploit_timeout",
+            "cleanup": "cleanup_timeout",
+        }.get(stage, "timeout")
+        hint = {
+            "readiness": "Fix the fresh TCP banner/menu readiness probe before running the exploit.",
+            "exploit": "Debug bounded solver I/O and payload delivery; readiness already reached the exploit phase.",
+            "cleanup": "Bound cleanup commands so they cannot mask validation diagnostics.",
+        }.get(stage)
+        return [
+            validation_failure_detail(
+                phase=stage if stage in {"readiness", "exploit", "cleanup"} else "validate",
+                code=code,
+                status=status,
+                message=error or status,
+                **({"hint": hint} if hint else {}),
+            )
+        ]
+    if status in {"missing_validation", "no_shell", "invalid_metadata"}:
         return [
             validation_failure_detail(
                 phase="validate",
@@ -601,6 +650,19 @@ def _looks_like_pwn_remote_local_mismatch(text: str) -> bool:
     )
 
 
+def _pwn_validation_stage(text: str) -> str | None:
+    lower = text.lower()
+    if re.search(r"\b(cleaning up|cleanup|docker-compose down|docker compose down)\b", lower):
+        return "cleanup"
+    if re.search(r"\b(running exploit|exploit phase|starting exploit|launching exploit)\b", lower):
+        return "exploit"
+    if re.search(r"\b(service is ready|readiness (?:ok|passed|succeeded)|probe passed)\b", lower):
+        return "exploit"
+    if re.search(r"\b(readiness|probe|waiting for service|checking service)\b", lower):
+        return "readiness"
+    return None
+
+
 def _read_text(path: Path) -> str | None:
     try:
         return path.read_text(encoding="utf-8", errors="replace")
@@ -616,6 +678,196 @@ def _contains_hardcoded_execution_path(text: str) -> bool:
             "/root/ctf-skills/work/executions/",
         )
     )
+
+
+def _pwn_solver_evidence_stale(
+    challenge_dir: Path,
+    metadata: dict[str, Any],
+) -> list[dict[str, str]]:
+    if metadata.get("category") != "pwn":
+        return []
+    expected_sha = metadata.get("artifact_sha256")
+    if not isinstance(expected_sha, str) or not expected_sha:
+        return []
+
+    details: list[dict[str, str]] = []
+    report_path = challenge_dir / "writenup" / "pwn_debug_report.json"
+    if report_path.is_file() and not report_path.is_symlink():
+        report_sha = _pwn_debug_report_binary_sha(report_path)
+        if report_sha != expected_sha:
+            details.append(
+                validation_failure_detail(
+                    phase="validate",
+                    code="solver_evidence_stale",
+                    status="solver_evidence_stale",
+                    message=(
+                        "writenup/pwn_debug_report.json.binary.sha256 does not "
+                        "match metadata.artifact_sha256; ignore the report and "
+                        "recompute exploit evidence from attachments/vuln"
+                    ),
+                    path="writenup/pwn_debug_report.json",
+                    hint=(
+                        "Rerun readelf/objdump/checksec against metadata.artifact "
+                        "under attachments/ and rewrite pwn_debug_report.json."
+                    ),
+                )
+            )
+
+    exp_sha = _pwn_exp_binary_sha(challenge_dir / "writenup" / "exp.py")
+    if exp_sha is not None and exp_sha != expected_sha:
+        details.append(
+            validation_failure_detail(
+                phase="validate",
+                code="solver_evidence_stale",
+                status="solver_evidence_stale",
+                message=(
+                    "writenup/exp.py recorded binary sha256 does not match "
+                    "metadata.artifact_sha256; do not run this stale exploit"
+                ),
+                path="writenup/exp.py",
+                hint=(
+                    "Recompute symbols, offsets, gadgets, and prompt sync from "
+                    "the current attachments/vuln and update the recorded sha."
+                ),
+            )
+        )
+
+    offset_conflicts = _pwn_exp_offset_conflicts(challenge_dir, metadata)
+    for conflict in offset_conflicts:
+        details.append(
+            validation_failure_detail(
+                phase="validate",
+                code="solver_evidence_stale",
+                status="solver_evidence_stale",
+                message=conflict,
+                path="writenup/exp.py",
+                hint=(
+                    "Do not reuse hardcoded offsets from deploy/src or old reports; "
+                    "derive win/main/leak offsets from the current attachments ELF."
+                ),
+            )
+        )
+    return details
+
+
+def _pwn_debug_report_binary_sha(path: Path) -> str | None:
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(report, dict):
+        return None
+    binary = report.get("binary")
+    if not isinstance(binary, dict):
+        return None
+    value = binary.get("sha256")
+    return value if isinstance(value, str) and value else None
+
+
+def _pwn_exp_binary_sha(path: Path) -> str | None:
+    text = _read_text(path)
+    if not text:
+        return None
+    match = _PWN_EXP_SHA_RE.search(text)
+    if not match:
+        return None
+    value = match.group(1).strip()
+    return value or None
+
+
+def _pwn_exp_offset_conflicts(challenge_dir: Path, metadata: dict[str, Any]) -> list[str]:
+    exp_text = _read_text(challenge_dir / "writenup" / "exp.py")
+    if not exp_text:
+        return []
+    offsets = {
+        match.group(1).lower(): int(match.group(2), 0)
+        for match in _PWN_NAMED_OFFSET_RE.finditer(exp_text)
+    }
+    if not offsets:
+        return []
+    artifact = metadata.get("artifact")
+    if not isinstance(artifact, str) or not artifact.startswith("attachments/"):
+        return []
+    artifact_path = challenge_dir / artifact
+    if not artifact_path.is_file() or not is_elf(artifact_path):
+        return []
+
+    conflicts: list[str] = []
+    symbols = _elf_function_symbols(artifact_path)
+    for offset_name, symbol_name in (("win", "win"), ("main", "main")):
+        actual = symbols.get(symbol_name)
+        expected = offsets.get(offset_name)
+        if actual is not None and expected is not None and expected != actual:
+            conflicts.append(
+                f"{offset_name.upper()}_OFFSET={expected:#x} conflicts with "
+                f"attachments/{artifact_path.name} symbol {symbol_name}={actual:#x}"
+            )
+    expected_leak = offsets.get("leak")
+    if expected_leak is not None:
+        return_offsets = _elf_call_return_offsets(artifact_path, "greet")
+        if return_offsets and expected_leak not in return_offsets:
+            rendered = ", ".join(f"{item:#x}" for item in sorted(return_offsets)[:5])
+            conflicts.append(
+                f"LEAK_OFFSET={expected_leak:#x} conflicts with current "
+                f"attachments/{artifact_path.name} call-return offsets after greet: {rendered}"
+            )
+    return conflicts
+
+
+def _elf_function_symbols(path: Path) -> dict[str, int]:
+    try:
+        result = subprocess.run(
+            ["readelf", "-sW", str(path)],
+            text=True,
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return {}
+    if result.returncode != 0:
+        return {}
+    symbols: dict[str, int] = {}
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 8 or parts[3] != "FUNC":
+            continue
+        name = parts[7].split("@", 1)[0]
+        if name in {"win", "main", "greet"}:
+            try:
+                symbols[name] = int(parts[1], 16)
+            except ValueError:
+                continue
+    return symbols
+
+
+def _elf_call_return_offsets(path: Path, symbol_name: str) -> set[int]:
+    try:
+        result = subprocess.run(
+            ["objdump", "-d", str(path)],
+            text=True,
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return set()
+    if result.returncode != 0:
+        return set()
+    offsets: set[int] = set()
+    previous_was_call = False
+    target = f"<{symbol_name}>"
+    for line in result.stdout.splitlines():
+        match = re.match(r"\s*([0-9a-fA-F]+):\s", line)
+        if not match:
+            previous_was_call = False
+            continue
+        address = int(match.group(1), 16)
+        if previous_was_call:
+            offsets.add(address)
+            previous_was_call = False
+        previous_was_call = bool(re.search(r"\bcall(?:q)?\b", line) and target in line)
+    return offsets
 
 
 def _dockerfile_installs_root_start(dockerfile: Path) -> bool:
@@ -722,6 +974,13 @@ def _pwn_runtime_contract_errors(challenge_dir: Path) -> list[str]:
                     errors.append(
                         f"{rel}: chrooted pwn source opens /home/ctf/flag; "
                         "xinetd chroots into /home/ctf, so source must open /flag"
+                    )
+                if text and _PWN_UNTERMINATED_ASCII_PATH_RE.search(text):
+                    rel = path.relative_to(challenge_dir).as_posix()
+                    errors.append(
+                        f"{rel}: assembly path string uses .ascii without a NUL "
+                        "terminator; use .asciz, .string, or an explicit \\0 for "
+                        "syscall/libc path arguments"
                     )
 
     validate_text = _read_text(challenge_dir / "validate.sh")
@@ -1324,6 +1583,17 @@ class ChallengeValidator:
             if persist_result:
                 self._update_metadata(metadata_path, status, note)
 
+        stale_solver_evidence = _pwn_solver_evidence_stale(challenge_dir, metadata)
+        if stale_solver_evidence:
+            error = "; ".join(item["message"] for item in stale_solver_evidence)
+            record_status("failed", error)
+            return {
+                **record,
+                "status": "solver_evidence_stale",
+                "error": error,
+                "failure_details": stale_solver_evidence,
+            }
+
         # 第一步：合约检查
         errors = self.contract_errors(challenge_dir, metadata)
         if errors:
@@ -1383,6 +1653,11 @@ class ChallengeValidator:
                 "failure_details": classify_validation_failure(
                     status="timeout",
                     error="validation timed out",
+                    stderr="\n".join(
+                        value
+                        for value in (stdout_tail, stderr_tail)
+                        if isinstance(value, str) and value
+                    ),
                 ),
             }
         except FileNotFoundError as exc:

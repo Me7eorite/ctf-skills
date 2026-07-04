@@ -205,13 +205,27 @@ Pwn exploit debugging acceleration:
   file `/home/ctf/flag`, the vulnerable program must open `/flag` from inside
   the chroot. A source path like `/home/ctf/flag` resolves to
   `/home/ctf/home/ctf/flag` after chroot and will make ret2win appear broken.
-- Load the local binary with `ELF('./attachments/<binary>', checksec=False)` or
-  `ELF('./deploy/src/<binary>', checksec=False)` so symbols, PLT/GOT, and
-  architecture assumptions come from the artifact instead of handwritten guesses.
+- In Pwn assembly sources, every path or command string passed to syscall/libc
+  (`open`, `openat`, `execve`, `system`, etc.) must be NUL terminated: use
+  `.asciz`, `.string`, or an explicit `\0`. Never emit `.ascii "/flag"`.
+- Load the local binary only from the delivered artifact, for example
+  `ELF('./attachments/<binary>', checksec=False)`, so symbols, PLT/GOT,
+  architecture assumptions, gadgets, and offsets come from the final host-built
+  ELF. After host build synchronizes the image's `/home/ctf/<binary>` into
+  `attachments/<binary>`, do not trust `deploy/src/<binary>`, local rebuilds,
+  old report offsets, old sha values, or source-level symbol addresses. Prefer
+  dynamic symbol discovery such as `ELF('./attachments/vuln').symbols` plus
+  `readelf`/`objdump` evidence over hardcoded old constants. Record the
+  artifact sha used by `writenup/exp.py` as `BINARY_SHA256` or
+  `ARTIFACT_SHA256`; it must equal `metadata.artifact_sha256`.
 - Add or preserve a local mode such as `LOCAL=1 python3 writenup/exp.py` that
   uses `process([binary_path])` for quick menu/offset smoke tests. The default
   validation path must still connect with
-  `remote(os.environ['CHAL_HOST'], int(os.environ['CHAL_PORT']))`.
+  `remote(os.environ['CHAL_HOST'], int(os.environ['CHAL_PORT']))`. If pwntools
+  is unavailable, keep a standard-library `socket.create_connection` fallback
+  that can complete the same remote menu interaction. Track whether the banner
+  or menu bytes were already consumed so the exploit does not call `recvuntil`
+  for the same prompt twice or blindly send after a recv timeout.
 - In local debug mode only, if the challenge ships a matching `ld`/loader
   alongside the binary, it is acceptable to use `patchelf` to point the local
   binary at that loader and reproduce the shipped runtime more closely. If the
@@ -246,6 +260,11 @@ Pwn exploit debugging acceleration:
   `remote_result`, `failure_code`, and `notes`. This report is used by later
   validation-debug/repair rounds so they inherit context instead of starting
   from scratch.
+- A Pwn debug report is trustworthy only when
+  `writenup/pwn_debug_report.json.binary.sha256` equals
+  `metadata.artifact_sha256`. If the inherited context marks the report stale,
+  ignore all offsets/gadgets in it and rerun `readelf`, `objdump`, and
+  `checksec` against `attachments/<binary>` before editing `writenup/exp.py`.
 - Before writing files or calling `./bin/progress`, verify the current directory
   is the execution workspace or the exact challenge root. Do not write absolute
   paths such as `/output/...`, `/attachments/...`, or `/writenup/exp.py`;
@@ -741,6 +760,11 @@ Web / Pwn:
   Do not rely on Compose's default project name such as `deploy`.
 - Pwn solvers may use pwntools and should keep a local `ELF()`/`process()` debug
   path plus a default `remote(CHAL_HOST, CHAL_PORT)` validation path.
+- Pwn solver offsets and ROP chains MUST be derived from the current
+  `attachments/<binary>` ELF. Do not use `deploy/src/<binary>` as the authority
+  for exploit offsets after host build, and do not reuse
+  `writenup/pwn_debug_report.json` unless its `binary.sha256` exactly matches
+  `metadata.artifact_sha256`.
 - Do not run Docker from Hermes. The host runner rebuilds the exact image named by
   `metadata.docker_image` with `docker build -t <metadata.docker_image> -f deploy/Dockerfile .`
   after deploy source, Dockerfile, binary, or runtime dependencies change.

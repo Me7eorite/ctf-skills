@@ -80,6 +80,107 @@ class ValidateChallengeLookupTests(unittest.TestCase):
             )
             self.assertEqual(result.get("path"), str(directory))
 
+    def test_pwn_stale_debug_report_fails_before_validate_script(self):
+        with TemporaryDirectory() as tmp:
+            paths = _seed_paths(Path(tmp))
+            challenge = paths.challenges / "pwn" / "pwn-0001-demo"
+            (challenge / "writenup").mkdir(parents=True)
+            (challenge / "metadata.json").write_text(
+                json.dumps(
+                    {
+                        "id": "pwn-0001",
+                        "category": "pwn",
+                        "artifact_sha256": "current-sha",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (challenge / "writenup" / "pwn_debug_report.json").write_text(
+                json.dumps({"binary": {"sha256": "old-sha"}, "offset": 64}),
+                encoding="utf-8",
+            )
+            validator = ChallengeValidator(paths)  # type: ignore[arg-type]
+
+            result = validator.validate_challenge("pwn-0001")
+
+            self.assertEqual(result["status"], "solver_evidence_stale")
+            self.assertIn("pwn_debug_report.json.binary.sha256", result["error"])
+            self.assertEqual(
+                result["failure_details"][0]["code"],
+                "solver_evidence_stale",
+            )
+
+    def test_pwn_hardcoded_win_offset_conflict_fails_before_validate_script(self):
+        with TemporaryDirectory() as tmp:
+            paths = _seed_paths(Path(tmp))
+            challenge = paths.challenges / "pwn" / "pwn-0001-demo"
+            (challenge / "attachments").mkdir(parents=True)
+            (challenge / "writenup").mkdir()
+            (challenge / "attachments" / "vuln").write_bytes(b"\x7fELFfake")
+            (challenge / "writenup" / "exp.py").write_text(
+                "WIN_OFFSET = 0xdead\n",
+                encoding="utf-8",
+            )
+            (challenge / "metadata.json").write_text(
+                json.dumps(
+                    {
+                        "id": "pwn-0001",
+                        "category": "pwn",
+                        "artifact": "attachments/vuln",
+                        "artifact_sha256": "current-sha",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            validator = ChallengeValidator(paths)  # type: ignore[arg-type]
+
+            def fake_run(command, **kwargs):
+                if command[:2] == ["readelf", "-sW"]:
+                    return subprocess.CompletedProcess(
+                        command,
+                        0,
+                        stdout=(
+                            "Symbol table '.symtab' contains 1 entry:\n"
+                            "  12: 00000000000011a9    42 FUNC    GLOBAL DEFAULT   15 win\n"
+                        ),
+                        stderr="",
+                    )
+                return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
+
+            with patch("domain.validation.subprocess.run", side_effect=fake_run):
+                result = validator.validate_challenge("pwn-0001")
+
+            self.assertEqual(result["status"], "solver_evidence_stale")
+            self.assertIn("WIN_OFFSET=0xdead", result["error"])
+            self.assertIn("symbol win=0x11a9", result["error"])
+
+    def test_pwn_exp_recorded_sha_mismatch_fails_before_validate_script(self):
+        with TemporaryDirectory() as tmp:
+            paths = _seed_paths(Path(tmp))
+            challenge = paths.challenges / "pwn" / "pwn-0001-demo"
+            (challenge / "writenup").mkdir(parents=True)
+            (challenge / "writenup" / "exp.py").write_text(
+                'BINARY_SHA256 = "old-sha"\nprint("should not run")\n',
+                encoding="utf-8",
+            )
+            (challenge / "metadata.json").write_text(
+                json.dumps(
+                    {
+                        "id": "pwn-0001",
+                        "category": "pwn",
+                        "artifact_sha256": "current-sha",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            validator = ChallengeValidator(paths)  # type: ignore[arg-type]
+
+            result = validator.validate_challenge("pwn-0001")
+
+            self.assertEqual(result["status"], "solver_evidence_stale")
+            self.assertIn("exp.py recorded binary sha256", result["error"])
+            self.assertEqual(result["failure_details"][0]["path"], "writenup/exp.py")
+
 
 class ValidateChallengeFlagExtractionTests(unittest.TestCase):
     def _validate_stdout(self, stdout: str, expected: str = "flag{expected-value}"):

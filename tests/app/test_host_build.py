@@ -215,6 +215,23 @@ def test_host_builder_rewrites_pwn_image_to_workspace_scoped_tag(tmp_path: Path)
 def test_host_builder_syncs_pwn_runtime_elf_to_attachment(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     challenge = _pwn_challenge_with_artifact(workspace)
+    (challenge / "writenup").mkdir()
+    (challenge / "writenup" / "pwn_debug_report.json").write_text(
+        json.dumps({"binary": {"sha256": "old"}, "offset": 64}),
+        encoding="utf-8",
+    )
+    metadata = read_json(challenge / "metadata.json")
+    metadata.update(
+        {
+            "solve_status": "failed",
+            "solve_note": "old offset failed",
+            "validation_status": "nonzero_exit",
+            "validation_failure_class": "service-readiness",
+            "validation_failure_signature": "old",
+            "validation_elapsed": 1.23,
+        }
+    )
+    (challenge / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
     validation_set = WorkspaceValidationSet(
         candidates={"pwn-0001": challenge},
         output_manifest_hash="sha256:before",
@@ -246,6 +263,17 @@ def test_host_builder_syncs_pwn_runtime_elf_to_attachment(tmp_path: Path) -> Non
     assert (challenge / "attachments" / "vuln").read_bytes() == b"runtime-elf"
     metadata = read_json(challenge / "metadata.json")
     assert metadata["artifact_sha256"] == "7b890f6cd0e6fa34864e726aa2cda390c35f43277e388d2e6b5c455dae01ba9b"
+    assert metadata["solver_evidence_stale"] is True
+    assert "attachments/" in metadata["solver_evidence_stale_reason"]
+    for field in (
+        "solve_status",
+        "solve_note",
+        "validation_status",
+        "validation_failure_class",
+        "validation_failure_signature",
+        "validation_elapsed",
+    ):
+        assert field not in metadata
 
 
 def test_host_builder_uses_short_pwn_slug_for_workspace_image(tmp_path: Path) -> None:

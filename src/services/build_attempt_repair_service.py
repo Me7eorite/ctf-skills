@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,6 +31,10 @@ from services.build_attempt_revalidation_service import (
 )
 
 REPAIR_WORKER = "dashboard-repair"
+_EXECUTION_ID_RE = re.compile(
+    r"/(?:workspace/executions|root/ctf-skills/work/executions)/"
+    r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\b"
+)
 
 
 class BuildAttemptRepairError(ValueError):
@@ -238,7 +243,8 @@ class BuildAttemptRepairService:
             attempt["resulting_challenge_dir"],
             category=attempt["category"],
         )
-        return {
+        file_context = _file_context(challenge_dir)
+        context = {
             **attempt,
             "challenge_id": challenge_id,
             "challenge_dir": str(challenge_dir),
@@ -247,8 +253,10 @@ class BuildAttemptRepairService:
                 latest_failure or {},
                 operator_triggered=True,
             ),
-            "file_context": _file_context(challenge_dir),
+            "file_context": file_context,
         }
+        _assert_no_context_leak(attempt["id"], context)
+        return context
 
     @staticmethod
     def _record_event(path: Path, phase: str, status: str, message: str) -> None:
@@ -638,6 +646,7 @@ def _validation_evidence(latest_failure: Any) -> dict[str, Any]:
 
 def _file_context(challenge_dir: Path) -> str:
     snippets: list[str] = []
+    metadata = read_json(challenge_dir / "metadata.json", {})
     for relative in (
         "metadata.json",
         "validate.sh",
@@ -649,9 +658,54 @@ def _file_context(challenge_dir: Path) -> str:
         path = challenge_dir / relative
         if not path.is_file():
             continue
+        if relative == "writenup/pwn_debug_report.json":
+            stale_context = _stale_pwn_debug_report_context(path, metadata)
+            if stale_context is not None:
+                snippets.append(f"--- {relative} ---\n{stale_context}")
+                continue
         text = path.read_text(encoding="utf-8", errors="replace")
         snippets.append(f"--- {relative} ---\n{_budget_text(text, label=relative, limit=6000)}")
     return "\n\n".join(snippets)
+
+
+def _stale_pwn_debug_report_context(path: Path, metadata: Any) -> str | None:
+    if not isinstance(metadata, dict) or metadata.get("category") != "pwn":
+        return None
+    expected_sha = metadata.get("artifact_sha256")
+    if not isinstance(expected_sha, str) or not expected_sha:
+        return None
+    report = read_json(path, {})
+    report_sha = None
+    if isinstance(report, dict):
+        binary = report.get("binary")
+        if isinstance(binary, dict):
+            value = binary.get("sha256")
+            if isinstance(value, str) and value:
+                report_sha = value
+    if report_sha == expected_sha:
+        return None
+    payload = {
+        "stale": True,
+        "reason": (
+            "pwn_debug_report.json.binary.sha256 does not match "
+            "metadata.artifact_sha256; stale offsets/gadgets are omitted from "
+            "trusted repair context"
+        ),
+        "metadata_artifact_sha256": expected_sha,
+        "report_binary_sha256": report_sha,
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def _assert_no_context_leak(current_attempt_id: UUID | str, context: dict[str, Any]) -> None:
+    current = str(current_attempt_id)
+    text = json.dumps(context, ensure_ascii=False, default=str)
+    leaked = sorted({match.group(1) for match in _EXECUTION_ID_RE.finditer(text) if match.group(1) != current})
+    if leaked:
+        raise BuildAttemptRepairError(
+            "orchestration-context-leak: repair context references non-current "
+            f"attempt_id(s): {', '.join(leaked)}"
+        )
 
 
 def _default_timeout_seconds() -> int:

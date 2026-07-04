@@ -231,6 +231,8 @@ def test_validation_repair_prompt_classifies_nonzero_exit() -> None:
     assert "Pwn exploit debugging acceleration:" in prompt
     assert "context(os='linux', arch='amd64'" in prompt
     assert "ELF('./attachments/<binary>', checksec=False)" in prompt
+    assert "BINARY_SHA256" in prompt
+    assert "socket.create_connection" in prompt
     assert "process([binary_path])" in prompt
     assert "PWNLIB_LOG_LEVEL=debug" in prompt
     assert "remote(os.environ['CHAL_HOST']" in prompt
@@ -341,12 +343,19 @@ def test_pwn_debug_report_is_available_for_repair_context(tmp_path: Path) -> Non
     challenge = tmp_path / "challenges" / "pwn" / "pwn-0001-demo"
     (challenge / "writenup").mkdir(parents=True)
     (challenge / "metadata.json").write_text(
-        json.dumps({"id": "pwn-0001", "category": "pwn"}),
+        json.dumps(
+            {
+                "id": "pwn-0001",
+                "category": "pwn",
+                "artifact_sha256": "current-sha",
+            }
+        ),
         encoding="utf-8",
     )
     (challenge / "writenup" / "pwn_debug_report.json").write_text(
         json.dumps(
             {
+                "binary": {"sha256": "current-sha"},
                 "failure_code": "pwn_bad_libc_base",
                 "bases": {"libc": "0x7ffff7dc0000"},
             }
@@ -361,6 +370,43 @@ def test_pwn_debug_report_is_available_for_repair_context(tmp_path: Path) -> Non
 
     assert reports["pwn-0001"]["path"] == "writenup/pwn_debug_report.json"
     assert reports["pwn-0001"]["content"]["failure_code"] == "pwn_bad_libc_base"
+
+
+def test_pwn_debug_report_is_marked_stale_when_sha_mismatches(tmp_path: Path) -> None:
+    challenge = tmp_path / "challenges" / "pwn" / "pwn-0001-demo"
+    (challenge / "writenup").mkdir(parents=True)
+    (challenge / "metadata.json").write_text(
+        json.dumps(
+            {
+                "id": "pwn-0001",
+                "category": "pwn",
+                "artifact_sha256": "current-sha",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (challenge / "writenup" / "pwn_debug_report.json").write_text(
+        json.dumps(
+            {
+                "binary": {"sha256": "old-sha"},
+                "failure_code": "pwn_bad_libc_base",
+                "bases": {"libc": "0x7ffff7dc0000"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    reports = _failed_challenge_debug_reports(
+        tmp_path / "challenges",
+        {"pwn-0001"},
+    )
+
+    report = reports["pwn-0001"]
+    assert report["stale"] is True
+    assert "content" not in report
+    assert report["metadata_artifact_sha256"] == "current-sha"
+    assert report["report_binary_sha256"] == "old-sha"
+    assert "readelf/objdump/checksec" in report["reason"]
 
 
 def test_validate_gate_reports_specific_implementation_gap(tmp_path: Path) -> None:

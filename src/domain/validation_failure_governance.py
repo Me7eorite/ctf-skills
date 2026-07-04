@@ -48,7 +48,7 @@ _CONTRACT_STATUSES = {
     "missing_challenge",
     "ambiguous_challenge",
 }
-_SOLVER_STATUSES = {"nonzero_exit", "flag_mismatch"}
+_SOLVER_STATUSES = {"nonzero_exit", "flag_mismatch", "solver_evidence_stale"}
 _TIMEOUT_STATUSES = {"timeout"}
 _TIMEOUT_SUBREASON_ALIASES = {
     "solver_io": {
@@ -56,6 +56,7 @@ _TIMEOUT_SUBREASON_ALIASES = {
         "solver-io",
         "solver_io_timeout",
         "solver_timeout",
+        "exploit_timeout",
         "pwn_bruteforce_timeout",
         "unbounded_solver_read",
     },
@@ -97,6 +98,8 @@ _SOLVER_CODES = {
     "pwn_shell_no_flag",
     "pwn_remote_local_mismatch",
     "pwn_prompt_eof",
+    "solver_evidence_stale",
+    "exploit_timeout",
 }
 _VOLATILE_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"/(?:workspace/executions|root/ctf-skills/work/executions)/[^\s\"')]+"), "<workspace-path>"),
@@ -131,6 +134,9 @@ def normalized_validation_failure_class(
     if status in _TIMEOUT_STATUSES or "timeout" in detail_codes:
         return "timeout"
     readiness_observation = _readiness_observation(result, detail_items)
+    if _exploit_stage_started(result, detail_items):
+        if detail_codes & _READINESS_CODES or "pwn_prompt_eof" in detail_codes:
+            return "solver"
 
     if detail_codes & _READINESS_CODES:
         return "service-readiness"
@@ -519,6 +525,23 @@ def _readiness_observation(
     if any(marker in text for marker in _READINESS_UNAVAILABLE_MARKERS):
         return "unavailable"
     return "unavailable"
+
+
+def _exploit_stage_started(
+    result: Mapping[str, Any],
+    details: Sequence[Mapping[str, Any]],
+) -> bool:
+    for detail in details:
+        if str(detail.get("phase") or "").strip().lower() == "exploit":
+            return True
+    text = _combined_text(result).lower()
+    return bool(
+        re.search(r"\b(running exploit|exploit phase|starting exploit|launching exploit)\b", text)
+        or (
+            re.search(r"\bservice is ready\b", text)
+            and re.search(r"\b(running exploit|exploit)\b", text)
+        )
+    )
 
 
 def _combined_text(result: Mapping[str, Any]) -> str:

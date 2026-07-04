@@ -316,6 +316,9 @@ Container rules for Web and Pwn:
   open the flag by its chroot-internal path such as `/flag`, not
   `/home/ctf/flag`; `/home/ctf/flag` inside the source would resolve to
   `/home/ctf/home/ctf/flag` in the container and break exploitation.
+- In Pwn assembly sources, every path or command string passed to syscall/libc
+  (`open`, `openat`, `execve`, `system`, etc.) must be NUL terminated: use
+  `.asciz`, `.string`, or an explicit `\0`. Never emit `.ascii "/flag"`.
 - Harden Pwn xinetd services with bounded resource settings such as
   `per_source`, `rlimit_cpu`, and, when compatible with the exploit,
   `rlimit_as`; include a `banner_fail` file. Keep `/home/ctf` owned by
@@ -496,10 +499,19 @@ authoritative `validate/passed` or `validate/failed` event.
 - For Pwn, prefer a pwntools-based exploit skeleton when available. Set
   `context(os='linux', arch='amd64', log_level=os.environ.get('PWNLIB_LOG_LEVEL', 'info'))`
   for amd64 Linux targets, use `ELF('./attachments/<binary>', checksec=False)`
-  or `ELF('./deploy/src/<binary>', checksec=False)` to inspect symbols/PLT/GOT,
-  and support a bounded local debug mode such as `LOCAL=1 python3 writenup/exp.py`
-  that runs `process([binary_path])` against the local ELF. The default validation
-  path must still use `remote(os.environ['CHAL_HOST'], int(os.environ['CHAL_PORT']))`.
+  to inspect symbols/PLT/GOT and compute exploit offsets from the delivered
+  artifact. After host build synchronizes the image's `/home/ctf/<binary>` into
+  `attachments/<binary>`, do not trust `deploy/src/<binary>`, source-local
+  rebuilds, old debug reports, old sha values, or hardcoded stale offsets.
+  Record the final artifact sha in `writenup/exp.py` as `BINARY_SHA256` or
+  `ARTIFACT_SHA256`; it must equal `metadata.artifact_sha256`. Support a
+  bounded local debug mode such as `LOCAL=1 python3 writenup/exp.py` that runs
+  `process([binary_path])` against the local ELF. The default validation path
+  must still use `remote(os.environ['CHAL_HOST'], int(os.environ['CHAL_PORT']))`.
+  If pwntools is unavailable, implement a standard-library
+  `socket.create_connection` fallback that completes the same remote menu
+  interaction. Track consumed banner/menu bytes so the exploit never waits for
+  the same prompt twice and never blindly sends after a recv timeout.
   Use `PWNLIB_LOG_LEVEL=debug` or `context(..., log_level='debug')` while tuning
   menu synchronization, leaks, offsets, and payload bytes; drop back to concise
   output for normal validation.
@@ -521,7 +533,9 @@ authoritative `validate/passed` or `validate/failed` event.
   `prompt_probe`, `offset`, `leaks`, `bases`, `gadgets`, `local_result`,
   `remote_result`, `failure_code`, and `notes`. This report is used by later
   validation-debug/repair rounds so they inherit context instead of starting
-  from scratch.
+  from scratch. Include `binary.sha256` equal to `metadata.artifact_sha256`;
+  later repair rounds must ignore the report when those hashes differ and rerun
+  `readelf`, `objdump`, and `checksec` against `attachments/<binary>`.
 - Every local binary, pwntools `process()`, subprocess, and gdb run must be
   bounded and non-interactive. Never run bare `./<binary>` or a menu-driven
   ELF without input in headless mode. Use patterns like
@@ -625,6 +639,11 @@ violates any of them fails validation regardless of what `validate.sh` prints:
   `"artifact": "attachments/<binary>"` and the matching
   `"artifact_sha256": "<sha256>"`. If the artifact is rebuilt, recompute the
   SHA-256 before marking `build_status` or `solve_status` as `passed`.
+- A `pwn` solver MUST treat `attachments/<binary>` as the authority for offsets,
+  gadgets, and return chains. Prefer `ELF('./attachments/vuln').symbols`,
+  `readelf -sW attachments/vuln`, and `objdump -d attachments/vuln` over
+  handwritten constants; do not derive exploit offsets from `deploy/src/vuln`
+  after host build has synchronized the runtime ELF into attachments.
 - `validate.sh` MUST NOT contain `docker volume rm`, `docker volume prune`,
   Docker prune commands, or `docker-compose down -v`/`--volumes`. Destructive
   Docker cleanup is rejected before execution.

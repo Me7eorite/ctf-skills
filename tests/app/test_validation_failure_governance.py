@@ -115,6 +115,42 @@ def test_readiness_established_false_does_not_mean_fresh_probe_failed() -> None:
     assert normalized_validation_failure_class(result) == "solver"
 
 
+def test_exploit_phase_nonzero_outranks_readiness_code() -> None:
+    result = {
+        "solve_status": "failed",
+        "validation_status": "nonzero_exit",
+        "validation_stdout_tail": "Service is ready\nRunning exploit...\n",
+        "validation_stderr_tail": "readiness probe passed earlier; exp.py exited 1",
+        "validation_failure_details": [
+            {
+                "phase": "exploit",
+                "code": "pwn_service_readiness_failed",
+                "message": "legacy readiness code should not override exploit phase",
+            }
+        ],
+    }
+
+    assert normalized_validation_failure_class(result) == "solver"
+
+
+def test_exploit_phase_timeout_is_solver_io_timeout_not_readiness() -> None:
+    result = {
+        "solve_status": "failed",
+        "validation_status": "timeout",
+        "validation_stdout_tail": "Service is ready\nRunning exploit...\n",
+        "validation_failure_details": [
+            {
+                "phase": "exploit",
+                "code": "exploit_timeout",
+                "message": "recvuntil('Choice:') timed out after exploit start",
+            }
+        ],
+    }
+
+    assert normalized_validation_failure_class(result) == "timeout"
+    assert timeout_failure_subreason(result) == "solver_io"
+
+
 def test_progress_message_fallback_requires_validation_phase() -> None:
     paths = ProjectPaths(root=Path("/tmp/unused"), repository=Path("/tmp/unused"))
 

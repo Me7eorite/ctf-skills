@@ -1,6 +1,13 @@
 from pathlib import Path
 
-from services.build_attempt_repair_service import _file_context, _repair_prompt
+import pytest
+
+from services.build_attempt_repair_service import (
+    BuildAttemptRepairError,
+    _assert_no_context_leak,
+    _file_context,
+    _repair_prompt,
+)
 
 
 def test_build_attempt_repair_prompt_anchors_terminal_to_allowed_root() -> None:
@@ -93,6 +100,44 @@ def test_build_attempt_repair_prompt_includes_validation_evidence_and_debug_repo
     normalized = " ".join(prompt.split())
     assert "Bound every `recvuntil` / `recvline` wait with short" in normalized
     assert "print bounded diagnostics for service ready state" in normalized
+
+
+def test_file_context_omits_stale_pwn_debug_report_trusted_body(tmp_path: Path) -> None:
+    challenge_dir = tmp_path / "pwn-0001-demo"
+    (challenge_dir / "writenup").mkdir(parents=True)
+    (challenge_dir / "metadata.json").write_text(
+        '{"id":"pwn-0001","category":"pwn","artifact_sha256":"current-sha"}',
+        encoding="utf-8",
+    )
+    (challenge_dir / "writenup" / "pwn_debug_report.json").write_text(
+        '{"binary":{"sha256":"old-sha"},"WIN_OFFSET":"0xdeadbeef"}',
+        encoding="utf-8",
+    )
+
+    context = _file_context(challenge_dir)
+
+    assert "--- writenup/pwn_debug_report.json ---" in context
+    assert '"stale": true' in context
+    assert "old-sha" in context
+    assert "current-sha" in context
+    assert "0xdeadbeef" not in context
+
+
+def test_repair_context_rejects_other_attempt_execution_paths() -> None:
+    current = "11111111-1111-1111-1111-111111111111"
+    other = "22222222-2222-2222-2222-222222222222"
+
+    with pytest.raises(BuildAttemptRepairError, match="orchestration-context-leak"):
+        _assert_no_context_leak(
+            current,
+            {
+                "id": current,
+                "file_context": (
+                    f"/root/ctf-skills/work/executions/{other}/current/output/"
+                    "challenges/pwn/pwn-0001/writenup/exp.py"
+                ),
+            },
+        )
 
 
 def test_build_attempt_repair_prompt_marks_truncated_evidence(tmp_path: Path) -> None:

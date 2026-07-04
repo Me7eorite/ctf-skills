@@ -69,6 +69,9 @@ class HermesRunnerTests(unittest.TestCase):
 
         self.assertIn("context(os='linux', arch='amd64'", prompt)
         self.assertIn("ELF('./attachments/<binary>', checksec=False)", prompt)
+        self.assertIn("BINARY_SHA256", prompt)
+        self.assertIn("socket.create_connection", prompt)
+        self.assertIn("never waits for\n  the same prompt twice", prompt)
         self.assertIn("LOCAL=1 python3 writenup/exp.py", prompt)
         self.assertIn("process([binary_path])", prompt)
         self.assertIn("PWNLIB_LOG_LEVEL=debug", prompt)

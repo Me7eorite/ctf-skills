@@ -2041,16 +2041,46 @@ def _failed_challenge_debug_reports(
             challenge_dir / "writenup" / "pwn_debug_report.json",
             challenge_dir / "logs" / "pwn_debug_report.json",
         )
+        expected_sha = metadata.get("artifact_sha256")
         for path in candidates:
             if not path.is_file() or path.is_symlink():
                 continue
             rel = path.relative_to(challenge_dir).as_posix()
+            content = read_json(path, {})
+            report_sha = _pwn_debug_report_binary_sha(content)
+            if not (
+                isinstance(expected_sha, str)
+                and expected_sha
+                and report_sha == expected_sha
+            ):
+                reports[challenge_id] = {
+                    "path": rel,
+                    "stale": True,
+                    "reason": (
+                        "debug report stale: pwn_debug_report.json.binary.sha256 "
+                        "does not match metadata.artifact_sha256; recompute from "
+                        "attachments/vuln with readelf/objdump/checksec"
+                    ),
+                    "metadata_artifact_sha256": expected_sha,
+                    "report_binary_sha256": report_sha,
+                }
+                break
             reports[challenge_id] = {
                 "path": rel,
-                "content": read_json(path, {}),
+                "content": content,
             }
             break
     return reports
+
+
+def _pwn_debug_report_binary_sha(content: object) -> str | None:
+    if not isinstance(content, Mapping):
+        return None
+    binary = content.get("binary")
+    if not isinstance(binary, Mapping):
+        return None
+    value = binary.get("sha256")
+    return value if isinstance(value, str) and value else None
 
 
 def _output_signature(output_dir: Path) -> tuple[int, int, int]:

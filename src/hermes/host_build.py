@@ -206,8 +206,9 @@ class HostBuilder:
                 failed_step=_infer_docker_step(stdout_text, stderr_text),
             )
         image_id = _inspect_image_id(image, timeout=min(10.0, float(self.timeout_seconds)))
+        pwn_artifact_sha_changed = False
         if metadata.get("category") == "pwn":
-            _sync_pwn_runtime_artifact(
+            pwn_artifact_sha_changed = _sync_pwn_runtime_artifact(
                 challenge_id,
                 challenge_dir,
                 image=image,
@@ -224,6 +225,7 @@ class HostBuilder:
             image_id=image_id,
             log_path=_workspace_relative(log_path, challenge_dir),
             prune_warning=prune_warning,
+            pwn_artifact_sha_changed=pwn_artifact_sha_changed,
         )
         return HostBuildResult(
             challenge_id=challenge_id,
@@ -385,10 +387,10 @@ def _sync_pwn_runtime_artifact(
     image: str,
     metadata: Mapping[str, Any],
     timeout: float,
-) -> None:
+) -> bool:
     artifact = metadata.get("artifact")
     if not isinstance(artifact, str) or not artifact.startswith("attachments/"):
-        return
+        return False
     artifact_path = _safe_child(challenge_dir, artifact)
     runtime_path = _pwn_runtime_binary_path(challenge_dir, artifact_path.name)
     container_id = _docker_create_for_copy(challenge_id, image, timeout=timeout)
@@ -402,7 +404,7 @@ def _sync_pwn_runtime_artifact(
         )
     finally:
         _docker_rm_container(container_id, timeout=min(10.0, timeout))
-    _stamp_pwn_artifact_metadata(challenge_dir, artifact_path)
+    return _stamp_pwn_artifact_metadata(challenge_dir, artifact_path)
 
 
 def _pwn_runtime_binary_path(challenge_dir: Path, fallback_name: str) -> str:
@@ -520,13 +522,16 @@ def _docker_rm_container(container_id: str, *, timeout: float) -> None:
         return
 
 
-def _stamp_pwn_artifact_metadata(challenge_dir: Path, artifact_path: Path) -> None:
+def _stamp_pwn_artifact_metadata(challenge_dir: Path, artifact_path: Path) -> bool:
     metadata_path = challenge_dir / "metadata.json"
     metadata = read_json(metadata_path, {})
     if not isinstance(metadata, dict):
         raise HostBuildError(f"{challenge_dir.name}: metadata.json missing or invalid")
-    metadata["artifact_sha256"] = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+    old_sha = metadata.get("artifact_sha256")
+    new_sha = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+    metadata["artifact_sha256"] = new_sha
     write_json(metadata_path, metadata)
+    return isinstance(old_sha, str) and bool(old_sha) and old_sha != new_sha
 
 
 def _pwn_workspace_image(workspace_id: str, challenge_name: str) -> str:
@@ -736,6 +741,7 @@ def _stamp_metadata(
     image_id: str | None,
     log_path: str | None,
     prune_warning: str | None = None,
+    pwn_artifact_sha_changed: bool = False,
 ) -> None:
     metadata_path = challenge_dir / "metadata.json"
     metadata = read_json(metadata_path, {})
@@ -752,6 +758,21 @@ def _stamp_metadata(
         metadata["host_build_prune_warning"] = prune_warning
     else:
         metadata.pop("host_build_prune_warning", None)
+    if pwn_artifact_sha_changed:
+        metadata["solver_evidence_stale"] = True
+        metadata["solver_evidence_stale_reason"] = (
+            "host build synchronized a different runtime ELF into metadata.artifact; "
+            "recompute pwn_debug_report.json and exploit offsets from attachments/"
+        )
+        for field in (
+            "solve_status",
+            "solve_note",
+            "validation_status",
+            "validation_failure_class",
+            "validation_failure_signature",
+            "validation_elapsed",
+        ):
+            metadata.pop(field, None)
     write_json(metadata_path, metadata)
 
 

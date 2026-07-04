@@ -336,6 +336,44 @@ class ValidationTests(unittest.TestCase):
 
         self.assertTrue(any("source must open /flag" in e for e in errors))
 
+    def test_pwn_assembly_flag_path_must_be_nul_terminated(self):
+        challenge = self.paths.challenges / "pwn" / "pwn-flag-asm-001"
+        metadata = _write_minimal_pwn_contract(challenge)
+        (challenge / "deploy" / "_files" / "ctf.xinetd").write_text(
+            "service ctf\n{\n"
+            "  server = /usr/sbin/chroot\n"
+            "  server_args = --userspec=1000:1000 /home/ctf ./vuln\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        (challenge / "deploy" / "src" / "win.S").write_text(
+            '.section .rodata\nflag_path:\n  .ascii "/flag"\n',
+            encoding="utf-8",
+        )
+
+        errors = self.validator.contract_errors(challenge, metadata)
+
+        self.assertTrue(any(".ascii without a NUL terminator" in e for e in errors))
+
+    def test_pwn_assembly_flag_path_allows_asciz(self):
+        challenge = self.paths.challenges / "pwn" / "pwn-flag-asm-ok-001"
+        metadata = _write_minimal_pwn_contract(challenge)
+        (challenge / "deploy" / "_files" / "ctf.xinetd").write_text(
+            "service ctf\n{\n"
+            "  server = /usr/sbin/chroot\n"
+            "  server_args = --userspec=1000:1000 /home/ctf ./vuln\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        (challenge / "deploy" / "src" / "win.S").write_text(
+            '.section .rodata\nflag_path:\n  .asciz "/flag"\n',
+            encoding="utf-8",
+        )
+
+        errors = self.validator.contract_errors(challenge, metadata)
+
+        self.assertFalse(any(".ascii without a NUL terminator" in e for e in errors))
+
     def test_pwn_validate_requires_application_level_readiness(self):
         challenge = self.paths.challenges / "pwn" / "pwn-readiness-001"
         metadata = _write_minimal_pwn_contract(challenge)
@@ -440,6 +478,31 @@ class ValidationTests(unittest.TestCase):
         errors = self.validator.contract_errors(challenge, metadata)
 
         self.assertFalse(any("inner shell sees empty host/port" in e for e in errors))
+
+    def test_nonzero_after_running_exploit_is_not_readiness(self):
+        details = classify_validation_failure(
+            status="nonzero_exit",
+            stderr=(
+                "Checking service readiness\n"
+                "Service is ready\n"
+                "Running exploit...\n"
+                "readiness probe failed: exp.py exited 1\n"
+            ),
+            error="validate.sh exited non-zero",
+        )
+
+        self.assertEqual(details[0]["phase"], "exploit")
+        self.assertNotEqual(details[0]["code"], "pwn_service_readiness_failed")
+
+    def test_timeout_after_running_exploit_is_exploit_timeout(self):
+        details = classify_validation_failure(
+            status="timeout",
+            stderr="Service is ready\nRunning exploit...\nrecvuntil timed out\n",
+            error="validation timed out",
+        )
+
+        self.assertEqual(details[0]["phase"], "exploit")
+        self.assertEqual(details[0]["code"], "exploit_timeout")
 
     def test_pwn_exp_rejects_canary_width_threshold(self):
         challenge = self.paths.challenges / "pwn" / "pwn-canary-001"
