@@ -51,3 +51,18 @@ Build orchestration SHALL treat solver regeneration, challenge regeneration, and
 - **WHEN** orchestration chooses challenge regeneration after solver-only routes fail
 - **THEN** the regeneration SHALL be recorded as part of the current attempt context or as a new explicit retry attempt
 - **AND** the resulting artifact SHALL still require final solver acceptance before success
+
+### Requirement: Build success uses manifest-bound solver acceptance
+
+Build orchestration SHALL only promote Web and Pwn attempts using solver acceptance evidence tied to the current attempt's output manifest. Attempt list and detail derivation SHALL remain bounded to the returned attempts and SHALL NOT scan unrelated execution workspaces.
+
+#### Scenario: Manifest-stale acceptance cannot promote
+- **WHEN** a Web or Pwn attempt has an older passed solver acceptance round
+- **AND** the current attempt output manifest no longer matches that round
+- **THEN** build orchestration SHALL NOT mark the attempt as succeeded
+- **AND** revalidation SHALL run again before promotion is allowed
+
+#### Scenario: Current attempt workspace is the only repair source
+- **WHEN** an operator repairs or revalidates a failed Web or Pwn attempt
+- **THEN** orchestration SHALL select the current attempt workspace or canonical resulting challenge directory for that attempt
+- **AND** it SHALL NOT search unrelated `work/executions/*` directories to find a passing solver acceptance record

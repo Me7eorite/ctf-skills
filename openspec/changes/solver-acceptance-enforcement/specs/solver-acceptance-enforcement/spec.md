@@ -105,3 +105,22 @@ The system SHALL preserve solver acceptance evidence for every failed and succes
 - **WHEN** solver acceptance passes after repair or regeneration
 - **THEN** the final validation round SHALL preserve the passed acceptance status and acceptance fingerprint
 - **AND** the published artifact SHALL correspond to the output tree that produced that final passed round
+
+### Requirement: Solver acceptance fields are additive and manifest-bound
+
+The system SHALL add solver acceptance evidence without removing or renaming existing validation result fields. Existing `contract_errors`, `failure_details`, `validation_failure_details`, validation failure class, validation failure signature, stdout/stderr tails, command, return code, and final flag candidate fields SHALL remain readable. A passed solver acceptance result SHALL include or reference the output manifest hash for the validated tree, and that acceptance SHALL NOT be reused for a different output manifest.
+
+#### Scenario: Existing validation fields remain available
+- **WHEN** Web or Pwn solver acceptance diagnostics are added to a failed validation result
+- **THEN** existing consumers SHALL still be able to read legacy-compatible `contract_errors` and structured `validation_failure_details`
+- **AND** the solver acceptance details SHALL be additive rather than replacing failure-governance evidence
+
+#### Scenario: Output manifest mismatch invalidates acceptance
+- **WHEN** a validation round records solver acceptance passed for output manifest hash `A`
+- **AND** the output tree later changes to manifest hash `B`
+- **THEN** solver acceptance for hash `A` SHALL NOT authorize publication or revalidation promotion for hash `B`
+
+#### Scenario: Older history reports unavailable acceptance
+- **WHEN** an older validation-history entry does not contain solver acceptance fields
+- **THEN** API and repair consumers SHALL expose solver acceptance as unavailable
+- **AND** they SHALL NOT reinterpret the older entry as a solver acceptance failure solely because the fields are absent

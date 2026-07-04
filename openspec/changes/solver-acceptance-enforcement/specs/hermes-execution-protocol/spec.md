@@ -48,3 +48,17 @@ The Hermes runner SHALL publish Web/Pwn output only after the exact output tree 
 - **WHEN** the runner captures the publish candidate
 - **AND** final validation passes with solver acceptance passed on that exact tree
 - **THEN** the runner MAY publish the artifact according to existing publication rules
+
+### Requirement: Runner preserves existing validation history semantics
+
+The Hermes runner SHALL store solver acceptance as additive validation-history evidence. Existing history readers that depend on validation status, failure class, failure signature, contract errors, and stdout/stderr tails SHALL remain compatible. Missing solver acceptance fields in old entries SHALL be represented as unavailable.
+
+#### Scenario: Solver acceptance enriches validation history
+- **WHEN** a Web or Pwn validation round completes
+- **THEN** the runner SHALL append solver acceptance evidence to the validation-history round
+- **AND** the round SHALL still expose existing validation failure governance fields when validation fails
+
+#### Scenario: Repeated solver failures use existing no-progress guard
+- **WHEN** solver repair produces the same solver acceptance fingerprint and the same validation failure fingerprint
+- **THEN** the runner SHALL use the existing repeated-failure/no-progress repair stop path
+- **AND** it SHALL record a solver blocked reason rather than invoking an unrelated repair loop
