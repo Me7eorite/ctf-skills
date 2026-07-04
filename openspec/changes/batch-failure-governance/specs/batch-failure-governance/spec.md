@@ -92,8 +92,9 @@ The system SHALL treat initial `writenup/exp.py` quality as a validation-governe
 #### Scenario: Menu synchronization evidence separates solver bugs from readiness bugs
 - **WHEN** a Pwn solver fails while waiting for a banner, prompt, or menu token
 - **THEN** the diagnostics SHALL preserve whether the service readiness probe saw the prompt on a fresh connection
-- **AND** prompt/menu EOF SHALL classify as `service-readiness` when readiness evidence shows no real application prompt on a fresh connection
+- **AND** prompt/menu EOF SHALL classify as `service-readiness` only when explicit readiness evidence shows no real application prompt on a fresh connection
 - **AND** prompt/menu EOF SHALL classify as `solver` when readiness is established and the reference solver later loses synchronization
+- **AND** generic EOF evidence without a fresh-connection readiness observation SHALL preserve a missing-readiness-evidence diagnostic and SHALL NOT be treated as `service-readiness` solely because readiness is unknown
 
 #### Scenario: Solver dependency gaps are diagnostic in Phase 1
 - **WHEN** `writenup/exp.py` imports a non-standard helper module
@@ -132,7 +133,7 @@ The validation path SHALL emit and preserve a bounded diagnostic envelope whenev
 
 ### Requirement: Automatic repair stops after repeated identical failures
 
-The system SHALL stop runner automatic validation repair for a build attempt when the same normalized validation failure class and essentially the same failure signature repeat across repair rounds inside the same active runner validation/repair invocation without observable progress. The signature SHOULD be derived from structured `validation_failure_details` code/message/path data when available, then fall back to validation status, concise error text, and stdout/stderr tail evidence. The stop condition SHALL be attempt-local and invocation-local. Reaching that stop condition SHALL leave the attempt failed and SHALL not affect the repair budget or progress of sibling attempts in the same batch. Cross-request suppression across separate dashboard manual repair, retry, or revalidate requests is out of scope unless a future change adds durable failure-signature storage. Those operator-triggered paths SHALL receive the latest class and signature as context but SHALL NOT be suppressed by Phase 1 invocation-local state.
+The system SHALL stop runner automatic validation repair for a build attempt when the same normalized validation failure class and essentially the same failure signature repeat across repair rounds inside the same active runner validation/repair invocation without observable progress. The signature SHOULD be derived from structured `validation_failure_details` code/message/path data when available, then fall back to validation status, concise error text, and stdout/stderr tail evidence. The stop condition SHALL be attempt-local and invocation-local, and SHALL be evaluated after validation reruns caused by deterministic repair as well as after Hermes repair rounds. Reaching that stop condition SHALL leave the attempt failed and SHALL not affect the repair budget or progress of sibling attempts in the same batch. Cross-request suppression across separate dashboard manual repair, retry, or revalidate requests is out of scope unless a future change adds durable failure-signature storage. Those operator-triggered paths SHALL receive the latest class and signature as context but SHALL NOT be suppressed by Phase 1 invocation-local state.
 
 #### Scenario: Repeated timeout stops repair for one attempt
 - **WHEN** the same build attempt times out repeatedly with the same structured-or-derived signature and no progress change inside one validation/repair invocation
@@ -176,3 +177,54 @@ The system SHALL treat each build attempt in a batch as an independent failure d
 - **WHEN** two attempts in the same batch fail for different reasons
 - **THEN** each attempt SHALL retain its own derived failure class, invocation-local signature state, and summary
 - **AND** neither attempt SHALL overwrite the other's diagnostic state
+
+### Requirement: Generated Web/Pwn artifacts are normalized before first validation
+
+The system SHALL run a deterministic pre-validation normalization gate against the current attempt workspace before the first host validation run for generated Web/Pwn build attempts. The gate SHALL either repair known safe mechanical defects or fail with structured `validation_failure_details` before spending Hermes repair budget. The gate SHALL cover canonical challenge layout, required `metadata.json` and `validate.sh`, nested `output/challenges` promotion or rejection, Compose project isolation, invalid Compose file path construction, and required Pwn xinetd/chroot scaffold files when the design or metadata declares an xinetd/chroot service model. The gate SHALL be attempt-scoped and SHALL operate only on the current execution workspace for that attempt.
+
+#### Scenario: Nested generated output is normalized before validation
+- **WHEN** a generated attempt leaves a single canonical challenge root under a nested `output/challenges/<category>/<challenge-id>` tree instead of the expected current attempt output root
+- **THEN** the pre-validation gate SHALL promote or normalize that root using the existing safe deterministic mechanics
+- **AND** validation SHALL run against the normalized canonical challenge root
+- **AND** the gate SHALL fail with a contract diagnostic instead of guessing when multiple candidate roots exist
+
+#### Scenario: Compose isolation is enforced before validation
+- **WHEN** a Web/Pwn generated `validate.sh` or wrapper uses Docker Compose without an isolated project name
+- **THEN** the pre-validation gate SHALL either normalize the wrapper to use a stable `COMPOSE_PROJECT_NAME` and `docker-compose -p` for `up`, `ps`, `logs`, and `down`, or fail with detail code `compose_cross_talk`
+- **AND** the attempt SHALL NOT enter host validation with default Compose project names such as `deploy`
+
+#### Scenario: Bad compose path construction is rejected deterministically
+- **WHEN** validation commands construct paths such as `docker-compose.yml.yml` or otherwise point to a non-existent compose file while `deploy/docker-compose.yml` exists
+- **THEN** the pre-validation gate SHALL repair the path when the intended file is unambiguous
+- **AND** otherwise fail with a contract diagnostic that includes the bad path and the expected compose path
+
+#### Scenario: Pwn xinetd scaffold is a system-owned contract
+- **WHEN** a Pwn attempt declares or implies the default xinetd/chroot service model
+- **THEN** the gate SHALL verify the canonical scaffold files exist, including `deploy/Dockerfile`, `deploy/docker-compose.yml`, `deploy/_files/start.sh`, and an xinetd service file
+- **AND** missing or drifted scaffold files SHALL be normalized from the repository scaffold when safe
+- **AND** unresolved scaffold drift SHALL produce `service-readiness` or `contract` diagnostics before solver tuning is attempted
+
+### Requirement: Pwn validation distinguishes service readiness from solver quality before repair
+
+The system SHALL require Pwn validation failures to preserve enough application-level readiness and solver evidence to route repair accurately. A port-open check, container `Up` state, or xinetd `...done` log SHALL NOT by itself prove service readiness. The readiness evidence SHALL prefer a fresh connection that reads an application banner, menu, prompt, or other protocol-specific token before the reference solver sends exploit payloads. Solver repair SHALL receive bounded evidence from `validate.sh`, `writenup/exp.py`, solver stdout/stderr, service logs, readiness probes, and `writenup/pwn_debug_report.json` when present.
+
+#### Scenario: Port-open readiness is insufficient
+- **WHEN** a Pwn validation script only proves the TCP port is open or xinetd has started
+- **THEN** the attempt SHALL record a readiness diagnostic such as `pwn_port_only_readiness` or `pwn_service_readiness_failed`
+- **AND** repair SHALL prioritize readiness/scaffold/probe normalization before exploit payload changes
+
+#### Scenario: Established readiness routes later failure to solver repair
+- **WHEN** a fresh readiness probe observes the application prompt or menu
+- **AND** the reference solver later exits non-zero, loses synchronization, or fails to print the expected flag
+- **THEN** the attempt SHALL be classified as `solver`
+- **AND** the Hermes repair context SHALL include the prompt/readiness evidence so repair does not incorrectly rewrite service startup
+
+#### Scenario: Missing diagnostic envelope is repaired before payload guesses
+- **WHEN** a Pwn validation failure lacks solver stdout/stderr tails, service logs, readiness probe output, exact solver command, exit code, or structured failure details
+- **THEN** the next automatic route SHALL first normalize validation diagnostics when safe
+- **AND** Hermes SHALL NOT be asked to tune arbitrary offsets, gadgets, or leak parsing from an empty generic `nonzero_exit` summary
+
+#### Scenario: Deep exploit evidence is diagnostic-first in the first rollout
+- **WHEN** a non-trivial Pwn exploit lacks rich `pwn_debug_report.json` evidence for offsets, mitigations, gadgets, leak parsing, or local/container observations
+- **THEN** Phase 1 SHALL preserve that gap as repair context and a solver-quality diagnostic
+- **AND** Phase 1 SHALL NOT reject every simple passing ret2win or ret2text challenge solely because it lacks a full advanced evidence profile

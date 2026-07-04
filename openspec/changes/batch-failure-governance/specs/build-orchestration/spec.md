@@ -24,6 +24,7 @@ The system SHALL route validation and repair for validation-phase build-attempt 
 - **WHEN** a build attempt fails before validation because prompt inputs cannot be rendered or supplied
 - **THEN** the attempt SHALL preserve the prompt/rendering diagnostic in the existing runner failure surface
 - **AND** deterministic validation auto-repair SHALL NOT claim a class-specific prompt route for that failure in the first rollout
+- **AND** retry, repair, list, and detail derivation SHALL preserve the terminal runner phase or otherwise prove the source failure was validation before emitting `validation_failure_class` from fallback report/progress evidence
 
 #### Scenario: Contract failures use safe mechanical repairs first
 - **WHEN** a build attempt fails with normalized class `contract`
@@ -93,3 +94,32 @@ The system SHALL roll out validation failure governance in stages so operators c
 - **WHEN** an older failed attempt lacks new solver-quality evidence or diagnostic-envelope fields
 - **THEN** the API SHALL still expose available legacy diagnostics
 - **AND** missing new fields SHALL be represented as unavailable rather than breaking attempt detail rendering
+
+### Requirement: Build orchestration runs pre-validation normalization for generated Web/Pwn attempts
+
+The build orchestration path SHALL invoke the deterministic pre-validation normalization gate for generated Web/Pwn attempts before the first host validation run and before any Hermes validation repair round. The gate SHALL run in the current attempt execution workspace and SHALL NOT scan unrelated execution directories to discover challenge roots. If the gate applies safe repairs, the orchestration path SHALL continue with host build/validation using the normalized output. If the gate emits a hard deterministic blocker, the attempt SHALL fail as a validation/contract or validation/service-readiness failure with structured details, and sibling attempts SHALL continue independently.
+
+#### Scenario: Normalization precedes first validation
+- **WHEN** a generated Web/Pwn attempt reaches the build/validation orchestration path
+- **THEN** orchestration SHALL run pre-validation normalization before calling `ChallengeValidator.validate_one` for that attempt
+- **AND** validation SHALL use the normalized current attempt workspace output
+
+#### Scenario: Normalization is attempt-scoped
+- **WHEN** multiple attempts are present in `work/executions/`
+- **THEN** orchestration SHALL bind normalization, validation, repair, and revalidation to the current attempt workspace
+- **AND** it SHALL NOT select stale roots from older attempts or sibling attempts
+
+#### Scenario: Deterministic blockers stop only the current attempt
+- **WHEN** the pre-validation gate finds an unsafe or ambiguous deterministic blocker in attempt A
+- **THEN** attempt A SHALL be failed with structured validation details and a concise summary
+- **AND** attempts B and C in the same batch SHALL continue through their own normalization and validation paths
+
+#### Scenario: Safe normalization avoids spending Hermes repair budget
+- **WHEN** the gate safely repairs layout, scaffold, Compose isolation, validate wrapper, or diagnostic-envelope defects
+- **THEN** orchestration SHALL run validation on the repaired output before invoking Hermes repair
+- **AND** Hermes repair SHALL be skipped when the repaired output passes validation
+
+#### Scenario: Hard solver-stability blockers are enforced before validation can hang
+- **WHEN** a Web/Pwn default solver path hardcodes a non-validation target, performs unbounded reads/process interaction, or lacks a runnable validation entrypoint
+- **THEN** orchestration SHALL surface a structured validation diagnostic before the worker can hang or repeatedly consume repair budget
+- **AND** explicit local debug branches such as `LOCAL=1` MAY remain as long as the default validation path uses `CHAL_HOST` and `CHAL_PORT`

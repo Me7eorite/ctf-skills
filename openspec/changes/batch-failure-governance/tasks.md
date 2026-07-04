@@ -1,10 +1,25 @@
+## One-round implementation slice: raise first-pass generation success
+
+These tasks are the preferred first implementation pass. They intentionally combine the existing failure-governance work with the 2026-07-04 remote batch findings: 8/8 latest Pwn attempts failed in validation, and recent failures were dominated by solver and service-readiness issues rather than queue/Hermes infrastructure.
+
+- [ ] 0.1 Add a pre-validation normalization entrypoint that runs on the current attempt workspace before the first host validation and before Hermes repair. Reuse existing deterministic repair mechanics for safe layout/scaffold/wrapper fixes, but expose it as an explicit gate in runner/revalidation orchestration.
+- [ ] 0.2 Normalize or reject deterministic Web/Pwn blockers before validation: nested `output/challenges`, missing `metadata.json`, missing `validate.sh`, bad `docker-compose.yml.yml` paths, Compose commands without `COMPOSE_PROJECT_NAME` / `docker-compose -p`, and missing required xinetd/chroot scaffold files.
+- [ ] 0.3 Promote the default Pwn xinetd/chroot deploy scaffold to a system-owned contract: normalize `deploy/Dockerfile`, `deploy/docker-compose.yml`, `deploy/_files/start.sh`, xinetd config, image identity, container name, and service port wiring from the repository scaffold when safe.
+- [ ] 0.4 Enforce application-level Pwn readiness diagnostics: validation must distinguish port-open/xinetd-started from a fresh connection that reads a real banner/menu/prompt, and classify failures accordingly.
+- [ ] 0.5 Add hard solver-stability diagnostics for one-round blockers: default Web/Pwn solver path must use `CHAL_HOST`/`CHAL_PORT`, local debug must be explicit, solver reads/process interactions must be bounded, and failed validation must capture stdout/stderr tails, service logs, readiness output, solver command, exit code, and structured details when available.
+- [ ] 0.6 Route post-normalization failures by class: service-readiness to scaffold/readiness repair, contract to deterministic repair first, solver to Hermes repair with `validate.sh`, `writenup/exp.py`, structured details, tails, and `pwn_debug_report.json` when present, timeout to its bounded route.
+- [ ] 0.7 Stop auto-repair for the current attempt when the same normalized class/signature repeats after deterministic or Hermes repair validation reruns; keep sibling attempts running and do not suppress manual retry/repair/revalidate across requests.
+- [ ] 0.8 Expose `validation_failure_class`, normalized signature, selected route, and concise diagnostic summary in attempt list/detail and repair context using the same latest-failed-validation derivation helper.
+- [ ] 0.9 Add focused tests for the one-round path: pre-validation gate ordering, attempt-scoped workspace binding, Pwn scaffold normalization, Compose isolation, readiness-vs-solver classification, missing diagnostic envelope routing, repeated-signature stop after deterministic repair, sibling continuation, and no `consecutive_infra` increment for validation failures.
+- [ ] 0.10 Keep full Pwn evidence-profile enforcement out of this first pass. Record missing rich debug evidence as diagnostics/repair context, but do not hard-reject simple passing ret2win/ret2text challenges solely for lacking an advanced `pwn_debug_report.json`.
+
 ## Phase 1: Classification, diagnostics, and attempt-local repair governance
 
 ## 1. Taxonomy and shared derivation
 
 - [x] 1.1 Extend the validation failure classifier with normalized batch-oriented validation failure classes and an invocation-local stable failure signature.
 - [x] 1.2 Define the first-rollout closed class set as `timeout`, `service-readiness`, `contract`, and `solver`; leave prompt-input failures unclassified until prompt capture points and diagnostics are added.
-- [x] 1.3 Define the runner phase / validation status / `validation_failure_details` diagnostic-code mapping, including precedence rules and explicit `no normalized validation class` outcomes for non-validation runner phases.
+- [ ] 1.3 Tighten the runner phase / validation status / `validation_failure_details` diagnostic-code mapping so fallback report/progress evidence cannot emit a validation class unless the terminal source phase is validation.
 - [x] 1.4 Keep existing detailed validation diagnostic codes as signature inputs and repair context; do not replace them with only the normalized class.
 - [x] 1.5 Implement a shared latest-failed-validation derivation helper that reads `work/executions/<attempt_id>/current/state/validation-history.json` first, then falls back to report entries, validation status, contract errors, progress messages, and artifact metadata.
 - [x] 1.6 Expose a single attempt-level `validation_failure_class` only for the current one-build-attempt-to-one-challenge flow; return no class or per-challenge data rather than guessing if a multi-challenge attempt is encountered.
@@ -15,16 +30,16 @@
 
 ## 2. Attempt-scoped repair behavior
 
-- [x] 2.1 Define a small policy object for class-specific retry ceilings, route types (`deterministic`, `hermes`, `escalate`), and stop conditions, including the evidence rule that prompt/menu EOF is `service-readiness` only when readiness is not established and `solver` once readiness evidence exists.
+- [ ] 2.1 Tighten the policy object for class-specific retry ceilings, route types (`deterministic`, `hermes`, `escalate`), and stop conditions so prompt/menu EOF is `service-readiness` only with explicit failed fresh-connection readiness evidence, `solver` once readiness is established, and not service-readiness merely because readiness evidence is missing.
 - [x] 2.2 Split the current deterministic auto-repair entrypoint behind a class-aware policy router instead of wrapping the existing all-repairs function with ad hoc call-site checks.
 - [x] 2.3 Make the policy router choose bounded route types from the normalized validation failure class: deterministic mechanical repair for known safe fixes, Hermes repair for solver/runtime tuning, or no-op/escalation when automatic repair is unsafe.
 - [x] 2.4 Keep deterministic repair limited to safe wrapper/diagnostic normalization for solver failures; do not treat arbitrary payload, ROP, offset, leak parsing, or flag extraction tuning as deterministic auto-repair.
 - [x] 2.5 Thread latest `validation_failure_details`, stdout/stderr tails, concise `failure_summary`, normalized class, and signature into `BuildAttemptRepairService` direct repair context while preserving `validation_contract_errors` / `contract_errors` compatibility.
 - [x] 2.6 Extend retry/repair submission diagnostics so `BuildOrchestrationService` carries `validation_failure_details`, normalized class, and signature from the same latest failed validation result used by direct repair and attempt-detail APIs.
-- [x] 2.7 Stop runner automatic repair when the same validation failure class and structured-or-derived signature repeats within the same runner validation/repair invocation without progress.
+- [ ] 2.7 Stop runner automatic repair when the same validation failure class and structured-or-derived signature repeats within the same runner validation/repair invocation without progress, including repeats observed after deterministic repair reruns as well as Hermes repair reruns.
 - [x] 2.8 Do not suppress dashboard manual repair, retry, or revalidate across invocations in Phase 1; pass the latest class/signature as context only.
 - [x] 2.9 Route solver-class failures to Hermes repair with exp-specific context, including current `writenup/exp.py`, `validate.sh`, `writenup/pwn_debug_report.json` when present, structured failure details, stdout/stderr tails, concise failure summary, class, and signature.
-- [x] 2.10 Normalize validation diagnostics so failed `validate.sh` captures service state, recent logs, readiness probe result, exact solver command, solver stdout/stderr tails, exit code, and final flag candidate without polluting stdout when those fields are available.
+- [ ] 2.10 Normalize validation diagnostics so failed `validate.sh` captures service state, recent logs, readiness probe result, exact solver command, solver stdout/stderr tails, exit code, and final flag candidate without polluting stdout when those fields are available; preserve explicit unavailable markers when validation scripts omit those fields.
 - [x] 2.11 Add repair-context budgets for solver stdout/stderr, service logs, debug reports, and file context; include explicit truncation markers when caps are hit.
 
 ## 3. Batch isolation and orchestration
@@ -51,6 +66,8 @@
 - [ ] 4.12 Add a no-regression test proving validation failures do not increment the `consecutive_infra` streak.
 - [ ] 4.13 Add solver repair-context tests proving Hermes repair receives `writenup/exp.py`, `validate.sh`, pwn debug report context, structured failure details, stdout/stderr tails, failure summary, class, and signature.
 - [ ] 4.14 Add repeated-signature tests proving `solver:missing_dependency:<module>`, `solver:flag_mismatch`, `solver:pwn_prompt_eof:<marker>` after readiness is established, and `service-readiness:pwn_prompt_eof:<marker>` before readiness is established are treated as materially different failures within the same bounded budget.
+- [ ] 4.14a Add classification tests proving generic `pwn_prompt_eof` without fresh-connection readiness evidence records missing readiness evidence and does not default to `service-readiness`.
+- [ ] 4.14b Add runner tests proving repeated signatures are checked after deterministic validation repair reruns, not only after Hermes repair rounds.
 - [ ] 4.15 Add validation-diagnostic-envelope tests proving failed validation preserves solver stdout/stderr tails, service logs/readiness evidence, exact solver command, exit code, and structured failure details for the next repair prompt when those fields are available.
 - [ ] 4.16 Add signature-normalization tests proving volatile fields do not create fake new failures and stable diagnostic markers still distinguish materially different failures.
 - [ ] 4.17 Add repair-context budget tests proving oversized logs/debug reports are truncated with explicit markers and useful tails/summaries remain present.

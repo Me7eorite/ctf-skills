@@ -18,6 +18,29 @@ Batch build attempts currently inherit a mostly single-attempt validation repair
 - No change to the sequential driver's existing consecutive infrastructure fail-fast behavior.
 - No hard solver-quality gate in Phase 1. Phase 1 may classify and expose solver-quality diagnostics, but documentation-completion blockers and Pwn evidence-profile enforcement are staged behind visible diagnostics and dedicated tests.
 
+## Recent Batch Evidence
+
+The 2026-07-04 remote queue on `192.168.6.233:/root/ctf-skills` provides the concrete failure surface this change should optimize for. The latest full queue (`iter-009`) processed 8 Pwn build attempts across four dashboard lanes and all 8 failed in `hermes_phase=validation`. The lane summaries showed no Hermes auth/rate-limit/queue-dispatch bottleneck. A broader recent sample of 80 reports contained 24 passes and 56 `nonzero_exit` failures; 49 of the failures were solver-class and 7 were service-readiness. The repeated evidence classes were:
+
+- Service readiness: containers were `Up` and xinetd logged `...done`, but application-level banner/menu probes returned nothing or timed out.
+- Solver runtime: `writenup/exp.py` connected to the service but did not recover a flag, exited non-zero, lost prompt synchronization, or relied on brittle payload constants.
+- Deterministic contract/layout defects: nested `output/challenges` trees, `docker-compose.yml.yml` path construction, missing scaffold files, missing or weak diagnostics, and Compose commands without an isolated project.
+- Repair-loop waste: reports often claimed validation was prepared or locally passing, but host validation still failed and the shard remained in `failed/`.
+
+The design should therefore not spend its first implementation round on historical analytics or broad UI reporting. It should prevent the known deterministic defects before the first validation run, preserve enough validation evidence to repair true solver failures, and stop identical no-progress repair loops.
+
+## One-Round Solution
+
+The first implementation slice is intentionally narrow enough to ship in one pass:
+
+1. Run a pre-validation normalization gate on the current attempt workspace before the first host validation run and before any Hermes repair. Reuse existing deterministic repair mechanics where possible, but make the gate explicit in the runner/revalidation path.
+2. Promote the default Pwn xinetd/chroot deploy scaffold to a system-owned contract. The generator may still author challenge source, binary, port, metadata, and solver, but the system normalizes scaffold files, image identity, compose isolation, and validate wrapper shape before validation.
+3. Hard-block deterministic stability defects that cannot be solved by retrying the model: invalid canonical challenge layout, missing `metadata.json` or `validate.sh`, missing required Pwn scaffold files for xinetd/chroot tasks, missing Compose project isolation, bad compose file path construction, default-path hardcoded service target in Web/Pwn solvers, unbounded solver reads that can hang validation, and absent validation diagnostics after a failure.
+4. Keep exploit-quality evidence diagnostic-first in the first pass. Missing rich `pwn_debug_report.json` should improve repair prompts and summaries, but should not block every simple ret2win/ret2text challenge until profile-specific tests exist.
+5. Classify and route validation failures after normalization: service-readiness goes to scaffold/readiness repair first, contract goes to deterministic repair first, solver goes to Hermes repair with `validate.sh`, `writenup/exp.py`, structured details, tails, and debug evidence, and timeout uses its own bounded route.
+6. Compare normalized failure signatures after every deterministic and Hermes repair validation rerun. If the same class/signature repeats inside the invocation, stop auto-repair for that attempt and continue sibling attempts.
+
+This shifts the system from "prompt harder, retry more" to "make the generated artifact structurally valid first, then spend model budget only on the remaining semantic exploit problem."
 ## Decisions
 
 1. Use a normalized validation failure classification layer instead of ad hoc log parsing in each service.
@@ -26,12 +49,12 @@ Batch build attempts currently inherit a mostly single-attempt validation repair
 2. Keep runner-phase failures outside this normalized validation class unless an explicit mapping exists.
    Existing runner-phase categories remain authoritative for non-validation failures. API responses should not invent a validation failure class for phases such as `hermes_auth`, `hermes_rate_limit`, `hermes_timeout`, `terminal_workspace`, `materialize`, or `contract_prepare`.
 
-   Classification should use this precedence: timeout status or timeout diagnostics first; readiness-specific `validation_failure_details[].code` next; contract/gate diagnostics next; solver/runtime statuses last. This matters because readiness problems may currently surface as `contract_failed` with readiness-specific detail codes. Menu/prompt EOF evidence is context-sensitive: it is `service-readiness` only when readiness evidence shows the service did not expose a real application prompt on a fresh connection; it is `solver` when readiness is established and the reference solver later loses synchronization.
+   Classification should use this precedence: timeout status or timeout diagnostics first; readiness-specific `validation_failure_details[].code` next; contract/gate diagnostics next; solver/runtime statuses last. This matters because readiness problems may currently surface as `contract_failed` with readiness-specific detail codes. Menu/prompt EOF evidence is context-sensitive: it is `service-readiness` only when readiness evidence explicitly shows the service did not expose a real application prompt on a fresh connection; it is `solver` when readiness is established and the reference solver later loses synchronization. If the latest result only contains generic EOF evidence and no freshness/readiness observation, Phase 1 should preserve a "readiness evidence unavailable" diagnostic and prefer the solver route after required contracts have passed, rather than assuming service readiness failed.
 
    | Evidence source | Example status or diagnostic | Normalized validation class |
    | --- | --- | --- |
    | validation status or detail code | `timeout` | `timeout` |
-   | validation detail code | `pwn_service_readiness_failed`, `pwn_port_only_readiness`, `pwn_bad_readiness_probe`, readiness-probe `pwn_prompt_eof` | `service-readiness` |
+   | validation detail code | `pwn_service_readiness_failed`, `pwn_port_only_readiness`, `pwn_bad_readiness_probe`, readiness-probe `pwn_prompt_eof` with explicit failed fresh-connection evidence | `service-readiness` |
    | validation status, phase, or detail code | `contract_failed`, `missing_validation`, `invalid_metadata`, `phase=contract`, `phase=gate`, missing required file/field/metadata/attachment/validation script/evidence contract | `contract` |
    | validation status or detail code | `nonzero_exit`, `flag_mismatch`, `missing_dependency`, solver-sync `pwn_prompt_eof`, exploit/runtime failure after required contracts and readiness are established | `solver` |
    | runner phase | `hermes_auth`, `hermes_rate_limit`, `hermes_timeout`, `terminal_workspace`, `materialize`, `contract_prepare` | no normalized validation class |
@@ -44,7 +67,7 @@ Batch build attempts currently inherit a mostly single-attempt validation repair
    The normalized class is derived from the latest validation result and existing diagnostics for the current attempt. Phase 1 SHALL use the latest failed result in `work/executions/<attempt_id>/current/state/validation-history.json` as the primary structured source, because artifact `metadata.json` and the current report merge path do not preserve `validation_failure_details` reliably. If history is unavailable, derivation may fall back to report challenge entries that preserve `validation_failure_details`, then to `validation_status`, `validation_contract_errors`, progress-event terminal messages, and artifact metadata. The shared derivation helper should be used by attempt-detail/list API payloads, retry context, and manual repair context so those paths classify the same failure consistently. It may copy `validation_failure_class` into existing progress-event or attempt-summary payloads for operator visibility, but those copies are not the durable source of truth and no new table or required schema field is introduced.
 
 5. Treat repeated identical failure signatures as an invocation-local stop signal.
-   When an attempt fails with the same class and effectively the same signature across repair rounds inside the same active runner validation/repair invocation, the runner should stop automatic repair and hand control back to the operator instead of looping. This stop rule applies to the runner's in-process automatic validation repair loop. Dashboard manual repair, retry, and revalidate calls remain separate operator-triggered invocations; they should receive the latest signature and class for context, but Phase 1 does not suppress them across requests.
+   When an attempt fails with the same class and effectively the same signature across repair rounds inside the same active runner validation/repair invocation, the runner should stop automatic repair and hand control back to the operator instead of looping. This stop rule applies after every validation rerun caused by deterministic repair and after every Hermes repair round, not only after AI repair. Dashboard manual repair, retry, and revalidate calls remain separate operator-triggered invocations; they should receive the latest signature and class for context, but Phase 1 does not suppress them across requests.
 
 6. Add a policy router in front of deterministic repair.
    The existing deterministic repair service applies a bundle of mechanical repairs to a challenge directory. This change should introduce a small class-aware repair policy/router before or inside that service so `timeout`, `service-readiness`, `contract`, and `solver` can select a bounded route without hard-coding class checks at unrelated call sites. A route may run deterministic mechanical repair, invoke Hermes repair with structured diagnostics, or stop/escalate when deterministic repair would be unsafe. Contract and service-readiness classes may use deterministic repairs when the detail code maps to an existing safe mechanic; solver failures should normally go to Hermes repair with file context and diagnostics rather than pretending deterministic auto-repair can tune exploit logic.
@@ -60,6 +83,8 @@ Batch build attempts currently inherit a mostly single-attempt validation repair
 
 10. Make solver repair evidence-rich before spending Hermes budget.
     Solver-class repair should include the latest `validate.sh`, `writenup/exp.py`, relevant `writenup/pwn_debug_report.json` when present, `validation_failure_details`, stdout/stderr tails, and concise failure summary in the repair prompt. The repair route should tell Hermes whether the failure looks like dependency, synchronization, wrong flag, offset/payload, leak parsing, or remote/local mismatch. Deterministic repair may normalize wrappers or add missing diagnostic plumbing, but it should not claim to tune arbitrary exploit payload logic.
+
+    Prompt-input/render failures remain outside this route unless the terminal runner phase is validation and the latest validation result supplies stable validation evidence. Call sites that derive retry, repair, or API summaries must pass or preserve the terminal runner phase when the source failure is not validation, so fallback report/progress text cannot accidentally become a solver-class validation failure.
 
 11. Use signatures fine-grained enough to avoid false stop conditions.
     The repeated-failure stop rule should compare normalized class plus a compact diagnostic signature such as `solver:missing_dependency:pwn`, `solver:pwn_prompt_eof:recvuntil Choice`, `solver:flag_mismatch`, or `service-readiness:pwn_bad_readiness_probe`. A second solver failure with a materially different detail code, traceback frame, missing module, or flag mismatch evidence should be eligible for its own bounded repair round instead of being suppressed as "same class again."
