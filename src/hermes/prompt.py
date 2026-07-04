@@ -144,8 +144,14 @@ Directory discipline:
   `./output/challenges/<category>/<id>-<slug>/deploy/Dockerfile`; if you need a
   workspace-root path, first verify `./input/shard.json` exists from that root.
 - Do not use absolute synthetic paths such as `/output/...`, `/attachments/...`,
-  `/writenup/...`, or `/workspace/executions/...` in write tools. Use paths
-  relative to the workspace root or the exact challenge root you have entered.
+  or `/writenup/...` in write tools. A real absolute path printed by `pwd -P`
+  or `find` is allowed and preferred for file tools when the tool cwd may have
+  drifted; do not invent or concatenate absolute paths from memory.
+- Before every `read_file`, `write_file`, or patch on a challenge file, decide
+  which root the path is relative to. If the path starts with
+  `./output/challenges/`, first verify the current tool cwd is the workspace
+  root; otherwise use the real absolute challenge path or a path relative to the
+  entered challenge root such as `writenup/wp.md`.
 - Before reading optional files such as `deploy/src/Makefile`, `attachments/*`,
   or `writenup/pwn_debug_report.json`, list the containing directory first.
   If an optional file is missing, create or adapt the expected file instead of
@@ -373,9 +379,10 @@ def _repair_steps_for_status(
                 ),
                 (
                     "If the error came from the scaffold, edit "
-                    "`../references/scaffolds/pwn/xinetd-chroot/` from a `current/` "
-                    "workspace, or `./references/scaffolds/pwn/xinetd-chroot/` when "
-                    "that path exists, and then let Hermes rebuild."
+                    "the pwn scaffold reference directory visible from the active "
+                    "execution workspace. Check `pwd` before reading it; "
+                    "`references/scaffolds/...` paths are workspace-relative, not "
+                    "repository-root paths."
                 ),
             ] + ([f"Host hint: {failure_hint}"] if failure_hint else [])
         if (
@@ -752,9 +759,11 @@ Web / Pwn:
 - Web additionally requires `metadata.runtime` and `metadata.framework`.
 
 Pwn container launcher:
-- Prefer the fixed xinetd + chroot + TCP socket scaffold
-  at `../references/scaffolds/pwn/xinetd-chroot/` from a `current/` workspace,
-  or `./references/scaffolds/pwn/xinetd-chroot/` when that path exists. Copy its `deploy/` tree into the challenge and
+- Prefer the fixed xinetd + chroot + TCP socket scaffold reference visible from
+  the active execution workspace. Check `pwd` first, then use the scaffold path
+  from the prompt's `Pwn scaffold reference:` line; do not try
+  `references/scaffolds/...` from the repository root or from a skill directory.
+  Copy its `deploy/` tree into the challenge and
   replace placeholders such as `{{BINARY_NAME}}` and `{{SERVICE_PORT}}`; keep the
   scaffold's fixed `ctf` user with uid/gid `1000:1000`. This scaffold is the
   factory-normalized form of `ctf-docker-template/pwn-ubuntu_20.04`; do not invent a fresh Docker/chroot layout.
