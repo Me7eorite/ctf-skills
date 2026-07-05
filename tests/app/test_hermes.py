@@ -1,4 +1,5 @@
-﻿import json
+﻿import inspect
+import json
 import subprocess
 import tempfile
 import time
@@ -16,6 +17,12 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class HermesRunnerTests(unittest.TestCase):
+    def test_run_accepts_attempt_deadline_parameters(self):
+        signature = inspect.signature(HermesRunner.run)
+
+        self.assertIn("attempt_timeout_seconds", signature.parameters)
+        self.assertIn("attempt_deadline", signature.parameters)
+
     def test_validation_prompt_requires_clean_stdout_and_stale_cleanup(self):
         prompt = (ROOT / "prompts" / "shard_prompt.md").read_text(encoding="utf-8")
         self.assertIn("redirect its output to stderr (`>&2`)", prompt)
