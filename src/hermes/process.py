@@ -33,7 +33,11 @@ TERMINATION_WAIT_TIMEOUT = 10
 _ERROR_MARKER_MAX_BYTES = 64 * 1024
 _CTF_HERMES_LABEL_KEY = "ctf-skills-hermes-run"
 _CTF_HERMES_OWNER_LABEL_KEY = "ctf-skills-owner"
+_CTF_HERMES_EXECUTION_LABEL_KEY = "ctf-skills-execution"
 _CTF_HERMES_LABEL_ENV = "CTF_SKILLS_HERMES_DOCKER_LABEL"
+_CTF_HERMES_EXECUTION_ENV = "CTF_SKILLS_EXECUTION_ID"
+_CTF_HERMES_TASK_ENV = "CTF_SKILLS_HERMES_TASK_ID"
+_CTF_HERMES_BOOTSTRAP_DIR = Path(__file__).resolve().parents[1] / "hermes_sitecustomize"
 # The probe starts a full Hermes CLI process. On server-side custom providers,
 # plugin loading plus model metadata probing can take over a minute before the
 # first terminal/file tool call is made, so keep this comfortably above that
@@ -289,7 +293,8 @@ def configure_terminal_workspace(
     container backends, Hermes terminal/file tools have their own runtime cwd.
     The Docker backend treats host paths under ``/root`` as container-internal,
     so per-attempt cwd passthrough is unreliable there. Mount the stable
-    ``work/executions`` root and point the container cwd at the matching path.
+    current execution workspace and point the container cwd at that isolated
+    mount. Sibling executions are intentionally not visible in the container.
     """
     backend = terminal_backend.strip().lower() if isinstance(terminal_backend, str) else ""
     if backend != "docker":
@@ -303,13 +308,37 @@ def configure_terminal_workspace(
     # previous attempt. Build workspaces are per-attempt, so force the backend to
     # start with the current cwd/mount contract instead of reusing stale state.
     environment["TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES"] = "false"
+    environment.setdefault("TERMINAL_CONTAINER_PERSISTENT", "true")
     label = docker_cleanup_label or docker_invocation_label(cwd)
+    attempt = _attempt_id_from_execution_cwd(cwd)
+    task_id = docker_task_id(cwd)
     environment[_CTF_HERMES_LABEL_ENV] = label
+    environment[_CTF_HERMES_TASK_ENV] = task_id
+    if attempt:
+        environment[_CTF_HERMES_EXECUTION_ENV] = attempt
+    _prepend_pythonpath(environment, _CTF_HERMES_BOOTSTRAP_DIR)
+    _merge_json_object_env(
+        environment,
+        "TERMINAL_DOCKER_ENV",
+        {
+            _CTF_HERMES_LABEL_ENV: label,
+            _CTF_HERMES_TASK_ENV: task_id,
+            **({_CTF_HERMES_EXECUTION_ENV: attempt} if attempt else {}),
+        },
+    )
     _append_docker_extra_args(
         environment,
         [
             "--label",
             f"{_CTF_HERMES_OWNER_LABEL_KEY}=ctf-skills",
+            *(
+                [
+                    "--label",
+                    f"{_CTF_HERMES_EXECUTION_LABEL_KEY}={attempt}",
+                ]
+                if attempt
+                else []
+            ),
             "--label",
             f"{_CTF_HERMES_LABEL_KEY}={label}",
         ],
@@ -321,6 +350,13 @@ def docker_invocation_label(cwd: Path) -> str:
     attempt = _attempt_id_from_execution_cwd(cwd)
     raw = f"{attempt or 'workspace'}-{os.getpid()}-{uuid.uuid4().hex[:10]}"
     return _sanitize_docker_label(raw)[:63] or uuid.uuid4().hex[:12]
+
+
+def docker_task_id(cwd: Path) -> str:
+    """Return the stable Hermes tool-runtime isolation key for this workspace."""
+    attempt = _attempt_id_from_execution_cwd(cwd)
+    raw = f"ctf-build-{attempt or 'workspace'}"
+    return _sanitize_docker_label(raw)[:63] or "ctf-build-workspace"
 
 
 def _attempt_id_from_execution_cwd(cwd: Path) -> str | None:
@@ -347,15 +383,49 @@ def _append_docker_extra_args(environment: dict[str, str], extra_args: list[str]
     environment["TERMINAL_DOCKER_EXTRA_ARGS"] = json.dumps(merged)
 
 
+def _merge_json_object_env(
+    environment: dict[str, str],
+    name: str,
+    updates: Mapping[str, str],
+) -> None:
+    raw = environment.get(name)
+    current: dict[str, Any] = {}
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                current = {str(key): value for key, value in parsed.items()}
+        except json.JSONDecodeError:
+            current = {}
+    current.update({key: str(value) for key, value in updates.items()})
+    environment[name] = json.dumps(current)
+
+
+def _prepend_pythonpath(environment: dict[str, str], path: Path) -> None:
+    if not path.is_dir():
+        return
+    current = environment.get("PYTHONPATH", "")
+    entry = str(path)
+    parts = [part for part in current.split(os.pathsep) if part]
+    if entry in parts:
+        return
+    environment["PYTHONPATH"] = os.pathsep.join([entry, *parts])
+
+
 def _docker_workspace_mapping(cwd: Path) -> tuple[str, list[str]]:
     resolved = cwd.resolve()
     parts = resolved.parts
-    for index in range(len(parts) - 1):
-        if parts[index] == "work" and parts[index + 1] == "executions":
-            host_root = Path(*parts[: index + 2])
+    for index in range(len(parts) - 3):
+        if (
+            parts[index] == "work"
+            and parts[index + 1] == "executions"
+            and parts[index + 3] == "current"
+        ):
+            host_root = Path(*parts[: index + 4])
             relative = resolved.relative_to(host_root).as_posix()
-            container_root = "/workspace/executions"
-            return f"{container_root}/{relative}", [f"{host_root}:{container_root}"]
+            container_root = "/workspace/current"
+            container_cwd = container_root if relative == "." else f"{container_root}/{relative}"
+            return container_cwd, [f"{host_root}:{container_root}"]
     return "/workspace", [f"{resolved}:/workspace"]
 
 
@@ -767,6 +837,13 @@ def invoke(
             f"cwd: {cwd}\n"
             f"timeout: {effective_timeout}s\n"
         )
+        env_summary = _invocation_env_summary(safe_environment)
+        output.write("env:\n")
+        output.write(
+            "  " + "\n  ".join(env_summary) + "\n"
+            if env_summary
+            else "  (none)\n"
+        )
         if prompt_sanitized:
             output.write(f"{NUL_SANITIZED_MESSAGE}\n")
         if arguments_sanitized or environment_sanitized:
@@ -780,6 +857,7 @@ def invoke(
             profile_log_path,
             output,
             stop_event=tail_stop,
+            line_filter=safe_environment.get(_CTF_HERMES_LABEL_ENV),
         )
         process: subprocess.Popen[str] | None = None
         try:
@@ -908,14 +986,39 @@ def _marker_is_rate_limit(marker: Any) -> bool:
     return status == "429" or "rate_limit" in error_type or "overloaded" in error_type
 
 
+_INVOKE_LOGGED_ENV_KEYS = (
+    "HERMES_HOME",
+    "HERMES_CMD",
+    "HERMES_PROFILE",
+    "CUSTOM_BASE_URL",
+    "TERMINAL_ENV",
+    "TERMINAL_CWD",
+    "TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE",
+    "TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES",
+    "TERMINAL_CONTAINER_PERSISTENT",
+    _CTF_HERMES_EXECUTION_ENV,
+    _CTF_HERMES_TASK_ENV,
+    _CTF_HERMES_LABEL_ENV,
+)
+
+
+def _invocation_env_summary(environment: Mapping[str, str]) -> list[str]:
+    return [
+        f"{key}={environment[key]}"
+        for key in _INVOKE_LOGGED_ENV_KEYS
+        if key in environment
+    ]
+
+
 def _start_profile_log_mirror(
     profile_log_path: Path | None,
     output,
     *,
     stop_event: threading.Event,
+    line_filter: str | None = None,
 ) -> threading.Thread | None:
-    """Mirror new Hermes profile log lines into the per-attempt log while running."""
-    if profile_log_path is None:
+    """Mirror only profile log lines explicitly tied to this invocation."""
+    if profile_log_path is None or not line_filter:
         return None
 
     def _mirror() -> None:
@@ -935,7 +1038,8 @@ def _start_profile_log_mirror(
             if not chunk:
                 continue
             for line in chunk.splitlines(True):
-                output.write("[profile] " + line)
+                if line_filter in line:
+                    output.write("[profile] " + line)
             output.flush()
 
     thread = threading.Thread(target=_mirror, daemon=True)
@@ -1033,7 +1137,15 @@ def _detect_json_error_marker(text: str) -> dict[str, Any] | None:
 
 
 # 中文注释：只有这些环境变量会写入捕获日志头，`CUSTOM_API_KEY` 等密钥会被刻意省略。
-_LOGGED_ENV_KEYS = ("HERMES_HOME", "HERMES_CMD", "HERMES_PROFILE", "CUSTOM_BASE_URL")
+_LOGGED_ENV_KEYS = (
+    "HERMES_HOME",
+    "HERMES_CMD",
+    "HERMES_PROFILE",
+    "CUSTOM_BASE_URL",
+    _CTF_HERMES_EXECUTION_ENV,
+    _CTF_HERMES_TASK_ENV,
+    _CTF_HERMES_LABEL_ENV,
+)
 
 
 def invoke_capture(

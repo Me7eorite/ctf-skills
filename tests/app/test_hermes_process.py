@@ -9,6 +9,7 @@ Hermes) so the threading and termination paths are end-to-end covered.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -16,6 +17,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -406,7 +408,7 @@ class ProjectHermesHomeTests(unittest.TestCase):
 
 
 class ConfigureTerminalWorkspaceTests(unittest.TestCase):
-    def test_docker_backend_mounts_executions_root_and_uses_container_cwd(self):
+    def test_docker_backend_mounts_current_execution_workspace_only(self):
         with tempfile.TemporaryDirectory() as temp:
             cwd = Path(temp) / "work" / "executions" / "attempt" / "current"
             cwd.mkdir(parents=True)
@@ -418,14 +420,40 @@ class ConfigureTerminalWorkspaceTests(unittest.TestCase):
                 terminal_backend="docker",
             )
 
-            executions = Path(temp) / "work" / "executions"
-            expected_volume = f"{executions.resolve()}:/workspace/executions"
+            expected_volume = f"{cwd.resolve()}:/workspace/current"
 
         self.assertEqual(environment["_HERMES_GATEWAY"], "1")
-        self.assertEqual(environment["TERMINAL_CWD"], "/workspace/executions/attempt/current")
+        self.assertEqual(environment["TERMINAL_CWD"], "/workspace/current")
         self.assertEqual(environment["TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE"], "1")
         self.assertEqual(json.loads(environment["TERMINAL_DOCKER_VOLUMES"]), [expected_volume])
         self.assertEqual(environment["TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES"], "false")
+        self.assertEqual(environment["TERMINAL_CONTAINER_PERSISTENT"], "true")
+        self.assertEqual(environment["CTF_SKILLS_EXECUTION_ID"], "attempt")
+        self.assertEqual(environment["CTF_SKILLS_HERMES_TASK_ID"], "ctf-build-attempt")
+        self.assertIn("hermes_sitecustomize", environment["PYTHONPATH"])
+        docker_env = json.loads(environment["TERMINAL_DOCKER_ENV"])
+        self.assertEqual(docker_env["CTF_SKILLS_EXECUTION_ID"], "attempt")
+        self.assertEqual(docker_env["CTF_SKILLS_HERMES_TASK_ID"], "ctf-build-attempt")
+        extra_args = json.loads(environment["TERMINAL_DOCKER_EXTRA_ARGS"])
+        self.assertIn("ctf-skills-owner=ctf-skills", extra_args)
+        self.assertIn("ctf-skills-execution=attempt", extra_args)
+
+    def test_docker_backend_keeps_non_execution_cwd_fallback(self):
+        with tempfile.TemporaryDirectory() as temp:
+            cwd = Path(temp) / "workspace"
+            cwd.mkdir()
+            environment = {}
+
+            configure_terminal_workspace(
+                environment,
+                cwd=cwd,
+                terminal_backend="docker",
+            )
+
+            expected_volume = f"{cwd.resolve()}:/workspace"
+
+        self.assertEqual(environment["TERMINAL_CWD"], "/workspace")
+        self.assertEqual(json.loads(environment["TERMINAL_DOCKER_VOLUMES"]), [expected_volume])
 
     def test_local_backend_leaves_environment_untouched(self):
         environment = {"TERMINAL_CWD": "/operator/default"}
@@ -437,6 +465,56 @@ class ConfigureTerminalWorkspaceTests(unittest.TestCase):
         )
 
         self.assertEqual(environment, {"TERMINAL_CWD": "/operator/default"})
+
+    def test_bootstrap_forces_file_and_terminal_tools_off_default_task(self):
+        root = Path(__file__).resolve().parents[2]
+        module_path = root / "src" / "hermes_sitecustomize" / "ctf_skills_hermes_bootstrap.py"
+        spec = importlib.util.spec_from_file_location("ctf_skills_hermes_bootstrap_test", module_path)
+        assert spec is not None
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+
+        tools_module = types.ModuleType("tools")
+        terminal_tool_module = types.ModuleType("tools.terminal_tool")
+        terminal_tool_module._task_env_overrides = {}
+        terminal_tool_module._resolve_container_task_id = lambda _task_id: "default"
+
+        def register_task_env_overrides(task_id, overrides):
+            terminal_tool_module._task_env_overrides[task_id] = overrides
+
+        terminal_tool_module.register_task_env_overrides = register_task_env_overrides
+        tools_module.terminal_tool = terminal_tool_module
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "CTF_SKILLS_HERMES_TASK_ID": "ctf-build-attempt",
+                    "TERMINAL_ENV": "docker",
+                    "TERMINAL_CWD": "/workspace/current",
+                },
+                clear=False,
+            ),
+            patch.dict(
+                sys.modules,
+                {
+                    "tools": tools_module,
+                    "tools.terminal_tool": terminal_tool_module,
+                },
+            ),
+        ):
+            module.install()
+
+        self.assertEqual(
+            terminal_tool_module._task_env_overrides["ctf-build-attempt"]["cwd"],
+            "/workspace/current",
+        )
+        self.assertEqual(terminal_tool_module._resolve_container_task_id(None), "ctf-build-attempt")
+        self.assertEqual(
+            terminal_tool_module._resolve_container_task_id("hermes-session-id"),
+            "ctf-build-attempt",
+        )
 
 
 class TerminalWorkspaceVisibilityTests(unittest.TestCase):

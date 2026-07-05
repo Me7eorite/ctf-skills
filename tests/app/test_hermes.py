@@ -464,23 +464,37 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertEqual(captured["cwd"], active)
         self.assertEqual(
             captured["environment"]["TERMINAL_CWD"],
-            "/workspace/executions/attempt/current",
+            "/workspace/current",
         )
         self.assertEqual(
             captured["environment"]["TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE"],
             "1",
         )
         volume = json.loads(captured["environment"]["TERMINAL_DOCKER_VOLUMES"])[0]
-        self.assertTrue(volume.endswith("/workspace/executions"))
+        self.assertTrue(volume.endswith("/workspace/current"))
         self.assertIn("work", volume)
         self.assertIn("executions", volume)
+        self.assertIn("/attempt/current:", volume)
+        self.assertNotIn("/workspace/executions", volume)
         self.assertEqual(
             captured["environment"]["TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES"],
             "false",
         )
+        self.assertEqual(
+            captured["environment"]["CTF_SKILLS_EXECUTION_ID"],
+            "attempt",
+        )
+        self.assertEqual(
+            captured["environment"]["CTF_SKILLS_HERMES_TASK_ID"],
+            "ctf-build-attempt",
+        )
+        docker_env = json.loads(captured["environment"]["TERMINAL_DOCKER_ENV"])
+        self.assertEqual(docker_env["CTF_SKILLS_EXECUTION_ID"], "attempt")
+        self.assertEqual(docker_env["CTF_SKILLS_HERMES_TASK_ID"], "ctf-build-attempt")
         extra_args = json.loads(captured["environment"]["TERMINAL_DOCKER_EXTRA_ARGS"])
         self.assertIn("--label", extra_args)
         self.assertIn("ctf-skills-owner=ctf-skills", extra_args)
+        self.assertIn("ctf-skills-execution=attempt", extra_args)
         self.assertTrue(
             any(arg.startswith("ctf-skills-hermes-run=attempt-") for arg in extra_args)
         )
@@ -550,7 +564,16 @@ class HermesRunnerTests(unittest.TestCase):
             self.assertFalse(any(other in prompt for other in others))
             self.assertEqual(
                 kwargs["environment"]["TERMINAL_CWD"],
-                f"/workspace/executions/{current}/current",
+                "/workspace/current",
+            )
+            self.assertNotIn("/workspace/executions", kwargs["environment"]["TERMINAL_CWD"])
+            volume = json.loads(kwargs["environment"]["TERMINAL_DOCKER_VOLUMES"])[0]
+            self.assertIn(f"/work/executions/{current}/current:", volume)
+            self.assertNotIn("/workspace/executions", volume)
+            self.assertEqual(kwargs["environment"]["CTF_SKILLS_EXECUTION_ID"], current)
+            self.assertEqual(
+                kwargs["environment"]["CTF_SKILLS_HERMES_TASK_ID"],
+                f"ctf-build-{current}",
             )
             label = kwargs["environment"]["CTF_SKILLS_HERMES_DOCKER_LABEL"]
             self.assertIn(current, label)
@@ -587,6 +610,42 @@ class HermesRunnerTests(unittest.TestCase):
             )
 
         self.assertEqual(returncode, 0)
+
+    def test_invoke_does_not_mirror_unlabeled_profile_log_by_default(self):
+        log = self.paths.logs / "profile-filter.log"
+        profile_log = self.paths.root / ".hermes" / "profiles" / "cf-pwn" / "logs" / "agent.log"
+        profile_log.parent.mkdir(parents=True, exist_ok=True)
+        profile_log.write_text("existing sibling log\n", encoding="utf-8")
+
+        class FakeProcess:
+            pid = 12345
+
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def wait(self, timeout=None):
+                profile_log.write_text(
+                    "existing sibling log\nsibling execution File not found\n",
+                    encoding="utf-8",
+                )
+                return 0
+
+        with patch("hermes.process.subprocess.Popen", FakeProcess):
+            returncode = hermes_process.invoke(
+                "prompt",
+                arguments=["hermes", "chat", "-Q", "-q"],
+                log_path=log,
+                cwd=self.paths.root,
+                environment={},
+                timeout=9,
+                profile_log_path=profile_log,
+            )
+
+        self.assertEqual(returncode, 0)
+        text = log.read_text(encoding="utf-8")
+        self.assertIn(f"profile_log: {profile_log}", text)
+        self.assertNotIn("sibling execution File not found", text)
+        self.assertNotIn("[profile]", text)
 
     def test_invoke_cleans_labeled_hermes_container(self):
         log = self.paths.logs / "cleanup.log"
