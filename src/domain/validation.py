@@ -22,6 +22,7 @@ from typing import Any, Mapping
 from core.clock import beijing_now_isoformat
 from core.jsonio import read_json, write_json
 from core.paths import ProjectPaths
+from domain.pwn_debug import classify_pwn_failure_stage, run_pwn_debug
 
 # ========== ELF 架构识别 ==========
 
@@ -79,7 +80,15 @@ _PWN_CANARY_LOW_BYTE_ONLY_RE = re.compile(
     r"(?:&\s*0xff\s*(?:==|!=)\s*0|%\s*256\s*(?:==|!=)\s*0)",
     re.IGNORECASE,
 )
-_PWN_HEX_LITERAL_RE = re.compile(r"0x[0-9a-f_]+", re.IGNORECASE)
+_PWN_CANARY_LITERAL_ASSIGN_RE = re.compile(
+    r"(?im)^\s*(?:accepted_)?canary\s*=\s*(0x[0-9a-f_]+|\d+)\b"
+)
+_PWN_CANARY_LITERAL_RETURN_RE = re.compile(
+    r"(?im)^\s*return\s+(0x[0-9a-f_]+|\d+)\b"
+)
+_PWN_CANARY_ACCEPT_RE = re.compile(
+    r"(?i)\b(?:accepted_canary|candidate|canary)\b"
+)
 _PWN_BASH_C_RE = re.compile(r"\bbash\s+-c\b")
 _APT_INSTALL_BLOCK_RE = re.compile(
     r"apt-get\s+install\b.*?(?=;|&&|\n\s*(?:RUN|COPY|CMD|ENTRYPOINT|WORKDIR|FROM)\b|$)",
@@ -389,6 +398,14 @@ def _classify_contract_error(message: str, *, status: str = "contract_failed") -
         code = "nested_output"
         path = "output/challenges"
         hint = "Move required files to the canonical challenge root and remove nested output trees."
+    elif "artifact_hygiene failed" in message:
+        phase = "gate"
+        code = "artifact_hygiene"
+        path = "."
+        hint = (
+            "Remove repair/debug residue before validation: backups, pyc/cache "
+            "files, debug_* files, nested output trees, and stray deploy flag files."
+        )
     elif "metadata." in message and "missing" in message:
         code = "missing_metadata_field"
         field = message.split("metadata.", 1)[1].split()[0]
@@ -1260,11 +1277,7 @@ def _pwn_canary_selection_errors(exp_text: str) -> list[str]:
         if "canary" in line.lower() or "leak" in line.lower()
     ]
     nearby = "\n".join(canary_lines)
-    bad_literals = [
-        literal
-        for literal in _PWN_HEX_LITERAL_RE.findall(nearby)
-        if _pwn_canary_candidate_is_implausible(literal)
-    ]
+    bad_literals = _pwn_literal_canary_candidates(exp_text)
     if bad_literals:
         errors.append(
             "writenup/exp.py accepts an implausible canary candidate that looks "
@@ -1281,6 +1294,24 @@ def _pwn_canary_selection_errors(exp_text: str) -> list[str]:
             "position across multiple fresh runs"
         )
     return errors
+
+
+def _pwn_literal_canary_candidates(exp_text: str) -> list[str]:
+    candidates: list[str] = []
+    candidates.extend(match.group(1) for match in _PWN_CANARY_LITERAL_ASSIGN_RE.finditer(exp_text))
+    lines = exp_text.splitlines()
+    for index, line in enumerate(lines):
+        match = _PWN_CANARY_LITERAL_RETURN_RE.search(line)
+        if not match:
+            continue
+        window = "\n".join(lines[max(0, index - 4) : index + 2])
+        if _PWN_CANARY_ACCEPT_RE.search(window):
+            candidates.append(match.group(1))
+    return [
+        literal
+        for literal in candidates
+        if _pwn_canary_candidate_is_implausible(literal)
+    ]
 
 
 def _pwn_canary_candidate_is_implausible(value: str | int) -> bool:
@@ -1316,19 +1347,21 @@ def _pwn_technique_consistency_errors(challenge_dir: Path, metadata: dict) -> li
     if "ret2win" in declared or "win function" in declared:
         return []
 
+    allows_ret2win = str(metadata.get("allow_ret2win") or "").lower() in {"1", "true", "yes"}
     source_text = "\n".join(
         _read_text(path) or ""
         for path in sorted((challenge_dir / "deploy" / "src").glob("**/*"))
         if path.is_file() and path.suffix in {".c", ".cc", ".cpp", ".h", ".S", ".s"}
     )
     exp_text = _read_text(challenge_dir / "writenup" / "exp.py") or ""
+    writeup_text = _read_text(challenge_dir / "writenup" / "wp.md") or ""
     combined = f"{source_text}\n{exp_text}"
     errors: list[str] = []
-    if re.search(r"\b(?:read_flag|win)\s*\(", combined):
+    if not allows_ret2win and re.search(r"\b(?:read_flag|print_flag|win)\s*\(", combined):
         errors.append(
             "pwn technique consistency failed: declared technique is "
             f"{metadata.get('primary_technique')!r}, but source/exp exposes a "
-            "read_flag()/win() ret2win shortcut"
+            "read_flag()/win()/print_flag() ret2win shortcut"
         )
     if ("srop" in declared or "sigreturn" in declared) and not re.search(
         r"\b(?:SigreturnFrame|sigreturn|rt_sigreturn|SYS_rt_sigreturn|syscall)\b",
@@ -1338,6 +1371,42 @@ def _pwn_technique_consistency_errors(challenge_dir: Path, metadata: dict) -> li
             "pwn technique consistency failed: SROP design requires the reference "
             "exploit to use sigreturn/SigreturnFrame/syscall evidence, not a "
             "different shortcut"
+        )
+    if "orw" in declared and not all(
+        re.search(pattern, exp_text, re.IGNORECASE)
+        for pattern in (r"\bopen(?:at)?\b", r"\bread\b", r"\bwrite\b")
+    ):
+        errors.append(
+            "pwn technique consistency failed: ORW design requires open/read/write "
+            "stages in writenup/exp.py"
+        )
+    if "ret2libc" in declared and not re.search(
+        r"\b(?:libc\.address|libc_base|system|execve|/bin/sh)\b",
+        exp_text,
+        re.IGNORECASE,
+    ):
+        errors.append(
+            "pwn technique consistency failed: ret2libc design requires libc base "
+            "and system/execve evidence in writenup/exp.py"
+        )
+    if ("got overwrite" in declared or "got_overwrite" in declared) and not re.search(
+        r"\b(?:got|GOT|write_primitive|overwrite)\b",
+        exp_text,
+    ):
+        errors.append(
+            "pwn technique consistency failed: GOT overwrite design requires a GOT "
+            "target and write primitive in writenup/exp.py"
+        )
+    writeup_lower = writeup_text.lower()
+    if "srop" in writeup_lower and "srop" not in declared and "sigreturn" not in declared:
+        errors.append(
+            "pwn technique consistency failed: writeup describes SROP but metadata "
+            "declares a different primary technique"
+        )
+    if "ret2win" in writeup_lower and not allows_ret2win and any(token in declared for token in strict_tokens):
+        errors.append(
+            "pwn technique consistency failed: writeup describes ret2win while "
+            "metadata declares a stricter pwn technique"
         )
     return errors
 
@@ -1606,6 +1675,34 @@ def _delivery_contract_errors(challenge_dir: Path) -> list[str]:
     for nested in ("output/challenges", "deploy/output/challenges", "attachments/output/challenges"):
         if (challenge_dir / nested).is_dir():
             errors.append(f"nested generated output tree remains at {nested}")
+    return errors
+
+
+def _artifact_hygiene_errors(challenge_dir: Path, metadata: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    forbidden_names = {"vuln_new", "vuln_backup", "__pycache__"}
+    forbidden_relatives: list[str] = []
+    for path in challenge_dir.rglob("*"):
+        if path.is_symlink():
+            continue
+        rel = path.relative_to(challenge_dir).as_posix()
+        name = path.name
+        if name in forbidden_names:
+            forbidden_relatives.append(rel)
+        elif path.is_file() and (name.endswith(".pyc") or name.startswith("debug_")):
+            forbidden_relatives.append(rel)
+    for nested in ("output/challenges", "deploy/output/challenges", "attachments/output/challenges"):
+        if (challenge_dir / nested).exists():
+            forbidden_relatives.append(nested)
+    allow_flag_file = bool(metadata.get("allow_deploy_flag_file"))
+    if not allow_flag_file and (challenge_dir / "deploy" / "_files" / "flag.txt").exists():
+        forbidden_relatives.append("deploy/_files/flag.txt")
+    if forbidden_relatives:
+        rendered = ", ".join(sorted(set(forbidden_relatives))[:12])
+        errors.append(
+            "artifact_hygiene failed: repair/debug residue remains in final "
+            f"challenge directory ({rendered})"
+        )
     return errors
 
 
@@ -2006,11 +2103,20 @@ class ChallengeValidator:
             record_status("failed", "timeout", "validation timed out")
             stdout_tail = _tail_text(exc.stdout)
             stderr_tail = _tail_text(exc.stderr)
+            pwn_debug_fields = self._pwn_debug_fields(
+                challenge_dir,
+                metadata,
+                status="timeout",
+                error="validation timed out",
+                stdout_tail=stdout_tail,
+                stderr_tail=stderr_tail,
+            )
             return {
                 **record,
                 "status": "timeout",
                 **({"stdout_tail": stdout_tail} if stdout_tail else {}),
                 **({"stderr_tail": stderr_tail} if stderr_tail else {}),
+                **pwn_debug_fields,
                 "diagnostic_unavailable": _missing_validation_diagnostics(
                     stdout_tail=stdout_tail,
                     stderr_tail=stderr_tail,
@@ -2062,9 +2168,19 @@ class ChallengeValidator:
         # 非零退出 → 失败
         if process.returncode != 0:
             record_status("failed", "nonzero_exit", f"validation exited {process.returncode}")
+            pwn_debug_fields = self._pwn_debug_fields(
+                challenge_dir,
+                metadata,
+                status="nonzero_exit",
+                error="validate.sh exited non-zero",
+                stdout_tail=record.get("stdout_tail"),
+                stderr_tail=record.get("stderr_tail"),
+                returncode=process.returncode,
+            )
             return {
                 **record,
                 "status": "nonzero_exit",
+                **pwn_debug_fields,
                 "diagnostic_unavailable": _missing_validation_diagnostics(
                     stdout_tail=record.get("stdout_tail"),
                     stderr_tail=record.get("stderr_tail"),
@@ -2113,9 +2229,19 @@ class ChallengeValidator:
             return {**record, "status": "passed"}
 
         record_status("failed", "flag_mismatch", "flag did not match metadata")
+        pwn_debug_fields = self._pwn_debug_fields(
+            challenge_dir,
+            metadata,
+            status="flag_mismatch",
+            error="flag did not match metadata",
+            stdout_tail=record.get("stdout_tail"),
+            stderr_tail=record.get("stderr_tail"),
+            returncode=process.returncode,
+        )
         return {
             **record,
             "status": "flag_mismatch",
+            **pwn_debug_fields,
             "diagnostic_unavailable": _missing_validation_diagnostics(
                 stdout_tail=record.get("stdout_tail"),
                 stderr_tail=record.get("stderr_tail"),
@@ -2127,6 +2253,48 @@ class ChallengeValidator:
                 error="flag did not match metadata",
             ),
         }
+
+    def _pwn_debug_fields(
+        self,
+        challenge_dir: Path,
+        metadata: dict[str, Any],
+        *,
+        status: str,
+        error: str | None = None,
+        stdout_tail: Any = None,
+        stderr_tail: Any = None,
+        returncode: int | None = None,
+    ) -> dict[str, Any]:
+        if metadata.get("category") != "pwn":
+            return {}
+        debug_result: dict[str, Any] | None = None
+        debug_error: str | None = None
+        try:
+            debug_result = run_pwn_debug(
+                challenge_dir,
+                timeout=min(max(self.timeout, 1), 8),
+                run_exp=True,
+            )
+        except Exception as exc:  # noqa: BLE001 - diagnostics must not mask validation
+            debug_error = f"{exc.__class__.__name__}: {exc}"
+        stage = classify_pwn_failure_stage(
+            status=status,
+            error=error,
+            stdout_tail=str(stdout_tail) if stdout_tail else None,
+            stderr_tail=str(stderr_tail) if stderr_tail else None,
+            returncode=returncode,
+            pwn_debug=debug_result,
+        )
+        fields: dict[str, Any] = {"pwn_failure_stage": stage}
+        if debug_result:
+            for key in ("result_path", "result_sha256", "actionable_summary"):
+                value = debug_result.get(key)
+                if value not in (None, "", []):
+                    fields[f"pwn_debug_{key}"] = value
+        elif debug_error:
+            fields["pwn_debug_error"] = debug_error
+            fields["pwn_debug_status"] = "debug_failed"
+        return fields
 
     def _intended_path_unnecessary(
         self, challenge_dir: Path, metadata: dict, expected_flag: str
@@ -2201,6 +2369,7 @@ class ChallengeValidator:
             ):
                 errors.append("Web metadata must record runtime and framework")
             if category == "pwn":
+                errors.extend(_artifact_hygiene_errors(challenge_dir, metadata))
                 errors.extend(_host_chroot_setup_errors(challenge_dir, metadata))
                 errors.extend(_pwn_dockerfile_scaffold_errors(challenge_dir))
                 errors.extend(_pwn_runtime_contract_errors(challenge_dir))
@@ -2407,10 +2576,15 @@ class ChallengeValidator:
         else:
             metadata.pop("solve_note", None)
         if solve_status == "passed":
+            metadata["repaired"] = True
+            metadata["publishable"] = True
             for field in (
                 "validation_failure_class",
                 "validation_failure_signature",
                 "validation_failure_details",
             ):
                 metadata.pop(field, None)
+        else:
+            metadata["repaired"] = False
+            metadata["publishable"] = False
         write_json(path, metadata)

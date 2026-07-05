@@ -37,6 +37,7 @@ from domain.pwn_artifact_evidence import (
     final_pwn_artifact_evidence,
     final_pwn_artifact_prompt_block,
 )
+from domain.pwn_debug import run_pwn_debug
 from domain.resume import (
     ChallengeResumePlan,
     ShardResumePlan,
@@ -145,6 +146,50 @@ def _validation_result_has_compose_cli_failure(result: Mapping[str, Any]) -> boo
     )
 
 
+def _repair_invocation_failure_results(
+    challenge_ids: list[str],
+    *,
+    repair_returncode: int,
+    error_marker: Mapping[str, Any] | None,
+    log_tail: str,
+) -> list[dict[str, Any]]:
+    if repair_returncode == 0:
+        return []
+    lower = log_tail.lower()
+    status = "repair_invocation_failed"
+    code = "hermes_repair_failed"
+    message = f"validation repair Hermes invocation exited {repair_returncode}"
+    if classify_hermes_exit(repair_returncode, log_tail, 0.0, error_marker) == "hermes_rate_limit":
+        status = "rate_limited"
+        code = "hermes_rate_limited"
+        message = "validation repair degraded: Hermes/API rate limited after retry budget"
+    elif "database is locked" in lower or "session not saved" in lower:
+        status = "degraded_session_state"
+        code = "degraded_session_state"
+        message = "validation repair degraded: session state was not durably saved"
+    return [
+        annotate_validation_result(
+            {
+                "challenge_id": challenge_id,
+                "solve_status": "failed",
+                "validation_status": status,
+                "validation_error": message,
+                "validation_stderr_tail": log_tail[-2000:],
+                "validation_returncode": repair_returncode,
+                "validation_failure_details": [
+                    {
+                        "phase": "repair",
+                        "code": code,
+                        "status": status,
+                        "message": message,
+                    }
+                ],
+            }
+        )
+        for challenge_id in challenge_ids
+    ]
+
+
 def _stamp_validation_results_into_outputs(
     candidates: Mapping[str, Path],
     per_results: list[dict[str, Any]],
@@ -153,6 +198,23 @@ def _stamp_validation_results_into_outputs(
     changed = False
     for result in per_results:
         result = annotate_validation_result(result)
+        authoritative_pass = (
+            result.get("solve_status") == "passed"
+            and result.get("validation_status") == "passed"
+            and result.get("validation_command")
+            and result.get("validation_returncode") == 0
+            and result.get("validation_final_flag_candidate")
+        )
+        if result.get("solve_status") == "passed" and not authoritative_pass:
+            result = {
+                **result,
+                "solve_status": "failed",
+                "validation_status": "pending_validation",
+                "validation_error": (
+                    "passed status ignored: missing authoritative validate.sh "
+                    "command, returncode, or flag candidate"
+                ),
+            }
         challenge_id = result.get("challenge_id")
         if not isinstance(challenge_id, str):
             continue
@@ -166,16 +228,38 @@ def _stamp_validation_results_into_outputs(
             updates: dict[str, Any] = {
                 "solve_status": result.get("solve_status", "failed"),
                 "validation_status": result.get("validation_status", ""),
+                "repaired": authoritative_pass,
+                "publishable": authoritative_pass,
             }
             for field in ("validation_failure_class", "validation_failure_signature"):
                 if result.get(field):
+                    updates[field] = result[field]
+                elif authoritative_pass and field in metadata:
+                    updates[field] = None
+            for field in (
+                "validation_command",
+                "validation_returncode",
+                "validation_stdout_tail",
+                "validation_stderr_tail",
+                "validation_final_flag_candidate",
+                "pwn_failure_stage",
+                "pwn_debug_result_path",
+                "pwn_debug_result_sha256",
+                "pwn_debug_actionable_summary",
+            ):
+                if result.get(field) not in (None, "", []):
                     updates[field] = result[field]
             if result.get("validation_elapsed") is not None:
                 updates["validation_elapsed"] = result.get("validation_elapsed")
             if result.get("validation_error"):
                 updates["solve_note"] = result.get("validation_error")
+            elif authoritative_pass:
+                metadata.pop("solve_note", None)
             before = dict(metadata)
             metadata.update(updates)
+            for key, value in list(metadata.items()):
+                if value is None and key in {"validation_failure_class", "validation_failure_signature"}:
+                    metadata.pop(key, None)
             if metadata != before:
                 write_json(metadata_path, metadata)
                 changed = True
@@ -1232,6 +1316,7 @@ class HermesRunner:
                 ),
             )
             self._ensure_workspace_pwn_solver_evidence(workspace, challenge_ids)
+            self._ensure_workspace_pwn_debug_results(workspace, challenge_ids)
             repair_prompt = render_validation_repair_prompt(
                 attempt=repair_attempt,
                 max_attempts=repair_budget,
@@ -1260,6 +1345,18 @@ class HermesRunner:
                 repair_tailer.stop_and_flush()
             import_workspace_report(workspace, report)
             if repair_returncode != 0:
+                repair_failure = _repair_invocation_failure_results(
+                    challenge_ids,
+                    repair_returncode=repair_returncode,
+                    error_marker=self._read_error_marker(repair_log),
+                    log_tail=self._read_tail(repair_log, 4000),
+                )
+                if repair_failure:
+                    per_results = repair_failure
+                    self._record_validation_round(
+                        workspace, validation_round + 1, per_results, validated_set
+                    )
+                    merge_validation_into_report(report, per_results)
                 _LOGGER.warning(
                     "validation debug attempt %s exited with %s",
                     repair_attempt,
@@ -1752,6 +1849,30 @@ class HermesRunner:
                 continue
 
     @staticmethod
+    def _ensure_workspace_pwn_debug_results(
+        workspace: ExecutionWorkspace,
+        challenge_ids: list[str],
+    ) -> None:
+        output_root = workspace.output / "challenges"
+        if not output_root.is_dir():
+            return
+        wanted = set(challenge_ids)
+        for challenge_dir in sorted(output_root.glob("*/*")):
+            if not challenge_dir.is_dir() or challenge_dir.is_symlink():
+                continue
+            metadata = read_json(challenge_dir / "metadata.json", {})
+            if (
+                not isinstance(metadata, dict)
+                or metadata.get("category") != "pwn"
+                or str(metadata.get("id") or "") not in wanted
+            ):
+                continue
+            try:
+                run_pwn_debug(challenge_dir, timeout=8, run_exp=True)
+            except Exception:  # noqa: BLE001 - diagnostics must not mask repair
+                continue
+
+    @staticmethod
     def _record_validation_round(
         workspace: ExecutionWorkspace,
         round_no: int,
@@ -1793,6 +1914,10 @@ class HermesRunner:
         return {
             "shard": read_json(workspace.input / "shard.json", {}),
             "current_report": read_json(workspace.report, {}),
+            "first_validation_failure": read_json(
+                workspace.state / "first-validation-failure.json",
+                {},
+            ),
             "validation_history_tail": _tail_json_list(
                 workspace.state / "validation-history.json",
                 limit=3,
@@ -1802,6 +1927,10 @@ class HermesRunner:
                 failed_ids,
             ),
             "pwn_debug_reports": _failed_challenge_debug_reports(
+                workspace.output / "challenges",
+                failed_ids,
+            ),
+            "pwn_debug_results": _failed_challenge_pwn_debug_results(
                 workspace.output / "challenges",
                 failed_ids,
             ),
@@ -2181,6 +2310,36 @@ def _failed_challenge_debug_reports(
             }
             break
     return reports
+
+
+def _failed_challenge_pwn_debug_results(
+    challenges_root: Path,
+    failed_ids: set[str],
+) -> dict[str, Any]:
+    results: dict[str, Any] = {}
+    if not challenges_root.is_dir():
+        return results
+    for challenge_dir in sorted(challenges_root.glob("*/*")):
+        if not challenge_dir.is_dir() or challenge_dir.is_symlink():
+            continue
+        metadata = read_json(challenge_dir / "metadata.json", {})
+        if not isinstance(metadata, dict):
+            continue
+        challenge_id = str(metadata.get("id") or "")
+        if challenge_id not in failed_ids or metadata.get("category") != "pwn":
+            continue
+        for path in (
+            challenge_dir / "logs" / "pwn-debug-result.json",
+            challenge_dir / "writenup" / "pwn-debug-result.json",
+        ):
+            if not path.is_file() or path.is_symlink():
+                continue
+            results[challenge_id] = {
+                "path": path.relative_to(challenge_dir).as_posix(),
+                "content": read_json(path, {}),
+            }
+            break
+    return results
 
 
 def _failed_pwn_final_artifact_evidence(

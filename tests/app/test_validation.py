@@ -545,8 +545,7 @@ class ValidationTests(unittest.TestCase):
         metadata = _write_minimal_pwn_contract(challenge)
         (challenge / "writenup").mkdir(parents=True, exist_ok=True)
         (challenge / "writenup" / "exp.py").write_text(
-            "leak = 0x00007fffd331b600\n"
-            "canary = leak\n"
+            "canary = 0x00007fffd331b600\n"
             "if canary & 0xff == 0:\n"
             "    print('accepted canary')\n",
             encoding="utf-8",
@@ -555,6 +554,24 @@ class ValidationTests(unittest.TestCase):
         errors = self.validator.contract_errors(challenge, metadata)
 
         self.assertTrue(any("implausible canary candidate" in e for e in errors))
+
+    def test_pwn_exp_does_not_treat_offsets_and_masks_as_canary_literals(self):
+        challenge = self.paths.challenges / "pwn" / "pwn-canary-offset-001"
+        metadata = _write_minimal_pwn_contract(challenge)
+        (challenge / "writenup").mkdir(parents=True, exist_ok=True)
+        (challenge / "writenup" / "exp.py").write_text(
+            "OFFSET = 0x50\n"
+            "MASK = 0xff\n"
+            "index = 0x8\n"
+            "candidate = int(leak, 16)\n"
+            "if candidate & MASK == 0:\n"
+            "    print('accepted canary after stable position checks')\n",
+            encoding="utf-8",
+        )
+
+        errors = self.validator.contract_errors(challenge, metadata)
+
+        self.assertFalse(any("implausible canary candidate" in e for e in errors))
 
     def test_pwn_srop_design_rejects_read_flag_shortcut(self):
         challenge = self.paths.challenges / "pwn" / "pwn-srop-001"
@@ -574,7 +591,18 @@ class ValidationTests(unittest.TestCase):
         errors = self.validator.contract_errors(challenge, metadata)
 
         self.assertTrue(any("technique consistency failed" in e for e in errors))
-        self.assertTrue(any("read_flag()/win()" in e for e in errors))
+        self.assertTrue(any("read_flag()/win()/print_flag()" in e for e in errors))
+
+    def test_pwn_artifact_hygiene_rejects_repair_residue(self):
+        challenge = self.paths.challenges / "pwn" / "pwn-hygiene-001"
+        metadata = _write_minimal_pwn_contract(challenge)
+        (challenge / "vuln_new").write_text("stale\n", encoding="utf-8")
+        (challenge / "__pycache__").mkdir()
+        (challenge / "debug_trace.log").write_text("debug\n", encoding="utf-8")
+
+        errors = self.validator.contract_errors(challenge, metadata)
+
+        self.assertTrue(any("artifact_hygiene failed" in e for e in errors))
 
     def test_web_contract_requires_literal_compose_flag_matching_metadata(self):
         challenge = self.paths.challenges / "web" / "web-flag-001"

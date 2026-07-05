@@ -24,6 +24,7 @@ from core.paths import ProjectPaths
 from core.queue import SUPPORTED_CATEGORIES, ShardQueue, split_matrix
 from core.state import STAGES, STATUSES, InMemoryProgressStore
 from domain.metrics import duration_breakdown
+from domain.pwn_debug import run_pwn_debug
 from domain.reports import merge_reports
 from domain.research import DIFFICULTY_LABELS, GenerationRequestStatus
 from domain.research_validators import ResearchValidationError, validate_runtime_constraints
@@ -434,6 +435,12 @@ def parser() -> argparse.ArgumentParser:
     validate.add_argument("--timeout", type=int, default=120)
     validate.add_argument("--shell", default="bash")
     validate.add_argument("--quiet", action="store_true")
+
+    pwn_debug = commands.add_parser("pwn-debug", help="collect structured Pwn diagnostics")
+    pwn_debug.add_argument("challenge_dir", type=Path)
+    pwn_debug.add_argument("--out", type=Path, default=None)
+    pwn_debug.add_argument("--timeout", type=int, default=8)
+    pwn_debug.add_argument("--skip-exp", action="store_true")
 
     progress = commands.add_parser("progress", help="record agent progress")
     progress.add_argument("--shard", required=True)
@@ -1387,6 +1394,16 @@ def main() -> None:
             )
         if summary["status_counts"].get("passed", 0) != summary["total"]:
             sys.exit(1)
+        return
+
+    if args.command == "pwn-debug":
+        result = run_pwn_debug(
+            args.challenge_dir,
+            output_path=args.out,
+            timeout=args.timeout,
+            run_exp=not args.skip_exp,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
         return
 
     if args.command == "progress":

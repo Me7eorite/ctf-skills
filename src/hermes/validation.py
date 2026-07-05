@@ -220,6 +220,12 @@ def run_validation(
                     "validation_diagnostic_unavailable": outcome.get("diagnostic_unavailable"),
                     "validation_contract_errors": contract_errors,
                     "validation_failure_details": failure_details,
+                    "pwn_failure_stage": outcome.get("pwn_failure_stage"),
+                    "pwn_debug_result_path": outcome.get("pwn_debug_result_path"),
+                    "pwn_debug_result_sha256": outcome.get("pwn_debug_result_sha256"),
+                    "pwn_debug_actionable_summary": outcome.get("pwn_debug_actionable_summary"),
+                    "pwn_debug_status": outcome.get("pwn_debug_status"),
+                    "pwn_debug_error": outcome.get("pwn_debug_error"),
                 }
             )
             state.record(

@@ -56,6 +56,12 @@ def render_validation_repair_prompt(
                     "validation_command",
                     "validation_final_flag_candidate",
                     "validation_diagnostic_unavailable",
+                    "pwn_failure_stage",
+                    "pwn_debug_result_path",
+                    "pwn_debug_result_sha256",
+                    "pwn_debug_actionable_summary",
+                    "pwn_debug_status",
+                    "pwn_debug_error",
                     "failure_kind",
                     "failure_hint",
                     "failed_step",
@@ -113,6 +119,26 @@ How to read `validation_error`:
   plaintext only from player-visible artifacts such as `attachments/`, and
   never make `validate.sh` or `writenup/exp.py` read the flag from
   compose/metadata/challenge files.
+
+Pwn repair evidence rules:
+- For Pwn failures, treat `pwn_failure_stage` and the referenced
+  `pwn-debug-result.json` as the primary repair evidence. Do not finish by only
+  changing report text, metadata, SHA fields, or `writenup/pwn_debug_report.json`.
+  A repair is complete only after `./validate.sh` is rerun by the host and a
+  `flag{...}` token is captured from real stdout.
+- Solver repairs must prove, using pwn-debug evidence, that the service is
+  connectable, leak values are stable, canary/libc/PIE/gadget sources match the
+  current `metadata.artifact`, payload offsets come from disassembly or dynamic
+  verification, and `writenup/exp.py` actually emits a flag candidate.
+- If `pwn_failure_stage` is `readiness`, fix service protocol, host/port,
+  banner/menu probing, logs, and readiness diagnostics first. Do not turn this
+  into a SHA-only or metadata-only repair.
+- If `pwn_failure_stage` is `payload_control_flow`, assume readiness/leak work
+  is already past the first hurdle unless pwn-debug explicitly shows unstable
+  leaks; focus on final control flow, stack alignment, payload layout, and flag
+  read path.
+- If the declared design is SROP, ORW, ret2libc, or GOT overwrite, preserve that
+  technique. Do not replace it with `read_flag()`, `win()`, or ret2win shortcuts.
 {_VALIDATION_CONTRACT_CHECKLIST}{non_regression}
 This is a validation-debug continuation, not a broad redesign. First understand
 the inherited context above and the current files before editing. The host runner

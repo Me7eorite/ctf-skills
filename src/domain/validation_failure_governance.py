@@ -138,12 +138,27 @@ def normalized_validation_failure_class(
         return None
 
     status = str(result.get("validation_status") or result.get("status") or "").strip()
+    pwn_stage = str(result.get("pwn_failure_stage") or "").strip()
     detail_items = _failure_details(result)
     detail_codes = {str(item.get("code") or "").strip() for item in detail_items}
     detail_phases = {str(item.get("phase") or "").strip() for item in detail_items}
 
     if status in _TIMEOUT_STATUSES or "timeout" in detail_codes:
         return "timeout"
+    if pwn_stage == "readiness":
+        return "service-readiness"
+    if pwn_stage in {
+        "connection",
+        "leak",
+        "canary_or_offset",
+        "payload_control_flow",
+        "shell",
+        "flag_read",
+        "solver",
+    }:
+        return "solver"
+    if pwn_stage == "contract":
+        return "contract"
     readiness_observation = _readiness_observation(result, detail_items)
     if _exploit_stage_started(result, detail_items):
         if detail_codes & _READINESS_CODES or "pwn_prompt_eof" in detail_codes:
@@ -184,6 +199,9 @@ def validation_failure_signature(
     status = str(result.get("validation_status") or result.get("status") or "").strip()
     if status:
         parts.append(f"status={status}")
+    pwn_stage = _stable_text(result.get("pwn_failure_stage"))
+    if pwn_stage:
+        parts.append(f"pwn_stage={pwn_stage}")
     if failure_class == "timeout":
         timeout_subreason = timeout_failure_subreason(result)
         if timeout_subreason:
@@ -291,6 +309,12 @@ def attempt_level_validation_failure(results: Sequence[Mapping[str, Any]]) -> di
             "validation_returncode",
             "validation_final_flag_candidate",
             "validation_diagnostic_unavailable",
+            "pwn_failure_stage",
+            "pwn_debug_result_path",
+            "pwn_debug_result_sha256",
+            "pwn_debug_actionable_summary",
+            "pwn_debug_status",
+            "pwn_debug_error",
         )
         if (value := result.get(key)) not in (None, "", [])
     }
@@ -383,6 +407,15 @@ def _summarize_single_result(result: Mapping[str, Any], *, source: str) -> dict[
             limit=200,
         ),
         "validation_diagnostic_unavailable": normalized.get("validation_diagnostic_unavailable"),
+        "pwn_failure_stage": normalized.get("pwn_failure_stage"),
+        "pwn_debug_result_path": normalized.get("pwn_debug_result_path"),
+        "pwn_debug_result_sha256": normalized.get("pwn_debug_result_sha256"),
+        "pwn_debug_actionable_summary": _stable_text(
+            normalized.get("pwn_debug_actionable_summary"),
+            limit=1000,
+        ),
+        "pwn_debug_status": normalized.get("pwn_debug_status"),
+        "pwn_debug_error": _stable_text(normalized.get("pwn_debug_error"), limit=1000),
         "failure_kind": normalized.get("failure_kind"),
         "failure_hint": _stable_text(normalized.get("failure_hint"), limit=1000),
         "failed_step": _stable_text(normalized.get("failed_step"), limit=1000),
