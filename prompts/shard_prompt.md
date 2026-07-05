@@ -495,6 +495,12 @@ authoritative `validate/passed` or `validate/failed` event.
   receives the expected banner/menu prompt such as `Choice:` before running the
   exploit. A port-only check can pass while xinetd is still initializing or can
   consume a short-lived service instance and cause the exploit to hit EOF.
+  Do not use fixed byte reads such as `head -c 200 < /dev/tcp/...` that wait
+  for EOF on interactive services. Use a short socket timeout and succeed as
+  soon as a stable token such as `Choice:`, the menu prompt, or a banner string
+  is observed. On readiness failure, print the actual probe tail plus
+  `$COMPOSE ps`, `$COMPOSE logs --no-color --tail=120`, CHAL_HOST, CHAL_PORT,
+  compose project, container, and image diagnostics to stderr.
   Do not put `nc "$CHAL_HOST" "$CHAL_PORT"` behind `bash -c` unless both
   variables are exported first; prefer a current-shell probe such as
   `printf '3\n' | timeout 3 nc "$CHAL_HOST" "$CHAL_PORT" | grep -q "Choice:"`.
@@ -524,9 +530,11 @@ authoritative `validate/passed` or `validate/failed` event.
   output for normal validation.
 - When leaking stack canaries through `%n$p`, scan a broad bounded range and
   identify canary-like values by stability across multiple fresh connections
-  and low byte `0x00`. Do not reject values merely because they are greater
-  than `2^48`; amd64 canaries commonly use the upper seven bytes and will often
-  exceed that threshold.
+  and low byte `0x00`. Exclude NULL/small integers and obvious stack/libc/PIE
+  addresses such as `0x7fff...`, `0x7f...`, and `0x55...`; a pointer whose low
+  byte is 00 is not a canary. Do not reject values merely because they are
+  greater than `2^48`; amd64 canaries commonly use the upper seven bytes and
+  will often exceed that threshold.
 - Never fall back to guessed stack addresses such as `0x7fffffffxxxx` without a
   live leak that proves the address for the current process. Establish a
   reliable stack/PIE/libc leak first or switch to a provably valid exploit chain.
@@ -661,6 +669,12 @@ violates any of them fails validation regardless of what `validate.sh` prints:
   `readelf -sW "$metadata_artifact"`, and `objdump -d "$metadata_artifact"`
   over handwritten constants; do not derive exploit offsets from `deploy/src/`
   after host build has synchronized the runtime ELF into attachments.
+- Pwn source, metadata, writeup, and `writenup/exp.py` MUST match the declared
+  primary technique. If the design says SROP/ORW/ret2libc/GOT overwrite, do not
+  add hidden `read_flag()` / `win()` / ret2win shortcuts and do not solve by
+  returning directly to such a helper unless ret2win is explicitly declared.
+  SROP writeups and solvers must actually use sigreturn/SigreturnFrame/syscall
+  evidence.
 - `validate.sh` MUST NOT contain `docker volume rm`, `docker volume prune`,
   Docker prune commands, or `docker-compose down -v`/`--volumes`. Destructive
   Docker cleanup is rejected before execution.

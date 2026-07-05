@@ -34,7 +34,7 @@ _PWN_XINETD_SCAFFOLD = _REPOSITORY_ROOT / "scaffolds" / "pwn" / "xinetd-chroot"
 _PWN_DEFAULT_SERVICE_PORT = "9999"
 _PWN_READINESS_PROBE_FUNCTION = """\
 pwn_readiness_probe() {
-  python3 - "$1" "$2" "${3:-3}" <<'PY'
+  python3 - "$1" "$2" "${3:-3}" "${4:-}" <<'PY'
 import re
 import socket
 import sys
@@ -57,6 +57,9 @@ try:
     timeout_seconds = float(raw_timeout)
 except ValueError:
     fail(f"invalid timeout: {raw_timeout!r}")
+token_re = (sys.argv[4] if len(sys.argv) > 4 else "").strip()
+if not token_re:
+    token_re = r"(Choice:|Welcome|Menu|Username:|Password:|Input:|Enter|SecureVault|> )"
 deadline = time.monotonic() + max(0.1, timeout_seconds)
 chunks = []
 last_error = None
@@ -75,7 +78,7 @@ try:
             break
         chunks.append(data)
         text = b"".join(chunks).decode("latin-1", errors="replace")
-        if re.search(r"(Choice:|Welcome|Menu|Username:|Enter)", text):
+        if re.search(token_re, text):
             break
     sock.close()
 except OSError as exc:
@@ -88,7 +91,9 @@ elif last_error is not None:
     print(f"[readiness] connection failed: {last_error}", file=sys.stderr)
 else:
     print("[readiness] no banner or menu prompt received", file=sys.stderr)
-sys.exit(0 if re.search(r"(Choice:|Welcome|Menu|Username:|Enter)", text) else 1)
+if text:
+    print(f"[readiness] probe_tail={text[-200:]!r}", file=sys.stderr)
+sys.exit(0 if re.search(token_re, text) else 1)
 PY
 }
 """
@@ -588,6 +593,7 @@ def _repair_pwn_validate_readiness_probe(
     except OSError:
         return []
     repaired = _replace_unexported_bash_nc_probe(text)
+    repaired = _replace_dev_tcp_head_probe(repaired)
     repaired = _replace_port_only_nc_probe(repaired)
     repaired = _replace_timeout_nc_banner_capture(repaired)
     if repaired != text:
@@ -631,6 +637,53 @@ def _replace_timeout_nc_banner_capture(text: str) -> str:
         )
 
     return pattern.sub(replace, text)
+
+
+def _replace_dev_tcp_head_probe(text: str) -> str:
+    token = r"(?:\"[^\"]+\"|'[^']+'|[^\s;&|)]+)"
+    dev_tcp_host = r"(?:\$CHAL_HOST|\$\{CHAL_HOST\}|\"?\$CHAL_HOST\"?)"
+    dev_tcp_port = r"(?:\$CHAL_PORT|\$\{CHAL_PORT\}|\"?\$CHAL_PORT\"?)"
+    dev_tcp = rf"/dev/tcp/{dev_tcp_host}/{dev_tcp_port}"
+    head_probe = rf"head\s+-c\s+\d+\s+<\s+{dev_tcp}"
+    grep_probe = rf"(?:\|\s*grep\s+(?:-[qE]+\s+)?(?P<token>{token}))?"
+    quoted = re.compile(
+        rf"timeout\s+(?P<timeout>\d+)\s+bash\s+-c\s+(?P<quote>['\"])(?P<body>[^'\"]*{head_probe}[^'\"]*?){grep_probe}(?P=quote)"
+    )
+
+    def replace_quoted(match: re.Match[str]) -> str:
+        return _pwn_readiness_probe_call(match.group("timeout"), match.group("token"))
+
+    text = quoted.sub(replace_quoted, text)
+
+    direct = re.compile(
+        rf"(?:timeout\s+(?P<timeout>\d+)\s+)?{head_probe}\s*{grep_probe}"
+    )
+
+    def replace_direct(match: re.Match[str]) -> str:
+        return _pwn_readiness_probe_call(match.group("timeout") or "3", match.group("token"))
+
+    return direct.sub(replace_direct, text)
+
+
+def _pwn_readiness_probe_call(timeout_seconds: str, token: str | None) -> str:
+    cleaned = _clean_grep_token(token)
+    if cleaned:
+        return (
+            f"pwn_readiness_probe \"$CHAL_HOST\" \"$CHAL_PORT\" "
+            f"{timeout_seconds} {cleaned}"
+        )
+    return f"pwn_readiness_probe \"$CHAL_HOST\" \"$CHAL_PORT\" {timeout_seconds}"
+
+
+def _clean_grep_token(token: str | None) -> str | None:
+    if not token:
+        return None
+    value = token.strip()
+    if not value:
+        return None
+    if (value[0], value[-1:]) in {("\"", "\""), ("'", "'")}:
+        return value
+    return repr(value)
 
 
 def _replace_port_only_nc_probe(text: str) -> str:

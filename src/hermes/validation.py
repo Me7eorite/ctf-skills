@@ -153,7 +153,7 @@ def run_validation(
                 )
         elapsed = outcome.get("elapsed")
 
-        if outcome.get("status") == "passed":
+        if outcome.get("status") == "passed" and outcome.get("final_flag_candidate"):
             # 校验通过
             state.record(
                 shard=original_shard_name,
@@ -171,12 +171,23 @@ def run_validation(
                     "solve_status": "passed",
                     "validation_status": "passed",
                     "validation_elapsed": elapsed,
+                    "validation_returncode": outcome.get("returncode"),
+                    "validation_command": outcome.get("command"),
+                    "validation_stdout_tail": outcome.get("stdout_tail"),
+                    "validation_stderr_tail": outcome.get("stderr_tail"),
+                    "validation_final_flag_candidate": outcome.get("final_flag_candidate"),
                 }
             )
         else:
             # 校验失败（状态可能是 nonzero_exit / flag_mismatch / timeout 等）
             status = str(outcome.get("status", "failed"))
             error = outcome.get("error")
+            if outcome.get("status") == "passed" and not outcome.get("final_flag_candidate"):
+                status = "pending_validation"
+                error = (
+                    "validator reported passed without a flag candidate from "
+                    "validate.sh stdout"
+                )
             contract_errors = outcome.get("contract_errors")
             if not error and isinstance(contract_errors, list):
                 error = "; ".join(str(item) for item in contract_errors if item)

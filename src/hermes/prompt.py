@@ -197,6 +197,12 @@ Pwn exploit debugging acceleration:
   menu or banner. `validate.sh` readiness must open a fresh TCP connection and
   read an application prompt such as `Choice:`; a bare `nc -z` port check is too
   weak and can race xinetd startup, causing the exploit to receive EOF.
+  Do not use fixed byte reads such as `head -c 200 < /dev/tcp/...`; interactive
+  services often keep the connection open, so that pattern waits for EOF and
+  causes false readiness timeouts. Use a short socket timeout and succeed as
+  soon as a stable prompt/banner token is observed. On failure, print `$COMPOSE ps`,
+  `$COMPOSE logs --no-color --tail=120`, CHAL_HOST, CHAL_PORT, compose project,
+  container/image identity, and the raw TCP probe tail to stderr.
   Do not put `nc "$CHAL_HOST" "$CHAL_PORT"` behind `bash -c` unless both
   variables are exported first. Prefer a bounded socket read probe that treats
   received banner/prompt bytes as evidence even if the interactive connection
@@ -249,9 +255,11 @@ Pwn exploit debugging acceleration:
   `logs/report.json` instead of risking a hung worker.
 - When leaking stack canaries through `%n$p`, scan a broad bounded range and
   identify canary-like values by stability across multiple fresh connections
-  and low byte `0x00`. Do not reject values merely because they are greater
-  than `2^48`; amd64 canaries commonly use the upper seven bytes and will often
-  exceed that threshold.
+  and low byte `0x00`. Exclude NULL/small integers and obvious stack/libc/PIE
+  addresses such as `0x7fff...`, `0x7f...`, and `0x55...`; a leaked pointer
+  whose low byte is 00 is not a canary. Do not reject values merely because they
+  are greater than `2^48`; amd64 canaries commonly use the upper seven bytes
+  and will often exceed that threshold.
 - Never fall back to guessed stack addresses such as `0x7fffffffxxxx` without a
   live leak that proves the address for the current process. Establish a
   reliable stack/PIE/libc leak first or switch to a provably valid exploit chain.
@@ -678,7 +686,10 @@ def _pwn_repair_steps_from_failure_details(
     if "pwn_canary_leak_failed" in codes:
         steps.append(
             "Rescan stack leaks across a broad bounded `%n$p` range; choose "
-            "stable low-byte-zero canary candidates and remove any `2^48` filter."
+            "the same stable leak position across multiple fresh runs, require "
+            "low byte 0x00, and exclude NULL/small integers plus stack/libc/PIE "
+            "addresses such as `0x7fff...`, `0x7f...`, and `0x55...`; remove "
+            "any `2^48` filter."
         )
     if "pwn_chroot_flag_path" in codes:
         steps.append(
@@ -794,6 +805,12 @@ Web / Pwn:
   The host gate rejects solvers that only declare aliases such as
   `ARTIFACT_SHA256`, or whose debug report/solver SHA was copied from
   `deploy/src/vuln` or an old build.
+- Pwn source, metadata, writeup, and `writenup/exp.py` MUST match the declared
+  primary technique. If the design says SROP/ORW/ret2libc/GOT overwrite, do not
+  add hidden `read_flag()` / `win()` / ret2win shortcuts and do not solve by
+  returning directly to such a helper unless ret2win is explicitly declared.
+  SROP writeups and solvers must actually use sigreturn/SigreturnFrame/syscall
+  evidence.
 - Do not run Docker from Hermes. The host runner rebuilds the exact image named by
   `metadata.docker_image` with `docker build -t <metadata.docker_image> -f deploy/Dockerfile .`
   after deploy source, Dockerfile, binary, or runtime dependencies change.

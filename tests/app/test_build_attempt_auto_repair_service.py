@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import re
+import socket
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 from core.jsonio import write_json
@@ -568,3 +571,57 @@ def test_pwn_readiness_probe_handles_empty_port_without_valueerror(tmp_path: Pat
     assert result.returncode == 1
     assert "invalid port" in result.stderr
     assert "ValueError" not in result.stderr
+
+
+def test_pwn_readiness_probe_does_not_wait_for_tcp_eof(tmp_path: Path) -> None:
+    challenge_dir = tmp_path / "challenge"
+    challenge_dir.mkdir()
+    _write_metadata(challenge_dir, category="pwn")
+    validate = challenge_dir / "validate.sh"
+    validate.write_text(
+        "#!/bin/bash\n"
+        "CHAL_HOST=127.0.0.1\n"
+        "CHAL_PORT=31337\n"
+        "timeout 3 bash -c 'head -c 200 < /dev/tcp/$CHAL_HOST/$CHAL_PORT | grep -q SecureVault'\n",
+        encoding="utf-8",
+    )
+
+    auto_repair_challenge(challenge_dir)
+    repaired = validate.read_text(encoding="utf-8")
+    assert "head -c 200" not in repaired
+    assert "pwn_readiness_probe" in repaired
+    match = re.search(r"(?ms)^pwn_readiness_probe\(\) \{.*?^\}", repaired)
+    assert match is not None
+
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    port = server.getsockname()[1]
+    done = threading.Event()
+
+    def serve() -> None:
+        try:
+            conn, _addr = server.accept()
+            with conn:
+                conn.sendall(b"SecureVault\nChoice: ")
+                done.wait(2)
+        finally:
+            server.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+    probe = tmp_path / "probe.sh"
+    probe.write_text(
+        "#!/bin/bash\n"
+        + match.group(0)
+        + f"\npwn_readiness_probe 127.0.0.1 {port} 1 SecureVault\n",
+        encoding="utf-8",
+    )
+
+    started = time.monotonic()
+    result = subprocess.run(["bash", str(probe)], text=True, capture_output=True, timeout=3, check=False)
+    elapsed = time.monotonic() - started
+    done.set()
+
+    assert result.returncode == 0
+    assert elapsed < 1.5
+    assert "SecureVault" in result.stdout

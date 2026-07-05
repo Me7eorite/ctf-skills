@@ -19,10 +19,10 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from core.clock import beijing_now_isoformat
-from core.jsonio import write_json
+from core.jsonio import read_json, write_json
 
 DEFAULT_HERMES_COMMAND = "hermes chat -Q --yolo -q"
 # -Q: 查询模式（单次问答，非交互）；--yolo: 自动批准所有工具调用；-q: 静默模式
@@ -823,7 +823,58 @@ def invoke(
                 output.write(f"\n[hermes-docker-cleanup] {cleanup}\n")
             output.flush()
     _write_error_marker_from_log(log_path)
+    marker = read_json(_error_marker_path(log_path), None)
+    if returncode != 0 and _marker_is_rate_limit(marker):
+        retry_depth = _env_int(environment, "_HERMES_RATE_LIMIT_RETRY_DEPTH", 0)
+        max_retries = _env_int(environment, "HERMES_RATE_LIMIT_RETRIES", 2)
+        if retry_depth < max_retries:
+            retry_log = log_path.with_name(f"{log_path.name}.retry{retry_depth + 1}.log")
+            try:
+                log_path.replace(retry_log)
+            except OSError:
+                retry_log = log_path
+            delay = min(30.0, 0.25 * (2 ** retry_depth))
+            time.sleep(delay)
+            retry_env = dict(environment)
+            retry_env["_HERMES_RATE_LIMIT_RETRY_DEPTH"] = str(retry_depth + 1)
+            retry_returncode = invoke(
+                prompt,
+                arguments=arguments,
+                log_path=log_path,
+                cwd=cwd,
+                environment=retry_env,
+                timeout=timeout,
+                profile_log_path=profile_log_path,
+            )
+            try:
+                with log_path.open("a", encoding="utf-8") as output:
+                    output.write(
+                        "\n[hermes-rate-limit-retry] "
+                        f"attempt={retry_depth + 1} previous_log={retry_log} "
+                        f"delay={delay:.2f}s\n"
+                    )
+            except OSError:
+                pass
+            return retry_returncode
     return returncode
+
+
+def _env_int(environment: Mapping[str, str], name: str, default: int) -> int:
+    raw = environment.get(name, os.environ.get(name))
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _marker_is_rate_limit(marker: Any) -> bool:
+    if not isinstance(marker, dict):
+        return False
+    status = str(marker.get("status_code") or "")
+    error_type = str(marker.get("error_type") or marker.get("type") or "").lower()
+    return status == "429" or "rate_limit" in error_type or "overloaded" in error_type
 
 
 def _start_profile_log_mirror(

@@ -352,17 +352,11 @@ def validate_resume_evidence(
       - metadata 中 solve_status == "passed"
       - 进度事件中有 validate passed 记录
     """
-    if not (challenge_dir / "validate.sh").is_file():
-        return False
-    if not (challenge_dir / "writenup" / "exp.py").is_file():
-        return False
-    metadata = _read_metadata(challenge_dir)
-    if metadata is None or metadata.get("solve_status") != "passed":
-        return False
-    return any(
-        event.get("stage") == "validate" and event.get("status") == "passed"
-        for event in challenge_events
-    )
+    # Host validation is the publish gate. Older resume evidence only proves
+    # that metadata and progress once claimed success; it does not prove this
+    # run executed validate.sh and extracted a flag from stdout. Force the
+    # runner back through validation instead of skipping from report/metadata.
+    return False
 
 
 def document_evidence(challenge_dir: Path) -> bool:

@@ -204,7 +204,7 @@ class ComputeResumePlanTests(unittest.TestCase):
             self.assertEqual(challenge.skipped_stages, ())
             self.assertEqual(challenge.first_pending_stage, "design")
 
-    def test_full_skip_when_all_evidence_present(self):
+    def test_resume_never_skips_authoritative_validation(self):
         with TemporaryDirectory() as tmp:
             paths = _make_paths(Path(tmp))
             _make_web_challenge_dir(paths, "web-0001")
@@ -224,12 +224,9 @@ class ComputeResumePlanTests(unittest.TestCase):
                 image_exists=lambda image: True,
             )
             challenge = plan.challenges[0]
-            self.assertEqual(
-                challenge.skipped_stages,
-                ("design", "implement", "build", "validate", "document"),
-            )
-            self.assertTrue(challenge.all_skipped)
-            self.assertIsNone(challenge.first_pending_stage)
+            self.assertEqual(challenge.skipped_stages, ("design", "implement", "build"))
+            self.assertFalse(challenge.all_skipped)
+            self.assertEqual(challenge.first_pending_stage, "validate")
 
     def test_missing_docker_image_stops_at_build(self):
         with TemporaryDirectory() as tmp:

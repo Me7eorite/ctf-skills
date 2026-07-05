@@ -12,6 +12,27 @@ from core.jsonio import read_json, write_json
 from domain.validation_failure_governance import annotate_validation_result
 
 
+def _authoritative_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Require real validate.sh flag evidence before report-level passed."""
+    if result.get("solve_status") != "passed":
+        return result
+    if (
+        result.get("validation_status") == "passed"
+        and result.get("validation_command")
+        and result.get("validation_returncode") == 0
+        and result.get("validation_final_flag_candidate")
+    ):
+        return result
+    downgraded = dict(result)
+    downgraded["solve_status"] = "failed"
+    downgraded["validation_status"] = "pending_validation"
+    downgraded["validation_error"] = (
+        "passed status ignored: missing authoritative validate.sh command, "
+        "returncode, or flag candidate"
+    )
+    return downgraded
+
+
 def merge_validation_into_report(
     report: Path,
     per_results: list[dict[str, Any]],
@@ -54,7 +75,7 @@ def merge_validation_into_report(
     # 合并校验结果
     any_failed = False
     for result in per_results:
-        result = annotate_validation_result(result)
+        result = annotate_validation_result(_authoritative_result(result))
         challenge_id = result["challenge_id"]
         target = by_id.get(challenge_id)
         if target is None:

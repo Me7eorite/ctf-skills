@@ -231,7 +231,7 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(details[0]["code"], "pwn_canary_leak_failed")
         self.assertIn("broad %n$p range", details[0]["hint"])
         self.assertIn("low byte 0x00", details[0]["hint"])
-        self.assertIn("2^48", details[0]["hint"])
+        self.assertIn("stack/libc/PIE", details[0]["hint"])
 
     def test_timeout_after_exploit_phase_is_not_readiness(self):
         details = classify_validation_failure(
@@ -540,6 +540,42 @@ class ValidationTests(unittest.TestCase):
 
         self.assertTrue(any("canary leak filtering by 2^48" in e for e in errors))
 
+    def test_pwn_exp_rejects_stack_address_as_canary_candidate(self):
+        challenge = self.paths.challenges / "pwn" / "pwn-canary-stack-001"
+        metadata = _write_minimal_pwn_contract(challenge)
+        (challenge / "writenup").mkdir(parents=True, exist_ok=True)
+        (challenge / "writenup" / "exp.py").write_text(
+            "leak = 0x00007fffd331b600\n"
+            "canary = leak\n"
+            "if canary & 0xff == 0:\n"
+            "    print('accepted canary')\n",
+            encoding="utf-8",
+        )
+
+        errors = self.validator.contract_errors(challenge, metadata)
+
+        self.assertTrue(any("implausible canary candidate" in e for e in errors))
+
+    def test_pwn_srop_design_rejects_read_flag_shortcut(self):
+        challenge = self.paths.challenges / "pwn" / "pwn-srop-001"
+        metadata = _write_minimal_pwn_contract(challenge)
+        metadata["primary_technique"] = "SROP"
+        metadata["techniques"] = ["sigreturn oriented programming"]
+        (challenge / "deploy" / "src" / "vuln.c").write_text(
+            "void read_flag(){ puts(\"flag\"); }\nint main(){ return 0; }\n",
+            encoding="utf-8",
+        )
+        (challenge / "writenup").mkdir(parents=True, exist_ok=True)
+        (challenge / "writenup" / "exp.py").write_text(
+            "payload = b'A' * 72 + p64(elf.symbols['read_flag'])\n",
+            encoding="utf-8",
+        )
+
+        errors = self.validator.contract_errors(challenge, metadata)
+
+        self.assertTrue(any("technique consistency failed" in e for e in errors))
+        self.assertTrue(any("read_flag()/win()" in e for e in errors))
+
     def test_web_contract_requires_literal_compose_flag_matching_metadata(self):
         challenge = self.paths.challenges / "web" / "web-flag-001"
         deploy = challenge / "deploy"
@@ -724,7 +760,7 @@ class ValidationFailureClassificationTests(unittest.TestCase):
         )
 
         self.assertEqual(details[0]["code"], "pwn_canary_leak_failed")
-        self.assertIn("2^48", details[0]["hint"])
+        self.assertIn("stack/libc/PIE", details[0]["hint"])
 
     def test_classifies_service_readiness_before_canary_name(self):
         details = classify_validation_failure(

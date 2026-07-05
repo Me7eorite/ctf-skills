@@ -5,12 +5,15 @@ from pathlib import Path
 
 import pytest
 
+from domain.validation_repair_policy import ValidationRepairPolicy
 from services.build_attempt_repair_service import (
     BuildAttemptRepairError,
+    BuildAttemptRepairService,
     _assert_no_context_leak,
     _file_context,
     _repair_prompt,
 )
+from services.build_attempt_revalidation_service import BuildAttemptRevalidationError
 
 
 def test_build_attempt_repair_prompt_anchors_terminal_to_allowed_root() -> None:
@@ -53,6 +56,57 @@ def test_build_attempt_repair_prompt_anchors_terminal_to_allowed_root() -> None:
     normalized = " ".join(prompt.split())
     assert "Do not replace it with `${FLAG}`" in normalized
     assert "forbidden in player-facing `attachments/`" in normalized
+
+
+def test_ai_repair_success_still_requires_revalidation(tmp_path: Path, monkeypatch) -> None:
+    attempt_id = "11111111-1111-1111-1111-111111111111"
+    current = tmp_path / "work" / "executions" / attempt_id / "current"
+    challenge_dir = current / "output" / "challenges" / "pwn" / "pwn-0001-demo"
+    challenge_dir.mkdir(parents=True)
+    service = BuildAttemptRepairService.__new__(BuildAttemptRepairService)
+    service.paths = type(
+        "Paths",
+        (),
+        {"executions": tmp_path / "work" / "executions", "hermes_home": tmp_path / ".hermes"},
+    )()
+    service.progress = object()
+    service.session_factory = object()
+    service.timeout_seconds = 1
+    service._prepare = lambda _attempt_id: {  # type: ignore[method-assign]
+        "id": attempt_id,
+        "design_task_id": "task",
+        "challenge_id": "pwn-0001",
+        "category": "pwn",
+        "challenge_dir": str(challenge_dir),
+        "failure_summary": "solver failed",
+        "failure_details": [],
+        "latest_failure": {
+            "validation_status": "nonzero_exit",
+            "validation_failure_class": "solver",
+        },
+        "repair_policy": ValidationRepairPolicy(
+            failure_class="solver",
+            route_type="hermes",
+            deterministic_mechanics=(),
+            hermes_allowed=True,
+        ),
+        "file_context": "",
+    }
+    service._revalidate = lambda _attempt_id: (_ for _ in ()).throw(  # type: ignore[method-assign]
+        BuildAttemptRevalidationError("no flag")
+    )
+    monkeypatch.setattr("services.build_attempt_repair_service._hermes_arguments", lambda _category: ["hermes"])
+    monkeypatch.setattr(
+        "services.build_attempt_repair_service._hermes_environment",
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr("services.build_attempt_repair_service.hermes_process.invoke", lambda *a, **k: 0)
+
+    result = service.repair(attempt_id)  # type: ignore[arg-type]
+
+    assert result.status == "failed"
+    assert result.verification_status == "failed"
+    assert "no flag" in (result.failure_summary or "")
 
 
 def test_build_attempt_repair_prompt_includes_validation_evidence_and_debug_report(tmp_path: Path) -> None:

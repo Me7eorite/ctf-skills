@@ -319,11 +319,21 @@ class RunnerRealRunTests(unittest.TestCase):
         runner._invoke = fake_invoke  # type: ignore[assignment]
 
         def fake_validate(challenge_id: str) -> dict:
-            return {
+            result = {
                 "challenge_id": challenge_id,
                 "status": validator_status,
                 "elapsed": 0.01,
             }
+            if validator_status == "passed":
+                result.update(
+                    {
+                        "returncode": 0,
+                        "command": ["bash", "validate.sh"],
+                        "stdout_tail": "flag{test}\n",
+                        "final_flag_candidate": "flag{test}",
+                    }
+                )
+            return result
 
         runner.validator.validate_challenge = fake_validate  # type: ignore[assignment]
         runner.validator.validate_path = (  # type: ignore[method-assign]
@@ -753,7 +763,7 @@ class RunnerRealRunTests(unittest.TestCase):
             self.assertEqual(len(passed), 1)
             self.assertTrue(passed[0]["message"].startswith("validator:"))
 
-    def test_all_skipped_short_circuit(self):
+    def test_all_previous_stages_passed_still_reruns_validate(self):
         with TemporaryDirectory() as tmp:
             paths = _Paths(root=Path(tmp))
             paths.initialize()
@@ -772,16 +782,27 @@ class RunnerRealRunTests(unittest.TestCase):
             runner = self._make_runner_with_fake_invoke(paths, progress=store)
             invocation_count = {"validator": 0}
 
-            def assert_not_called(challenge_id: str) -> dict:
+            def validate_called(challenge_id: str) -> dict:
                 invocation_count["validator"] += 1
-                return {"challenge_id": challenge_id, "status": "passed"}
+                return {
+                    "challenge_id": challenge_id,
+                    "status": "passed",
+                    "elapsed": 0.01,
+                    "returncode": 0,
+                    "command": ["bash", "validate.sh"],
+                    "stdout_tail": "flag{web_0001}\n",
+                    "final_flag_candidate": "flag{web_0001}",
+                }
 
-            runner.validator.validate_challenge = assert_not_called  # type: ignore[assignment]
+            runner.validator.validate_challenge = validate_called  # type: ignore[assignment]
+            runner.validator.validate_path = (  # type: ignore[method-assign]
+                lambda _path, *, expected_challenge_id: validate_called(expected_challenge_id)
+            )
 
             outcome = runner.process_one("worker-03", dry_run=False)
             self.assertEqual(outcome["status"], "done")
-            self.assertTrue(outcome.get("short_circuit"))
-            self.assertEqual(invocation_count["validator"], 0)
+            self.assertFalse(outcome.get("short_circuit"))
+            self.assertEqual(invocation_count["validator"], 1)
 
             latest_claim = runner.state.latest_claim_event("web-0001-0001.json")
             assert latest_claim is not None
@@ -791,8 +812,8 @@ class RunnerRealRunTests(unittest.TestCase):
                 if event["id"] >= latest_claim["id"]
             ]
             stage_set = {(event["stage"], event["status"], event["challenge_id"]) for event in window}
-            # 5 carry-forward stages + complete pair.
-            for stage in ("design", "implement", "build", "validate", "document"):
+            # Earlier stages carry forward, validate is re-run, then complete is recorded.
+            for stage in ("design", "implement", "build", "validate"):
                 self.assertIn((stage, "passed", "web-0001"), stage_set)
             self.assertIn(("complete", "passed", "web-0001"), stage_set)
             self.assertIn(("complete", "passed", ""), stage_set)
@@ -868,6 +889,10 @@ class RunnerRealRunTests(unittest.TestCase):
                 "challenge_id": expected_challenge_id,
                 "status": "passed",
                 "elapsed": 0.0,
+                "returncode": 0,
+                "command": ["bash", "validate.sh"],
+                "stdout_tail": "flag{test}\n",
+                "final_flag_candidate": "flag{test}",
             }
 
             outcome = runner.process_one("worker-resume", dry_run=False)
@@ -934,7 +959,14 @@ class RunnerRealRunTests(unittest.TestCase):
                         "stdout_tail": "leak=0x0",
                         "stderr_tail": "EOFError",
                     }
-                return {"status": "passed", "elapsed": 0.4}
+                return {
+                    "status": "passed",
+                    "elapsed": 0.4,
+                    "returncode": 0,
+                    "command": ["bash", "validate.sh"],
+                    "stdout_tail": "flag{test}\n",
+                    "final_flag_candidate": "flag{test}",
+                }
 
             runner.validator.validate_challenge = validate  # type: ignore[assignment]
             runner.validator.validate_path = lambda *_args, **_kwargs: validate("web-0001")  # type: ignore[method-assign]
@@ -1161,11 +1193,19 @@ class RunnerRealRunTests(unittest.TestCase):
                 "challenge_id": cid,
                 "status": "passed",
                 "elapsed": 0.1,
+                "returncode": 0,
+                "command": ["bash", "validate.sh"],
+                "stdout_tail": "flag{test}\n",
+                "final_flag_candidate": "flag{test}",
             }
             runner.validator.validate_path = lambda _path, *, expected_challenge_id: {  # type: ignore[method-assign]
                 "challenge_id": expected_challenge_id,
                 "status": "passed",
                 "elapsed": 0.1,
+                "returncode": 0,
+                "command": ["bash", "validate.sh"],
+                "stdout_tail": "flag{test}\n",
+                "final_flag_candidate": "flag{test}",
             }
 
             outcome = runner.process_one("worker-01", dry_run=False)
@@ -1203,7 +1243,14 @@ class RunnerRealRunTests(unittest.TestCase):
                         "stdout_tail": "leak=0x0",
                         "stderr_tail": "EOFError",
                     }
-                return {"status": "passed", "elapsed": 0.4}
+                return {
+                    "status": "passed",
+                    "elapsed": 0.4,
+                    "returncode": 0,
+                    "command": ["bash", "validate.sh"],
+                    "stdout_tail": "flag{test}\n",
+                    "final_flag_candidate": "flag{test}",
+                }
 
             runner.validator.validate_challenge = validate  # type: ignore[assignment]
             runner.validator.validate_path = lambda *_args, **_kwargs: validate("web-0001")  # type: ignore[method-assign]
@@ -1362,11 +1409,19 @@ class RunnerRealRunTests(unittest.TestCase):
                 "challenge_id": cid,
                 "status": "passed",
                 "elapsed": 0.0,
+                "returncode": 0,
+                "command": ["bash", "validate.sh"],
+                "stdout_tail": "flag{test}\n",
+                "final_flag_candidate": "flag{test}",
             }
             runner.validator.validate_path = lambda _path, *, expected_challenge_id: {  # type: ignore[method-assign]
                 "challenge_id": expected_challenge_id,
                 "status": "passed",
                 "elapsed": 0.0,
+                "returncode": 0,
+                "command": ["bash", "validate.sh"],
+                "stdout_tail": "flag{test}\n",
+                "final_flag_candidate": "flag{test}",
             }
 
             outcome = runner.process_one("worker-05", dry_run=False)
@@ -1435,11 +1490,19 @@ class ShardNameNormalizationTests(unittest.TestCase):
                 "challenge_id": cid,
                 "status": "passed",
                 "elapsed": 0.0,
+                "returncode": 0,
+                "command": ["bash", "validate.sh"],
+                "stdout_tail": "flag{test}\n",
+                "final_flag_candidate": "flag{test}",
             }
             runner.validator.validate_path = lambda _path, *, expected_challenge_id: {  # type: ignore[method-assign]
                 "challenge_id": expected_challenge_id,
                 "status": "passed",
                 "elapsed": 0.0,
+                "returncode": 0,
+                "command": ["bash", "validate.sh"],
+                "stdout_tail": "flag{test}\n",
+                "final_flag_candidate": "flag{test}",
             }
 
             runner.process_one("worker-42", dry_run=False)

@@ -72,6 +72,21 @@ class _PathValidator:
         self, challenge_dir: Path, *, expected_challenge_id: str
     ) -> dict[str, Any]:
         self.seen.append(challenge_dir)
+        return {
+            "challenge_id": expected_challenge_id,
+            "status": "passed",
+            "elapsed": 0.01,
+            "returncode": 0,
+            "command": ["bash", "validate.sh"],
+            "stdout_tail": "flag{demo}\n",
+            "final_flag_candidate": "flag{demo}",
+        }
+
+
+class _NoFlagPathValidator:
+    def validate_path(
+        self, challenge_dir: Path, *, expected_challenge_id: str
+    ) -> dict[str, Any]:
         return {"challenge_id": expected_challenge_id, "status": "passed", "elapsed": 0.01}
 
 
@@ -721,3 +736,27 @@ def test_workspace_validation_uses_exact_bound_path(tmp_path: Path) -> None:
 
     assert results[0]["validation_status"] == "passed"
     assert validator.seen == [target]
+
+
+def test_validator_passed_without_flag_candidate_is_not_solve_passed(tmp_path: Path) -> None:
+    paths = _Paths(tmp_path)
+    target = _make_gate_passing_web_challenge(
+        _Paths(tmp_path / "execution" / "output"), "web-0001"
+    )
+    recorder = _Recorder()
+
+    results = run_validation(
+        state=recorder,
+        validator=_NoFlagPathValidator(),  # type: ignore[arg-type]
+        paths=paths,  # type: ignore[arg-type]
+        image_exists=lambda _image: True,
+        original_shard_name="web.iter-001.json",
+        worker="worker-01",
+        challenge_ids=["web-0001"],
+        plan_by_id={},
+        validation_targets={"web-0001": target},
+    )
+
+    assert results[0]["solve_status"] == "failed"
+    assert results[0]["validation_status"] == "pending_validation"
+    assert "without a flag candidate" in results[0]["validation_error"]

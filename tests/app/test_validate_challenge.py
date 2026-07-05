@@ -505,6 +505,9 @@ class MergeValidationIntoReportTests(unittest.TestCase):
                         "solve_status": "passed",
                         "validation_status": "passed",
                         "validation_elapsed": 1.2,
+                        "validation_command": ["bash", "validate.sh"],
+                        "validation_returncode": 0,
+                        "validation_final_flag_candidate": "flag{demo}",
                     }
                 ],
                 shard=Path("/x/web-0001-0001.json"),
@@ -597,6 +600,9 @@ class MergeValidationIntoReportTests(unittest.TestCase):
                         "challenge_id": "web-0001",
                         "solve_status": "passed",
                         "validation_status": "passed",
+                        "validation_command": ["bash", "validate.sh"],
+                        "validation_returncode": 0,
+                        "validation_final_flag_candidate": "flag{demo}",
                     }
                 ],
                 runner_status="passed",
@@ -636,6 +642,9 @@ class MergeValidationIntoReportTests(unittest.TestCase):
                         "challenge_id": "web-0001",
                         "solve_status": "passed",
                         "validation_status": "passed",
+                        "validation_command": ["bash", "validate.sh"],
+                        "validation_returncode": 0,
+                        "validation_final_flag_candidate": "flag{demo}",
                     }
                 ],
             )
@@ -644,6 +653,26 @@ class MergeValidationIntoReportTests(unittest.TestCase):
             self.assertEqual(raw["execution_summary"]["passed"], 1)
             self.assertEqual(raw["execution_summary"]["failed"], 0)
             self.assertEqual(raw["execution_summary"]["pending_validation"], 0)
+
+    def test_report_passed_without_validate_flag_is_not_authoritative(self):
+        with TemporaryDirectory() as tmp:
+            report = Path(tmp) / "report.json"
+            merge_validation_into_report(
+                report,
+                [
+                    {
+                        "challenge_id": "web-0001",
+                        "solve_status": "passed",
+                        "validation_status": "passed",
+                    }
+                ],
+                runner_status="passed",
+            )
+
+            raw = json.loads(report.read_text(encoding="utf-8"))
+            self.assertEqual(raw["runner_status"], "failed")
+            self.assertEqual(raw["challenges"][0]["solve_status"], "failed")
+            self.assertEqual(raw["challenges"][0]["validation_status"], "pending_validation")
 
     def test_any_failure_flips_runner_status(self):
         with TemporaryDirectory() as tmp:

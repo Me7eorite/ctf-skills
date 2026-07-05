@@ -134,6 +134,7 @@ def test_policy_routes_prompt_eof_to_readiness_only_after_failed_fresh_observati
     assert policy.failure_class == "service-readiness"
     assert policy.route_type == "deterministic"
     assert MECHANIC_PWN_READINESS_PROBE in policy.deterministic_mechanics
+    assert MECHANIC_PWN_SOLVER_EVIDENCE not in policy.deterministic_mechanics
 
 
 def test_validation_failure_fingerprints_keep_material_solver_and_readiness_failures_distinct() -> None:

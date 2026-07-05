@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -77,6 +79,14 @@ class BuildAttemptRepairService:
 
     def repair(self, attempt_id: UUID) -> BuildAttemptRepairResult:
         context = self._prepare(attempt_id)
+        with _category_repair_lock(self.paths, str(context.get("category") or "unknown")):
+            return self._repair_prepared(attempt_id, context)
+
+    def _repair_prepared(
+        self,
+        attempt_id: UUID,
+        context: dict[str, Any],
+    ) -> BuildAttemptRepairResult:
         repair_id = f"repair-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid4().hex[:8]}"
         repair_dir = self.paths.executions / str(attempt_id) / "repairs" / repair_id
         repair_dir.mkdir(parents=True, exist_ok=False)
@@ -290,6 +300,20 @@ def _failed_payload(paths: ProjectPaths, shard_basename: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise BuildAttemptRepairError("failed shard payload is invalid")
     return payload
+
+
+@contextmanager
+def _category_repair_lock(paths: ProjectPaths, category: str):
+    locks_dir = paths.executions / "locks"
+    locks_dir.mkdir(parents=True, exist_ok=True)
+    safe_category = re.sub(r"[^A-Za-z0-9_.-]+", "_", category or "unknown")
+    lock_path = locks_dir / f"repair-{safe_category}.lock"
+    with lock_path.open("w", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _challenge_ids(payload: dict[str, Any]) -> list[str]:

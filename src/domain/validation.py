@@ -17,7 +17,7 @@ import subprocess
 import time
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from core.clock import beijing_now_isoformat
 from core.jsonio import read_json, write_json
@@ -75,6 +75,11 @@ _PWN_UNTERMINATED_ASCII_PATH_RE = re.compile(
 _PWN_CANARY_WIDTH_FILTER_RE = re.compile(
     r"(?:1\s*<<\s*48|2\s*\*\*\s*48|0x1_?0000_?0000_?0000)"
 )
+_PWN_CANARY_LOW_BYTE_ONLY_RE = re.compile(
+    r"(?:&\s*0xff\s*(?:==|!=)\s*0|%\s*256\s*(?:==|!=)\s*0)",
+    re.IGNORECASE,
+)
+_PWN_HEX_LITERAL_RE = re.compile(r"0x[0-9a-f_]+", re.IGNORECASE)
 _PWN_BASH_C_RE = re.compile(r"\bbash\s+-c\b")
 _APT_INSTALL_BLOCK_RE = re.compile(
     r"apt-get\s+install\b.*?(?=;|&&|\n\s*(?:RUN|COPY|CMD|ENTRYPOINT|WORKDIR|FROM)\b|$)",
@@ -180,8 +185,10 @@ def classify_validation_failure(
         elif _looks_like_pwn_canary_failure(text):
             code = "pwn_canary_leak_failed"
             hint = (
-                "Scan a broad %n$p range, identify stable canary-like values with "
-                "low byte 0x00, and do not filter leaks by a 2^48 threshold."
+                "Scan a broad %n$p range, verify the same stable leak position "
+                "across multiple fresh runs, require low byte 0x00, and exclude "
+                "NULL/small integers plus stack/libc/PIE addresses before "
+                "accepting a canary."
             )
         elif _looks_like_pwn_chroot_flag_path_failure(text):
             code = "pwn_chroot_flag_path"
@@ -1240,7 +1247,117 @@ def _pwn_runtime_contract_errors(challenge_dir: Path) -> list[str]:
             "writenup/exp.py uses canary leak filtering by 2^48; stack canaries "
             "should be selected by stable %n$p leaks and low byte 0x00"
         )
+    if exp_text and "canary" in exp_text.lower():
+        errors.extend(_pwn_canary_selection_errors(exp_text))
     return errors
+
+
+def _pwn_canary_selection_errors(exp_text: str) -> list[str]:
+    errors: list[str] = []
+    canary_lines = [
+        line
+        for line in exp_text.splitlines()
+        if "canary" in line.lower() or "leak" in line.lower()
+    ]
+    nearby = "\n".join(canary_lines)
+    bad_literals = [
+        literal
+        for literal in _PWN_HEX_LITERAL_RE.findall(nearby)
+        if _pwn_canary_candidate_is_implausible(literal)
+    ]
+    if bad_literals:
+        errors.append(
+            "writenup/exp.py accepts an implausible canary candidate that looks "
+            "like a stack/libc/PIE address or small value: "
+            + ", ".join(sorted(set(bad_literals))[:5])
+        )
+    if (
+        _PWN_CANARY_LOW_BYTE_ONLY_RE.search(nearby)
+        and not re.search(r"\b(stable|stability|same\s+index|position|exclude|address)\b", nearby, re.IGNORECASE)
+    ):
+        errors.append(
+            "writenup/exp.py appears to identify canaries only by low byte 0x00; "
+            "it must exclude stack/libc/PIE addresses and verify the same leak "
+            "position across multiple fresh runs"
+        )
+    return errors
+
+
+def _pwn_canary_candidate_is_implausible(value: str | int) -> bool:
+    try:
+        candidate = int(str(value).replace("_", ""), 0)
+    except ValueError:
+        return False
+    if candidate == 0 or candidate < 0x1000:
+        return True
+    # Canonical userland addresses commonly seen in generated bad solvers:
+    # stack 0x7fff..., libc/ld 0x7f..., PIE/main binary 0x55...
+    return (
+        0x7FFF00000000 <= candidate <= 0x7FFFFFFFFFFF
+        or 0x7F0000000000 <= candidate <= 0x7FFFFFFFFFFF
+        or 0x550000000000 <= candidate <= 0x57FFFFFFFFFF
+    )
+
+
+def _pwn_technique_consistency_errors(challenge_dir: Path, metadata: dict) -> list[str]:
+    declared = _metadata_technique_text(metadata)
+    if not declared:
+        return []
+    strict_tokens = (
+        "srop",
+        "sigreturn",
+        "orw",
+        "ret2libc",
+        "got overwrite",
+        "got_overwrite",
+    )
+    if not any(token in declared for token in strict_tokens):
+        return []
+    if "ret2win" in declared or "win function" in declared:
+        return []
+
+    source_text = "\n".join(
+        _read_text(path) or ""
+        for path in sorted((challenge_dir / "deploy" / "src").glob("**/*"))
+        if path.is_file() and path.suffix in {".c", ".cc", ".cpp", ".h", ".S", ".s"}
+    )
+    exp_text = _read_text(challenge_dir / "writenup" / "exp.py") or ""
+    combined = f"{source_text}\n{exp_text}"
+    errors: list[str] = []
+    if re.search(r"\b(?:read_flag|win)\s*\(", combined):
+        errors.append(
+            "pwn technique consistency failed: declared technique is "
+            f"{metadata.get('primary_technique')!r}, but source/exp exposes a "
+            "read_flag()/win() ret2win shortcut"
+        )
+    if ("srop" in declared or "sigreturn" in declared) and not re.search(
+        r"\b(?:SigreturnFrame|sigreturn|rt_sigreturn|SYS_rt_sigreturn|syscall)\b",
+        exp_text,
+    ):
+        errors.append(
+            "pwn technique consistency failed: SROP design requires the reference "
+            "exploit to use sigreturn/SigreturnFrame/syscall evidence, not a "
+            "different shortcut"
+        )
+    return errors
+
+
+def _metadata_technique_text(metadata: Mapping[str, Any]) -> str:
+    parts: list[str] = []
+    for key in (
+        "primary_technique",
+        "secondary_technique",
+        "actual_solution_type",
+        "learning_objective",
+        "description",
+    ):
+        value = metadata.get(key)
+        if isinstance(value, str):
+            parts.append(value)
+    techniques = metadata.get("techniques")
+    if isinstance(techniques, list):
+        parts.extend(str(item) for item in techniques if item)
+    return " ".join(parts).lower()
 
 
 def _validate_has_app_readiness_probe(text: str) -> bool:
@@ -2087,6 +2204,7 @@ class ChallengeValidator:
                 errors.extend(_host_chroot_setup_errors(challenge_dir, metadata))
                 errors.extend(_pwn_dockerfile_scaffold_errors(challenge_dir))
                 errors.extend(_pwn_runtime_contract_errors(challenge_dir))
+                errors.extend(_pwn_technique_consistency_errors(challenge_dir, metadata))
 
         target_format = metadata.get("target_format", "elf")
         if category in {"re", "pwn"} and target_format == "elf":
