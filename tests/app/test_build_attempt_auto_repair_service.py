@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 from core.jsonio import write_json
@@ -537,3 +538,33 @@ def test_auto_repair_replaces_timeout_nc_banner_capture_without_discarding_outpu
     assert "pwn_readiness_probe() {" in repaired
     assert 'BANNER=$(pwn_readiness_probe "$CHAL_HOST" "$CHAL_PORT" 3) || BANNER=""' in repaired
     assert "timeout 3 nc" not in repaired
+
+
+def test_pwn_readiness_probe_handles_empty_port_without_valueerror(tmp_path: Path) -> None:
+    challenge_dir = tmp_path / "challenge"
+    challenge_dir.mkdir()
+    _write_metadata(challenge_dir, category="pwn")
+    validate = challenge_dir / "validate.sh"
+    validate.write_text(
+        "#!/bin/bash\n"
+        "CHAL_HOST=127.0.0.1\n"
+        "CHAL_PORT=\n"
+        "timeout 2 nc -z \"$CHAL_HOST\" \"$CHAL_PORT\"\n",
+        encoding="utf-8",
+    )
+
+    auto_repair_challenge(challenge_dir)
+    repaired = validate.read_text(encoding="utf-8")
+    match = re.search(r"(?ms)^pwn_readiness_probe\(\) \{.*?^\}", repaired)
+    assert match is not None
+    probe = tmp_path / "probe.sh"
+    probe.write_text(
+        "#!/bin/bash\n" + match.group(0) + "\npwn_readiness_probe 127.0.0.1 '' 0.1\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(["bash", str(probe)], text=True, capture_output=True, check=False)
+
+    assert result.returncode == 1
+    assert "invalid port" in result.stderr
+    assert "ValueError" not in result.stderr

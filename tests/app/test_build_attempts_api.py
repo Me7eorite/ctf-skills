@@ -625,6 +625,83 @@ def test_successful_attempt_does_not_expose_stale_validation_failure_context(
     assert detail.get("validation_failure_details") is None
 
 
+def test_failed_attempt_validation_history_overrides_agent_pending_report(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory, category="pwn")
+    with transaction(factory=session_factory) as session:
+        repo = BuildAttemptsRepository(session)
+        attempt = repo.create_attempt(task_id, f"{uuid4()}.json")
+        repo.update_to_terminal(
+            attempt.id,
+            status="failed",
+            error="agent report said pending_validation",
+            resulting_challenge_dir=f"work/challenges/pwn/{attempt.id}",
+        )
+
+    challenge_dir = (
+        client.app.state.project_paths.root
+        / "work"
+        / "challenges"
+        / "pwn"
+        / str(attempt.id)
+    )
+    challenge_dir.mkdir(parents=True)
+    write_json(
+        challenge_dir / "metadata.json",
+        {
+            "id": "pwn-0001",
+            "category": "pwn",
+            "solve_status": "passed",
+            "validation_status": "passed",
+        },
+    )
+    state_dir = (
+        client.app.state.project_paths.executions
+        / str(attempt.id)
+        / "current"
+        / "state"
+    )
+    state_dir.mkdir(parents=True)
+    write_json(
+        state_dir / "validation-history.json",
+        [
+            {
+                "round": 2,
+                "results": [
+                    {
+                        "challenge_id": "pwn-0001",
+                        "solve_status": "failed",
+                        "validation_status": "solver_evidence_stale",
+                        "validation_error": "BINARY_SHA256 mismatch",
+                        "validation_failure_details": [
+                            {
+                                "phase": "validate",
+                                "code": "pwn_exp_binary_sha_mismatch",
+                                "message": "sha mismatch",
+                                "path": "writenup/exp.py",
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    )
+
+    response = client.get(f"/api/build-attempts/{attempt.id}")
+
+    assert response.status_code == 200
+    detail = response.json()
+    assert detail["status"] == "failed"
+    assert detail["solve_status"] == "failed"
+    assert detail["validation_status"] == "solver_evidence_stale"
+    assert detail["validation_error"] == "BINARY_SHA256 mismatch"
+    assert detail["validation_failure_class"] == "solver"
+    assert "pwn_exp_binary_sha_mismatch" in detail["validation_failure_signature"]
+    assert detail["validation_failure_source"] == "validation-history"
+
+
 def test_non_validation_failure_does_not_expose_validation_failure_class(
     client: TestClient,
     session_factory: SessionFactory,

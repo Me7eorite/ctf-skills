@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -189,6 +190,35 @@ def test_ensure_pwn_solver_evidence_replaces_mismatched_binary_sha(tmp_path: Pat
     assert (challenge / "writenup" / "exp.py").read_text(encoding="utf-8") == (
         f'BINARY_SHA256 = "{artifact_sha}"\n'
     )
+
+
+def test_ensure_pwn_solver_evidence_repairs_unreadable_attachment_mode(tmp_path: Path) -> None:
+    challenge = tmp_path / "pwn-0001-demo"
+    (challenge / "attachments").mkdir(parents=True)
+    (challenge / "writenup").mkdir()
+    artifact = b"\x7fELFfinal"
+    artifact_path = challenge / "attachments" / "vuln"
+    artifact_path.write_bytes(artifact)
+    artifact_path.chmod(0o111)
+    artifact_sha = hashlib.sha256(artifact).hexdigest()
+    (challenge / "metadata.json").write_text(
+        json.dumps(
+            {
+                "id": "pwn-0001",
+                "category": "pwn",
+                "artifact": "attachments/vuln",
+                "artifact_sha256": artifact_sha,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (challenge / "writenup" / "exp.py").write_text("print('x')\n", encoding="utf-8")
+
+    actions = ensure_pwn_solver_evidence(challenge)
+
+    assert "made attachments/vuln readable for host validation" in actions
+    assert artifact_path.stat().st_mode & 0o444 == 0o444
+    assert os.access(artifact_path, os.R_OK)
 
 
 def test_ensure_pwn_solver_evidence_is_isolated_across_multiple_pwn_challenges(

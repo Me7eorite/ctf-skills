@@ -40,10 +40,26 @@ import socket
 import sys
 import time
 
-host = sys.argv[1]
-port = int(sys.argv[2])
-deadline = time.monotonic() + max(0.1, float(sys.argv[3]))
+def fail(message):
+    print(f"[readiness] {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+host = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
+if not host:
+    fail("empty host")
+raw_port = (sys.argv[2] if len(sys.argv) > 2 else "").strip()
+try:
+    port = int(raw_port)
+except ValueError:
+    fail(f"invalid port: {raw_port!r}")
+raw_timeout = (sys.argv[3] if len(sys.argv) > 3 else "3").strip() or "3"
+try:
+    timeout_seconds = float(raw_timeout)
+except ValueError:
+    fail(f"invalid timeout: {raw_timeout!r}")
+deadline = time.monotonic() + max(0.1, timeout_seconds)
 chunks = []
+last_error = None
 
 try:
     sock = socket.create_connection((host, port), timeout=min(2.0, max(0.1, deadline - time.monotonic())))
@@ -62,12 +78,16 @@ try:
         if re.search(r"(Choice:|Welcome|Menu|Username:|Enter)", text):
             break
     sock.close()
-except OSError:
-    pass
+except OSError as exc:
+    last_error = exc
 
 text = b"".join(chunks).decode("latin-1", errors="replace")
 if text:
     print(text, end="")
+elif last_error is not None:
+    print(f"[readiness] connection failed: {last_error}", file=sys.stderr)
+else:
+    print("[readiness] no banner or menu prompt received", file=sys.stderr)
 sys.exit(0 if re.search(r"(Choice:|Welcome|Menu|Username:|Enter)", text) else 1)
 PY
 }

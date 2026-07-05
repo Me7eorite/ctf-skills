@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -114,6 +115,8 @@ def ensure_pwn_solver_evidence(challenge_dir: Path) -> tuple[str, ...]:
         raise PwnArtifactEvidenceError(f"{PWN_FINAL_ARTIFACT_REL} missing")
 
     actions: list[str] = []
+    if _ensure_host_readable(artifact_path):
+        actions.append("made attachments/vuln readable for host validation")
     artifact_sha = _sha256_file(artifact_path)
     if metadata.get("artifact_sha256") != artifact_sha:
         metadata["artifact_sha256"] = artifact_sha
@@ -133,6 +136,23 @@ def ensure_pwn_solver_evidence(challenge_dir: Path) -> tuple[str, ...]:
         if _ensure_exp_binary_sha(exp_path, artifact_sha):
             actions.append("updated writenup/exp.py BINARY_SHA256")
     return tuple(actions)
+
+
+def _ensure_host_readable(path: Path) -> bool:
+    try:
+        current_mode = path.stat().st_mode
+    except OSError as exc:
+        raise PwnArtifactEvidenceError(f"cannot stat {PWN_FINAL_ARTIFACT_REL}: {exc}") from exc
+    desired_mode = current_mode | 0o444
+    if desired_mode == current_mode:
+        return False
+    try:
+        os.chmod(path, desired_mode)
+    except OSError as exc:
+        raise PwnArtifactEvidenceError(
+            f"cannot make {PWN_FINAL_ARTIFACT_REL} readable: {exc}"
+        ) from exc
+    return True
 
 
 def refresh_pwn_debug_report(challenge_dir: Path) -> Path | None:

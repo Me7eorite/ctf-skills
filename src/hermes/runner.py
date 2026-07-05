@@ -246,6 +246,10 @@ def _bind_resume_targets_to_plan(
 
 
 _ITERATION_RE = re.compile(r"\.iter-(\d+)\.")
+_EXECUTION_PATH_RE = re.compile(
+    r"/(?:workspace/executions|root/ctf-skills/work/executions)/"
+    r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[^/\s\"')]+)/current\b"
+)
 
 
 def _iteration_from_shard_name(original_shard_name: str | None) -> int:
@@ -1975,6 +1979,13 @@ class HermesRunner:
         workspace=None,
         profile_name: str | None = None,
     ) -> int:
+        if workspace is not None:
+            try:
+                _assert_no_execution_context_leak(workspace, prompt)
+            except ValueError as exc:
+                log.parent.mkdir(parents=True, exist_ok=True)
+                log.write_text(f"{exc}\n", encoding="utf-8")
+                return 1
         if dry_run:
             log.parent.mkdir(parents=True, exist_ok=True)
             log.write_text(hermes_process.sanitize_prompt_text(prompt) + "\n", encoding="utf-8")
@@ -2231,6 +2242,32 @@ def _output_signature(output_dir: Path) -> tuple[int, int, int]:
         if stat.st_mtime_ns > max_mtime:
             max_mtime = stat.st_mtime_ns
     return (file_count, total_size, max_mtime)
+
+
+def _assert_no_execution_context_leak(workspace: ExecutionWorkspace, text: str) -> None:
+    current = _attempt_id_from_workspace(workspace.active)
+    if not current:
+        return
+    leaked = sorted(
+        {
+            match.group(1)
+            for match in _EXECUTION_PATH_RE.finditer(text)
+            if match.group(1) != current
+        }
+    )
+    if leaked:
+        raise ValueError(
+            "orchestration-context-leak: Hermes prompt references non-current "
+            f"attempt execution path(s): {', '.join(leaked)}"
+        )
+
+
+def _attempt_id_from_workspace(path: Path) -> str | None:
+    parts = path.resolve().parts
+    for index in range(len(parts) - 2):
+        if parts[index] == "work" and parts[index + 1] == "executions":
+            return parts[index + 2]
+    return None
 
 
 _PROJECT_ROOT_LEAK_DIRS = ("output", "challenges", ".design_output")

@@ -1619,7 +1619,10 @@ def _attempt_dict(
     if attempt.status not in {"failed", "lost"}:
         payload.pop("failure_summary", None)
     if paths is not None and attempt.status in {"failed", "lost"}:
-        payload.update(_latest_validation_failure_fields(paths, attempt.id))
+        validation_fields = _latest_validation_failure_fields(paths, attempt.id)
+        if validation_fields:
+            payload["solve_status"] = "failed"
+            payload.update(validation_fields)
     return payload
 
 
@@ -1762,6 +1765,7 @@ def _latest_validation_failure_fields(paths, attempt_id: UUID) -> dict[str, Any]
         for key in (
             "challenge_id",
             "validation_status",
+            "validation_error",
             "validation_failure_class",
             "validation_failure_signature",
             "validation_failure_details",

@@ -450,6 +450,76 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertIn("CTF_SKILLS_HERMES_DOCKER_LABEL", captured["environment"])
         self.assertIn("profile_log_path", captured)
 
+    def test_invoke_rejects_other_attempt_execution_path_in_prompt(self):
+        runner = HermesRunner(self.paths)
+        current = "11111111-1111-1111-1111-111111111111"
+        other = "22222222-2222-2222-2222-222222222222"
+        active = self.paths.root / "work" / "executions" / current / "current"
+        active.mkdir(parents=True)
+        log = self.paths.logs / "leak.log"
+        workspace = type("Workspace", (), {"active": active})()
+
+        with patch("hermes.process.invoke", side_effect=AssertionError("Hermes must not run")):
+            returncode = runner._invoke(
+                f"debug path /workspace/executions/{other}/current/output",
+                log,
+                dry_run=False,
+                timeout=1,
+                workspace=workspace,
+                profile_name="cf-pwn",
+            )
+
+        self.assertEqual(returncode, 1)
+        self.assertIn("orchestration-context-leak", log.read_text(encoding="utf-8"))
+        self.assertIn(other, log.read_text(encoding="utf-8"))
+
+    def test_three_attempt_invocations_have_isolated_workspace_context(self):
+        runner = HermesRunner(self.paths)
+        attempt_ids = [
+            "11111111-1111-1111-1111-111111111111",
+            "22222222-2222-2222-2222-222222222222",
+            "33333333-3333-3333-3333-333333333333",
+        ]
+        captures = []
+
+        def fake_invoke(prompt, **kwargs):
+            captures.append((prompt, kwargs))
+            return 0
+
+        with (
+            patch.object(runner, "_apply_legacy_custom_provider", return_value=False),
+            patch("hermes.process.hermes_arguments", return_value=["hermes", "chat", "-Q", "-q"]),
+            patch("hermes.process.effective_terminal_backend", return_value="docker"),
+            patch("hermes.process.invoke", side_effect=fake_invoke),
+        ):
+            for attempt_id in attempt_ids:
+                active = self.paths.root / "work" / "executions" / attempt_id / "current"
+                active.mkdir(parents=True)
+                workspace = type("Workspace", (), {"active": active})()
+                runner._invoke(
+                    f"current path /workspace/executions/{attempt_id}/current/output",
+                    self.paths.logs / f"{attempt_id}.log",
+                    dry_run=False,
+                    timeout=1,
+                    workspace=workspace,
+                    profile_name="cf-pwn",
+                )
+
+        labels = set()
+        for index, (prompt, kwargs) in enumerate(captures):
+            current = attempt_ids[index]
+            others = set(attempt_ids) - {current}
+            self.assertIn(current, prompt)
+            self.assertFalse(any(other in prompt for other in others))
+            self.assertEqual(
+                kwargs["environment"]["TERMINAL_CWD"],
+                f"/workspace/executions/{current}/current",
+            )
+            label = kwargs["environment"]["CTF_SKILLS_HERMES_DOCKER_LABEL"]
+            self.assertIn(current, label)
+            labels.add(label)
+        self.assertEqual(len(labels), 3)
+
     def test_invoke_flushes_header_before_blocking_run(self):
         log = self.paths.logs / "live.log"
         profile_log = self.paths.root / ".hermes" / "profiles" / "cf-pwn" / "logs" / "agent.log"
