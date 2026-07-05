@@ -786,6 +786,52 @@ def test_report_and_metadata_do_not_pass_when_solver_output_missing(tmp_path: Pa
     assert challenge["missing_solver_output"] is True
 
 
+def test_report_success_clears_stale_validation_failure_fields(tmp_path: Path) -> None:
+    from hermes.report import merge_validation_into_report
+
+    report = tmp_path / "report.json"
+    report.write_text(
+        json.dumps(
+            {
+                "challenges": [
+                    {
+                        "id": "pwn-0001",
+                        "solve_status": "failed",
+                        "validation_status": "contract_failed",
+                        "validation_error": "pwn technique consistency failed",
+                        "validation_contract_errors": ["writeup describes ret2win"],
+                        "validation_failure_details": [{"code": "contract_failed"}],
+                        "validation_failure_class": "contract",
+                        "validation_failure_signature": "contract|status=contract_failed",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    merge_validation_into_report(
+        report,
+        [
+            {
+                "challenge_id": "pwn-0001",
+                "solve_status": "passed",
+                "validation_status": "passed",
+                "validation_command": ["bash", "validate.sh"],
+                "validation_returncode": 0,
+                "validation_final_flag_candidate": "flag{demo}",
+            }
+        ],
+    )
+
+    challenge = json.loads(report.read_text(encoding="utf-8"))["challenges"][0]
+    assert challenge["solve_status"] == "passed"
+    assert challenge["validation_status"] == "passed"
+    assert "validation_error" not in challenge
+    assert "validation_contract_errors" not in challenge
+    assert "validation_failure_details" not in challenge
+
+
 def test_stamp_validation_results_marks_missing_solver_output_unpublishable(tmp_path: Path) -> None:
     paths = _Paths(tmp_path)
     challenge = _make_pwn_gate_challenge(paths)
@@ -812,3 +858,47 @@ def test_stamp_validation_results_marks_missing_solver_output_unpublishable(tmp_
     assert stamped["repaired"] is False
     assert stamped["publishable"] is False
     assert stamped["missing_solver_output"] is True
+
+
+def test_stamp_validation_results_success_clears_stale_failure_fields(tmp_path: Path) -> None:
+    paths = _Paths(tmp_path)
+    challenge = _make_pwn_gate_challenge(paths)
+    metadata_path = challenge / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata.update(
+        {
+            "solve_status": "failed",
+            "validation_status": "contract_failed",
+            "validation_error": "pwn technique consistency failed",
+            "validation_contract_errors": ["writeup describes ret2win"],
+            "validation_failure_details": [{"code": "contract_failed"}],
+            "validation_failure_class": "contract",
+            "validation_failure_signature": "contract|status=contract_failed",
+            "solve_note": "pwn technique consistency failed",
+        }
+    )
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    changed = _stamp_validation_results_into_outputs(
+        {"pwn-0001": challenge},
+        [
+            {
+                "challenge_id": "pwn-0001",
+                "solve_status": "passed",
+                "validation_status": "passed",
+                "validation_command": ["bash", "validate.sh"],
+                "validation_returncode": 0,
+                "validation_final_flag_candidate": "flag{demo}",
+            }
+        ],
+    )
+
+    stamped = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert changed is True
+    assert stamped["solve_status"] == "passed"
+    assert stamped["validation_status"] == "passed"
+    assert stamped["repaired"] is True
+    assert stamped["publishable"] is True
+    assert "validation_error" not in stamped
+    assert "validation_contract_errors" not in stamped
+    assert "validation_failure_details" not in stamped

@@ -275,6 +275,19 @@ def _stamp_validation_results_into_outputs(
             elif authoritative_pass:
                 metadata.pop("solve_note", None)
             before = dict(metadata)
+            if authoritative_pass:
+                for field in (
+                    "validation_error",
+                    "validation_contract_errors",
+                    "validation_failure_details",
+                    "validation_failure_class",
+                    "validation_failure_signature",
+                    "pwn_failure_stage",
+                    "pwn_debug_failure_stage",
+                    "pwn_debug_actionable_summary",
+                    "pwn_debug_error",
+                ):
+                    metadata.pop(field, None)
             metadata.update(updates)
             for key, value in list(metadata.items()):
                 if value is None and key in {"validation_failure_class", "validation_failure_signature"}:

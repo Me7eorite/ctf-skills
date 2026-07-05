@@ -1391,6 +1391,16 @@ def _pwn_technique_consistency_errors(challenge_dir: Path, metadata: dict) -> li
     writeup_text = _read_text(challenge_dir / "writenup" / "wp.md") or ""
     combined = f"{source_text}\n{exp_text}"
     errors: list[str] = []
+    flag_text = "\n".join(
+        str(metadata.get(key) or "")
+        for key in ("flag", "validation_final_flag_candidate")
+    ).lower()
+    misleading_flag_tokens = ("ret2win", "rop_win", "win_func", "winfunction")
+    if not allows_ret2win and any(token in flag_text for token in misleading_flag_tokens):
+        errors.append(
+            "pwn technique consistency failed: flag naming implies ret2win/rop_win "
+            "while metadata declares a stricter pwn technique"
+        )
     if not allows_ret2win and re.search(r"\b(?:read_flag|print_flag|win)\s*\(", combined):
         errors.append(
             "pwn technique consistency failed: declared technique is "

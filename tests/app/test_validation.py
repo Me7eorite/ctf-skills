@@ -593,6 +593,28 @@ class ValidationTests(unittest.TestCase):
         self.assertTrue(any("technique consistency failed" in e for e in errors))
         self.assertTrue(any("read_flag()/win()/print_flag()" in e for e in errors))
 
+    def test_pwn_strict_design_rejects_ret2win_flag_naming(self):
+        challenge = self.paths.challenges / "pwn" / "pwn-ret2libc-flag-001"
+        metadata = _write_minimal_pwn_contract(challenge)
+        metadata["primary_technique"] = "stack_canary_leak_via_print"
+        metadata["secondary_technique"] = "ret2libc_leak"
+        metadata["techniques"] = [
+            "stack_canary_leak_via_print",
+            "ret2libc_leak",
+            "rop_chain_construction",
+        ]
+        metadata["flag"] = "flag{stack_smashing_detected_bypass_canary_leak_rop_win_2026}"
+        (challenge / "writenup").mkdir(parents=True, exist_ok=True)
+        (challenge / "writenup" / "exp.py").write_text(
+            "libc_base = leak - 0x29dc0\n"
+            "payload = flat(pop_rdi, binsh, system)\n",
+            encoding="utf-8",
+        )
+
+        errors = self.validator.contract_errors(challenge, metadata)
+
+        self.assertTrue(any("flag naming implies ret2win/rop_win" in e for e in errors))
+
     def test_pwn_artifact_hygiene_rejects_repair_residue(self):
         challenge = self.paths.challenges / "pwn" / "pwn-hygiene-001"
         metadata = _write_minimal_pwn_contract(challenge)

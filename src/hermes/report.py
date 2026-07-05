@@ -117,6 +117,19 @@ def merge_validation_into_report(
         ):
             if field in result and result[field] is not None:
                 target[field] = result[field]
+        if target["solve_status"] == "passed":
+            for field in (
+                "validation_error",
+                "validation_contract_errors",
+                "validation_failure_details",
+                "validation_failure_class",
+                "validation_failure_signature",
+                "pwn_failure_stage",
+                "pwn_debug_actionable_summary",
+                "pwn_debug_error",
+            ):
+                if field not in result or result[field] in (None, "", []):
+                    target.pop(field, None)
         if target["solve_status"] == "failed":
             any_failed = True
 
