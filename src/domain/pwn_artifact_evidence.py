@@ -31,10 +31,12 @@ def final_pwn_artifact_evidence(challenge_dir: Path) -> dict[str, Any] | None:
     metadata = read_json(challenge_dir / "metadata.json", {})
     if not isinstance(metadata, dict) or metadata.get("category") != "pwn":
         return None
-    artifact_rel = PWN_FINAL_ARTIFACT_REL
-    artifact_prompt_path = PWN_FINAL_ARTIFACT_PROMPT_PATH
+    artifact_rel = _pwn_final_artifact_rel(metadata)
+    artifact_prompt_path = f"./{artifact_rel}"
     artifact = challenge_dir / artifact_rel
-    deploy_src = challenge_dir / "deploy" / "src" / "vuln"
+    deploy_src = challenge_dir / "deploy" / "src" / Path(artifact_rel).name
+    if not deploy_src.is_file() or deploy_src.is_symlink():
+        deploy_src = challenge_dir / "deploy" / "src" / "vuln"
     deploy_src_sha = (
         _sha256_file(deploy_src)
         if deploy_src.is_file() and not deploy_src.is_symlink()
@@ -85,10 +87,10 @@ def final_pwn_artifact_prompt_block(challenge_dir: Path) -> str:
     return "\n".join(
         [
             "FINAL SOLVER EVIDENCE SOURCE:",
-            "Use only ./attachments/vuln for exp.py and pwn_debug_report.json.",
-            "Do not use deploy/src/vuln for solver offsets, symbols, gadgets, or report sha.",
+            f"Use only {artifact_path} for exp.py and pwn_debug_report.json.",
+            "Do not use deploy/src binaries for solver offsets, symbols, gadgets, or report sha.",
             "BINARY_SHA256 in exp.py is mandatory and must equal metadata.artifact_sha256.",
-            "pwn_debug_report.json is host-generated from attachments/vuln; do not hand-edit binary.sha256.",
+            f"pwn_debug_report.json is host-generated from {artifact_path}; do not hand-edit binary.sha256.",
             f"- artifact path: {artifact_path}",
             f"- artifact available: {available}",
             f"- {rel_artifact_path} sha256: {sha}",
@@ -107,25 +109,26 @@ def ensure_pwn_solver_evidence(challenge_dir: Path) -> tuple[str, ...]:
     metadata = read_json(metadata_path, {})
     if not isinstance(metadata, dict) or metadata.get("category") != "pwn":
         return ()
-    if metadata.get("artifact") != PWN_FINAL_ARTIFACT_REL:
+    artifact_rel = _pwn_final_artifact_rel(metadata)
+    if artifact_rel == PWN_FINAL_ARTIFACT_REL and metadata.get("artifact") != PWN_FINAL_ARTIFACT_REL:
         return ()
 
-    artifact_path = challenge_dir / PWN_FINAL_ARTIFACT_REL
+    artifact_path = challenge_dir / artifact_rel
     if not artifact_path.is_file() or artifact_path.is_symlink():
-        raise PwnArtifactEvidenceError(f"{PWN_FINAL_ARTIFACT_REL} missing")
+        raise PwnArtifactEvidenceError(f"{artifact_rel} missing")
 
     actions: list[str] = []
-    if _ensure_host_readable(artifact_path):
-        actions.append("made attachments/vuln readable for host validation")
+    if _ensure_host_readable(artifact_path, artifact_rel=artifact_rel):
+        actions.append(f"made {artifact_rel} readable for host validation")
     artifact_sha = _sha256_file(artifact_path)
     if metadata.get("artifact_sha256") != artifact_sha:
         metadata["artifact_sha256"] = artifact_sha
         write_json(metadata_path, metadata)
-        actions.append("updated metadata.artifact_sha256 from attachments/vuln")
+        actions.append(f"updated metadata.artifact_sha256 from {artifact_rel}")
 
     report_path = _write_pwn_debug_report(
         challenge_dir,
-        artifact_rel=PWN_FINAL_ARTIFACT_REL,
+        artifact_rel=artifact_rel,
         artifact_path=artifact_path,
         artifact_sha=artifact_sha,
     )
@@ -138,11 +141,11 @@ def ensure_pwn_solver_evidence(challenge_dir: Path) -> tuple[str, ...]:
     return tuple(actions)
 
 
-def _ensure_host_readable(path: Path) -> bool:
+def _ensure_host_readable(path: Path, *, artifact_rel: str = PWN_FINAL_ARTIFACT_REL) -> bool:
     try:
         current_mode = path.stat().st_mode
     except OSError as exc:
-        raise PwnArtifactEvidenceError(f"cannot stat {PWN_FINAL_ARTIFACT_REL}: {exc}") from exc
+        raise PwnArtifactEvidenceError(f"cannot stat {artifact_rel}: {exc}") from exc
     desired_mode = current_mode | 0o444
     if desired_mode == current_mode:
         return False
@@ -150,7 +153,7 @@ def _ensure_host_readable(path: Path) -> bool:
         os.chmod(path, desired_mode)
     except OSError as exc:
         raise PwnArtifactEvidenceError(
-            f"cannot make {PWN_FINAL_ARTIFACT_REL} readable: {exc}"
+            f"cannot make {artifact_rel} readable: {exc}"
         ) from exc
     return True
 

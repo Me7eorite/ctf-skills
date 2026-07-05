@@ -1,4 +1,4 @@
-﻿## Context
+## Context
 
 `batch-failure-governance` makes validation failures class-aware and stops blind repeated repair loops, but it deliberately does not make reference solver quality a hard release gate. The remaining operator pain is sharper: Web/Pwn artifacts can carry a weak `writenup/exp.py`, validation may fail in ways that are correctly classified as `solver`, and repair can still fail to converge. The system needs to guarantee the release boundary: a challenge is not built unless the reference solver passes against the host validation service path.
 
@@ -9,11 +9,25 @@ Current validation already runs `validate.sh`, records stdout/stderr tails, stor
 The implementation already has several enforcement boundaries that this change must extend instead of replacing:
 
 - `src/domain/validation.py::ChallengeValidator.validate_one()` is the authoritative per-challenge validation entrypoint. Solver acceptance fields should be added to its result dictionaries and to `failure_details`/`validation_failure_details`; `contract_errors` must remain as a compatibility surface for existing tests, reports, and callers.
-- `ChallengeValidator.contract_errors()` and `_solver_integrity_errors()` already perform deterministic solver/validator anti-cheat checks. The new Web/Pwn static preflight should live beside those checks or be called from the same validation path, while preserving older RE solver-integrity behavior.
-- `src/hermes/runner.py` already appends `state/validation-history.json`, records first failure evidence, compares validation failure fingerprints, and blocks publication when the output manifest changes after validation. Solver acceptance must enrich those existing records and final-publish checks rather than adding an independent success marker.
-- `src/domain/validation_repair_policy.py::validation_failure_fingerprints()` is the existing no-progress guard. Solver acceptance fingerprints should either extend this function or feed it a solver-specific sub-fingerprint so repeated solver failures are detected consistently with Phase 1 governance.
+- `ChallengeValidator.contract_errors()` and `_solver_integrity_errors()` already perform deterministic solver/validator anti-cheat checks, including hardcoded flag and organizer-file leakage guards. The new Web/Pwn static preflight should fill the remaining default-target, helper, and bounded-I/O gaps beside those checks, while preserving older RE solver-integrity behavior.
+- `src/domain/pwn_debug.py` plus `src/domain/validation_failure_governance.py` already classify Pwn failures by stage and record classification conflicts such as readiness established but classified as service-readiness. This change should add tests and display coverage for those boundaries, not replace the classifier.
+- `src/hermes/runner.py` already appends `state/validation-history.json`, records `state/first-validation-failure.json`, compares validation failure fingerprints, and blocks publication when the output manifest changes after validation. Solver acceptance must enrich those existing records and final-publish checks rather than adding an independent success marker.
+- `src/domain/validation_repair_policy.py::validation_failure_fingerprints()` is the existing repeated-failure guard. Solver acceptance fingerprints should either extend this function or feed it a solver-specific sub-fingerprint so repeated solver failures are detected consistently with Phase 1 governance.
+- `src/services/build_orchestration_service.py` already passes retry context with first/latest failure diagnostics for same-attempt retries. This change should preserve that binding and add solver acceptance/root-current blocked evidence to the existing retry context where available.
 - Same-attempt repair and revalidation are already attempt-scoped through `BuildAttemptRepairService` and `BuildAttemptRevalidationService`, with challenge roots normalized under the current attempt workspace. This change must not scan unrelated `work/executions/*` trees to infer solver acceptance.
-- `src/web/build_attempts_endpoints.py` already derives attempt-detail validation fields from latest validation history. Solver acceptance API fields should be derived for the current returned rows/details only, not by global workspace scans.
+- `src/web/build_attempts_endpoints.py` already derives attempt-detail validation fields from latest validation history. Solver acceptance, root failure, current blocker, blocked reason, and route fields should be derived for the current returned rows/details only, not by global workspace scans.
+
+## Gap Audit Summary
+
+The current codebase covers more than the original sketch assumed:
+
+- Root failure and current blocker do not need new top-level concepts. `first-validation-failure.json` captures the root validation failure, while `validation-history.json` plus latest failed validation fields capture the current blocker. The remaining gap is surfacing both clearly in API/dashboard and repair prompts, especially when the current blocker is repair infrastructure.
+- `repair_invocation_failed` can replace `per_results` after a Hermes repair invocation fails. The root validation failure remains available in `first-validation-failure.json`, but current API/detail/prompt surfaces must keep both the original host-validation root cause and the repair-invocation blocker visible.
+- Pwn readiness-vs-solver classification is mostly implemented through `pwn_failure_stage`, `readiness_established`, `_exploit_stage_started()`, and `classification_conflicts`. This change should add boundary tests and expose conflicts, rather than redesigning stage classification.
+- Retry/resume already have safe `resume_from_shard_basename` validation, explicit clean/resume separation, and retry context with `first_failure`/`latest_failure`. The remaining work is acceptance-aware resume skip and tests proving latest finalized failed-attempt diagnostics are used.
+- Contract, service-readiness, solver, timeout, validation-capture, and inconclusive routes already exist in `validation_repair_policy.py`. The remaining route gap is solver-acceptance blocked/regeneration diagnostics, not a new routing framework.
+- Publication already has output-manifest consistency via `validated-output.json`, `publish-status.json`, and manifest hashing. The missing piece is requiring solver acceptance passed for that same manifest.
+- Revalidation currently promotes on host validation success for the selected current directory. It must add solver acceptance passed for Web/Pwn before promoting.
 
 ## Goals / Non-Goals
 
@@ -22,7 +36,7 @@ The implementation already has several enforcement boundaries that this change m
 - Reject or repair default solver paths that do not use the validation target through `CHAL_HOST` and `CHAL_PORT`.
 - Prevent unbounded solver I/O, missing helper modules, hardcoded flags, and organizer-only file reads from reaching successful build completion.
 - Require repair rounds to prove progress before consuming more budget.
-- Allow bounded solver-only regeneration when repair cannot make progress and evidence supports it.
+- Record bounded solver-focused blocked routes when repair cannot make progress, leaving any solver-only regeneration implementation behind the existing repair abstraction for a later slice.
 - Preserve clean validation evidence for the final successful artifact.
 
 **Non-Goals:**
@@ -45,15 +59,16 @@ The implementation already has several enforcement boundaries that this change m
    Static preflight catches obvious bad solvers, but a solver is accepted only by runtime validation. Runtime diagnostics must preserve command, exit code, stdout/stderr tails, final flag candidate, readiness evidence, service logs when available, and structured solver-quality findings.
 
 4. Require repair progress to be measurable.
-   Each repair or regeneration round should record a compact progress fingerprint derived from the solver file hash, validate wrapper hash, debug report hash, validation failure class/signature, and structured solver-quality detail codes. If a round changes none of these, or repeats the same failure without improving diagnostics, the runner should stop that repair path and escalate.
+   Each deterministic or Hermes repair round should record a compact progress fingerprint derived from the solver file hash, validate wrapper hash, debug report hash, validation failure class/signature, structured solver-quality detail codes, and solver acceptance status/fingerprint. If a round changes none of these, or repeats the same failure without improving diagnostics, the runner should stop that repair path and record a blocked reason. This extends the existing validation failure fingerprint guard.
 
-5. Keep this change to solver-only regeneration.`n   If validation proves the service is reachable and the solver is bad, the escalation may regenerate or rewrite only `writenup/exp.py` and supporting debug evidence. Automated challenge implementation regeneration is out of scope for this change; when diagnostics show a target/solver contradiction such as missing shipped binary, impossible flag path, or service behavior inconsistent with metadata, the attempt should fail with a human-action reason such as `challenge_regeneration_required`.
+5. Keep regeneration explicit and bounded.
+   If validation proves the service is reachable and the solver is bad, a later implementation may regenerate or rewrite only `writenup/exp.py` and supporting debug evidence inside the existing repair abstraction. Automated challenge implementation regeneration is out of scope for this change; when diagnostics show a target/solver contradiction such as missing shipped binary, impossible flag path, or service behavior inconsistent with metadata, the attempt should fail with a human-action reason such as `challenge_regeneration_required`.
 
 6. Make blocked states explicit.
    When solver repair cannot prove progress within budget, the attempt should fail with a clear reason such as `solver_unrepairable`, `solver_quality_blocked`, `solver_regeneration_failed`, or `challenge_regeneration_required`. These reasons can live in existing report/progress/attempt summary fields in the first slice.
 
 7. Final validation must be clean.
-   After any deterministic repair, Hermes repair, or solver-only regeneration, the runner must rebuild or rebind the execution workspace as needed and run final host validation from the exact output tree that will be published. Only that final validation can promote the attempt to done/succeeded.
+   After any deterministic or Hermes repair, the runner must rebuild or rebind the execution workspace as needed and run final host validation from the exact output tree that will be published. Only that final validation, with solver acceptance passed for Web/Pwn, can promote the attempt to done/succeeded.
 
 8. Keep solver acceptance schema-compatible.
    The first slice should add a nested `solver_acceptance` object and mirrored summary fields where useful, but must keep existing keys such as `status`, `solve_status`, `contract_errors`, `failure_details`, `validation_failure_details`, and `validation_failure_signature` readable. Older validation histories without solver fields are `unavailable`, not failed by reinterpretation.
@@ -70,10 +85,13 @@ The implementation already has several enforcement boundaries that this change m
 12. Separate solver-quality blocking from service-readiness blocking.
     Static solver defects can block solver acceptance before runtime solve, but runtime failures must keep the existing failure-governance classification. For example, missing readiness evidence can remain `service-readiness`, while readiness established plus prompt EOF can remain `solver`. Solver acceptance adds release gating and details; it should not collapse all validation failures into `solver`.
 
+13. Preserve root failure when current blocker changes.
+    Repair-infrastructure failures, including `repair_invocation_failed`, are current blockers. They must not erase the root host-validation failure from first-failure/history evidence, retry context, repair prompts, or attempt detail responses.
+
 ## Risks / Trade-offs
 
 - [Risk] Static gates may reject valid unusual solvers. -> Mitigation: scope checks to default validation paths, allow explicit local debug branches, and make every blocked code visible in structured details.
-- [Risk] Regeneration may churn working challenge source. -> Mitigation: this change permits solver-only regeneration only; challenge regeneration is deferred.
+- [Risk] Regeneration may churn working challenge source. -> Mitigation: this change records blocked/future route decisions only; automated challenge regeneration is deferred.
 - [Risk] More validation rounds increase latency. -> Mitigation: keep budgets bounded and stop on no-progress fingerprints.
 - [Risk] Heuristic static analysis can miss dynamic bugs. -> Mitigation: keep runtime validation as the only acceptance source.
 - [Risk] Hard acceptance can reduce apparent batch success rate at first. -> Mitigation: failures become honest blocked attempts instead of false successes, and repair evidence becomes actionable.
@@ -84,16 +102,15 @@ The implementation already has several enforcement boundaries that this change m
 1. Add solver preflight diagnostics and tests without changing publish behavior.
 2. Wire solver acceptance into runner final-validation publish fences.
 3. Add repair-progress fingerprints and blocked reasons.
-4. Add bounded solver-regeneration route and tests.
-5. Record challenge_regeneration_required as a human-action blocked reason when solver-only routes cannot resolve artifact contradictions; implementing challenge regeneration is a later change.
-6. Surface blocked reasons and solver-quality details in attempt list/detail.
-7. Roll out for Web/Pwn first; leave Reverse unchanged unless a future change defines comparable solver acceptance rules.
+4. Surface blocked reasons, root/current blocker lineage, route decisions, and solver-quality details in attempt list/detail.
+5. Record `challenge_regeneration_required` as a human-action blocked reason when solver-only routes cannot resolve artifact contradictions; implementing challenge regeneration remains a later change.
+6. Roll out for Web/Pwn first; leave Reverse unchanged unless a future change defines comparable solver acceptance rules.
 
 ## Open Questions
 
 - Should blocked reasons become a durable enum on `build_attempts`, or remain report/progress-derived in the first implementation? Recommendation for this change: keep them report/progress/validation-history derived first, then add a migration only if UI filtering needs indexed blocked states.
-- What exact maximum budgets should apply to solver repair and solver-only regeneration? Recommendation for this change: define explicit config defaults in implementation tasks before coding, with solver-only regeneration at most once per runner invocation unless the solver fingerprint changes. Challenge regeneration budget is out of scope.
-- Should solver regeneration reuse the full original design prompt, or a narrower solver-only prompt assembled from validation/debug evidence? Recommendation for this change: use a narrower solver-only prompt by default, with original design metadata as context only.
+- What exact maximum budgets should apply to solver repair progress checks? Recommendation for this change: keep existing repair budgets and add a no-progress stop condition keyed by solver/evidence fingerprints. Challenge regeneration budget is out of scope.
+- If a later slice implements solver-only regeneration, should it reuse the full original design prompt or a narrower solver-only prompt assembled from validation/debug evidence? Recommendation: use a narrower solver-only prompt by default, with original design metadata as context only.
 
 ## 20-Round Optimization Log
 
@@ -114,7 +131,7 @@ This section records the requested repeated review loop. Each round re-read the 
 | 11 | Local debug | Local branches could be banned too broadly. | Kept explicit `LOCAL=1`-style allowances when default validation remains bounded. | Debug ergonomics do not weaken acceptance. |
 | 12 | Missing helpers | Helper-module checks lacked dependency allowance wording. | Scoped blocking to undeclared local helpers not present or supported at runtime. | Vendored/declared helpers can pass. |
 | 13 | Unbounded I/O | Static I/O checks could become heuristic-only blockers. | Required structured codes and runtime validation as authority. | Operators see why a solver is blocked. |
-| 14 | Regeneration scope | Challenge regeneration could churn working sources and budgets were undefined. | Deferred automated challenge regeneration to a later change and kept this change to solver-only regeneration plus blocked reason recording. | Scope is now bounded. |
+| 14 | Regeneration scope | Challenge regeneration could churn working sources and budgets were undefined. | Deferred automated challenge regeneration to a later change and kept this change to blocked route recording, with any solver-only regeneration left behind the existing repair abstraction for a later slice. | Scope is now bounded. |
 | 15 | Older attempts | Historical validation histories might be reinterpreted as failed. | Added unavailable semantics for missing solver acceptance fields. | Backward compatibility is explicit. |
 | 16 | API fields | Attempt detail/list fields were underspecified. | Added bounded derivation and detail/list exposure requirements. | Dashboard can display acceptance without expensive scans. |
 | 17 | Budgets | Repair/regeneration budget defaults were open-ended. | Converted budget question into an implementation-task decision with bounded defaults. | No infinite repair path remains in scope. |

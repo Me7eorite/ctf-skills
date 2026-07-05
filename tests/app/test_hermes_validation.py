@@ -464,7 +464,7 @@ def test_validation_debug_context_includes_final_pwn_artifact_evidence(
     assert evidence["pwn-0001"]["symbols"]["win"] == "0x40149d"
     assert "FINAL SOLVER EVIDENCE SOURCE" in evidence["pwn-0001"]["instruction"]
     assert "Use only ./attachments/vuln for exp.py and pwn_debug_report.json." in evidence["pwn-0001"]["instruction"]
-    assert "Do not use deploy/src/vuln" in evidence["pwn-0001"]["instruction"]
+    assert "Do not use deploy/src binaries" in evidence["pwn-0001"]["instruction"]
     assert f"deploy/src/vuln sha256: {deploy_sha} (UNTRUSTED / DO NOT USE)" in evidence["pwn-0001"]["instruction"]
 
     prompt = render_validation_repair_prompt(

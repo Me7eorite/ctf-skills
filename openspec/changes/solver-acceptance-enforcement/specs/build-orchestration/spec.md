@@ -1,4 +1,4 @@
-﻿## ADDED Requirements
+## ADDED Requirements
 
 ### Requirement: Build attempts require solver acceptance before success
 
@@ -25,29 +25,38 @@ Build orchestration SHALL consume solver acceptance evidence for Web and Pwn att
 
 ### Requirement: Build diagnostics expose solver acceptance and blocked reason
 
-Build attempt list and detail APIs SHALL expose solver acceptance status, solver acceptance fingerprint, solver-quality diagnostic summaries, and explicit blocked reasons when available. These fields SHALL be derived from the current attempt's validation history, report, progress evidence, or attempt summary and SHALL NOT require scanning unrelated execution histories.
+Build attempt list and detail APIs SHALL expose solver acceptance status, solver acceptance fingerprint, solver-quality diagnostic summaries, route decisions, and explicit blocked reasons when available. Attempt detail SHALL also expose the root validation failure and current blocker when they differ, such as when a later repair invocation failure blocks progress after an earlier host-validation failure. These fields SHALL be derived from the current attempt's validation history, first-failure record, report, progress evidence, or attempt summary and SHALL NOT require scanning unrelated execution histories.
 
 #### Scenario: Attempt detail exposes blocked solver reason
 - **WHEN** a Web or Pwn attempt fails because automatic solver repair made no progress
 - **THEN** attempt detail SHALL expose the blocked reason and solver-quality diagnostics
 - **AND** it SHALL retain the validation failure class and signature from failure governance when available
 
+#### Scenario: Repair blocker preserves original validation root cause
+- **WHEN** a Web or Pwn attempt first fails host validation with a solver or readiness root cause
+- **AND** a later repair invocation fails with `repair_invocation_failed`
+- **THEN** attempt detail SHALL expose the original host-validation root failure
+- **AND** it SHALL separately expose the repair invocation failure as the current blocker
+
 #### Scenario: Attempt list stays bounded
 - **WHEN** the dashboard requests a page of build attempts
 - **THEN** solver acceptance fields SHALL be derived only for returned rows or copied summaries
 - **AND** the list path SHALL NOT scan all execution workspaces to build a global solver acceptance picture
 
-### Requirement: Regeneration outcomes remain attempt-scoped
+### Requirement: Blocked route outcomes remain attempt-scoped
 
-Build orchestration SHALL treat solver-only regeneration and solver blocked outcomes as attempt-scoped diagnostics. One attempt's solver repair exhaustion or regeneration route SHALL NOT consume the repair budget, retry budget, or status of sibling attempts in the same batch.
+Build orchestration SHALL treat solver blocked outcomes, challenge-regeneration-required decisions, and any future solver-only regeneration route as attempt-scoped diagnostics. One attempt's solver repair exhaustion or blocked route SHALL NOT consume the repair budget, retry budget, or status of sibling attempts in the same batch.
 
 #### Scenario: Solver blocked attempt does not stop sibling
 - **GIVEN** a batch contains attempts A and B
 - **WHEN** attempt A remains `failed` with blocked reason `solver_unrepairable`
 - **THEN** attempt B SHALL continue through its own validation and repair lifecycle
-- **AND** B SHALL receive its own solver repair and regeneration budgets
+- **AND** B SHALL receive its own solver repair budget and route diagnostics
 
-#### Scenario: Challenge regeneration is recorded as future human action`r`n- **WHEN** solver-only routes fail and diagnostics prove an artifact contradiction`r`n- **THEN** orchestration SHALL keep the attempt `failed` and record `challenge_regeneration_required` as a blocked reason`r`n- **AND** this change SHALL NOT automatically create a regenerated challenge attempt
+#### Scenario: Challenge regeneration is recorded as future human action
+- **WHEN** solver-only routes fail and diagnostics prove an artifact contradiction
+- **THEN** orchestration SHALL keep the attempt `failed` and record `challenge_regeneration_required` as a blocked reason
+- **AND** this change SHALL NOT automatically create a regenerated challenge attempt
 
 ### Requirement: Build success uses manifest-bound solver acceptance
 

@@ -263,9 +263,9 @@ def test_build_attempt_repair_prompt_includes_final_pwn_artifact_evidence(
 
     assert "FINAL SOLVER EVIDENCE SOURCE:" in prompt
     assert "Use only ./attachments/vuln for exp.py and pwn_debug_report.json." in prompt
-    assert "Do not use deploy/src/vuln for solver offsets, symbols, gadgets, or report sha." in prompt
+    assert "Do not use deploy/src binaries for solver offsets, symbols, gadgets, or report sha." in prompt
     assert "BINARY_SHA256 in exp.py is mandatory and must equal metadata.artifact_sha256." in prompt
-    assert "pwn_debug_report.json is host-generated from attachments/vuln; do not hand-edit binary.sha256." in prompt
+    assert "pwn_debug_report.json is host-generated from ./attachments/vuln; do not hand-edit binary.sha256." in prompt
     assert f"attachments/vuln sha256: {artifact_sha}" in prompt
     assert f"metadata.artifact_sha256: {artifact_sha}" in prompt
     assert f"deploy/src/vuln sha256: {deploy_sha} (UNTRUSTED / DO NOT USE)" in prompt

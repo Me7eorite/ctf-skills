@@ -1,4 +1,4 @@
-﻿## ADDED Requirements
+## ADDED Requirements
 
 ### Requirement: Runner records solver acceptance rounds
 
@@ -20,7 +20,7 @@ The Hermes runner and validation path SHALL record solver acceptance evidence in
 
 ### Requirement: Runner enforces solver repair progress
 
-The Hermes runner SHALL compare solver acceptance fingerprints after each deterministic repair, Hermes repair, or solver-only regeneration round. If the fingerprint proves no material solver progress and validation does not pass, the runner SHALL stop the automatic path and record an explicit blocked reason. The comparison SHALL be invocation-local unless a future change adds durable cross-request suppression.
+The Hermes runner SHALL compare solver acceptance fingerprints after each deterministic or Hermes repair round. If the fingerprint proves no material solver progress and validation does not pass, the runner SHALL stop the automatic path and record an explicit blocked reason. The comparison SHALL be invocation-local unless a future change adds durable cross-request suppression.
 
 #### Scenario: No-progress Hermes repair is blocked
 - **WHEN** Hermes repair exits successfully
@@ -28,11 +28,17 @@ The Hermes runner SHALL compare solver acceptance fingerprints after each determ
 - **THEN** the runner SHALL stop automatic repair for that attempt
 - **AND** it SHALL record a solver blocked reason in progress or validation history
 
-#### Scenario: Solver regeneration changes fingerprint
-- **WHEN** solver regeneration rewrites `writenup/exp.py`
+#### Scenario: Changed solver evidence changes fingerprint
+- **WHEN** a repair rewrites `writenup/exp.py` or supporting solver evidence
 - **AND** the next validation round produces a different acceptance fingerprint
-- **THEN** the runner MAY continue within the bounded solver regeneration budget
+- **THEN** the runner MAY continue within the bounded repair budget
 - **AND** it SHALL still require final validation passed before publishing
+
+#### Scenario: Repair invocation failure is current blocker, not root failure
+- **WHEN** host validation first fails with solver acceptance diagnostics
+- **AND** a later Hermes repair invocation fails before producing a useful output change
+- **THEN** the runner SHALL preserve the first host-validation failure in first-failure/history evidence
+- **AND** it SHALL record the repair invocation failure as the current blocker or blocked reason
 
 ### Requirement: Runner publishes only clean final validation output
 
