@@ -217,8 +217,11 @@ Pwn exploit debugging acceleration:
   old report offsets, old sha values, or source-level symbol addresses. Prefer
   dynamic symbol discovery such as `ELF('./attachments/vuln').symbols` plus
   `readelf`/`objdump` evidence over hardcoded old constants. Record the
-  artifact sha used by `writenup/exp.py` as `BINARY_SHA256` or
-  `ARTIFACT_SHA256`; it must equal `metadata.artifact_sha256`.
+  artifact sha used by `writenup/exp.py` exactly as `BINARY_SHA256`; it must
+  equal both `metadata.artifact_sha256` and the SHA-256 of `attachments/vuln`.
+  If `MAIN_OFFSET`, `WIN_OFFSET`, or ROP gadget constants conflict with
+  `readelf`/`objdump` output from `attachments/vuln`, treat the exploit as
+  stale and regenerate it instead of patching around the mismatch.
 - Add or preserve a local mode such as `LOCAL=1 python3 writenup/exp.py` that
   uses `process([binary_path])` for quick menu/offset smoke tests. The default
   validation path must still connect with
@@ -243,9 +246,18 @@ Pwn exploit debugging acceleration:
   input. If a local smoke test cannot be bounded, skip it and explain why in
   `logs/report.json` instead of risking a hung worker.
 - When leaking stack canaries through `%n$p`, scan a broad bounded range and
-  identify canary-like values by stability and low byte `0x00`. Do not reject
-  values merely because they are greater than `2^48`; amd64 canaries commonly
-  use the upper seven bytes and will often exceed that threshold.
+  identify canary-like values by stability across multiple fresh connections
+  and low byte `0x00`. Do not reject values merely because they are greater
+  than `2^48`; amd64 canaries commonly use the upper seven bytes and will often
+  exceed that threshold.
+- Never fall back to guessed stack addresses such as `0x7fffffffxxxx` without a
+  live leak that proves the address for the current process. Establish a
+  reliable stack/PIE/libc leak first or switch to a provably valid exploit chain.
+- For fork-per-connection canary brute force, print byte-level progress
+  diagnostics (`byte_index`, candidate byte, attempt count), set short
+  connect/recv timeouts for every attempt, fail before the validation budget is
+  exhausted with the current position, and improve the crash oracle instead of
+  blindly waiting on slow sockets.
 - For ROP/ret2libc/PIE Pwn tasks, follow a structured debug loop before
   finishing the exploit: identify mitigations with `checksec`/`file`, compute
   the exact overflow offset with cyclic/core/headless gdb, discover gadgets from
@@ -767,6 +779,10 @@ Web / Pwn:
   for exploit offsets after host build, and do not reuse
   `writenup/pwn_debug_report.json` unless its `binary.sha256` exactly matches
   `metadata.artifact_sha256`.
+- Pwn `writenup/exp.py` MUST declare `BINARY_SHA256 = metadata.artifact_sha256`.
+  The host gate rejects solvers that only declare aliases such as
+  `ARTIFACT_SHA256`, or whose debug report/solver SHA was copied from
+  `deploy/src/vuln` or an old build.
 - Do not run Docker from Hermes. The host runner rebuilds the exact image named by
   `metadata.docker_image` with `docker build -t <metadata.docker_image> -f deploy/Dockerfile .`
   after deploy source, Dockerfile, binary, or runtime dependencies change.
@@ -802,6 +818,8 @@ Pwn container launcher:
   order. Do not replace it with one hardcoded mirror or remove fallback entries.
   If package fetch fails, keep the fallback loop and adjust the mirror list only
   deliberately.
+- Do not add `chroot` to `apt-get install`; Ubuntu/Debian provide the `chroot`
+  command via `coreutils`. Remove that package name or use `coreutils`.
 - The xinetd service may run as root only to accept the socket and execute
   `/usr/sbin/chroot`; it should run the vulnerable binary with
   `server_args = --userspec=1000:1000 /home/ctf ./<binary>` by default,

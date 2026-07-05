@@ -523,10 +523,23 @@ Rules:
   fallback loop and mirror order. Do not replace it with one hardcoded mirror or
   remove fallback entries; if package fetch fails, keep the loop and adjust only
   the mirror list deliberately.
+- For Pwn Dockerfile repairs, do not add `chroot` to `apt-get install`;
+  Ubuntu/Debian provide the `chroot` command via `coreutils`. Remove that
+  package name or use `coreutils`.
 - For Pwn solver repairs, Bound every `recvuntil` / `recvline` wait with short
   timeouts, cap brute-force or leak loops, and print bounded diagnostics for
   service ready state, the first banner line, the last recv position, and the
   failing phase before exit.
+- For Pwn solver repairs, derive all offsets, symbols, gadgets, and reports
+  from final `attachments/vuln` only. `writenup/exp.py` must declare
+  `BINARY_SHA256 = metadata.artifact_sha256`; aliases such as
+  `ARTIFACT_SHA256`, SHAs from `deploy/src/vuln`, and old
+  `pwn_debug_report.json` constants are stale.
+- For canary leaks, scan a broad bounded `%n$p` range, keep candidates stable
+  across multiple fresh connections, require low byte `0x00`, and do not filter
+  by a `2^48` threshold. For stack leaks, never fallback to guessed
+  `0x7fffffffxxxx` addresses without a live leak. For fork canary brute force,
+  print byte-level progress and use short per-attempt timeouts.
 - Do not call `./bin/progress` or `$WORKSPACE_ROOT/bin/progress`; this repair
   service records repair progress outside Hermes.
 

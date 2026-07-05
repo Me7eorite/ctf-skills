@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
@@ -135,8 +136,22 @@ def _make_web_challenge(
     (deploy / "Dockerfile").write_text("FROM alpine\n", encoding="utf-8")
     (deploy / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
     (directory / "validate.sh").write_text("#!/bin/bash\necho flag{x}\n", encoding="utf-8")
+    os.chmod(directory / "validate.sh", 0o755)
     (directory / "writenup").mkdir(parents=True, exist_ok=True)
-    (directory / "writenup" / "exp.py").write_text("pass\n", encoding="utf-8")
+    metadata_extra = dict(metadata_extra or {})
+    if category == "pwn":
+        import hashlib
+
+        (directory / "attachments").mkdir(parents=True, exist_ok=True)
+        artifact = b"\x7fELFfake"
+        (directory / "attachments" / "vuln").write_bytes(artifact)
+        artifact_sha = hashlib.sha256(artifact).hexdigest()
+        metadata_extra.setdefault("artifact", "attachments/vuln")
+        metadata_extra.setdefault("artifact_sha256", artifact_sha)
+        exp_text = f'BINARY_SHA256 = "{artifact_sha}"\n'
+    else:
+        exp_text = "pass\n"
+    (directory / "writenup" / "exp.py").write_text(exp_text, encoding="utf-8")
     (directory / "writenup" / "wp.md").write_text(
         "# title\n\n## A\n\n" + ("x" * 600) + "\n\n## B\nmore\n",
         encoding="utf-8",
@@ -156,8 +171,7 @@ def _make_web_challenge(
         "solve_status": "passed",
         "flag": "flag{example}",
     }
-    if metadata_extra:
-        metadata.update(metadata_extra)
+    metadata.update(metadata_extra)
     (directory / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
     return directory
 
@@ -186,8 +200,17 @@ def _make_archived_web_challenge(
     (deploy / "Dockerfile").write_text("FROM alpine\n", encoding="utf-8")
     (deploy / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
     (directory / "validate.sh").write_text("#!/bin/sh\necho flag{x}\n", encoding="utf-8")
+    os.chmod(directory / "validate.sh", 0o755)
     (directory / "writenup").mkdir(parents=True, exist_ok=True)
     (directory / "writenup" / "exp.py").write_text("pass\n", encoding="utf-8")
+    (directory / "writenup" / "wp.md").write_text(
+        "# title\n\n## A\n\n" + ("x" * 600) + "\n\n## B\nmore\n",
+        encoding="utf-8",
+    )
+    (directory / "README.md").write_text(
+        "# title\n\n## A\n\n" + ("y" * 600) + "\n\n## B\nmore\n",
+        encoding="utf-8",
+    )
     (directory / "metadata.json").write_text(
         json.dumps(
             {

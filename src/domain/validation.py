@@ -76,6 +76,11 @@ _PWN_CANARY_WIDTH_FILTER_RE = re.compile(
     r"(?:1\s*<<\s*48|2\s*\*\*\s*48|0x1_?0000_?0000_?0000)"
 )
 _PWN_BASH_C_RE = re.compile(r"\bbash\s+-c\b")
+_APT_INSTALL_BLOCK_RE = re.compile(
+    r"apt-get\s+install\b.*?(?=;|&&|\n\s*(?:RUN|COPY|CMD|ENTRYPOINT|WORKDIR|FROM)\b|$)",
+    re.IGNORECASE | re.DOTALL,
+)
+_CHROOT_PACKAGE_RE = re.compile(r"(?<![\w.-])chroot(?![\w.-])")
 _COMPOSE_PROJECT_RE = re.compile(
     r"(?:\bCOMPOSE_PROJECT_NAME\b|\bdocker-compose\b[^\n;&|]*\s-p\s+|\bdocker\s+compose\b[^\n;&|]*\s-p\s+)"
 )
@@ -84,6 +89,9 @@ _PWN_NAMED_OFFSET_RE = re.compile(
 )
 _PWN_EXP_SHA_RE = re.compile(
     r"""(?im)(?:BINARY|ARTIFACT|ELF|EXPLOIT)_SHA256\s*=\s*["']([^"']+)["']"""
+)
+_PWN_BINARY_SHA_RE = re.compile(
+    r"""(?im)\bBINARY_SHA256\s*=\s*["']([^"']+)["']"""
 )
 
 
@@ -95,6 +103,8 @@ def validation_failure_detail(
     status: str | None = None,
     path: str | None = None,
     hint: str | None = None,
+    stdout_tail: str | None = None,
+    stderr_tail: str | None = None,
 ) -> dict[str, str]:
     """Return a stable machine-readable validation diagnostic."""
     detail = {
@@ -108,6 +118,10 @@ def validation_failure_detail(
         detail["path"] = path
     if hint:
         detail["hint"] = hint
+    if stdout_tail:
+        detail["stdout_tail"] = stdout_tail
+    if stderr_tail:
+        detail["stderr_tail"] = stderr_tail
     return detail
 
 
@@ -251,38 +265,47 @@ def classify_validation_failure(
     if status == "solver_evidence_stale":
         return [
             validation_failure_detail(
-                phase="validate",
+                phase="contract",
                 code="solver_evidence_stale",
                 status=status,
                 message=error or "Pwn solver evidence is stale",
                 path="writenup/exp.py",
                 hint=(
-                    "Ignore stale pwn_debug_report.json, recompute offsets and "
-                    "return chains from attachments/vuln with readelf/objdump/checksec, "
-                    "and update exp.py."
+                    "Ignore stale solver evidence and rerun readelf, objdump, "
+                    "checksec, and ROPgadget against attachments/vuln; regenerate "
+                    "offsets, gadgets, pwn_debug_report.json, and exp.py from "
+                    "the final player artifact."
                 ),
             )
         ]
     if status == "timeout":
         text = "\n".join(value for value in (error, stderr) if value)
         stage = _pwn_validation_stage(text)
-        code = {
-            "readiness": "readiness_timeout",
-            "exploit": "exploit_timeout",
-            "cleanup": "cleanup_timeout",
-        }.get(stage, "timeout")
-        hint = {
-            "readiness": "Fix the fresh TCP banner/menu readiness probe before running the exploit.",
-            "exploit": "Debug bounded solver I/O and payload delivery; readiness already reached the exploit phase.",
-            "cleanup": "Bound cleanup commands so they cannot mask validation diagnostics.",
-        }.get(stage)
+        stage_key = stage if stage in {"readiness", "exploit", "cleanup"} else None
+        if stage_key is None:
+            code = "timeout"
+            timeout_hint: str | None = None
+        else:
+            code = {
+                "readiness": "readiness_timeout",
+                "exploit": "exploit_timeout",
+                "cleanup": "cleanup_timeout",
+            }[stage_key]
+            timeout_hint = {
+                "readiness": "Fix the fresh TCP banner/menu readiness probe before running the exploit.",
+                "exploit": (
+                    "Debug bounded solver I/O and payload delivery; "
+                    "readiness already reached the exploit phase."
+                ),
+                "cleanup": "Bound cleanup commands so they cannot mask validation diagnostics.",
+            }[stage_key]
         return [
             validation_failure_detail(
-                phase=stage if stage in {"readiness", "exploit", "cleanup"} else "validate",
+                phase=stage_key or "validate",
                 code=code,
                 status=status,
                 message=error or status,
-                **({"hint": hint} if hint else {}),
+                **({"hint": timeout_hint} if timeout_hint else {}),
             )
         ]
     if status in {"missing_validation", "no_shell", "invalid_metadata"}:
@@ -373,6 +396,11 @@ def _classify_contract_error(message: str, *, status: str = "contract_failed") -
         code = "missing_document"
         path = "writenup/wp.md"
         hint = "Add a reproducible writeup with enough structure for document evidence."
+    elif "validate.sh is not executable" in message:
+        phase = "gate"
+        code = "validation_not_executable"
+        path = "validate.sh"
+        hint = "Make validate.sh executable with mode 0755 before validation."
     elif "README.md missing" in message:
         phase = "gate"
         code = "missing_document"
@@ -416,6 +444,16 @@ def _classify_contract_error(message: str, *, status: str = "contract_failed") -
         code = "artifact_hash_mismatch"
         path = "metadata.json"
         hint = "Recompute metadata.artifact_sha256 from the exact published artifact."
+    elif "pwn final attachment" in message and "missing" in message:
+        phase = "gate"
+        code = "missing_artifact"
+        path = "attachments/vuln"
+        hint = "Copy the final host-built player ELF to attachments/vuln before validation."
+    elif "pwn metadata.artifact" in message and "attachments/vuln" in message:
+        phase = "gate"
+        code = "artifact_path_mismatch"
+        path = "metadata.json"
+        hint = "Set metadata.artifact to attachments/vuln for pwn challenges."
     elif "metadata.artifact" in message and "executable" in message:
         phase = "gate"
         code = "artifact_type_mismatch"
@@ -474,6 +512,10 @@ def _classify_contract_error(message: str, *, status: str = "contract_failed") -
         code = "pwn_canary_width_filter"
         path = "writenup/exp.py"
         hint = "Remove the 2^48 threshold and validate canary candidates by stability and low byte 0x00."
+    elif "apt-get install lists chroot" in message:
+        code = "invalid_apt_package"
+        path = "deploy/Dockerfile"
+        hint = "`chroot` is provided by `coreutils`; remove the chroot package name or replace it with coreutils."
     return validation_failure_detail(
         phase=phase,
         code=code,
@@ -688,12 +730,48 @@ def _pwn_solver_evidence_stale(
     if metadata.get("category") != "pwn":
         return []
     expected_sha = metadata.get("artifact_sha256")
-    if not isinstance(expected_sha, str) or not expected_sha:
-        return []
 
     details: list[dict[str, str]] = []
     artifact_sha = _sha256_if_file(challenge_dir / "attachments" / "vuln")
     deploy_src_sha = _sha256_if_file(challenge_dir / "deploy" / "src" / "vuln")
+    if not isinstance(expected_sha, str) or not expected_sha:
+        if artifact_sha:
+            details.append(
+                validation_failure_detail(
+                    phase="contract",
+                    code="pwn_artifact_sha_missing",
+                    status="solver_evidence_stale",
+                    message=(
+                        "metadata.artifact_sha256 missing; compute it from the "
+                        "final attachments/vuln artifact before trusting solver evidence"
+                    ),
+                    path="metadata.json",
+                    hint=(
+                        "Set metadata.artifact_sha256 to sha256(attachments/vuln), "
+                        "then set writenup/exp.py BINARY_SHA256 to the same value."
+                    ),
+                )
+            )
+        expected_sha = None
+    elif artifact_sha and expected_sha != artifact_sha:
+        details.append(
+            validation_failure_detail(
+                phase="contract",
+                code="pwn_artifact_sha_mismatch",
+                status="solver_evidence_stale",
+                message=(
+                    "metadata.artifact_sha256 does not match final attachments/vuln; "
+                    "do not validate stale solver evidence"
+                ),
+                path="metadata.json",
+                hint=(
+                    "Recompute metadata.artifact_sha256 from attachments/vuln, then "
+                    "rerun readelf/objdump/checksec/ROPgadget against that same file "
+                    "and regenerate offsets, gadgets, pwn_debug_report.json, and exp.py."
+                ),
+            )
+        )
+
     report_path = challenge_dir / "writenup" / "pwn_debug_report.json"
     if report_path.is_file() and not report_path.is_symlink():
         report_binary = _pwn_debug_report_binary(report_path)
@@ -743,10 +821,10 @@ def _pwn_solver_evidence_stale(
                     ),
                 )
             )
-        elif report_sha != expected_sha:
+        elif expected_sha and report_sha != expected_sha:
             details.append(
                 validation_failure_detail(
-                    phase="validate",
+                    phase="contract",
                     code="solver_evidence_stale",
                     status="solver_evidence_stale",
                     message=(
@@ -764,11 +842,11 @@ def _pwn_solver_evidence_stale(
 
     exp_path = challenge_dir / "writenup" / "exp.py"
     exp_text = _read_text(exp_path)
-    exp_sha = _pwn_exp_binary_sha_from_text(exp_text)
+    exp_sha = _pwn_exp_binary_sha_from_text(exp_text, require_binary_name=True)
     if exp_text and exp_sha is None:
         details.append(
             validation_failure_detail(
-                phase="validate",
+                phase="contract",
                 code="pwn_exp_missing_binary_sha",
                 status="solver_evidence_stale",
                 message="writenup/exp.py must declare BINARY_SHA256 for the final artifact",
@@ -799,10 +877,10 @@ def _pwn_solver_evidence_stale(
                 hint="Set BINARY_SHA256 to metadata.artifact_sha256 for attachments/vuln.",
             )
         )
-    elif exp_sha is not None and exp_sha != expected_sha:
+    elif exp_sha is not None and expected_sha and exp_sha != expected_sha:
         details.append(
             validation_failure_detail(
-                phase="validate",
+                phase="contract",
                 code="pwn_exp_binary_sha_mismatch",
                 status="solver_evidence_stale",
                 message=(
@@ -840,6 +918,14 @@ def _pwn_solver_evidence_stale(
     return details
 
 
+def pwn_solver_evidence_failures(
+    challenge_dir: Path,
+    metadata: dict[str, Any],
+) -> list[dict[str, str]]:
+    """Return hard-gate Pwn solver evidence failures for the final artifact."""
+    return _pwn_solver_evidence_stale(challenge_dir, metadata)
+
+
 def _pwn_debug_report_binary_sha(path: Path) -> str | None:
     return _pwn_debug_report_binary(path).get("sha256")
 
@@ -867,10 +953,14 @@ def _pwn_exp_binary_sha(path: Path) -> str | None:
     return _pwn_exp_binary_sha_from_text(text)
 
 
-def _pwn_exp_binary_sha_from_text(text: str | None) -> str | None:
+def _pwn_exp_binary_sha_from_text(
+    text: str | None,
+    *,
+    require_binary_name: bool = False,
+) -> str | None:
     if not text:
         return None
-    match = _PWN_EXP_SHA_RE.search(text)
+    match = (_PWN_BINARY_SHA_RE if require_binary_name else _PWN_EXP_SHA_RE).search(text)
     if not match:
         return None
     value = match.group(1).strip()
@@ -1071,6 +1161,11 @@ def _pwn_dockerfile_scaffold_errors(challenge_dir: Path) -> list[str]:
             "deploy/Dockerfile copies both /lib* and /usr/lib* into /home/ctf; "
             "this collides on Ubuntu 22.04 where /lib points at /usr/lib"
         )
+    if _dockerfile_installs_chroot_package(text):
+        errors.append(
+            "deploy/Dockerfile apt-get install lists chroot; chroot is provided "
+            "by coreutils on Ubuntu/Debian, so remove chroot or use coreutils"
+        )
     return errors
 
 
@@ -1195,6 +1290,10 @@ def _dockerfile_install_block_contains_package(text: str, package: str) -> bool:
         if re.search(rf"(?<![\w.-]){re.escape(package)}(?![\w.-])", body):
             return True
     return False
+
+
+def _dockerfile_installs_chroot_package(text: str) -> bool:
+    return any(_CHROOT_PACKAGE_RE.search(match.group(0)) for match in _APT_INSTALL_BLOCK_RE.finditer(text))
 
 
 def _dockerfile_copy_sources(text: str) -> list[str]:

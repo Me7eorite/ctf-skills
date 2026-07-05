@@ -72,6 +72,7 @@ from hermes.progress import ensure_report, update_report
 from hermes.prompt import render_prompt, render_validation_repair_prompt
 from hermes.report import merge_validation_into_report
 from hermes.validation import (
+    pre_build_contract_gate,
     record_per_challenge_complete,
     run_validation,
     validate_gate,
@@ -1564,6 +1565,14 @@ class HermesRunner:
                     for challenge_id in challenge_ids
                 ]
             return results, None
+        pre_build_failures = self._run_pre_host_build_contract(
+            validation_set,
+            original_shard_name=original_shard_name,
+            worker=worker,
+            challenge_ids=challenge_ids,
+        )
+        if pre_build_failures is not None:
+            return pre_build_failures, validation_set
         build_failures = self._run_host_build(
             workspace,
             validation_set,
@@ -1589,6 +1598,48 @@ class HermesRunner:
         )
         return results, post_validation_set
 
+    def _run_pre_host_build_contract(
+        self,
+        validation_set: WorkspaceValidationSet,
+        *,
+        original_shard_name: str,
+        worker: str,
+        challenge_ids: list[str],
+    ) -> list[dict[str, Any]] | None:
+        results: list[dict[str, Any]] = []
+        for challenge_id in challenge_ids:
+            challenge_dir = validation_set.candidates.get(challenge_id)
+            if challenge_dir is None:
+                continue
+            category = category_of(challenge_dir, self.paths) or challenge_dir.parent.name
+            detail = pre_build_contract_gate(challenge_dir, category)
+            if detail is None:
+                continue
+            status = detail.get("status") or "contract_failed"
+            message = detail.get("message") or detail.get("code") or status
+            self._progress.record(
+                shard=original_shard_name,
+                challenge_id=challenge_id,
+                worker=worker,
+                stage="validate",
+                status="failed",
+                message=f"validator: status={status} error={message}",
+            )
+            result = annotate_validation_result(
+                {
+                    "challenge_id": challenge_id,
+                    "solve_status": "failed",
+                    "validation_status": status,
+                    "validation_error": message,
+                    "validation_contract_errors": [message]
+                    if status == "contract_failed"
+                    else None,
+                    "validation_failure_details": [detail],
+                }
+            )
+            results.append(result)
+        return results or None
+
     def _run_host_build(
         self,
         workspace: ExecutionWorkspace,
@@ -1599,7 +1650,7 @@ class HermesRunner:
         challenge_ids: list[str],
     ) -> list[dict[str, Any]] | None:
         try:
-            results = self._host_builder.build_workspace(workspace, validation_set)
+            build_results = self._host_builder.build_workspace(workspace, validation_set)
         except HostBuildError as exc:
             error = f"host build failed: {exc}"
             failed_ids = {exc.challenge_id} if exc.challenge_id else set(challenge_ids)
@@ -1614,11 +1665,11 @@ class HermesRunner:
                     status="failed",
                     message=error,
                 )
-            results: list[dict[str, Any]] = []
+            failure_results: list[dict[str, Any]] = []
             for challenge_id in challenge_ids:
                 if challenge_id not in failed_ids:
                     continue
-                result = {
+                failure_result = {
                     "challenge_id": challenge_id,
                     "solve_status": "failed",
                     "validation_status": "contract_failed",
@@ -1642,12 +1693,12 @@ class HermesRunner:
                     ],
                 }
                 if exc.stdout_tail:
-                    result["validation_stdout_tail"] = exc.stdout_tail
+                    failure_result["validation_stdout_tail"] = exc.stdout_tail
                 if exc.stderr_tail:
-                    result["validation_stderr_tail"] = exc.stderr_tail
-                results.append(result)
-            return results
-        for result in results:
+                    failure_result["validation_stderr_tail"] = exc.stderr_tail
+                failure_results.append(failure_result)
+            return failure_results
+        for result in build_results:
             if result.skipped:
                 continue
             self._progress.record(
@@ -1720,7 +1771,7 @@ class HermesRunner:
             ),
         }
 
-    def _validate_gate(self, challenge_id: str, plan: ChallengeResumePlan | None) -> str | None:
+    def _validate_gate(self, challenge_id: str, plan: ChallengeResumePlan | None) -> str | dict[str, str] | None:
         return validate_gate(challenge_id, plan, self.paths, self._image_exists)
 
     @staticmethod

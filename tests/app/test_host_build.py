@@ -412,6 +412,65 @@ def test_host_builder_classifies_common_docker_failures(tmp_path: Path) -> None:
     assert "make" in (error.value.failure_hint or "")
 
 
+def test_host_builder_normalizes_pwn_chroot_apt_package(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    challenge = _pwn_challenge(workspace)
+    dockerfile = challenge / "deploy" / "Dockerfile"
+    dockerfile.write_text(
+        "FROM ubuntu:20.04\n"
+        "RUN apt-get update && apt-get install -y --no-install-recommends \\\n"
+        "    xinetd \\\n"
+        "    chroot \\\n"
+        "    gcc\n",
+        encoding="utf-8",
+    )
+    validation_set = WorkspaceValidationSet(
+        candidates={"pwn-0001": challenge},
+        output_manifest_hash="sha256:before",
+    )
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["docker", "image", "inspect"]:
+            return subprocess.CompletedProcess(command, 0, stdout="sha256:image\n", stderr="")
+        if command[:3] == ["docker", "image", "prune"]:
+            return subprocess.CompletedProcess(command, 0, stdout="Total reclaimed space: 0B\n", stderr="")
+        assert kwargs["cwd"] == challenge
+        return subprocess.CompletedProcess(command, 0, stdout="built\n", stderr="")
+
+    with patch("hermes.host_build.subprocess.run", side_effect=fake_run):
+        HostBuilder().build_workspace(workspace, validation_set)
+
+    text = dockerfile.read_text(encoding="utf-8")
+    assert "coreutils" in text
+    assert " chroot " not in f" {text} "
+
+
+def test_host_builder_classifies_chroot_package_failure(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    challenge = _web_challenge(workspace)
+    validation_set = WorkspaceValidationSet(
+        candidates={"web-0001": challenge},
+        output_manifest_hash="sha256:before",
+    )
+
+    def fake_run(command, **_kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            100,
+            stdout="E: Unable to locate package chroot\n",
+            stderr="The command returned a non-zero code: 100\n",
+        )
+
+    with (
+        patch("hermes.host_build.subprocess.run", side_effect=fake_run),
+        pytest.raises(HostBuildError) as error,
+    ):
+        HostBuilder().build_workspace(workspace, validation_set)
+
+    assert error.value.failure_kind == "invalid_apt_package"
+    assert "coreutils" in (error.value.failure_hint or "")
+
+
 def test_host_builder_classifies_tuna_mirror_forbidden(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     challenge = _web_challenge(workspace)

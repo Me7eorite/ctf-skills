@@ -302,6 +302,8 @@ Container rules for Web and Pwn:
   order. Do not replace it with one hardcoded mirror or remove fallback entries.
   If package fetch fails, keep the fallback loop and adjust the mirror list only
   deliberately.
+- Do not add `chroot` to `apt-get install`; Ubuntu/Debian provide the `chroot`
+  command via `coreutils`. Remove that package name or use `coreutils`.
 - For that Pwn chroot layout, construct `/home/ctf` as the runtime root:
   do this ONLY inside `deploy/Dockerfile` `RUN` steps executed by
   `docker build`. Dockerfile-only commands such as `cp -R /lib* /home/ctf`,
@@ -503,8 +505,11 @@ authoritative `validate/passed` or `validate/failed` event.
   artifact. After host build synchronizes the image's `/home/ctf/<binary>` into
   `attachments/<binary>`, do not trust `deploy/src/<binary>`, source-local
   rebuilds, old debug reports, old sha values, or hardcoded stale offsets.
-  Record the final artifact sha in `writenup/exp.py` as `BINARY_SHA256` or
-  `ARTIFACT_SHA256`; it must equal `metadata.artifact_sha256`. Support a
+  Record the final artifact sha in `writenup/exp.py` exactly as
+  `BINARY_SHA256`; it must equal both `metadata.artifact_sha256` and the
+  SHA-256 of `attachments/vuln`. If `MAIN_OFFSET`, `WIN_OFFSET`, or ROP gadget
+  constants conflict with `readelf`/`objdump` output from `attachments/vuln`,
+  stop and regenerate the exploit/report from the final artifact. Support a
   bounded local debug mode such as `LOCAL=1 python3 writenup/exp.py` that runs
   `process([binary_path])` against the local ELF. The default validation path
   must still use `remote(os.environ['CHAL_HOST'], int(os.environ['CHAL_PORT']))`.
@@ -516,9 +521,18 @@ authoritative `validate/passed` or `validate/failed` event.
   menu synchronization, leaks, offsets, and payload bytes; drop back to concise
   output for normal validation.
 - When leaking stack canaries through `%n$p`, scan a broad bounded range and
-  identify canary-like values by stability and low byte `0x00`. Do not reject
-  values merely because they are greater than `2^48`; amd64 canaries commonly
-  use the upper seven bytes and will often exceed that threshold.
+  identify canary-like values by stability across multiple fresh connections
+  and low byte `0x00`. Do not reject values merely because they are greater
+  than `2^48`; amd64 canaries commonly use the upper seven bytes and will often
+  exceed that threshold.
+- Never fall back to guessed stack addresses such as `0x7fffffffxxxx` without a
+  live leak that proves the address for the current process. Establish a
+  reliable stack/PIE/libc leak first or switch to a provably valid exploit chain.
+- For fork-per-connection canary brute force, print byte-level progress
+  diagnostics (`byte_index`, candidate byte, attempt count), set short
+  connect/recv timeouts for every attempt, fail before the validation budget is
+  exhausted with the current position, and improve the crash oracle instead of
+  blindly waiting on slow sockets.
 - For ROP/ret2libc/PIE Pwn tasks, follow a structured debug loop before
   finishing the exploit: identify mitigations with `checksec`/`file`, compute
   the exact overflow offset with cyclic/core/headless gdb, discover gadgets from

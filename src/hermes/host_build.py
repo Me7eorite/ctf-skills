@@ -25,6 +25,11 @@ _FORBIDDEN_DOCKERFILE_RE = re.compile(
 _FORBIDDEN_COMPOSE_RE = re.compile(
     r"(?im)^\s*(?:volumes|privileged|network_mode|pid|ipc|devices)\s*:"
 )
+_APT_INSTALL_BLOCK_RE = re.compile(
+    r"apt-get\s+install\b.*?(?=;|&&|\n\s*(?:RUN|COPY|CMD|ENTRYPOINT|WORKDIR|FROM)\b|$)",
+    re.IGNORECASE | re.DOTALL,
+)
+_CHROOT_PACKAGE_RE = re.compile(r"(?<![\w.-])chroot(?![\w.-])")
 _MANAGED_IMAGE_LABEL = "ctf-factory.managed=true"
 _WORKSPACE_LABEL_KEY = "ctf-factory.workspace_id"
 _CHALLENGE_LABEL_KEY = "ctf-factory.challenge_id"
@@ -132,6 +137,7 @@ class HostBuilder:
             )
         if metadata.get("category") == "pwn":
             _prepare_pwn_image(challenge_id, challenge_dir, workspace_id, metadata, compose)
+            _normalize_pwn_dockerfile_packages(dockerfile)
         _reject_unsafe_build_files(challenge_id, dockerfile=dockerfile, compose=compose)
         category = str(metadata.get("category") or "")
         image = _metadata_image(challenge_id, metadata)
@@ -617,6 +623,20 @@ def _reject_unsafe_build_files(challenge_id: str, *, dockerfile: Path, compose: 
         )
 
 
+def _normalize_pwn_dockerfile_packages(dockerfile: Path) -> None:
+    text = dockerfile.read_text(encoding="utf-8", errors="replace")
+
+    def replace_install_block(match: re.Match[str]) -> str:
+        block = match.group(0)
+        if not _CHROOT_PACKAGE_RE.search(block):
+            return block
+        return _CHROOT_PACKAGE_RE.sub("coreutils", block)
+
+    normalized = _APT_INSTALL_BLOCK_RE.sub(replace_install_block, text)
+    if normalized != text:
+        dockerfile.write_text(normalized, encoding="utf-8")
+
+
 def _write_build_log(
     path: Path,
     *,
@@ -666,6 +686,12 @@ def _classify_docker_failure(
     returncode: int,
 ) -> tuple[str, str | None]:
     text = f"{stdout}\n{stderr}".lower()
+    if "unable to locate package chroot" in text or "package chroot" in text:
+        return (
+            "invalid_apt_package",
+            "`chroot` is provided by `coreutils` on Ubuntu/Debian; remove "
+            "`chroot` from apt-get install lists or replace it with `coreutils`.",
+        )
     if returncode == 127 or "not found" in text:
         if "make: not found" in text or "make: command not found" in text:
             return (

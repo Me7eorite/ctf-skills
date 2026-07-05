@@ -222,6 +222,27 @@ class ValidationTests(unittest.TestCase):
         self.assertIsNotNone(reason)
         self.assertIn("attachments/note.txt", reason)
 
+    def test_pwn_canary_leak_failure_hint_requires_broad_stable_scan(self):
+        details = classify_validation_failure(
+            status="nonzero_exit",
+            stderr="Running exploit phase\ncanary leak failed: could not find canary",
+        )
+
+        self.assertEqual(details[0]["code"], "pwn_canary_leak_failed")
+        self.assertIn("broad %n$p range", details[0]["hint"])
+        self.assertIn("low byte 0x00", details[0]["hint"])
+        self.assertIn("2^48", details[0]["hint"])
+
+    def test_timeout_after_exploit_phase_is_not_readiness(self):
+        details = classify_validation_failure(
+            status="timeout",
+            error="validation timed out",
+            stderr="readiness passed\nRunning exploit phase\nrecv timed out",
+        )
+
+        self.assertEqual(details[0]["phase"], "exploit")
+        self.assertEqual(details[0]["code"], "exploit_timeout")
+
     def test_pwn_exp_reading_compose_for_flag_is_rejected(self):
         challenge = self.paths.challenges / "pwn" / "pwn-exp-compose-001"
         metadata = _write_minimal_pwn_contract(challenge)

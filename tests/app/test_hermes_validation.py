@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -91,6 +92,7 @@ def _make_gate_passing_web_challenge(paths: _Paths, challenge_id: str) -> Path:
         encoding="utf-8",
     )
     (challenge / "validate.sh").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    os.chmod(challenge / "validate.sh", 0o755)
     (challenge / "metadata.json").write_text(
         json.dumps(
             {
@@ -489,6 +491,142 @@ def test_validate_gate_reports_specific_implementation_gap(tmp_path: Path) -> No
     error = validate_gate("re-0001", plan, paths, image_exists=lambda _image: True)  # type: ignore[arg-type]
 
     assert error == "implement evidence incomplete: src missing"
+
+
+def _make_pwn_gate_challenge(paths: _Paths, challenge_id: str = "pwn-0001") -> Path:
+    challenge = paths.challenges / "pwn" / f"{challenge_id}-demo"
+    (challenge / "deploy" / "src").mkdir(parents=True)
+    (challenge / "deploy" / "src" / "vuln.c").write_text("int main(){return 0;}\n", encoding="utf-8")
+    (challenge / "deploy" / "Dockerfile").write_text("FROM alpine\n", encoding="utf-8")
+    (challenge / "deploy" / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
+    (challenge / "attachments").mkdir()
+    artifact = b"\x7fELFfinal"
+    (challenge / "attachments" / "vuln").write_bytes(artifact)
+    artifact_sha = hashlib.sha256(artifact).hexdigest()
+    (challenge / "writenup").mkdir()
+    (challenge / "writenup" / "wp.md").write_text("# wp\n\n## A\n\n" + "x" * 520 + "\n\n## B\n", encoding="utf-8")
+    (challenge / "writenup" / "exp.py").write_text(f'BINARY_SHA256 = "{artifact_sha}"\n', encoding="utf-8")
+    (challenge / "README.md").write_text("# readme\n\n## A\n\n" + "y" * 520 + "\n\n## B\n", encoding="utf-8")
+    (challenge / "validate.sh").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    os.chmod(challenge / "validate.sh", 0o755)
+    (challenge / "metadata.json").write_text(
+        json.dumps(
+            {
+                "id": challenge_id,
+                "title": "Demo",
+                "category": "pwn",
+                "difficulty": "easy",
+                "build_status": "passed",
+                "build_command": "docker build -t pwn-demo:latest -f deploy/Dockerfile .",
+                "docker_image": "pwn-demo:latest",
+                "artifact": "attachments/vuln",
+                "artifact_sha256": artifact_sha,
+                "flag": "flag{demo}",
+            }
+        ),
+        encoding="utf-8",
+    )
+    return challenge
+
+
+def test_validate_gate_rejects_pwn_exp_missing_binary_sha_before_build(tmp_path: Path) -> None:
+    paths = _Paths(tmp_path)
+    challenge = _make_pwn_gate_challenge(paths)
+    (challenge / "writenup" / "exp.py").write_text("ARTIFACT_SHA256 = 'alias-only'\n", encoding="utf-8")
+    plan = ChallengeResumePlan(
+        challenge_id="pwn-0001",
+        directory=challenge,
+        lookup_status="ok",
+        first_pending_stage="validate",
+    )
+    image_checks: list[str] = []
+
+    error = validate_gate(
+        "pwn-0001",
+        plan,
+        paths,  # type: ignore[arg-type]
+        image_exists=lambda image: image_checks.append(image) or True,
+    )
+
+    assert isinstance(error, dict)
+    assert error["status"] == "solver_evidence_stale"
+    assert error["code"] == "pwn_exp_missing_binary_sha"
+    assert "BINARY_SHA256" in error["message"]
+    assert image_checks == []
+
+
+def test_validate_gate_rejects_pwn_exp_binary_sha_mismatch(tmp_path: Path) -> None:
+    paths = _Paths(tmp_path)
+    challenge = _make_pwn_gate_challenge(paths)
+    (challenge / "writenup" / "exp.py").write_text('BINARY_SHA256 = "old-sha"\n', encoding="utf-8")
+    plan = ChallengeResumePlan("pwn-0001", challenge, "ok", first_pending_stage="validate")
+
+    error = validate_gate("pwn-0001", plan, paths, image_exists=lambda _image: True)  # type: ignore[arg-type]
+
+    assert isinstance(error, dict)
+    assert error["status"] == "solver_evidence_stale"
+    assert error["code"] == "pwn_exp_binary_sha_mismatch"
+
+
+def test_validate_gate_rejects_pwn_debug_report_sha_mismatch(tmp_path: Path) -> None:
+    paths = _Paths(tmp_path)
+    challenge = _make_pwn_gate_challenge(paths)
+    (challenge / "writenup" / "pwn_debug_report.json").write_text(
+        json.dumps({"binary": {"path": "attachments/vuln", "sha256": "old-sha"}}),
+        encoding="utf-8",
+    )
+    plan = ChallengeResumePlan("pwn-0001", challenge, "ok", first_pending_stage="validate")
+
+    error = validate_gate("pwn-0001", plan, paths, image_exists=lambda _image: True)  # type: ignore[arg-type]
+
+    assert isinstance(error, dict)
+    assert error["status"] == "solver_evidence_stale"
+    assert error["code"] == "pwn_debug_report_claims_wrong_artifact"
+
+
+def test_validate_gate_rejects_pwn_exp_deploy_src_sha(tmp_path: Path) -> None:
+    paths = _Paths(tmp_path)
+    challenge = _make_pwn_gate_challenge(paths)
+    deploy = b"\x7fELFdeploy"
+    (challenge / "deploy" / "src" / "vuln").write_bytes(deploy)
+    deploy_sha = hashlib.sha256(deploy).hexdigest()
+    (challenge / "writenup" / "exp.py").write_text(f'BINARY_SHA256 = "{deploy_sha}"\n', encoding="utf-8")
+    plan = ChallengeResumePlan("pwn-0001", challenge, "ok", first_pending_stage="validate")
+
+    error = validate_gate("pwn-0001", plan, paths, image_exists=lambda _image: True)  # type: ignore[arg-type]
+
+    assert isinstance(error, dict)
+    assert error["code"] == "pwn_evidence_from_deploy_src"
+    assert "deploy/src/vuln" in error["message"]
+
+
+def test_validate_gate_catches_missing_validate_and_wp_before_build(tmp_path: Path) -> None:
+    paths = _Paths(tmp_path)
+    challenge = _make_pwn_gate_challenge(paths)
+    (challenge / "validate.sh").unlink()
+    (challenge / "writenup" / "wp.md").unlink()
+    plan = ChallengeResumePlan("pwn-0001", challenge, "ok", first_pending_stage="validate")
+    image_checks: list[str] = []
+
+    error = validate_gate(
+        "pwn-0001",
+        plan,
+        paths,  # type: ignore[arg-type]
+        image_exists=lambda image: image_checks.append(image) or True,
+    )
+
+    assert isinstance(error, dict)
+    assert error["status"] == "contract_failed"
+    assert error["code"] == "missing_validation"
+    assert error["path"] == "validate.sh"
+    assert image_checks == []
+
+    (challenge / "validate.sh").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    os.chmod(challenge / "validate.sh", 0o755)
+    error = validate_gate("pwn-0001", plan, paths, image_exists=lambda _image: True)  # type: ignore[arg-type]
+    assert isinstance(error, dict)
+    assert error["code"] == "missing_document"
+    assert error["path"] == "writenup/wp.md"
 
 
 def test_workspace_validation_uses_exact_bound_path(tmp_path: Path) -> None:

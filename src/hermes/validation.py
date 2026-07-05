@@ -14,6 +14,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
 
+from core.jsonio import read_json
 from core.paths import ProjectPaths, category_of
 from domain.resume import (
     ChallengeResumePlan,
@@ -24,7 +25,12 @@ from domain.resume import (
     implement_evidence_reason,
     validator_message,
 )
-from domain.validation import ChallengeValidator, classify_validation_failure
+from domain.validation import (
+    ChallengeValidator,
+    classify_validation_failure,
+    pwn_solver_evidence_failures,
+    validation_failure_detail,
+)
 from domain.validation_failure_governance import annotate_validation_result
 
 
@@ -94,27 +100,28 @@ def run_validation(
             continue
 
         # 情况 2: 质量门检查（不通过则直接记录失败）
-        gate_error = validate_gate(challenge_id, plan, paths, image_exists)
-        if gate_error is not None:
+        gate_failure = validate_gate(challenge_id, plan, paths, image_exists)
+        if gate_failure is not None:
+            gate_status, gate_error, failure_details = _normalize_gate_failure(gate_failure)
             state.record(
                 shard=original_shard_name,
                 challenge_id=challenge_id,
                 worker=worker,
                 stage="validate",
                 status="failed",
-                message=validator_message(status="contract_failed", error=gate_error),
+                message=validator_message(status=gate_status, error=gate_error),
             )
             results.append(
                 annotate_validation_result(
                     {
                         "challenge_id": challenge_id,
                         "solve_status": "failed",
-                        "validation_status": "contract_failed",
+                        "validation_status": gate_status,
                         "validation_error": gate_error,
-                        "validation_failure_details": classify_validation_failure(
-                            status="contract_failed",
-                            contract_errors=[gate_error],
-                        ),
+                        "validation_contract_errors": [gate_error]
+                        if gate_status == "contract_failed"
+                        else None,
+                        "validation_failure_details": failure_details,
                     }
                 )
             )
@@ -173,8 +180,12 @@ def run_validation(
             contract_errors = outcome.get("contract_errors")
             if not error and isinstance(contract_errors, list):
                 error = "; ".join(str(item) for item in contract_errors if item)
-            failure_details = outcome.get("failure_details")
-            if not isinstance(failure_details, list):
+            raw_failure_details = outcome.get("failure_details")
+            if isinstance(raw_failure_details, list):
+                failure_details = [
+                    item for item in raw_failure_details if isinstance(item, dict)
+                ]
+            else:
                 failure_details = classify_validation_failure(
                     status=status,
                     error=str(error) if error else None,
@@ -257,7 +268,7 @@ def validate_gate(
     plan: ChallengeResumePlan | None,
     paths: ProjectPaths,
     image_exists: Callable[[str], bool],
-) -> str | None:
+) -> str | dict[str, str] | None:
     """执行质量门检查，验证题目的磁盘证据是否齐全。
 
     检查项（按顺序）:
@@ -282,12 +293,19 @@ def validate_gate(
         # authoritative category directory.
         category = plan.directory.parent.name
 
+    metadata_contract = _metadata_contract_gate(plan.directory)
+    if metadata_contract is not None:
+        return metadata_contract
+
     # 按阶段顺序检查证据
     if not design_evidence(plan.directory, challenge_id):
         return "design evidence incomplete"
     implement_reason = implement_evidence_reason(plan.directory, category)
     if implement_reason is not None:
         return f"implement evidence incomplete: {implement_reason}"
+    light_contract = _light_contract_gate(plan.directory, category)
+    if light_contract is not None:
+        return light_contract
     build_ok, build_reason = build_evidence(plan.directory, category, image_exists)
     if not build_ok:
         return f"build evidence incomplete: {build_reason}"
@@ -295,13 +313,122 @@ def validate_gate(
     if document_reason is not None:
         return f"document evidence incomplete: {document_reason}"
 
-    # 检查校验所需的前置文件
-    if not (plan.directory / "validate.sh").is_file():
-        return "validate.sh missing"
-    if not (plan.directory / "writenup" / "exp.py").is_file():
-        return "writenup/exp.py missing"
-
     return None  # 全部检查通过
+
+
+def _normalize_gate_failure(
+    gate_failure: str | dict[str, str],
+) -> tuple[str, str, list[dict[str, str]]]:
+    if isinstance(gate_failure, dict):
+        status = gate_failure.get("status") or "contract_failed"
+        message = gate_failure.get("message") or gate_failure.get("code") or status
+        return status, message, [gate_failure]
+    details = classify_validation_failure(
+        status="contract_failed",
+        contract_errors=[gate_failure],
+    )
+    return "contract_failed", gate_failure, details
+
+
+def pre_build_contract_gate(challenge_dir: Path, category: str) -> dict[str, str] | None:
+    """Return a lightweight contract failure before expensive Docker build."""
+    return _light_contract_gate(challenge_dir, category)
+
+
+def _light_contract_gate(challenge_dir: Path, category: str) -> dict[str, str] | None:
+    """Fail fast before host Docker build or validate.sh execution."""
+    metadata = read_json(challenge_dir / "metadata.json", None)
+    if not isinstance(metadata, dict):
+        return _metadata_contract_gate(challenge_dir)
+    required_files = (
+        ("validate.sh", "missing_validation"),
+        ("writenup/exp.py", "missing_solver"),
+        ("writenup/wp.md", "missing_document"),
+    )
+    for relative, code in required_files:
+        if not (challenge_dir / relative).is_file():
+            return validation_failure_detail(
+                phase="contract",
+                code=code,
+                status="contract_failed",
+                message=f"{relative} missing",
+                path=relative,
+                hint=f"Create {relative} at the challenge root before validation.",
+            )
+    if not _is_executable_file(challenge_dir / "validate.sh"):
+        return validation_failure_detail(
+            phase="contract",
+            code="validation_not_executable",
+            status="contract_failed",
+            message="validate.sh is not executable",
+            path="validate.sh",
+            hint="Make validate.sh executable with mode 0755 before validation.",
+        )
+    if category == "pwn":
+        artifact = metadata.get("artifact")
+        if artifact not in {None, "attachments/vuln"}:
+            return validation_failure_detail(
+                phase="contract",
+                code="artifact_path_mismatch",
+                status="contract_failed",
+                message="pwn metadata.artifact must be attachments/vuln",
+                path="metadata.json",
+                hint="Set metadata.artifact to attachments/vuln for pwn challenges.",
+            )
+        if not (challenge_dir / "attachments" / "vuln").is_file():
+            return validation_failure_detail(
+                phase="contract",
+                code="missing_artifact",
+                status="contract_failed",
+                message="pwn final attachment attachments/vuln missing",
+                path="attachments/vuln",
+                hint="Copy the final host-built player ELF to attachments/vuln before validation.",
+            )
+        stale_details = pwn_solver_evidence_failures(challenge_dir, metadata)
+        if stale_details:
+            return stale_details[0]
+    elif category == "re":
+        artifact = metadata.get("artifact")
+        if not isinstance(artifact, str) or not artifact.startswith("attachments/"):
+            return validation_failure_detail(
+                phase="contract",
+                code="artifact_missing",
+                status="contract_failed",
+                message="metadata.artifact missing or not under attachments/",
+                path="metadata.json",
+                hint="Point metadata.artifact at the primary executable under attachments/.",
+            )
+        if not (challenge_dir / artifact).is_file():
+            return validation_failure_detail(
+                phase="contract",
+                code="missing_artifact",
+                status="contract_failed",
+                message=f"artifact file {artifact!r} missing under attachments/",
+                path="attachments/",
+                hint="Ensure metadata.artifact points to an existing file under attachments/.",
+            )
+    return None
+
+
+def _metadata_contract_gate(challenge_dir: Path) -> dict[str, str] | None:
+    metadata = read_json(challenge_dir / "metadata.json", None)
+    if isinstance(metadata, dict):
+        return None
+    return validation_failure_detail(
+        phase="contract",
+        code="missing_metadata",
+        status="contract_failed",
+        message="metadata.json missing",
+        path="metadata.json",
+        hint="Create metadata.json at the challenge root before validation.",
+    )
+
+
+def _is_executable_file(path: Path) -> bool:
+    try:
+        return path.is_file() and bool(path.stat().st_mode & 0o111)
+    except OSError:
+        return False
 
 
 def record_per_challenge_complete(
