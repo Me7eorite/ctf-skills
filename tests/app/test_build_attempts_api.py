@@ -41,15 +41,31 @@ class _StubBuildTaskManager:
         self.pool: dict | None = None
         self.finished_records: list[dict] = []
 
-    def start_worker(self, *, category: str, build_attempt_id: UUID):
+    def start_worker(
+        self,
+        *,
+        category: str,
+        build_attempt_id: UUID,
+        attempt_timeout_seconds: int | None = None,
+    ):
         self.calls.append((category, build_attempt_id))
         return self.response
 
-    def start_sequential_worker(self, *, build_attempt_ids: list[UUID]):
+    def start_sequential_worker(
+        self,
+        *,
+        build_attempt_ids: list[UUID],
+        attempt_timeout_seconds: int | None = None,
+    ):
         self.calls.extend(("sequence", attempt_id) for attempt_id in build_attempt_ids)
         return self.response
 
-    def start_sequential_lanes(self, *, lanes: list[list[UUID]]):
+    def start_sequential_lanes(
+        self,
+        *,
+        lanes: list[list[UUID]],
+        attempt_timeout_seconds: int | None = None,
+    ):
         ok, message = self.response
         if not ok:
             return False, message, {}

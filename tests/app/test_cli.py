@@ -9,6 +9,10 @@ import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import cli
 
 ROOT = Path(__file__).resolve().parents[2]
 CLI_SCRIPT = ROOT / "src" / "cli.py"
@@ -294,6 +298,30 @@ class DurationsCLIInputTests(unittest.TestCase):
                 cwd=tmp_path,
             )
             self.assertEqual(result.returncode, 2, result.stderr)
+
+
+class CleanupStaleProcessesTests(unittest.TestCase):
+    def test_dry_run_identifies_stale_hermes_and_debug_processes(self):
+        ps_output = "\n".join(
+            [
+                "101 3601 hermes terminal bash wrapper --label ctf-factory",
+                "102 4000 python pwn-debug ctf challenge script.py",
+                "103 4000 /usr/bin/python ordinary.py",
+            ]
+        )
+        completed = SimpleNamespace(returncode=0, stdout=ps_output)
+        with (
+            patch("cli.subprocess.run", return_value=completed),
+            patch("cli.shutil.which", return_value=None),
+        ):
+            result = cli._cleanup_stale_processes(older_than=1800, kill=False)
+
+        self.assertTrue(result["dry_run"])
+        self.assertEqual(result["matched"], 2)
+        kinds = {item["kind"] for item in result["candidates"]}
+        self.assertEqual(kinds, {"hermes_terminal", "python_debug_script"})
+        self.assertEqual(result["killed"], [])
+        self.assertEqual(result["matched_containers"], 0)
 
 
 if __name__ == "__main__":

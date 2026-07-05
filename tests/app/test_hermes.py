@@ -1,6 +1,7 @@
 ﻿import json
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -22,6 +23,35 @@ class HermesRunnerTests(unittest.TestCase):
             'docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true',
             prompt,
         )
+
+    def test_invoke_clamps_timeout_to_remaining_attempt_deadline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = ProjectPaths(root=Path(tmp), repository=Path(tmp))
+            runner = HermesRunner(paths)
+            log = Path(tmp) / "hermes.log"
+            deadline = time.monotonic() + 5
+
+            with (
+                patch.object(
+                    runner,
+                    "_invoke_context",
+                    return_value=(["hermes"], {}, Path(tmp), None),
+                ),
+                patch.object(runner, "_profile_agent_log_path", return_value=None),
+                patch("hermes.runner.hermes_process.invoke", return_value=0) as invoke,
+            ):
+                returncode = runner._invoke(
+                    "prompt",
+                    log,
+                    dry_run=False,
+                    timeout=60,
+                    attempt_deadline=deadline,
+                )
+
+        self.assertEqual(returncode, 0)
+        captured_timeout = invoke.call_args.kwargs["timeout"]
+        self.assertLessEqual(captured_timeout, 5)
+        self.assertGreater(captured_timeout, 0)
 
     def test_shard_prompt_uses_materialized_design_references(self):
         prompt = (ROOT / "prompts" / "shard_prompt.md").read_text(encoding="utf-8")

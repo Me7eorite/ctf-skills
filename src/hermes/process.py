@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from core.build_timeout import AttemptDeadlineExceeded, bounded_hermes_timeout
 from core.clock import beijing_now_isoformat
 from core.jsonio import read_json, write_json
 
@@ -736,7 +737,8 @@ def invoke(
     log_path: Path,
     cwd: Path,
     environment: dict[str, str],
-    timeout: int,
+    timeout: int | float,
+    attempt_deadline: float | None = None,
     profile_log_path: Path | None = None,
 ) -> int:
     """把 sanitized `prompt` 作为最后一个 argv 运行 Hermes，并记录完整日志。
@@ -757,12 +759,13 @@ def invoke(
     safe_environment, environment_sanitized = _sanitize_invocation_environment(environment)
     full_arguments = [*safe_arguments, sanitized_prompt]
     returncode: int
+    effective_timeout = bounded_hermes_timeout(timeout, attempt_deadline)
     with log_path.open("w", encoding="utf-8") as output:
         # 日志头：显示命令（prompt 用 <prompt> 占位避免泄露）
         output.write(
             f"$ {' '.join(shlex.quote(arg) for arg in full_arguments[:-1])} <prompt>\n"
             f"cwd: {cwd}\n"
-            f"timeout: {timeout}s\n"
+            f"timeout: {effective_timeout}s\n"
         )
         if prompt_sanitized:
             output.write(f"{NUL_SANITIZED_MESSAGE}\n")
@@ -790,7 +793,7 @@ def invoke(
                 stderr=subprocess.STDOUT, # stderr 合并到 stdout
                 start_new_session=os.name != "nt",
             )
-            returncode = process.wait(timeout=timeout)
+            returncode = process.wait(timeout=effective_timeout)
         except (FileNotFoundError, PermissionError):
             output.write(
                 "Hermes command not found or not executable. Set HERMES_CMD or install Hermes.\n"
@@ -803,9 +806,13 @@ def invoke(
             returncode = 1
         except subprocess.TimeoutExpired:
             if process is not None:
-                _terminate(process)
+                killed_process_group = _terminate(process)
                 _wait_after_terminate(process)
-            output.write(f"\nHermes command timed out after {timeout}s.\n")
+            output.write(f"\nHermes command timed out after {effective_timeout}s.\n")
+            if attempt_deadline is not None:
+                output.write("timeout_kind: attempt_deadline\n")
+            if process is not None:
+                output.write(f"killed_process_group: {str(killed_process_group).lower()}\n")
             returncode = HERMES_TIMEOUT_RETURNCODE
         except BaseException:
             if process is not None:
@@ -828,12 +835,35 @@ def invoke(
         retry_depth = _env_int(environment, "_HERMES_RATE_LIMIT_RETRY_DEPTH", 0)
         max_retries = _env_int(environment, "HERMES_RATE_LIMIT_RETRIES", 2)
         if retry_depth < max_retries:
+            try:
+                retry_timeout = bounded_hermes_timeout(timeout, attempt_deadline)
+            except AttemptDeadlineExceeded:
+                try:
+                    with log_path.open("a", encoding="utf-8") as output:
+                        output.write(
+                            "\n[hermes-rate-limit-retry] global deadline exceeded; "
+                            "retry skipped\n"
+                        )
+                except OSError:
+                    pass
+                return HERMES_TIMEOUT_RETURNCODE
             retry_log = log_path.with_name(f"{log_path.name}.retry{retry_depth + 1}.log")
             try:
                 log_path.replace(retry_log)
             except OSError:
                 retry_log = log_path
             delay = min(30.0, 0.25 * (2 ** retry_depth))
+            remaining_after_delay = retry_timeout - delay if attempt_deadline is not None else None
+            if remaining_after_delay is not None and remaining_after_delay <= 0:
+                try:
+                    with log_path.open("a", encoding="utf-8") as output:
+                        output.write(
+                            "\n[hermes-rate-limit-retry] global deadline exceeded; "
+                            "retry skipped\n"
+                        )
+                except OSError:
+                    pass
+                return HERMES_TIMEOUT_RETURNCODE
             time.sleep(delay)
             retry_env = dict(environment)
             retry_env["_HERMES_RATE_LIMIT_RETRY_DEPTH"] = str(retry_depth + 1)
@@ -843,7 +873,8 @@ def invoke(
                 log_path=log_path,
                 cwd=cwd,
                 environment=retry_env,
-                timeout=timeout,
+                timeout=retry_timeout,
+                attempt_deadline=attempt_deadline,
                 profile_log_path=profile_log_path,
             )
             try:
@@ -1227,25 +1258,29 @@ def _read_profile_env(path: Path) -> dict[str, str]:
     return values
 
 
-def _terminate(process: "subprocess.Popen[str]") -> None:
+def _terminate(process: "subprocess.Popen[str]") -> bool:
     """尽力终止子进程：先 SIGTERM，等待 5 秒后再 SIGKILL。"""
+    killed_process_group = False
     try:
         if os.name != "nt":
             os.killpg(process.pid, signal.SIGTERM)
+            killed_process_group = True
         else:
             process.terminate()
     except ProcessLookupError:
-        return
+        return killed_process_group
     try:
         process.wait(timeout=5)
     except subprocess.TimeoutExpired:
         if os.name != "nt":
             try:
                 os.killpg(process.pid, signal.SIGKILL)
+                killed_process_group = True
             except ProcessLookupError:
-                return
+                return killed_process_group
         else:
             process.kill()
+    return killed_process_group
 
 
 def _wait_after_terminate(process: "subprocess.Popen[str]") -> None:

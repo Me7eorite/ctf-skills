@@ -377,12 +377,19 @@ def record_effective_timeout(
     *,
     seconds: int,
     source: str,
+    attempt_timeout_seconds: int | float | None = None,
+    deadline_at_epoch: int | float | None = None,
 ) -> None:
     manifest = read_json(workspace.manifest, None)
     if not isinstance(manifest, dict):
         raise WorkspacePreflightError("input/manifest.json is not readable JSON")
     manifest["effective_timeout_seconds"] = seconds
     manifest["timeout_source"] = source
+    if attempt_timeout_seconds is not None:
+        manifest["attempt_timeout_seconds"] = attempt_timeout_seconds
+    if deadline_at_epoch is not None:
+        manifest["deadline_at_epoch"] = deadline_at_epoch
+        manifest["deadline_at"] = deadline_at_epoch
     write_json(workspace.manifest, manifest)
 
 

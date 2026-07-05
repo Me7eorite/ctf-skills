@@ -6,7 +6,10 @@ import argparse
 import json
 import os
 import re
+import shutil
+import signal
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -17,6 +20,12 @@ from contextlib import contextmanager
 from pathlib import Path
 from uuid import UUID
 
+from core.build_timeout import (
+    attempt_deadline_expired,
+    attempt_timeout_outcome,
+    deadline_from_epoch,
+    deadline_from_timeout,
+)
 from core.clock import beijing_isoformat_or_dash
 from core.execution_config import execution_minting_enabled, lease_ttl_seconds
 from core.jsonio import write_json
@@ -110,11 +119,13 @@ def _record_execution_outcome(
                 outcomes = item.get("outcomes") or []
                 last = outcomes[-1] if outcomes else {}
                 error = (last.get("error") or last.get("status") or "build failed")[:2000]
+            exit_class = _execution_exit_class(item)
             repo.update_to_terminal(
                 latest.id,
                 claim_token=latest.claim_token,
                 status=status,
                 error=error,
+                exit_class=exit_class,
             )
     except Exception as exc:  # never break the worker loop on bookkeeping
         print(
@@ -137,9 +148,19 @@ def _finalize_build_attempt(
             exec_repo = ExecutionsRepository(session)
             container = session.get(build_model.BuildAttempt, attempt_id)
             if container is None or container.current_execution_id is None:
+                if container is not None and container.status in {"failed", "lost"}:
+                    task = session.get(task_model.DesignTask, container.design_task_id)
+                    if task is not None:
+                        task.status = "build_failed"
+                        task.updated_at = container.finished_at
                 return
             execution = exec_repo.get(container.current_execution_id)
             if execution is None or execution.status not in {"claimed", "running"}:
+                if container.status in {"failed", "lost"}:
+                    task = session.get(task_model.DesignTask, container.design_task_id)
+                    if task is not None:
+                        task.status = "build_failed"
+                        task.updated_at = container.finished_at
                 return
             failed = int(item.get("failed", 0))
             processed = int(item.get("processed", 0))
@@ -149,11 +170,13 @@ def _finalize_build_attempt(
                 outcomes = item.get("outcomes") or []
                 last = outcomes[-1] if outcomes else {}
                 error = (last.get("error") or last.get("status") or "build failed")[:2000]
+            exit_class = _execution_exit_class(item)
             exec_repo.update_to_terminal(
                 execution.id,
                 claim_token=execution.claim_token,
                 status=status,
                 error=error,
+                exit_class=exit_class,
             )
             session.flush()
             container = session.get(build_model.BuildAttempt, attempt_id)
@@ -168,6 +191,14 @@ def _finalize_build_attempt(
             f"build attempt finalization skipped for {attempt_id}: {exc}",
             flush=True,
         )
+
+
+def _execution_exit_class(item: dict) -> str | None:
+    outcomes = item.get("outcomes") or []
+    last = outcomes[-1] if outcomes else {}
+    if isinstance(last, dict) and last.get("timeout_kind") == "attempt_deadline":
+        return "attempt_deadline"
+    return None
 
 
 def _mark_attempt_running(
@@ -214,6 +245,7 @@ def _mark_attempt_running(
 def _execution_heartbeat(
     attempt_id: UUID | None,
     *,
+    attempt_deadline: float | None = None,
     session_factory=None,
 ) -> Iterator[None]:
     """Renew the current execution lease while a blocking build is running."""
@@ -228,8 +260,49 @@ def _execution_heartbeat(
     ttl = lease_ttl_seconds()
     interval = max(1.0, ttl / 3)
 
+    def mark_deadline_timeout() -> None:
+        from persistence.models import build_attempts as build_model
+        from persistence.models import design_tasks as task_model
+
+        try:
+            with transaction(factory=session_factory) as session:
+                repo = ExecutionsRepository(session)
+                latest = repo.latest_for_attempt(attempt_id)
+                if (
+                    latest is None
+                    or latest.status not in {"claimed", "running"}
+                    or latest.claim_token is None
+                ):
+                    return
+                repo.update_to_terminal(
+                    latest.id,
+                    claim_token=latest.claim_token,
+                    status="failed",
+                    error="global deadline exceeded",
+                    exit_class="attempt_deadline",
+                )
+                container = session.get(build_model.BuildAttempt, attempt_id)
+                if container is not None:
+                    task = session.get(task_model.DesignTask, container.design_task_id)
+                    if task is not None:
+                        task.status = "build_failed"
+                        task.updated_at = container.finished_at
+        except Exception as exc:
+            print(
+                "global deadline exceeded; heartbeat stopped; "
+                f"timeout finalization skipped for {attempt_id}: {exc}",
+                flush=True,
+            )
+
     def heartbeat_loop() -> None:
         while not stop.is_set():
+            if attempt_deadline_expired(attempt_deadline):
+                mark_deadline_timeout()
+                print(
+                    f"global deadline exceeded; heartbeat stopped for {attempt_id}",
+                    flush=True,
+                )
+                break
             try:
                 with transaction(factory=session_factory) as session:
                     repo = ExecutionsRepository(session)
@@ -239,7 +312,7 @@ def _execution_heartbeat(
                         or latest.status not in {"claimed", "running"}
                         or latest.claim_token is None
                     ):
-                        continue
+                        break
                     repo.heartbeat(
                         latest.id,
                         claim_token=latest.claim_token,
@@ -273,6 +346,8 @@ def _run_build_attempt_sequence(
     *,
     timeout: int | None,
     timeout_source: str | None,
+    attempt_timeout_seconds: int | None = None,
+    attempt_deadline_epoch: float | None = None,
     failfast_streak: int,
 ) -> dict:
     outcomes: list[dict] = []
@@ -284,16 +359,41 @@ def _run_build_attempt_sequence(
     interrupted_attempt: str | None = None
 
     for index, attempt_id in enumerate(build_attempt_sequence):
+        attempt_started = time.monotonic()
+        attempt_deadline = (
+            deadline_from_timeout(attempt_timeout_seconds)
+            if attempt_timeout_seconds is not None
+            else deadline_from_epoch(attempt_deadline_epoch)
+        )
         # Claim + lease this attempt only now that it is its turn, so its lease
         # lifetime equals its processing time. Waiters stay `queued` and are not
         # reaped as `lost` while an earlier attempt is still running.
         _mark_attempt_running(attempt_id, worker)
+        if attempt_deadline_expired(attempt_deadline):
+            item = {
+                "processed": 0,
+                "failed": 1,
+                "outcomes": [
+                    attempt_timeout_outcome(
+                        shard=str(attempt_id),
+                        attempt_timeout_seconds=attempt_timeout_seconds,
+                        attempt_deadline=attempt_deadline,
+                        started_monotonic=attempt_started,
+                    )
+                ],
+            }
+            _finalize_build_attempt(attempt_id, worker, item)
+            outcomes.extend(item["outcomes"])
+            failed += 1
+            continue
         try:
-            with _execution_heartbeat(attempt_id):
+            with _execution_heartbeat(attempt_id, attempt_deadline=attempt_deadline):
                 item = runner.run(
                     worker,
                     timeout=timeout,
                     timeout_source=timeout_source,
+                    attempt_timeout_seconds=attempt_timeout_seconds,
+                    attempt_deadline=attempt_deadline,
                     build_attempt_id=attempt_id,
                 )
         except KeyboardInterrupt:
@@ -429,6 +529,18 @@ def parser() -> argparse.ArgumentParser:
             "Precedence: --timeout > HERMES_TIMEOUT env var > claimed-shard policy."
         ),
     )
+    run.add_argument(
+        "--attempt-timeout-seconds",
+        type=_positive_int,
+        default=None,
+        help="Global, non-renewable wall-clock budget for each build attempt.",
+    )
+    run.add_argument(
+        "--attempt-deadline-epoch",
+        type=float,
+        default=None,
+        help="Absolute epoch deadline for the current build attempt.",
+    )
 
     validate = commands.add_parser("validate", help="validate generated challenges")
     validate.add_argument("--filter", action="append", default=[])
@@ -452,6 +564,15 @@ def parser() -> argparse.ArgumentParser:
     progress.add_argument("--best-effort", action="store_true")
 
     commands.add_parser("merge-reports", help="merge shard reports")
+
+    cleanup = commands.add_parser(
+        "cleanup-stale-processes",
+        help="find or terminate stale Hermes/debug build helper processes",
+    )
+    cleanup.add_argument("--older-than", type=_positive_int, required=True)
+    mode = cleanup.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--dry-run", action="store_true")
+    mode.add_argument("--kill", action="store_true")
 
     durations = commands.add_parser(
         "durations",
@@ -682,6 +803,171 @@ def _resolve_run_timeout(cli_value: int | None) -> tuple[int | None, str | None]
         )
         return None, "env-fallback"
     return env_value, "env"
+
+
+def _stale_process_candidates(*, older_than: int) -> list[dict[str, object]]:
+    try:
+        result = subprocess.run(
+            ["ps", "-axo", "pid=,etimes=,command="],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if result.returncode != 0:
+        return []
+    candidates: list[dict[str, object]] = []
+    for line in result.stdout.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        parts = stripped.split(None, 2)
+        if len(parts) < 3:
+            continue
+        try:
+            pid = int(parts[0])
+            elapsed = int(parts[1])
+        except ValueError:
+            continue
+        command = parts[2]
+        if elapsed < older_than:
+            continue
+        kind = _stale_process_kind(command)
+        if kind is None:
+            continue
+        candidates.append(
+            {
+                "pid": pid,
+                "elapsed_seconds": elapsed,
+                "kind": kind,
+                "command": command,
+            }
+        )
+    return candidates
+
+
+def _stale_container_candidates() -> list[dict[str, object]]:
+    docker = shutil.which("docker")
+    if not docker:
+        return []
+    commands = [
+        [
+            docker,
+            "ps",
+            "-a",
+            "--filter",
+            "label=ctf-hermes-owner=ctf-skills",
+            "--format",
+            "{{.ID}}\t{{.Names}}\t{{.Labels}}",
+        ],
+        [
+            docker,
+            "ps",
+            "-a",
+            "--filter",
+            "label=hermes-agent=1",
+            "--format",
+            "{{.ID}}\t{{.Names}}\t{{.Labels}}",
+        ],
+    ]
+    containers: dict[str, dict[str, object]] = {}
+    for command in commands:
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode != 0:
+            continue
+        for line in result.stdout.splitlines():
+            parts = line.split("\t", 2)
+            if len(parts) != 3:
+                continue
+            container_id, name, labels = parts
+            if not container_id:
+                continue
+            containers[container_id] = {
+                "id": container_id,
+                "kind": "hermes_docker_container",
+                "name": name,
+                "labels": labels,
+            }
+    return list(containers.values())
+
+
+def _stale_process_kind(command: str) -> str | None:
+    lower = command.lower()
+    if "hermes" in lower and ("terminal" in lower or "bash" in lower):
+        return "hermes_terminal"
+    if "pwntools" in lower or "pwnlib" in lower:
+        return "pwntools_local_process"
+    if "python" in lower and ("pwn-debug" in lower or "debug" in lower) and "ctf" in lower:
+        return "python_debug_script"
+    if "ctf-factory" in lower or "challenge-factory" in lower:
+        return "ctf_factory_helper"
+    return None
+
+
+def _cleanup_stale_processes(*, older_than: int, kill: bool) -> dict[str, object]:
+    candidates = _stale_process_candidates(older_than=older_than)
+    containers = _stale_container_candidates()
+    killed: list[int] = []
+    removed_containers: list[str] = []
+    errors: list[dict[str, object]] = []
+    if kill:
+        for item in candidates:
+            pid = int(item["pid"])
+            try:
+                if os.name != "nt":
+                    os.killpg(pid, signal.SIGTERM)
+                else:
+                    os.kill(pid, signal.SIGTERM)
+                killed.append(pid)
+            except ProcessLookupError:
+                continue
+            except OSError as exc:
+                errors.append({"pid": pid, "error": str(exc)})
+        docker = shutil.which("docker")
+        if docker and containers:
+            container_ids = [str(item["id"]) for item in containers]
+            try:
+                result = subprocess.run(
+                    [docker, "rm", "-f", *container_ids],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                errors.append({"containers": container_ids, "error": str(exc)})
+            else:
+                if result.returncode == 0:
+                    removed_containers = container_ids
+                else:
+                    errors.append(
+                        {
+                            "containers": container_ids,
+                            "error": (result.stderr or "").strip(),
+                        }
+                    )
+    return {
+        "dry_run": not kill,
+        "older_than": older_than,
+        "matched": len(candidates),
+        "matched_containers": len(containers),
+        "killed": killed,
+        "removed_containers": removed_containers,
+        "errors": errors,
+        "candidates": candidates,
+        "containers": containers,
+    }
 
 
 def _progress_store_for_run(*, dry_run: bool):
@@ -1333,10 +1619,20 @@ def main() -> None:
         except argparse.ArgumentTypeError as exc:
             argument_parser.error(str(exc))
         effective_timeout, source = _resolve_run_timeout(args.timeout)
+        attempt_timeout_seconds = args.attempt_timeout_seconds or effective_timeout
+        if args.attempt_deadline_epoch is not None and args.attempt_timeout_seconds is not None:
+            argument_parser.error(
+                "--attempt-timeout-seconds and --attempt-deadline-epoch are mutually exclusive"
+            )
         if effective_timeout is None:
             print("effective_timeout=shard-policy source=shard_policy", flush=True)
         else:
             print(f"effective_timeout={effective_timeout} source={source}", flush=True)
+        if attempt_timeout_seconds is not None:
+            print(
+                f"attempt_timeout_seconds={attempt_timeout_seconds}",
+                flush=True,
+            )
         runner = HermesRunner(
             paths,
             progress=_progress_store_for_run(dry_run=args.dry_run),
@@ -1352,14 +1648,22 @@ def main() -> None:
                 args.build_attempt_sequence,
                 timeout=effective_timeout,
                 timeout_source=source,
+                attempt_timeout_seconds=attempt_timeout_seconds,
+                attempt_deadline_epoch=args.attempt_deadline_epoch,
                 failfast_streak=sequential_failfast_streak,
             )
             write_json(paths.root / _SEQ_RESULT_PATH, result)
         else:
+            attempt_deadline = (
+                deadline_from_timeout(attempt_timeout_seconds)
+                if attempt_timeout_seconds is not None
+                else deadline_from_epoch(args.attempt_deadline_epoch)
+            )
             if args.build_attempt and not args.dry_run:
                 _mark_attempt_running(args.build_attempt, args.worker)
             with _execution_heartbeat(
-                args.build_attempt if not args.dry_run else None
+                args.build_attempt if not args.dry_run else None,
+                attempt_deadline=attempt_deadline,
             ):
                 result = runner.run(
                     args.worker,
@@ -1368,6 +1672,8 @@ def main() -> None:
                     max_shards=args.max_shards,
                     timeout=effective_timeout,
                     timeout_source=source,
+                    attempt_timeout_seconds=attempt_timeout_seconds,
+                    attempt_deadline=attempt_deadline,
                     category=args.category,
                     build_attempt_id=args.build_attempt,
                     require_build_attempt=args.build_attempts_only,
@@ -1430,6 +1736,14 @@ def main() -> None:
 
     if args.command == "merge-reports":
         print(merge_reports(paths.reports))
+        return
+
+    if args.command == "cleanup-stale-processes":
+        result = _cleanup_stale_processes(
+            older_than=args.older_than,
+            kill=args.kill,
+        )
+        print(json.dumps(result, indent=2))
         return
 
     if args.command == "durations":

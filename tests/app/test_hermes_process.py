@@ -612,6 +612,50 @@ class InvokeLogMarkerTests(unittest.TestCase):
         marker = read_json(self.log.with_name("hermes.log.error_marker.json"), {})
         self.assertEqual(marker["error_type"], "rate_limit_error")
 
+    def test_rate_limit_retry_skips_when_attempt_deadline_expired(self):
+        arguments = _python(
+            "import sys",
+            "sys.stdout.write('Anthropic overloaded_error: retry later\\n')",
+            "sys.exit(1)",
+        )
+
+        returncode = invoke(
+            "noop",
+            arguments=arguments,
+            log_path=self.log,
+            cwd=self.workdir,
+            environment={"HERMES_RATE_LIMIT_RETRIES": "1"},
+            timeout=10,
+            attempt_deadline=time.monotonic() + 0.2,
+        )
+
+        self.assertEqual(returncode, HERMES_TIMEOUT_RETURNCODE)
+        self.assertIn(
+            "global deadline exceeded; retry skipped",
+            self.log.read_text(encoding="utf-8"),
+        )
+
+    def test_invoke_timeout_logs_process_group_cleanup(self):
+        arguments = _python(
+            "import time",
+            "time.sleep(30)",
+        )
+
+        returncode = invoke(
+            "noop",
+            arguments=arguments,
+            log_path=self.log,
+            cwd=self.workdir,
+            environment={},
+            timeout=1,
+        )
+
+        self.assertEqual(returncode, HERMES_TIMEOUT_RETURNCODE)
+        self.assertIn(
+            "killed_process_group:",
+            self.log.read_text(encoding="utf-8"),
+        )
+
 
 class HermesProfileHealthTests(unittest.TestCase):
     def test_missing_profile_directory(self):

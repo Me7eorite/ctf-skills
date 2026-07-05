@@ -22,7 +22,16 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from core.build_timeout import VALIDATION_REPAIR_TIMEOUT_CAP, shard_timeout_policy
+from core.build_timeout import (
+    GLOBAL_DEADLINE_PHASE,
+    VALIDATION_REPAIR_TIMEOUT_CAP,
+    AttemptDeadlineExceeded,
+    attempt_timeout_outcome,
+    bounded_hermes_timeout,
+    deadline_from_timeout,
+    remaining_attempt_time,
+    shard_timeout_policy,
+)
 from core.docker import image_exists as default_image_exists
 from core.execution_config import execution_minting_enabled
 from core.jsonio import read_json, write_json
@@ -533,6 +542,8 @@ class HermesRunner:
         max_shards: int = 0,
         timeout: int | None = None,
         timeout_source: str | None = None,
+        attempt_timeout_seconds: int | float | None = None,
+        attempt_deadline: float | None = None,
         category: str | None = None,
         build_attempt_id: UUID | str | None = None,
         require_build_attempt: bool = False,
@@ -560,6 +571,8 @@ class HermesRunner:
                 dry_run=dry_run,
                 timeout=timeout,
                 timeout_source=timeout_source,
+                attempt_timeout_seconds=attempt_timeout_seconds,
+                attempt_deadline=attempt_deadline,
                 category=category,
                 build_attempt_id=build_attempt_id,
                 require_build_attempt=require_build_attempt,
@@ -583,6 +596,8 @@ class HermesRunner:
         dry_run: bool,
         timeout: int | None = None,
         timeout_source: str | None = None,
+        attempt_timeout_seconds: int | float | None = None,
+        attempt_deadline: float | None = None,
         category: str | None = None,
         build_attempt_id: UUID | str | None = None,
         require_build_attempt: bool = False,
@@ -634,6 +649,8 @@ class HermesRunner:
             challenge_ids,
             timeout=timeout,
             timeout_source=timeout_source,
+            attempt_timeout_seconds=attempt_timeout_seconds,
+            attempt_deadline=attempt_deadline,
         )
 
     # ----------------------------------------------------------------
@@ -705,6 +722,8 @@ class HermesRunner:
         *,
         timeout: int | None,
         timeout_source: str | None,
+        attempt_timeout_seconds: int | float | None,
+        attempt_deadline: float | None,
     ) -> dict:
         """执行完整的分片处理管线。
 
@@ -749,6 +768,58 @@ class HermesRunner:
                 outcome["publisher_phase"] = publisher_phase
             outcome.update(self._timeout_metadata(workspace))
             return outcome
+
+        def fail_deadline_outcome(
+            *,
+            workspace: ExecutionWorkspace | None = None,
+        ) -> dict[str, Any]:
+            outcome = attempt_timeout_outcome(
+                shard=original_shard_name,
+                attempt_timeout_seconds=attempt_timeout_seconds,
+                attempt_deadline=attempt_deadline,
+                started_monotonic=process_started,
+            )
+            outcome.update(self._timeout_metadata(workspace))
+            return outcome
+
+        def ensure_attempt_time() -> None:
+            remaining = remaining_attempt_time(attempt_deadline)
+            if remaining is not None and remaining <= 0:
+                raise AttemptDeadlineExceeded("global deadline exceeded")
+
+        def mark_deadline_failed(
+            *,
+            workspace: ExecutionWorkspace | None = None,
+        ) -> dict[str, Any]:
+            outcome = fail_deadline_outcome(workspace=workspace)
+            self._mark_shard_failed(
+                shard,
+                original_shard_name,
+                worker,
+                challenge_ids,
+                report,
+                "global deadline exceeded",
+                HERMES_TIMEOUT_RETURNCODE,
+                hermes_phase=GLOBAL_DEADLINE_PHASE,
+                elapsed_seconds=float(outcome.get("elapsed_seconds") or elapsed()),
+                workspace=workspace,
+            )
+            if workspace is not None:
+                try:
+                    record_workspace_terminal(
+                        self.paths,
+                        workspace,
+                        status="failed",
+                        output_hash=None,
+                    )
+                except Exception:
+                    _LOGGER.exception("failed to record deadline terminal workspace")
+            return outcome
+
+        try:
+            ensure_attempt_time()
+        except AttemptDeadlineExceeded:
+            return mark_deadline_failed()
 
         # 步骤 1: 从历史窗口中计算恢复计划
         # 【重要】必须在写入本轮 queued 事件之前计算！
@@ -984,11 +1055,24 @@ class HermesRunner:
         else:
             effective_timeout = shard_timeout_policy(payload)
             effective_timeout_source = "shard_policy"
+        if attempt_timeout_seconds is None and attempt_deadline is None:
+            attempt_timeout_seconds = effective_timeout
+            attempt_deadline = deadline_from_timeout(effective_timeout)
         record_effective_timeout(
             workspace,
             seconds=effective_timeout,
             source=effective_timeout_source,
+            attempt_timeout_seconds=attempt_timeout_seconds,
+            deadline_at_epoch=(
+                time.time() + (attempt_deadline - time.monotonic())
+                if attempt_deadline is not None
+                else None
+            ),
         )
+        try:
+            ensure_attempt_time()
+        except AttemptDeadlineExceeded:
+            return mark_deadline_failed(workspace=workspace)
         try:
             publication_contract = prepare_publication_contract(
                 self.paths,
@@ -1042,9 +1126,11 @@ class HermesRunner:
         tailer = WorkspaceProgressTailer(workspace, self._progress.record)
         invoke_started = time.monotonic()
         try:
+            ensure_attempt_time()
             self._verify_terminal_workspace(
                 log=log,
                 timeout=effective_timeout,
+                attempt_deadline=attempt_deadline,
                 workspace=workspace,
                 profile_name=profile_name,
             )
@@ -1077,9 +1163,12 @@ class HermesRunner:
                 log,
                 dry_run=False,
                 timeout=effective_timeout,
+                attempt_deadline=attempt_deadline,
                 workspace=workspace,
                 profile_name=profile_name,
             )
+        except AttemptDeadlineExceeded:
+            return mark_deadline_failed(workspace=workspace)
         except KeyboardInterrupt:
             # 被用户中断 → 记录失败并重新抛出
             import_workspace_report(workspace, report)
@@ -1173,6 +1262,10 @@ class HermesRunner:
         ensure_report(report, shard, worker, "completed_by_runner", returncode)
 
         # 步骤 9: 执行强制校验
+        try:
+            ensure_attempt_time()
+        except AttemptDeadlineExceeded:
+            return mark_deadline_failed(workspace=workspace)
         per_results, validated_set = self._run_workspace_validation(
             original_shard_name,
             worker,
@@ -1231,6 +1324,7 @@ class HermesRunner:
                 and self._validation_results_allow_auto_repair(per_results)
                 and not repeated_failure_stop
             ):
+                ensure_attempt_time()
                 deterministic_limit = max(
                     (
                         policy.max_deterministic_rounds
@@ -1282,8 +1376,15 @@ class HermesRunner:
                 merge_validation_into_report(report, per_results)
                 repeated_failure_stop = stop_if_repeated_failure()
 
-        run_deterministic_repairs()
+        try:
+            run_deterministic_repairs()
+        except AttemptDeadlineExceeded:
+            return mark_deadline_failed(workspace=workspace)
         for repair_attempt in range(1, repair_budget + 1):
+            try:
+                ensure_attempt_time()
+            except AttemptDeadlineExceeded:
+                return mark_deadline_failed(workspace=workspace)
             if repeated_failure_stop:
                 break
             if not any(result.get("solve_status") == "failed" for result in per_results):
@@ -1338,9 +1439,12 @@ class HermesRunner:
                     repair_log,
                     dry_run=False,
                     timeout=repair_timeout,
+                    attempt_deadline=attempt_deadline,
                     workspace=workspace,
                     profile_name=profile_name,
                 )
+            except AttemptDeadlineExceeded:
+                return mark_deadline_failed(workspace=workspace)
             finally:
                 repair_tailer.stop_and_flush()
             import_workspace_report(workspace, report)
@@ -1414,7 +1518,10 @@ class HermesRunner:
             )
             merge_validation_into_report(report, per_results)
             repeated_failure_stop = stop_if_repeated_failure()
-            run_deterministic_repairs()
+            try:
+                run_deterministic_repairs()
+            except AttemptDeadlineExceeded:
+                return mark_deadline_failed(workspace=workspace)
 
         # 步骤 10: 根据校验结果判定最终状态
         any_failed = any(result.get("solve_status") == "failed" for result in per_results)
@@ -2056,6 +2163,15 @@ class HermesRunner:
         timeout_source = manifest.get("timeout_source")
         if isinstance(timeout_source, str):
             metadata["timeout_source"] = timeout_source
+        attempt_timeout = manifest.get("attempt_timeout_seconds")
+        if isinstance(attempt_timeout, int | float):
+            metadata["attempt_timeout_seconds"] = attempt_timeout
+        deadline_at = manifest.get("deadline_at")
+        if isinstance(deadline_at, int | float | str):
+            metadata["deadline_at"] = deadline_at
+        deadline_at_epoch = manifest.get("deadline_at_epoch")
+        if isinstance(deadline_at_epoch, int | float):
+            metadata["deadline_at_epoch"] = deadline_at_epoch
         return metadata
 
     def _augment_failure_report(
@@ -2074,6 +2190,10 @@ class HermesRunner:
         raw["elapsed_seconds"] = max(0.0, elapsed_seconds)
         if publisher_phase:
             raw["publisher_phase"] = publisher_phase
+        if hermes_phase == GLOBAL_DEADLINE_PHASE:
+            raw["timeout_kind"] = "attempt_deadline"
+            raw["validation_status"] = "timeout"
+            raw["build_status"] = "timeout"
         raw.update(self._timeout_metadata(workspace))
         write_json(report, raw)
 
@@ -2105,6 +2225,7 @@ class HermesRunner:
         dry_run: bool,
         *,
         timeout: int | None = None,
+        attempt_deadline: float | None = None,
         workspace=None,
         profile_name: str | None = None,
     ) -> int:
@@ -2121,6 +2242,7 @@ class HermesRunner:
             return 0
 
         effective_timeout = timeout if timeout is not None else DEFAULT_HERMES_TIMEOUT
+        effective_timeout = bounded_hermes_timeout(effective_timeout, attempt_deadline)
         arguments, environment, cwd, _terminal_backend = self._invoke_context(
             workspace=workspace,
             profile_name=profile_name,
@@ -2132,6 +2254,7 @@ class HermesRunner:
             cwd=cwd,
             environment=environment,
             timeout=effective_timeout,
+            attempt_deadline=attempt_deadline,
             profile_log_path=self._profile_agent_log_path(profile_name, environment),
         )
 
@@ -2175,6 +2298,7 @@ class HermesRunner:
         *,
         log: Path,
         timeout: int,
+        attempt_deadline: float | None = None,
         workspace=None,
         profile_name: str | None = None,
     ) -> None:
@@ -2188,7 +2312,10 @@ class HermesRunner:
             cwd=cwd,
             environment=environment,
             terminal_backend=terminal_backend,
-            timeout=min(timeout, hermes_process.TERMINAL_WORKSPACE_PROBE_TIMEOUT),
+            timeout=bounded_hermes_timeout(
+                min(timeout, hermes_process.TERMINAL_WORKSPACE_PROBE_TIMEOUT),
+                attempt_deadline,
+            ),
         )
 
     def _apply_legacy_custom_provider(self, environment: dict[str, str]) -> bool:

@@ -238,6 +238,55 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("--allow-failed-attempts-exit-zero", commands[0])
         self.assertIn("--allow-failed-attempts-exit-zero", commands[1])
 
+    def test_sequential_lanes_pass_attempt_timeout_to_cli(self):
+        first = UUID("11111111-1111-1111-1111-111111111111")
+        process = Mock()
+        process.poll.return_value = None
+        with (
+            patch("web.dashboard.subprocess.Popen", return_value=process) as popen,
+            patch("web.dashboard.time.sleep"),
+        ):
+            ok, _message, _pool = TaskManager(self.paths).start_sequential_lanes(
+                lanes=[[first]],
+                attempt_timeout_seconds=42,
+            )
+
+        self.assertTrue(ok)
+        command = popen.call_args.args[0]
+        self.assertIn("--attempt-timeout-seconds", command)
+        self.assertEqual(command[command.index("--attempt-timeout-seconds") + 1], "42")
+        self.assertIn("--timeout", command)
+        self.assertEqual(command[command.index("--timeout") + 1], "42")
+
+    def test_lane_watchdog_terminates_timed_out_process(self):
+        process = Mock()
+        process.poll.return_value = None
+        tasks = TaskManager(self.paths)
+        tasks._lane_pools["pool"] = LanePool(
+            id="pool",
+            started_at="now",
+            lanes=[
+                LaneProcess(
+                    lane=1,
+                    worker="dashboard-lane-01",
+                    build_attempt_ids=[],
+                    log="lane.log",
+                    process=process,
+                    deadline_monotonic=1.0,
+                    attempt_timeout_seconds=10,
+                )
+            ],
+        )
+        with (
+            patch("web.dashboard.time.monotonic", return_value=2.0),
+            patch("web.dashboard._terminate_process", return_value=True) as terminate,
+        ):
+            state = tasks.lane_pools_state()
+
+        terminate.assert_called_once()
+        self.assertTrue(state[0]["lanes"][0]["timeout_terminated"])
+        self.assertIn("超时", state[0]["lanes"][0]["message"])
+
     def test_stop_terminates_single_worker(self):
         tasks = TaskManager(self.paths)
         process = Mock()

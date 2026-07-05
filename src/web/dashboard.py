@@ -85,22 +85,33 @@ class TaskManager:
         *,
         category: str,
         build_attempt_id: UUID,
+        attempt_timeout_seconds: int | None = None,
     ) -> tuple[bool, str]:
         cli_script = Path(__file__).resolve().parents[1] / "cli.py"
+        command = [
+            sys.executable,
+            str(cli_script),
+            "run",
+            "--worker",
+            "dashboard-01",
+            "--category",
+            category,
+            "--build-attempt",
+            str(build_attempt_id),
+            "--allow-failed-attempts-exit-zero",
+        ]
+        if attempt_timeout_seconds is not None:
+            command.extend(
+                [
+                    "--timeout",
+                    str(attempt_timeout_seconds),
+                    "--attempt-timeout-seconds",
+                    str(attempt_timeout_seconds),
+                ]
+            )
         return self._start(
             "worker",
-            [
-                sys.executable,
-                str(cli_script),
-                "run",
-                "--worker",
-                "dashboard-01",
-                "--category",
-                category,
-                "--build-attempt",
-                str(build_attempt_id),
-                "--allow-failed-attempts-exit-zero",
-            ],
+            command,
             require_pending=False,
             worker_ids={"dashboard-01"},
             build_attempt_ids={build_attempt_id},
@@ -110,6 +121,7 @@ class TaskManager:
         self,
         *,
         build_attempt_ids: list[UUID],
+        attempt_timeout_seconds: int | None = None,
     ) -> tuple[bool, str]:
         """Run an explicit build-attempt list in the supplied order."""
         if not build_attempt_ids:
@@ -126,6 +138,15 @@ class TaskManager:
         ]
         for attempt_id in build_attempt_ids:
             command.extend(["--build-attempt-sequence", str(attempt_id)])
+        if attempt_timeout_seconds is not None:
+            command.extend(
+                [
+                    "--timeout",
+                    str(attempt_timeout_seconds),
+                    "--attempt-timeout-seconds",
+                    str(attempt_timeout_seconds),
+                ]
+            )
         command.append("--allow-failed-attempts-exit-zero")
         # Do NOT eagerly mark the whole batch running here: the CLI sequence
         # driver claims and leases each attempt only when its turn comes
@@ -144,6 +165,7 @@ class TaskManager:
         self,
         *,
         lanes: list[list[UUID]],
+        attempt_timeout_seconds: int | None = None,
     ) -> tuple[bool, str, dict]:
         """Run multiple independent ordered build-attempt lanes."""
         lane_batches = [lane for lane in lanes if lane]
@@ -151,6 +173,7 @@ class TaskManager:
             return False, "多队列至少需要一个构建任务", {}
         pool_id = uuid4().hex[:12]
         started_at = beijing_now_display()
+        started_monotonic = time.monotonic()
         cli_script = Path(__file__).resolve().parents[1] / "cli.py"
         pool = LanePool(
             id=pool_id,
@@ -179,6 +202,15 @@ class TaskManager:
                     ]
                     for attempt_id in attempt_ids:
                         command.extend(["--build-attempt-sequence", str(attempt_id)])
+                    if attempt_timeout_seconds is not None:
+                        command.extend(
+                            [
+                                "--timeout",
+                                str(attempt_timeout_seconds),
+                                "--attempt-timeout-seconds",
+                                str(attempt_timeout_seconds),
+                            ]
+                        )
                     command.append("--allow-failed-attempts-exit-zero")
                     with (self.paths.logs / log).open("w", encoding="utf-8") as output:
                         process = subprocess.Popen(
@@ -195,6 +227,14 @@ class TaskManager:
                         build_attempt_ids=attempt_ids,
                         log=log,
                         process=process,
+                        started_monotonic=started_monotonic,
+                        deadline_monotonic=(
+                            started_monotonic
+                            + float(attempt_timeout_seconds) * len(attempt_ids)
+                            if attempt_timeout_seconds is not None
+                            else None
+                        ),
+                        attempt_timeout_seconds=attempt_timeout_seconds,
                     )
                     pool.lanes.append(lane)
                     started_lanes.append(lane)
@@ -341,6 +381,7 @@ class TaskManager:
 
     def state(self) -> dict:
         with self._lock:
+            self._enforce_lane_deadlines_unlocked()
             lane_pools = self._lane_pools_state_unlocked()
             if self._process is None:
                 external = _discover_dashboard_build_workers()
@@ -368,12 +409,14 @@ class TaskManager:
 
     def lane_pools_state(self) -> list[dict]:
         with self._lock:
+            self._enforce_lane_deadlines_unlocked()
             return self._lane_pools_state_unlocked()
 
     def finished_build_workers(self) -> list[dict]:
         """Return dashboard-owned build workers whose process has exited."""
         records: list[dict] = []
         with self._lock:
+            self._enforce_lane_deadlines_unlocked()
             if self._process is not None and self._worker_ids:
                 returncode = self._process.poll()
                 key = self._finished_record_key(
@@ -451,6 +494,7 @@ class TaskManager:
         return " | ".join(lines[-3:])[-500:]
 
     def _active_lane_count_unlocked(self) -> int:
+        self._enforce_lane_deadlines_unlocked()
         return sum(
             1
             for pool in self._lane_pools.values()
@@ -459,6 +503,7 @@ class TaskManager:
         )
 
     def _discard_finished_records_unlocked(self) -> None:
+        self._enforce_lane_deadlines_unlocked()
         if self._process is not None and self._worker_ids:
             returncode = self._process.poll()
             if returncode is not None:
@@ -523,8 +568,10 @@ class TaskManager:
 
     def _lane_state(self, lane: "LaneProcess") -> dict:
         returncode = lane.process.poll()
-        running = returncode is None
-        if running:
+        running = returncode is None and not lane.timeout_terminated
+        if lane.timeout_terminated:
+            message = f"{lane.worker} 已因全局超时终止"
+        elif running:
             message = f"{lane.worker} 正在运行"
         elif returncode == 0:
             message = f"{lane.worker} 已完成"
@@ -539,7 +586,23 @@ class TaskManager:
             "returncode": returncode,
             "log": lane.log,
             "message": message,
+            "timeout_terminated": lane.timeout_terminated,
+            "attempt_timeout_seconds": lane.attempt_timeout_seconds,
         }
+
+    def _enforce_lane_deadlines_unlocked(self) -> None:
+        now = time.monotonic()
+        for pool in self._lane_pools.values():
+            for lane in pool.lanes:
+                if lane.deadline_monotonic is None or lane.process.poll() is not None:
+                    continue
+                if now < lane.deadline_monotonic:
+                    continue
+                lane.timeout_terminated = True
+                _terminate_process(
+                    lane.process,
+                    timeout=self._terminate_timeout_seconds(),
+                )
 
 
 @dataclass
@@ -549,6 +612,10 @@ class LaneProcess:
     build_attempt_ids: list[UUID]
     log: str
     process: subprocess.Popen
+    started_monotonic: float | None = None
+    deadline_monotonic: float | None = None
+    attempt_timeout_seconds: int | None = None
+    timeout_terminated: bool = False
 
 
 @dataclass

@@ -18,6 +18,7 @@ BuildFailureCategory = Literal[
     "hermes_timeout",
     "hermes_cancelled",
     "validation",
+    "global_deadline_exceeded",
 ]
 HERMES_TIMEOUT_RETURNCODE = 124
 

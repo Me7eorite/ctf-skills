@@ -349,6 +349,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
         tasks = app.state.dashboard_tasks
         ok, message = tasks.start_sequential_worker(
             build_attempt_ids=attempt_ids,
+            attempt_timeout_seconds=_attempt_timeout_for_batch(_project_paths(app), attempt_ids),
         )
         if not ok:
             raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=message)
@@ -377,7 +378,10 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
 
         lane_batches = _round_robin_lanes(attempt_ids, lane_count)
         tasks = app.state.dashboard_tasks
-        ok, message, pool = tasks.start_sequential_lanes(lanes=lane_batches)
+        ok, message, pool = tasks.start_sequential_lanes(
+            lanes=lane_batches,
+            attempt_timeout_seconds=_attempt_timeout_for_batch(_project_paths(app), attempt_ids),
+        )
         if not ok:
             raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=message)
         for lane in pool.get("lanes", []):
@@ -438,7 +442,10 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
 
         lane_batches = _round_robin_lanes(retry_ids, lane_count)
         tasks = app.state.dashboard_tasks
-        ok, message, pool = tasks.start_sequential_lanes(lanes=lane_batches)
+        ok, message, pool = tasks.start_sequential_lanes(
+            lanes=lane_batches,
+            attempt_timeout_seconds=_attempt_timeout_for_batch(_project_paths(app), retry_ids),
+        )
         if not ok:
             raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=message)
         for lane in pool.get("lanes", []):
@@ -537,7 +544,10 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
 
         attempt_ids = [item[0] for item in attempts]
         tasks = app.state.dashboard_tasks
-        ok, message = tasks.start_sequential_worker(build_attempt_ids=attempt_ids)
+        ok, message = tasks.start_sequential_worker(
+            build_attempt_ids=attempt_ids,
+            attempt_timeout_seconds=_attempt_timeout_for_batch(_project_paths(app), attempt_ids),
+        )
         if not ok:
             raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=message)
         _assign_queued_attempt_worker(attempt_ids, worker="dashboard-sequential-01")
@@ -1397,6 +1407,7 @@ def _start_constrained_worker(
     ok, message = tasks.start_worker(
         category=category,
         build_attempt_id=attempt_id,
+        attempt_timeout_seconds=effective_timeout,
     )
     if not ok:
         raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=message)
@@ -1454,6 +1465,14 @@ def _effective_timeout_for_attempt(paths, attempt_id: UUID) -> tuple[int, str]:
         payload = read_json(shard, {})
         break
     return shard_timeout_policy(payload), "shard_policy"
+
+
+def _attempt_timeout_for_batch(paths, attempt_ids: list[UUID]) -> int:
+    timeouts = [
+        _effective_timeout_for_attempt(paths, attempt_id)[0]
+        for attempt_id in attempt_ids
+    ]
+    return max(timeouts) if timeouts else 3600
 
 
 def _timeout_metadata_for_attempt(paths, attempt_id: UUID) -> dict[str, Any]:

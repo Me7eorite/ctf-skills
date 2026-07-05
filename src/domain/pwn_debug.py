@@ -441,12 +441,8 @@ def _compose_command(challenge_dir: Path, *args: str, timeout: int) -> dict[str,
     compose = challenge_dir / "deploy" / "docker-compose.yml"
     if not compose.is_file():
         return {"status": "skipped", "reason": "deploy/docker-compose.yml missing"}
-    command = ["docker", "compose", "-f", str(compose), *args]
-    result = _run_optional(command, cwd=challenge_dir, timeout=timeout)
-    if _command_unavailable(result):
-        legacy = ["docker-compose", "-f", str(compose), *args]
-        return _run_optional(legacy, cwd=challenge_dir, timeout=timeout)
-    return result
+    command = ["docker-compose", "-f", str(compose), *args]
+    return _run_optional(command, cwd=challenge_dir, timeout=timeout)
 
 
 def _metadata_port(metadata: Mapping[str, Any]) -> int | None:

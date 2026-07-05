@@ -217,6 +217,85 @@ def test_finalize_build_attempt_records_failed_attempt_and_execution(session_fac
         assert session.get(task_model.DesignTask, task_id).status == "build_failed"
 
 
+def test_finalize_global_deadline_records_failed_timeout_terminal(session_factory, monkeypatch):
+    monkeypatch.setenv("EXECUTION_MINTING", "1")
+    with session_factory() as session:
+        attempt_id, execution_id = _seed_scheduled(session)
+        session.commit()
+
+    cli._mark_attempt_running(
+        attempt_id,
+        "worker-1",
+        session_factory=session_factory,
+    )
+    cli._finalize_build_attempt(
+        attempt_id,
+        "worker-1",
+        {
+            "processed": 0,
+            "failed": 1,
+            "outcomes": [
+                {
+                    "status": "failed",
+                    "hermes_phase": "global_deadline_exceeded",
+                    "timeout_kind": "attempt_deadline",
+                    "validation_status": "timeout",
+                    "error": "global deadline exceeded",
+                }
+            ],
+        },
+        session_factory=session_factory,
+    )
+
+    with session_factory() as session:
+        row = session.get(exec_model.Execution, execution_id)
+        assert row.status == "failed"
+        assert row.exit_class == "attempt_deadline"
+        assert row.error == "global deadline exceeded"
+        container = session.get(build_model.BuildAttempt, attempt_id)
+        assert container.status == "failed"
+        assert container.error == "global deadline exceeded"
+
+
+def test_finalize_after_heartbeat_timeout_updates_design_task(session_factory, monkeypatch):
+    monkeypatch.setenv("EXECUTION_MINTING", "1")
+    with session_factory() as session:
+        attempt_id, execution_id = _seed_scheduled(session)
+        task_id = session.get(build_model.BuildAttempt, attempt_id).design_task_id
+        session.commit()
+
+    cli._mark_attempt_running(
+        attempt_id,
+        "worker-1",
+        session_factory=session_factory,
+    )
+    with session_factory() as session:
+        repo = ExecutionsRepository(session)
+        execution = repo.get(execution_id)
+        repo.update_to_terminal(
+            execution_id,
+            claim_token=execution.claim_token,
+            status="failed",
+            error="global deadline exceeded",
+            exit_class="attempt_deadline",
+        )
+        session.commit()
+
+    cli._finalize_build_attempt(
+        attempt_id,
+        "worker-1",
+        {
+            "processed": 0,
+            "failed": 1,
+            "outcomes": [{"timeout_kind": "attempt_deadline"}],
+        },
+        session_factory=session_factory,
+    )
+
+    with session_factory() as session:
+        assert session.get(task_model.DesignTask, task_id).status == "build_failed"
+
+
 def test_recorded_failed_outcome_is_not_reaped_to_lost(session_factory, monkeypatch):
     monkeypatch.setenv("EXECUTION_MINTING", "1")
     with session_factory() as session:

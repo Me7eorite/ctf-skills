@@ -3,7 +3,9 @@ from __future__ import annotations
 import socket
 import threading
 import time
+from pathlib import Path
 
+import domain.pwn_debug as pwn_debug
 from domain.pwn_debug import classify_leak_value, classify_pwn_failure_stage, tcp_readiness_probe
 
 
@@ -64,3 +66,26 @@ def test_canary_candidate_classification_rejects_pointer_like_values() -> None:
     assert classify_leak_value("0x0000555555555000") == "pie"
     assert classify_leak_value("0x0") == "null"
     assert classify_leak_value("0x50") == "small"
+
+
+def test_pwn_debug_compose_command_uses_legacy_docker_compose_only(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    challenge = tmp_path / "pwn-demo"
+    deploy = challenge / "deploy"
+    deploy.mkdir(parents=True)
+    compose = deploy / "docker-compose.yml"
+    compose.write_text("services: {}\n", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_run_optional(command, *, cwd, timeout, tail_limit=4000):
+        calls.append(list(command))
+        return {"status": "ok", "command": list(command), "returncode": 0}
+
+    monkeypatch.setattr(pwn_debug, "_run_optional", fake_run_optional)
+
+    result = pwn_debug._compose_command(challenge, "ps", timeout=5)
+
+    assert result["status"] == "ok"
+    assert calls == [["docker-compose", "-f", str(compose), "ps"]]
