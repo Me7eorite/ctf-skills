@@ -52,20 +52,12 @@ def final_pwn_artifact_evidence(challenge_dir: Path) -> dict[str, Any] | None:
     artifact_rel = _pwn_final_artifact_rel(metadata)
     artifact_prompt_path = f"./{artifact_rel}"
     artifact = challenge_dir / artifact_rel
-    deploy_src, deploy_src_rel = _pwn_deploy_src_counterpart(challenge_dir, artifact_rel)
-    deploy_src_sha = (
-        _sha256_file(deploy_src)
-        if deploy_src.is_file() and not deploy_src.is_symlink()
-        else None
-    )
     if not artifact.is_file() or artifact.is_symlink():
         return {
             "path": artifact_prompt_path,
             "available": False,
             "metadata_artifact": metadata.get("artifact"),
             "metadata_artifact_sha256": metadata.get("artifact_sha256"),
-            "deploy_src_path": deploy_src_rel,
-            "deploy_src_sha256": deploy_src_sha,
             "error": f"{artifact_rel} missing",
         }
     artifact_sha = _sha256_file(artifact)
@@ -76,8 +68,8 @@ def final_pwn_artifact_evidence(challenge_dir: Path) -> dict[str, Any] | None:
         "metadata_artifact": metadata.get("artifact"),
         "metadata_artifact_sha256": metadata.get("artifact_sha256"),
         "symbols": _readelf_symbols(artifact),
-        "deploy_src_path": deploy_src_rel,
-        "deploy_src_sha256": deploy_src_sha,
+        "checksec": _checksec(artifact),
+        "gadgets": _gadget_summary(artifact),
     }
 
 
@@ -101,8 +93,6 @@ def final_pwn_artifact_prompt_block(challenge_dir: Path) -> str:
     metadata_sha = evidence.get("metadata_artifact_sha256") or "(unavailable)"
     artifact_path = str(evidence.get("path") or PWN_FINAL_ARTIFACT_PROMPT_PATH)
     rel_artifact_path = artifact_path[2:] if artifact_path.startswith("./") else artifact_path
-    deploy_src_path = str(evidence.get("deploy_src_path") or "deploy/src/vuln")
-    deploy_sha = evidence.get("deploy_src_sha256") or "(unavailable)"
     return "\n".join(
         [
             "FINAL SOLVER EVIDENCE SOURCE:",
@@ -118,7 +108,8 @@ def final_pwn_artifact_prompt_block(challenge_dir: Path) -> str:
             f"- metadata.artifact_sha256: {metadata_sha}",
             f"- key symbols from {rel_artifact_path}:",
             *symbol_lines,
-            f"- {deploy_src_path} sha256: {deploy_sha} (UNTRUSTED / DO NOT USE)",
+            f"- checksec: {json.dumps(evidence.get('checksec') or {}, ensure_ascii=False)}",
+            f"- gadget summary: {json.dumps(evidence.get('gadgets') or {}, ensure_ascii=False)}",
         ]
     )
 
@@ -225,6 +216,7 @@ def _write_pwn_debug_report(
         },
         "symbols": _readelf_symbols(artifact_path),
         "checksec": _checksec(artifact_path),
+        "gadgets": _gadget_summary(artifact_path),
     }
     report_path = challenge_dir / "writenup" / "pwn_debug_report.json"
     report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -299,14 +291,6 @@ def _pwn_final_artifact_rel(metadata: dict[str, Any]) -> str:
     return PWN_FINAL_ARTIFACT_REL
 
 
-def _pwn_deploy_src_counterpart(challenge_dir: Path, artifact_rel: str) -> tuple[Path, str]:
-    deploy_src = challenge_dir / "deploy" / "src" / Path(artifact_rel).name
-    if deploy_src.is_file() and not deploy_src.is_symlink():
-        return deploy_src, deploy_src.relative_to(challenge_dir).as_posix()
-    fallback = challenge_dir / "deploy" / "src" / "vuln"
-    return fallback, fallback.relative_to(challenge_dir).as_posix()
-
-
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -363,3 +347,23 @@ def _checksec(path: Path) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {"raw": result.stdout.strip()[:2000]}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _gadget_summary(path: Path) -> dict[str, Any]:
+    try:
+        result = subprocess.run(
+            ["ROPgadget", "--binary", str(path), "--only", "ret,pop|syscall"],
+            text=True,
+            capture_output=True,
+            timeout=8,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return {"status": "unavailable"}
+    if result.returncode != 0:
+        return {"status": "unavailable", "stderr": result.stderr.strip()[:1000] if result.stderr else ""}
+    gadgets: list[str] = []
+    for line in result.stdout.splitlines():
+        if " : " in line:
+            gadgets.append(line.split(" : ", 1)[0].strip())
+    return {"status": "ok", "gadgets": gadgets[:50]}

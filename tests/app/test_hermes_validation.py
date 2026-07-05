@@ -426,7 +426,6 @@ def test_validation_debug_context_includes_final_pwn_artifact_evidence(
     (challenge / "attachments" / "vuln").write_bytes(artifact)
     (challenge / "deploy" / "src" / "vuln").write_bytes(deploy)
     artifact_sha = hashlib.sha256(artifact).hexdigest()
-    deploy_sha = hashlib.sha256(deploy).hexdigest()
     (challenge / "metadata.json").write_text(
         json.dumps(
             {
@@ -463,13 +462,13 @@ def test_validation_debug_context_includes_final_pwn_artifact_evidence(
     assert evidence["pwn-0001"]["path"] == "./attachments/vuln"
     assert evidence["pwn-0001"]["sha256"] == artifact_sha
     assert evidence["pwn-0001"]["metadata_artifact_sha256"] == artifact_sha
-    assert evidence["pwn-0001"]["deploy_src_path"] == "deploy/src/vuln"
-    assert evidence["pwn-0001"]["deploy_src_sha256"] == deploy_sha
     assert evidence["pwn-0001"]["symbols"]["win"] == "0x40149d"
+    assert evidence["pwn-0001"]["checksec"] == {}
+    assert evidence["pwn-0001"]["gadgets"]["status"] == "unavailable"
     assert "FINAL SOLVER EVIDENCE SOURCE" in evidence["pwn-0001"]["instruction"]
     assert "Use only ./attachments/vuln for exp.py and pwn_debug_report.json." in evidence["pwn-0001"]["instruction"]
     assert "Do not use deploy/src binaries" in evidence["pwn-0001"]["instruction"]
-    assert f"deploy/src/vuln sha256: {deploy_sha} (UNTRUSTED / DO NOT USE)" in evidence["pwn-0001"]["instruction"]
+    assert "artifact path: ./attachments/vuln" in evidence["pwn-0001"]["instruction"]
 
     prompt = render_validation_repair_prompt(
         attempt=1,
@@ -486,7 +485,7 @@ def test_validation_debug_context_includes_final_pwn_artifact_evidence(
 
     assert "FINAL SOLVER EVIDENCE SOURCE:" in prompt
     assert "BINARY_SHA256 in exp.py is mandatory and must equal metadata.artifact_sha256." in prompt
-    assert f"deploy/src/vuln sha256: {deploy_sha} (UNTRUSTED / DO NOT USE)" in prompt
+    assert "artifact path: ./attachments/vuln" in prompt
 
 
 def test_pwn_debug_report_is_available_for_repair_context(tmp_path: Path) -> None:
@@ -689,8 +688,8 @@ def test_validate_gate_rejects_pwn_exp_deploy_src_sha(tmp_path: Path) -> None:
     error = validate_gate("pwn-0001", plan, paths, image_exists=lambda _image: True)  # type: ignore[arg-type]
 
     assert isinstance(error, dict)
-    assert error["code"] == "pwn_evidence_from_deploy_src"
-    assert "deploy/src/vuln" in error["message"]
+    assert error["code"] == "pwn_exp_binary_sha_mismatch"
+    assert "metadata.artifact_sha256" in error["message"]
 
 
 def test_validate_gate_rejects_named_pwn_artifact_deploy_src_evidence(
@@ -722,8 +721,7 @@ def test_validate_gate_rejects_named_pwn_artifact_deploy_src_evidence(
 
     assert isinstance(error, dict)
     assert error["status"] == "solver_evidence_stale"
-    assert error["code"] == "pwn_evidence_from_deploy_src"
-    assert "deploy/src/taskqueue" in error["message"]
+    assert error["code"] == "pwn_debug_report_claims_wrong_artifact"
     assert "attachments/taskqueue" in error["message"]
 
 

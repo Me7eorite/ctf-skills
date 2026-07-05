@@ -750,24 +750,22 @@ def _pwn_exp_bad_artifact_path_failures(
         return []
     if not _validate_runs_exp_from_writenup(validate_text):
         return []
-    if f"./{artifact}" not in exp_text and artifact not in exp_text:
+    if "./attachments/" not in exp_text and "Path(__file__).resolve().parents[1]" not in exp_text:
         return []
-    artifact_name = Path(artifact).name
     return [
         validation_failure_detail(
             phase="validate",
             code="pwn_exp_bad_artifact_path",
             status="nonzero_exit",
             message=(
-                "writenup/exp.py uses a challenge-root-relative artifact path "
-                f"({artifact}) even though validate.sh runs the solver from writenup; "
-                "that resolves to writenup/attachments and breaks solver startup"
+                "writenup/exp.py uses a cwd-relative attachments path instead of "
+                "resolving the challenge root from the script location"
             ),
             path="writenup/exp.py",
             hint=(
                 "Resolve the artifact from the script location, e.g. "
-                "Path(__file__).resolve().parents[1] / "
-                f"'{artifact}', rather than hardcoding ./attachments/{artifact_name}."
+                "Path(__file__).resolve().parents[1] / metadata.artifact, and "
+                "avoid hardcoding ./attachments/<binary>."
             ),
         )
     ]
@@ -868,12 +866,22 @@ def _pwn_solver_evidence_stale(
     expected_sha = metadata.get("artifact_sha256")
 
     details: list[dict[str, str]] = []
-    artifact_path = _pwn_final_artifact_path(challenge_dir, metadata)
+    artifact = metadata.get("artifact")
+    if not isinstance(artifact, str) or not _safe_attachment_artifact(artifact):
+        details.append(
+            validation_failure_detail(
+                phase="contract",
+                code="artifact_path_mismatch",
+                status="solver_evidence_stale",
+                message="pwn metadata.artifact must point to the final player ELF under attachments/",
+                path="metadata.json",
+                hint="Set metadata.artifact to the final player ELF under attachments/.",
+            )
+        )
+        return details
+    artifact_path = challenge_dir / artifact
     artifact_rel = artifact_path.relative_to(challenge_dir).as_posix()
     artifact_sha = _sha256_if_file(artifact_path)
-    deploy_src_path = _pwn_deploy_src_counterpart(challenge_dir, artifact_path.name)
-    deploy_src_rel = deploy_src_path.relative_to(challenge_dir).as_posix()
-    deploy_src_sha = _sha256_if_file(deploy_src_path)
     if not isinstance(expected_sha, str) or not expected_sha:
         if artifact_sha:
             details.append(
@@ -917,30 +925,7 @@ def _pwn_solver_evidence_stale(
         report_binary = _pwn_debug_report_binary(report_path)
         report_sha = report_binary.get("sha256")
         report_binary_path = report_binary.get("path")
-        if (
-            isinstance(report_sha, str)
-            and artifact_sha
-            and deploy_src_sha
-            and artifact_sha != deploy_src_sha
-            and report_sha == deploy_src_sha
-        ):
-            details.append(
-                validation_failure_detail(
-                    phase="validate",
-                    code="pwn_evidence_from_deploy_src",
-                    status="solver_evidence_stale",
-                    message=(
-                        f"Report appears to be derived from {deploy_src_rel}, not "
-                        f"{artifact_rel}. Recompute from the final player artifact only."
-                    ),
-                    path="writenup/pwn_debug_report.json",
-                    hint=(
-                        f"Use only {artifact_rel} for solver offsets, symbols, "
-                        "gadgets, and pwn_debug_report.json.binary.sha256."
-                    ),
-                )
-            )
-        elif report_binary_path != artifact_rel:
+        if report_binary_path != artifact_rel:
             details.append(
                 validation_failure_detail(
                     phase="validate",
@@ -1011,26 +996,6 @@ def _pwn_solver_evidence_stale(
                 ),
             )
         )
-    elif (
-        exp_sha is not None
-        and artifact_sha
-        and deploy_src_sha
-        and artifact_sha != deploy_src_sha
-        and exp_sha == deploy_src_sha
-    ):
-        details.append(
-            validation_failure_detail(
-                phase="validate",
-                code="pwn_evidence_from_deploy_src",
-                status="solver_evidence_stale",
-                message=(
-                    f"writenup/exp.py records the sha256 of {deploy_src_rel}, not "
-                    f"{artifact_rel}. Recompute from the final player artifact only."
-                ),
-                path="writenup/exp.py",
-                hint=f"Set BINARY_SHA256 to metadata.artifact_sha256 for {artifact_rel}.",
-            )
-        )
     elif exp_sha is not None and expected_sha and exp_sha != expected_sha:
         details.append(
             validation_failure_detail(
@@ -1049,13 +1014,69 @@ def _pwn_solver_evidence_stale(
             )
         )
 
+    deploy_src_path = _pwn_deploy_src_counterpart(challenge_dir, artifact_path.name)
+    deploy_src_rel = deploy_src_path.relative_to(challenge_dir).as_posix()
+    deploy_src_sha = _sha256_if_file(deploy_src_path)
+    if (
+        deploy_src_sha
+        and artifact_sha
+        and deploy_src_sha != artifact_sha
+        and report_path.is_file()
+        and not report_path.is_symlink()
+    ):
+        report_binary = _pwn_debug_report_binary(report_path)
+        report_sha = report_binary.get("sha256")
+        if report_sha == deploy_src_sha:
+            details.append(
+                validation_failure_detail(
+                    phase="validate",
+                    code="pwn_evidence_from_deploy_src",
+                    status="solver_evidence_stale",
+                    message=(
+                        f"writenup/pwn_debug_report.json binary.sha256 matches {deploy_src_rel} "
+                        f"instead of the final {artifact_rel} artifact"
+                    ),
+                    path="writenup/pwn_debug_report.json",
+                    hint=(
+                        f"Use only {artifact_rel} for solver offsets, symbols, gadgets, "
+                        "and pwn_debug_report.json.binary.sha256."
+                ),
+            )
+        )
+        elif report_sha == deploy_src_sha:
+            details.append(
+                validation_failure_detail(
+                    phase="validate",
+                    code="pwn_evidence_from_deploy_src",
+                    status="solver_evidence_stale",
+                    message=(
+                        f"writenup/pwn_debug_report.json binary.sha256 matches {deploy_src_rel} "
+                        f"instead of the final {artifact_rel} artifact"
+                    ),
+                    path="writenup/pwn_debug_report.json",
+                    hint=(
+                        f"Use only {artifact_rel} for solver offsets, symbols, gadgets, "
+                        "and pwn_debug_report.json.binary.sha256."
+                    ),
+                )
+            )
+        if exp_sha is not None and exp_sha == deploy_src_sha:
+            details.append(
+                validation_failure_detail(
+                    phase="validate",
+                    code="pwn_evidence_from_deploy_src",
+                    status="solver_evidence_stale",
+                    message=(
+                        f"writenup/exp.py records the sha256 of {deploy_src_rel}, not {artifact_rel}"
+                    ),
+                    path="writenup/exp.py",
+                    hint=f"Set BINARY_SHA256 to metadata.artifact_sha256 for {artifact_rel}.",
+                )
+            )
+
     offset_conflicts = _pwn_exp_offset_conflicts(challenge_dir, metadata)
     for conflict in offset_conflicts:
-        code = (
-            "pwn_evidence_from_deploy_src"
-            if "matches deploy/src/" in conflict
-            else "solver_evidence_stale"
-        )
+        code = "pwn_evidence_from_deploy_src" if "matches deploy/src/" in conflict else "solver_evidence_stale"
         details.append(
             validation_failure_detail(
                 phase="validate",

@@ -676,6 +676,8 @@ Rules:
   aliases such as
   `ARTIFACT_SHA256`, SHAs from `deploy/src/<metadata.artifact basename>`, and old
   `pwn_debug_report.json` constants are stale.
+- `deploy/src/` may be read to understand the bug and protocol, but it is not
+  evidence for offsets, gadgets, symbols, libc bases, checksec, or report SHAs.
 - For canary leaks, scan a broad bounded `%n$p` range, keep candidates stable
   across multiple fresh connections, require low byte `0x00`, and do not filter
   by a `2^48` threshold. For stack leaks, never fallback to guessed

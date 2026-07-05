@@ -109,6 +109,9 @@ def test_refresh_pwn_debug_report_uses_metadata_artifact_name(
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["binary"]["path"] == "attachments/vault_service"
     assert report["binary"]["sha256"] == artifact_sha
+    assert report["binary"]["source"] == "final_artifact"
+    assert "checksec" in report
+    assert "gadgets" in report
 
 
 def test_ensure_pwn_solver_evidence_inserts_binary_sha_and_report(
@@ -260,6 +263,34 @@ def test_ensure_pwn_solver_evidence_uses_metadata_artifact_name(tmp_path: Path) 
     }
     exp_text = (challenge / "writenup" / "exp.py").read_text(encoding="utf-8")
     assert f'BINARY_SHA256 = "{artifact_sha}"' in exp_text
+
+
+def test_final_pwn_artifact_prompt_mentions_only_final_attachment(tmp_path: Path) -> None:
+    challenge = tmp_path / "pwn-0001-demo"
+    (challenge / "attachments").mkdir(parents=True)
+    (challenge / "writenup").mkdir()
+    artifact = b"\x7fELFfinal"
+    (challenge / "attachments" / "taskqueue").write_bytes(artifact)
+    artifact_sha = hashlib.sha256(artifact).hexdigest()
+    (challenge / "metadata.json").write_text(
+        json.dumps(
+            {
+                "id": "pwn-0001",
+                "category": "pwn",
+                "artifact": "attachments/taskqueue",
+                "artifact_sha256": artifact_sha,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    from domain.pwn_artifact_evidence import final_pwn_artifact_prompt_block
+
+    prompt = final_pwn_artifact_prompt_block(challenge)
+
+    assert "attachments/taskqueue" in prompt
+    assert "deploy/src/vuln sha256" not in prompt
+    assert "BINARY_SHA256" in prompt
 
 
 def test_ensure_pwn_solver_evidence_repairs_unreadable_attachment_mode(tmp_path: Path) -> None:

@@ -905,6 +905,9 @@ Common (web, pwn, re):
 - `validate.sh` and `writenup/exp.py` MUST NOT contain the literal `metadata.flag` value.
 - `writenup/exp.py` MUST NOT read the flag from organizer files (`metadata.json`,
   `challenge.yml`, `docker-compose*`); it recovers the flag at runtime.
+- `deploy/src/*.c` may be read to understand the bug, protocol, or menu flow,
+  but it is never authoritative for offsets, gadgets, symbols, libc bases,
+  checksec, or the SHA used by `writenup/exp.py`.
 
 Web / Pwn:
 - Keep `deploy/Dockerfile`, `deploy/docker-compose.yml`, and `deploy/src/`.
@@ -928,6 +931,10 @@ Web / Pwn:
   for exploit offsets after host build, and do not reuse
   `writenup/pwn_debug_report.json` unless its `binary.sha256` exactly matches
   `metadata.artifact_sha256`.
+- `deploy/src/` is allowed only as a source-reading aid for the bug design and
+  protocol shape. Do not compile it, do not read runtime offsets from it, and
+  do not let it become the source of `BINARY_SHA256`, gadgets, libc evidence,
+  or the report binary path.
 - Pwn `writenup/exp.py` MUST declare `BINARY_SHA256 = metadata.artifact_sha256`.
   The host gate rejects solvers that only declare aliases such as
   `ARTIFACT_SHA256`, or whose debug report/solver SHA was copied from

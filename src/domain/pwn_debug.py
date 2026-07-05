@@ -335,8 +335,7 @@ def _artifact_path(challenge_dir: Path, metadata: Mapping[str, Any]) -> Path | N
     artifact = metadata.get("artifact")
     if isinstance(artifact, str) and artifact.startswith("attachments/") and ".." not in Path(artifact).parts:
         return challenge_dir / artifact
-    fallback = challenge_dir / "attachments" / "vuln"
-    return fallback if fallback.exists() else None
+    return None
 
 
 def _metadata_summary(metadata: Mapping[str, Any]) -> dict[str, Any]:

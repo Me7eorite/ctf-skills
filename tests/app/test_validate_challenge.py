@@ -91,6 +91,7 @@ class ValidateChallengeLookupTests(unittest.TestCase):
                     {
                         "id": "pwn-0001",
                         "category": "pwn",
+                        "artifact": "attachments/vuln",
                         "artifact_sha256": "current-sha",
                     }
                 ),
@@ -105,11 +106,8 @@ class ValidateChallengeLookupTests(unittest.TestCase):
             result = validator.validate_challenge("pwn-0001")
 
             self.assertEqual(result["status"], "solver_evidence_stale")
-            self.assertIn("pwn_debug_report.json.binary.sha256", result["error"])
-            self.assertEqual(
-                result["failure_details"][0]["code"],
-                "solver_evidence_stale",
-            )
+            self.assertEqual(result["failure_details"][0]["code"], "pwn_debug_report_claims_wrong_artifact")
+            self.assertIn("metadata.artifact", result["error"])
 
     def test_pwn_debug_report_from_deploy_src_fails_before_validate_script(self):
         with TemporaryDirectory() as tmp:
@@ -142,8 +140,40 @@ class ValidateChallengeLookupTests(unittest.TestCase):
             result = validator.validate_challenge("pwn-0001")
 
             self.assertEqual(result["status"], "solver_evidence_stale")
-            self.assertEqual(result["failure_details"][0]["code"], "pwn_evidence_from_deploy_src")
-            self.assertIn("deploy/src/vuln", result["error"])
+            self.assertEqual(result["failure_details"][0]["code"], "pwn_debug_report_claims_wrong_artifact")
+            self.assertIn("attachments/vuln", result["error"])
+
+    def test_pwn_named_attachment_path_is_required_for_final_artifact(self):
+        with TemporaryDirectory() as tmp:
+            paths = _seed_paths(Path(tmp))
+            challenge = paths.challenges / "pwn" / "pwn-0001-demo"
+            (challenge / "attachments").mkdir(parents=True)
+            (challenge / "writenup").mkdir(parents=True)
+            (challenge / "attachments" / "taskqueue").write_bytes(b"final-artifact")
+            artifact_sha = hashlib.sha256(b"final-artifact").hexdigest()
+            (challenge / "metadata.json").write_text(
+                json.dumps(
+                    {
+                        "id": "pwn-0001",
+                        "category": "pwn",
+                        "artifact": "attachments/taskqueue",
+                        "artifact_sha256": artifact_sha,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (challenge / "writenup" / "exp.py").write_text(
+                f'BINARY_SHA256 = "{artifact_sha}"\n'
+                "ROOT = Path(__file__).resolve().parents[1]\n"
+                'BINARY = ROOT / "attachments" / "taskqueue"\n',
+                encoding="utf-8",
+            )
+            validator = ChallengeValidator(paths)  # type: ignore[arg-type]
+
+            result = validator.validate_challenge("pwn-0001")
+
+            self.assertNotEqual(result["status"], "solver_evidence_stale")
+            self.assertNotIn("attachments/vuln", result.get("error", ""))
 
     def test_pwn_debug_report_claiming_attachment_with_wrong_sha_fails_before_validate_script(self):
         with TemporaryDirectory() as tmp:
@@ -236,6 +266,7 @@ class ValidateChallengeLookupTests(unittest.TestCase):
                     {
                         "id": "pwn-0001",
                         "category": "pwn",
+                        "artifact": "attachments/vuln",
                         "artifact_sha256": "current-sha",
                     }
                 ),
@@ -264,6 +295,7 @@ class ValidateChallengeLookupTests(unittest.TestCase):
                     {
                         "id": "pwn-0001",
                         "category": "pwn",
+                        "artifact": "attachments/vuln",
                         "artifact_sha256": "current-sha",
                     }
                 ),
@@ -291,6 +323,7 @@ class ValidateChallengeLookupTests(unittest.TestCase):
                     {
                         "id": "pwn-0001",
                         "category": "pwn",
+                        "artifact": "attachments/vuln",
                         "artifact_sha256": "current-sha",
                         "solve_status": "passed",
                         "validation_status": "ready_for_validation",
