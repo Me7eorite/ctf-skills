@@ -1188,6 +1188,18 @@ def test_retry_sequential_lane_pool_retries_failed_attempts_before_start(
         repo.finalize_attempt(first.id, status="failed", error="first failed")
         repo.finalize_attempt(second.id, status="failed", error="second failed")
         repo.finalize_attempt(third.id, status="lost", error="third lost")
+        for attempt in (first, second, third):
+            session.add(
+                ProgressSnapshot(
+                    shard=attempt.shard_basename,
+                    challenge_id="",
+                    worker="worker-1",
+                    stage="validate",
+                    status="running",
+                    percent=64,
+                    message="validation running",
+                )
+            )
 
     tasks = _StubBuildTaskManager()
     client.app.state.dashboard_tasks = tasks
@@ -1214,6 +1226,12 @@ def test_retry_sequential_lane_pool_retries_failed_attempts_before_start(
         rows = [session.get(build_model.BuildAttempt, retry_id) for retry_id in retry_ids]
         assert [row.status for row in rows] == ["queued", "queued", "queued"]
         assert [row.worker for row in rows] == ["stub-lane-01", "stub-lane-02", "stub-lane-01"]
+        retry_progress = session.scalars(
+            sa.select(ProgressSnapshot)
+            .where(ProgressSnapshot.shard.in_([row.shard_basename for row in rows]))
+            .order_by(ProgressSnapshot.shard)
+        ).all()
+        assert [item.percent for item in retry_progress] == [64, 64, 64]
     for retry_id in retry_ids:
         assert (client.app.state.project_paths.shards / "pending" / f"{retry_id}.json").is_file()
 

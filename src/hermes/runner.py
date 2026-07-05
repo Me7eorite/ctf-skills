@@ -851,8 +851,14 @@ class HermesRunner:
                 image_exists=self._image_exists,
             )
 
-        # 步骤 2: 重置快照（事件保持追加）
-        self.state.reset_snapshots(original_shard_name)
+        # 步骤 2: 重置快照（事件保持追加）。Resume retry 的新 shard 会在
+        # orchestration 层继承 source shard 的高水位快照，不能在认领时清成 0。
+        if not (
+            isinstance(shard_payload, Mapping)
+            and shard_payload.get("execution_mode") == "resume"
+            and shard_payload.get("resume_from_shard_basename")
+        ):
+            self.state.reset_snapshots(original_shard_name)
 
         # 步骤 3: 写入本轮认领事件（新的时间窗口起点）
         self._progress.record(

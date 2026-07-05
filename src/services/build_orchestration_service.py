@@ -24,7 +24,7 @@ from domain.validation_failure_governance import latest_failed_validation, summa
 from persistence.models import build_attempts as build_model
 from persistence.models import design_tasks as task_model
 from persistence.models import executions as exec_model
-from persistence.models.progress import ProgressEvent
+from persistence.models.progress import ProgressEvent, ProgressSnapshot
 from persistence.repositories import (
     BuildAttemptsRepository,
     ChallengeDesignRepository,
@@ -391,6 +391,7 @@ class BuildOrchestrationService:
             for submission in prepared:
                 staged_paths.append(self._write_staged_payload(submission))
             self._commit(prepared, retry_sources=retry_sources)
+            self._carry_forward_retry_progress(prepared, retry_sources=retry_sources)
         except BaseException:
             for path in staged_paths:
                 path.unlink(missing_ok=True)
@@ -407,6 +408,31 @@ class BuildOrchestrationService:
                     exc,
                 )
         return [item.attempt_id for item in prepared]
+
+    def _carry_forward_retry_progress(
+        self,
+        prepared: Sequence[_PreparedSubmission],
+        *,
+        retry_sources: Mapping[UUID, UUID],
+    ) -> None:
+        retry_by_task = {
+            submission.task.id: submission
+            for submission in prepared
+            if submission.task.id in retry_sources
+            and submission.execution_mode == "resume"
+        }
+        if not retry_by_task:
+            return
+        with transaction(factory=self.session_factory) as session:
+            for task_id, submission in retry_by_task.items():
+                source = session.get(build_model.BuildAttempt, retry_sources[task_id])
+                if source is None:
+                    continue
+                _copy_progress_snapshots(
+                    session,
+                    source_shard=source.shard_basename,
+                    target_shard=submission.shard_basename,
+                )
 
     def _prepare(
         self,
@@ -830,6 +856,36 @@ def _payload_matches_attempt(
         and str(payload.get("build_attempt_id")) == str(attempt_id)
         and str(payload.get("design_task_id")) == str(design_task_id)
     )
+
+
+def _copy_progress_snapshots(
+    session: Session,
+    *,
+    source_shard: str,
+    target_shard: str,
+) -> None:
+    if source_shard == target_shard:
+        return
+    session.execute(
+        sa.delete(ProgressSnapshot).where(ProgressSnapshot.shard == target_shard)
+    )
+    now = datetime.now(timezone.utc)
+    rows = session.scalars(
+        sa.select(ProgressSnapshot).where(ProgressSnapshot.shard == source_shard)
+    ).all()
+    for row in rows:
+        session.add(
+            ProgressSnapshot(
+                shard=target_shard,
+                challenge_id=row.challenge_id,
+                worker=row.worker,
+                stage=row.stage,
+                status=row.status,
+                percent=row.percent,
+                message=row.message,
+                updated_at=now,
+            )
+        )
 
 
 def _review_error_message(result: DifficultyReviewResult) -> str:
