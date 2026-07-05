@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
 
-from core.jsonio import read_json
+from core.jsonio import read_json, write_json
 
 PWN_FINAL_ARTIFACT_REL = "attachments/vuln"
 PWN_FINAL_ARTIFACT_PROMPT_PATH = "./attachments/vuln"
 PWN_KEY_SYMBOLS = ("win", "main", "vuln", "setup_fake_stack", "fake_stack")
+_BINARY_SHA_RE = re.compile(
+    r"(?m)^(?P<prefix>\s*BINARY_SHA256\s*=\s*)[\"'][^\"']*[\"']"
+)
 
 
 class PwnArtifactEvidenceError(ValueError):
@@ -25,22 +30,33 @@ def final_pwn_artifact_evidence(challenge_dir: Path) -> dict[str, Any] | None:
     metadata = read_json(challenge_dir / "metadata.json", {})
     if not isinstance(metadata, dict) or metadata.get("category") != "pwn":
         return None
-    artifact_rel = _pwn_final_artifact_rel(metadata)
-    artifact_prompt_path = f"./{artifact_rel}"
+    artifact_rel = PWN_FINAL_ARTIFACT_REL
+    artifact_prompt_path = PWN_FINAL_ARTIFACT_PROMPT_PATH
     artifact = challenge_dir / artifact_rel
+    deploy_src = challenge_dir / "deploy" / "src" / "vuln"
+    deploy_src_sha = (
+        _sha256_file(deploy_src)
+        if deploy_src.is_file() and not deploy_src.is_symlink()
+        else None
+    )
     if not artifact.is_file() or artifact.is_symlink():
         return {
             "path": artifact_prompt_path,
             "available": False,
+            "metadata_artifact": metadata.get("artifact"),
             "metadata_artifact_sha256": metadata.get("artifact_sha256"),
+            "deploy_src_vuln_sha256": deploy_src_sha,
             "error": f"{artifact_rel} missing",
         }
+    artifact_sha = _sha256_file(artifact)
     return {
         "path": artifact_prompt_path,
         "available": True,
-        "sha256": _sha256_file(artifact),
+        "sha256": artifact_sha,
+        "metadata_artifact": metadata.get("artifact"),
         "metadata_artifact_sha256": metadata.get("artifact_sha256"),
         "symbols": _readelf_symbols(artifact),
+        "deploy_src_vuln_sha256": deploy_src_sha,
     }
 
 
@@ -64,20 +80,59 @@ def final_pwn_artifact_prompt_block(challenge_dir: Path) -> str:
     metadata_sha = evidence.get("metadata_artifact_sha256") or "(unavailable)"
     artifact_path = str(evidence.get("path") or PWN_FINAL_ARTIFACT_PROMPT_PATH)
     rel_artifact_path = artifact_path[2:] if artifact_path.startswith("./") else artifact_path
+    deploy_sha = evidence.get("deploy_src_vuln_sha256") or "(unavailable)"
     return "\n".join(
         [
             "FINAL SOLVER EVIDENCE SOURCE:",
-            f"Use only {artifact_path} for exp.py and pwn_debug_report.json.",
-            "Do not use deploy/src binaries for solver offsets, symbols, gadgets, or report sha.",
+            "Use only ./attachments/vuln for exp.py and pwn_debug_report.json.",
+            "Do not use deploy/src/vuln for solver offsets, symbols, gadgets, or report sha.",
+            "BINARY_SHA256 in exp.py is mandatory and must equal metadata.artifact_sha256.",
+            "pwn_debug_report.json is host-generated from attachments/vuln; do not hand-edit binary.sha256.",
             f"- artifact path: {artifact_path}",
             f"- artifact available: {available}",
             f"- {rel_artifact_path} sha256: {sha}",
             f"- metadata.artifact_sha256: {metadata_sha}",
             f"- key symbols from {rel_artifact_path}:",
             *symbol_lines,
-            "- deploy/src is an untrusted build intermediate for solver evidence.",
+            f"- deploy/src/vuln sha256: {deploy_sha} (UNTRUSTED / DO NOT USE)",
         ]
     )
+
+
+def ensure_pwn_solver_evidence(challenge_dir: Path) -> tuple[str, ...]:
+    """Ensure host-owned Pwn solver evidence is bound to the final attachment."""
+
+    metadata_path = challenge_dir / "metadata.json"
+    metadata = read_json(metadata_path, {})
+    if not isinstance(metadata, dict) or metadata.get("category") != "pwn":
+        return ()
+    if metadata.get("artifact") != PWN_FINAL_ARTIFACT_REL:
+        return ()
+
+    artifact_path = challenge_dir / PWN_FINAL_ARTIFACT_REL
+    if not artifact_path.is_file() or artifact_path.is_symlink():
+        raise PwnArtifactEvidenceError(f"{PWN_FINAL_ARTIFACT_REL} missing")
+
+    actions: list[str] = []
+    artifact_sha = _sha256_file(artifact_path)
+    if metadata.get("artifact_sha256") != artifact_sha:
+        metadata["artifact_sha256"] = artifact_sha
+        write_json(metadata_path, metadata)
+        actions.append("updated metadata.artifact_sha256 from attachments/vuln")
+
+    report_path = _write_pwn_debug_report(
+        challenge_dir,
+        artifact_rel=PWN_FINAL_ARTIFACT_REL,
+        artifact_path=artifact_path,
+        artifact_sha=artifact_sha,
+    )
+    actions.append(f"refreshed {report_path.relative_to(challenge_dir).as_posix()}")
+
+    exp_path = challenge_dir / "writenup" / "exp.py"
+    if exp_path.is_file() and not exp_path.is_symlink():
+        if _ensure_exp_binary_sha(exp_path, artifact_sha):
+            actions.append("updated writenup/exp.py BINARY_SHA256")
+    return tuple(actions)
 
 
 def refresh_pwn_debug_report(challenge_dir: Path) -> Path | None:
@@ -96,6 +151,21 @@ def refresh_pwn_debug_report(challenge_dir: Path) -> Path | None:
         raise PwnArtifactEvidenceError(
             f"metadata.artifact_sha256 does not match {artifact_rel}"
         )
+    return _write_pwn_debug_report(
+        challenge_dir,
+        artifact_rel=artifact_rel,
+        artifact_path=artifact_path,
+        artifact_sha=artifact_sha,
+    )
+
+
+def _write_pwn_debug_report(
+    challenge_dir: Path,
+    *,
+    artifact_rel: str,
+    artifact_path: Path,
+    artifact_sha: str,
+) -> Path:
     report = {
         "binary": {
             "path": artifact_rel,
@@ -109,6 +179,66 @@ def refresh_pwn_debug_report(challenge_dir: Path) -> Path | None:
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return report_path
+
+
+def _ensure_exp_binary_sha(exp_path: Path, artifact_sha: str) -> bool:
+    text = exp_path.read_text(encoding="utf-8", errors="replace")
+    replacement = rf'\g<prefix>"{artifact_sha}"'
+    new_text, count = _BINARY_SHA_RE.subn(replacement, text, count=1)
+    if count == 0:
+        insert_at = _binary_sha_insert_offset(text)
+        line = f'BINARY_SHA256 = "{artifact_sha}"\n'
+        new_text = text[:insert_at] + line + text[insert_at:]
+    if new_text == text:
+        return False
+    exp_path.write_text(new_text, encoding="utf-8")
+    return True
+
+
+def _binary_sha_insert_offset(text: str) -> int:
+    try:
+        module = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return _after_header_comments_offset(text)
+
+    insert_line = 1
+    body = list(module.body)
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
+        insert_line = getattr(body[0], "end_lineno", body[0].lineno) + 1
+        body = body[1:]
+    for node in body:
+        if not isinstance(node, ast.ImportFrom) or node.module != "__future__":
+            break
+        insert_line = getattr(node, "end_lineno", node.lineno) + 1
+
+    lines = text.splitlines(keepends=True)
+    if not lines:
+        return 0
+    if lines[0].startswith("#!"):
+        insert_line = max(insert_line, 2)
+    for idx, line in enumerate(lines[:2], start=1):
+        if "coding" in line and line.lstrip().startswith("#"):
+            insert_line = max(insert_line, idx + 1)
+    return sum(len(line) for line in lines[: max(0, insert_line - 1)])
+
+
+def _after_header_comments_offset(text: str) -> int:
+    lines = text.splitlines(keepends=True)
+    index = 0
+    if index < len(lines) and lines[index].startswith("#!"):
+        index += 1
+    if (
+        index < len(lines)
+        and "coding" in lines[index]
+        and lines[index].lstrip().startswith("#")
+    ):
+        index += 1
+    return sum(len(line) for line in lines[:index])
 
 
 def _pwn_final_artifact_rel(metadata: dict[str, Any]) -> str:

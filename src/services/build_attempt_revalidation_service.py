@@ -20,6 +20,7 @@ from core.jsonio import read_json
 from core.paths import ProjectPaths
 from core.queue import ShardQueue
 from core.state import ProgressStore
+from domain.pwn_artifact_evidence import PwnArtifactEvidenceError, ensure_pwn_solver_evidence
 from domain.resume import ChallengeResumePlan, find_challenge_directory
 from domain.validation import ChallengeValidator
 from hermes.validation import record_per_challenge_complete, run_validation
@@ -91,6 +92,7 @@ class BuildAttemptRevalidationService:
         with self._advisory_lock(attempt_id):
             attempt, challenge_ids = self._prepare(attempt_id)
             plans = self._current_plans(attempt, challenge_ids)
+            self._ensure_pwn_solver_evidence(plans)
             validator = _DirectoryBoundValidator(self.validator, plans)
             try:
                 results = run_validation(
@@ -294,6 +296,16 @@ class BuildAttemptRevalidationService:
                 stage_sources={},
             )
         return plans
+
+    @staticmethod
+    def _ensure_pwn_solver_evidence(plans: Mapping[str, ChallengeResumePlan]) -> None:
+        for plan in plans.values():
+            if plan.directory is None:
+                continue
+            try:
+                ensure_pwn_solver_evidence(plan.directory)
+            except PwnArtifactEvidenceError:
+                continue
 
     def _resolve_challenge_directory(
         self,

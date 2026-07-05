@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from core.jsonio import read_json, write_json
-from domain.pwn_artifact_evidence import PwnArtifactEvidenceError, refresh_pwn_debug_report
+from domain.pwn_artifact_evidence import PwnArtifactEvidenceError, ensure_pwn_solver_evidence
 from hermes.build_publisher import WorkspaceValidationSet
 from hermes.workspace import ExecutionWorkspace
 
@@ -236,7 +236,7 @@ class HostBuilder:
         )
         if metadata.get("category") == "pwn":
             try:
-                refresh_pwn_debug_report(challenge_dir)
+                ensure_pwn_solver_evidence(challenge_dir)
             except PwnArtifactEvidenceError:
                 pass
         return HostBuildResult(
@@ -278,6 +278,11 @@ class NoopHostBuilder:
                     log_path=None,
                     prune_warning=None,
                 )
+                if metadata.get("category") == "pwn":
+                    try:
+                        ensure_pwn_solver_evidence(challenge_dir)
+                    except PwnArtifactEvidenceError:
+                        pass
                 results.append(
                     HostBuildResult(
                         challenge_id=challenge_id,

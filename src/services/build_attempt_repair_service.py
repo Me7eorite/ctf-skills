@@ -19,8 +19,8 @@ from core.jsonio import read_json
 from core.paths import ProjectPaths
 from domain.pwn_artifact_evidence import (
     PwnArtifactEvidenceError,
+    ensure_pwn_solver_evidence,
     final_pwn_artifact_prompt_block,
-    refresh_pwn_debug_report,
 )
 from domain.validation_failure_governance import latest_failed_validation
 from domain.validation_repair_policy import policy_for_validation_failure
@@ -249,7 +249,7 @@ class BuildAttemptRepairService:
             category=attempt["category"],
         )
         try:
-            refresh_pwn_debug_report(challenge_dir)
+            ensure_pwn_solver_evidence(challenge_dir)
         except PwnArtifactEvidenceError:
             pass
         file_context = _file_context(challenge_dir)

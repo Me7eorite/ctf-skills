@@ -218,6 +218,7 @@ def test_host_builder_syncs_pwn_runtime_elf_to_attachment(tmp_path: Path) -> Non
     workspace = _workspace(tmp_path)
     challenge = _pwn_challenge_with_artifact(workspace)
     (challenge / "writenup").mkdir()
+    (challenge / "writenup" / "exp.py").write_text("print('flag{demo}')\n", encoding="utf-8")
     (challenge / "writenup" / "pwn_debug_report.json").write_text(
         json.dumps({"binary": {"sha256": "old"}, "offset": 64}),
         encoding="utf-8",
@@ -275,6 +276,8 @@ def test_host_builder_syncs_pwn_runtime_elf_to_attachment(tmp_path: Path) -> Non
         "sha256": "7b890f6cd0e6fa34864e726aa2cda390c35f43277e388d2e6b5c455dae01ba9b",
         "source": "final_artifact",
     }
+    exp_text = (challenge / "writenup" / "exp.py").read_text(encoding="utf-8")
+    assert 'BINARY_SHA256 = "7b890f6cd0e6fa34864e726aa2cda390c35f43277e388d2e6b5c455dae01ba9b"' in exp_text
     for field in (
         "solve_status",
         "solve_note",

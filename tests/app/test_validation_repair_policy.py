@@ -7,6 +7,7 @@ from domain.validation_repair_policy import (
     MECHANIC_DEPLOY_DOCKERFILE,
     MECHANIC_DOCUMENT_PAIR,
     MECHANIC_PWN_READINESS_PROBE,
+    MECHANIC_PWN_SOLVER_EVIDENCE,
     MECHANIC_PWN_XINETD_SCAFFOLD,
     MECHANIC_VALIDATE_SOLVER_CAPTURE,
     policy_for_validation_failure,
@@ -72,6 +73,27 @@ def test_policy_routes_solver_to_hermes_with_diagnostic_mechanics_only() -> None
     assert MECHANIC_VALIDATE_SOLVER_CAPTURE in policy.deterministic_mechanics
     assert MECHANIC_DOCUMENT_PAIR not in policy.deterministic_mechanics
     assert MECHANIC_PWN_XINETD_SCAFFOLD not in policy.deterministic_mechanics
+
+
+def test_policy_routes_pwn_solver_evidence_codes_to_solver_with_host_mechanic() -> None:
+    policy = policy_for_validation_failure(
+        {
+            "solve_status": "failed",
+            "validation_status": "contract_failed",
+            "validation_failure_details": [
+                {
+                    "phase": "contract",
+                    "code": "pwn_exp_missing_binary_sha",
+                    "status": "solver_evidence_stale",
+                }
+            ],
+        }
+    )
+
+    assert policy.failure_class == "solver"
+    assert policy.route_type == "hermes"
+    assert MECHANIC_PWN_SOLVER_EVIDENCE in policy.deterministic_mechanics
+    assert MECHANIC_DOCUMENT_PAIR not in policy.deterministic_mechanics
 
 
 def test_policy_routes_generic_prompt_eof_without_readiness_as_solver() -> None:

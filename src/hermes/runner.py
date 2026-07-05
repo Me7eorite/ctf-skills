@@ -31,7 +31,12 @@ from core.queue import ShardQueue
 from core.state import InMemoryProgressStore, ProgressEventInput, ProgressStore
 from domain.build_attempt_auto_repair import auto_repair_challenge
 from domain.build_failure_taxonomy import BuildFailureCategory, classify_hermes_exit
-from domain.pwn_artifact_evidence import final_pwn_artifact_evidence
+from domain.pwn_artifact_evidence import (
+    PwnArtifactEvidenceError,
+    ensure_pwn_solver_evidence,
+    final_pwn_artifact_evidence,
+    final_pwn_artifact_prompt_block,
+)
 from domain.resume import (
     ChallengeResumePlan,
     ShardResumePlan,
@@ -1162,6 +1167,7 @@ class HermesRunner:
                 )
                 if not auto_actions:
                     break
+                self._ensure_workspace_pwn_solver_evidence(workspace, challenge_ids)
                 deterministic_rounds += 1
                 self._progress.record(
                     shard=original_shard_name,
@@ -1221,6 +1227,7 @@ class HermesRunner:
                     f"({repair_attempt}/{repair_budget})"
                 ),
             )
+            self._ensure_workspace_pwn_solver_evidence(workspace, challenge_ids)
             repair_prompt = render_validation_repair_prompt(
                 attempt=repair_attempt,
                 max_attempts=repair_budget,
@@ -1582,6 +1589,7 @@ class HermesRunner:
         )
         if build_failures is not None:
             return build_failures, validation_set
+        self._ensure_pwn_solver_evidence_for_candidates(validation_set.candidates)
         results = self._run_validation(
             original_shard_name,
             worker,
@@ -1710,6 +1718,34 @@ class HermesRunner:
                 message=f"host image build passed; proceeding to validator: {' '.join(result.command or [])}",
             )
         return None
+
+    @staticmethod
+    def _ensure_pwn_solver_evidence_for_candidates(candidates: Mapping[str, Path]) -> None:
+        for challenge_dir in candidates.values():
+            try:
+                ensure_pwn_solver_evidence(challenge_dir)
+            except PwnArtifactEvidenceError:
+                continue
+
+    @staticmethod
+    def _ensure_workspace_pwn_solver_evidence(
+        workspace: ExecutionWorkspace,
+        challenge_ids: list[str],
+    ) -> None:
+        output_root = workspace.output / "challenges"
+        if not output_root.is_dir():
+            return
+        wanted = set(challenge_ids)
+        for challenge_dir in sorted(output_root.glob("*/*")):
+            if not challenge_dir.is_dir() or challenge_dir.is_symlink():
+                continue
+            metadata = read_json(challenge_dir / "metadata.json", {})
+            if not isinstance(metadata, dict) or str(metadata.get("id") or "") not in wanted:
+                continue
+            try:
+                ensure_pwn_solver_evidence(challenge_dir)
+            except PwnArtifactEvidenceError:
+                continue
 
     @staticmethod
     def _record_validation_round(
@@ -2157,11 +2193,7 @@ def _failed_pwn_final_artifact_evidence(
             continue
         evidence_by_id[challenge_id] = {
             **evidence,
-            "instruction": (
-                "FINAL SOLVER EVIDENCE SOURCE: Use only metadata.artifact under "
-                "attachments/ for exp.py and pwn_debug_report.json. Do not use "
-                "deploy/src for solver offsets, symbols, gadgets, or report sha."
-            ),
+            "instruction": final_pwn_artifact_prompt_block(challenge_dir),
         }
     return evidence_by_id
 

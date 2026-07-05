@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from core.jsonio import read_json, write_json
+from domain.pwn_artifact_evidence import PwnArtifactEvidenceError, ensure_pwn_solver_evidence
 from domain.validation_repair_policy import (
     MECHANIC_ARTIFACT_METADATA,
     MECHANIC_CHALLENGE_YML,
@@ -19,6 +20,7 @@ from domain.validation_repair_policy import (
     MECHANIC_DOCUMENT_PAIR,
     MECHANIC_PROMOTE_NESTED_ROOT,
     MECHANIC_PWN_READINESS_PROBE,
+    MECHANIC_PWN_SOLVER_EVIDENCE,
     MECHANIC_PWN_XINETD_SCAFFOLD,
     MECHANIC_REMOVE_NESTED_OUTPUT,
     MECHANIC_SOURCE_EVIDENCE,
@@ -119,6 +121,8 @@ def auto_repair_challenge(
         actions.extend(_repair_docker_logs_no_color(challenge_dir))
     if can_run(MECHANIC_VALIDATE_SOLVER_CAPTURE):
         actions.extend(_repair_validate_solver_capture(challenge_dir, metadata))
+    if can_run(MECHANIC_PWN_SOLVER_EVIDENCE):
+        actions.extend(_repair_pwn_solver_evidence(challenge_dir, metadata))
     if can_run(MECHANIC_PWN_XINETD_SCAFFOLD):
         actions.extend(_repair_pwn_xinetd_scaffold(challenge_dir, metadata))
     if can_run(MECHANIC_DEPLOY_DOCKERFILE):
@@ -127,6 +131,20 @@ def auto_repair_challenge(
     if actions:
         write_json(challenge_dir / "metadata.json", metadata)
     return AutoRepairResult(changed=bool(actions), actions=tuple(actions))
+
+
+def _repair_pwn_solver_evidence(challenge_dir: Path, metadata: dict[str, Any]) -> list[str]:
+    if metadata.get("category") != "pwn":
+        return []
+    try:
+        actions = list(ensure_pwn_solver_evidence(challenge_dir))
+    except PwnArtifactEvidenceError:
+        return []
+    refreshed = read_json(challenge_dir / "metadata.json", None)
+    if isinstance(refreshed, dict):
+        metadata.clear()
+        metadata.update(refreshed)
+    return actions
 
 
 def _promote_nested_challenge_root(

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import subprocess
 from contextlib import contextmanager
@@ -230,6 +232,34 @@ def test_revalidate_uses_execution_workspace_when_global_challenge_missing(
         row = session.get(build_model.BuildAttempt, attempt_id)
         assert row is not None
         assert row.status == "succeeded"
+
+
+def test_revalidate_ensures_pwn_binary_sha_before_validation(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    paths = ProjectPaths(root=tmp_path, repository=tmp_path)
+    paths.initialize()
+    task_id, attempt_id, basename, challenge_id = _seed_failed_attempt(session_factory)
+    _write_failed_shard(paths, task_id, attempt_id, basename, challenge_id)
+    challenge = _write_pwn_challenge_with_missing_exp_sha(paths, challenge_id)
+    validator = _RecordingValidator()
+    service = BuildAttemptRevalidationService(
+        paths=paths,
+        progress=PostgresProgressStore(session_factory),
+        session_factory=session_factory,
+        validator=validator,  # type: ignore[arg-type]
+        image_exists=lambda _image: True,
+    )
+
+    service.revalidate(attempt_id)
+
+    metadata = json.loads((challenge / "metadata.json").read_text(encoding="utf-8"))
+    exp_text = (challenge / "writenup" / "exp.py").read_text(encoding="utf-8")
+    report = json.loads((challenge / "writenup" / "pwn_debug_report.json").read_text(encoding="utf-8"))
+    assert validator.paths == [challenge]
+    assert f'BINARY_SHA256 = "{metadata["artifact_sha256"]}"' in exp_text
+    assert report["binary"]["sha256"] == metadata["artifact_sha256"]
 
 
 def test_revalidate_uses_current_attempt_workspace_not_other_attempt(
@@ -694,7 +724,55 @@ def _write_web_challenge(paths: ProjectPaths, challenge_id: str, *, root: Path |
         "#!/bin/sh\necho flag{demo}\n",
         encoding="utf-8",
     )
+    os.chmod(challenge / "validate.sh", 0o755)
     (challenge / "writenup").mkdir(exist_ok=True)
+    (challenge / "writenup" / "exp.py").write_text(
+        "print('flag{demo}')\n",
+        encoding="utf-8",
+    )
+    body = "## Overview\n" + ("A" * 520) + "\n## Solve\n" + ("B" * 80)
+    (challenge / "writenup" / "wp.md").write_text(body, encoding="utf-8")
+    (challenge / "README.md").write_text(body, encoding="utf-8")
+    return challenge
+
+
+def _write_pwn_challenge_with_missing_exp_sha(
+    paths: ProjectPaths,
+    challenge_id: str,
+) -> Path:
+    challenge = paths.challenges / "pwn" / f"{challenge_id}-demo"
+    (challenge / "deploy" / "src").mkdir(parents=True, exist_ok=True)
+    (challenge / "deploy" / "src" / "vuln.c").write_text(
+        "int main(){return 0;}\n",
+        encoding="utf-8",
+    )
+    (challenge / "deploy" / "Dockerfile").write_text("FROM alpine\n", encoding="utf-8")
+    (challenge / "deploy" / "docker-compose.yml").write_text(
+        "services:\n  pwn:\n    image: pwn-demo:latest\n",
+        encoding="utf-8",
+    )
+    (challenge / "attachments").mkdir()
+    artifact = b"\x7fELFfinal"
+    (challenge / "attachments" / "vuln").write_bytes(artifact)
+    artifact_sha = hashlib.sha256(artifact).hexdigest()
+    write_json(
+        challenge / "metadata.json",
+        {
+            "id": challenge_id,
+            "title": "Demo",
+            "difficulty": "easy",
+            "category": "pwn",
+            "flag": "flag{demo}",
+            "build_status": "passed",
+            "build_command": "docker build -t pwn-demo:latest -f deploy/Dockerfile .",
+            "docker_image": "pwn-demo:latest",
+            "artifact": "attachments/vuln",
+            "artifact_sha256": artifact_sha,
+        },
+    )
+    (challenge / "validate.sh").write_text("#!/bin/sh\necho flag{demo}\n", encoding="utf-8")
+    os.chmod(challenge / "validate.sh", 0o755)
+    (challenge / "writenup").mkdir()
     (challenge / "writenup" / "exp.py").write_text(
         "print('flag{demo}')\n",
         encoding="utf-8",

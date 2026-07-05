@@ -15,6 +15,7 @@ from hermes.prompt import render_validation_repair_prompt
 from hermes.runner import (
     _failed_challenge_debug_reports,
     _failed_pwn_final_artifact_evidence,
+    _stamp_validation_results_into_outputs,
 )
 from hermes.validation import run_validation, validate_gate
 
@@ -352,9 +353,13 @@ def test_validation_debug_context_includes_final_pwn_artifact_evidence(
 ) -> None:
     challenge = tmp_path / "challenges" / "pwn" / "pwn-0001-demo"
     (challenge / "attachments").mkdir(parents=True)
+    (challenge / "deploy" / "src").mkdir(parents=True)
     artifact = b"\x7fELFfinal"
+    deploy = b"\x7fELFdeploy"
     (challenge / "attachments" / "vuln").write_bytes(artifact)
+    (challenge / "deploy" / "src" / "vuln").write_bytes(deploy)
     artifact_sha = hashlib.sha256(artifact).hexdigest()
+    deploy_sha = hashlib.sha256(deploy).hexdigest()
     (challenge / "metadata.json").write_text(
         json.dumps(
             {
@@ -391,10 +396,29 @@ def test_validation_debug_context_includes_final_pwn_artifact_evidence(
     assert evidence["pwn-0001"]["path"] == "./attachments/vuln"
     assert evidence["pwn-0001"]["sha256"] == artifact_sha
     assert evidence["pwn-0001"]["metadata_artifact_sha256"] == artifact_sha
+    assert evidence["pwn-0001"]["deploy_src_vuln_sha256"] == deploy_sha
     assert evidence["pwn-0001"]["symbols"]["win"] == "0x40149d"
     assert "FINAL SOLVER EVIDENCE SOURCE" in evidence["pwn-0001"]["instruction"]
-    assert "metadata.artifact under attachments/" in evidence["pwn-0001"]["instruction"]
-    assert "Do not use deploy/src" in evidence["pwn-0001"]["instruction"]
+    assert "Use only ./attachments/vuln for exp.py and pwn_debug_report.json." in evidence["pwn-0001"]["instruction"]
+    assert "Do not use deploy/src/vuln" in evidence["pwn-0001"]["instruction"]
+    assert f"deploy/src/vuln sha256: {deploy_sha} (UNTRUSTED / DO NOT USE)" in evidence["pwn-0001"]["instruction"]
+
+    prompt = render_validation_repair_prompt(
+        attempt=1,
+        max_attempts=1,
+        validation_results=[
+            {
+                "challenge_id": "pwn-0001",
+                "solve_status": "failed",
+                "validation_status": "solver_evidence_stale",
+            }
+        ],
+        debug_context={"pwn_final_artifact_evidence": evidence},
+    )
+
+    assert "FINAL SOLVER EVIDENCE SOURCE:" in prompt
+    assert "BINARY_SHA256 in exp.py is mandatory and must equal metadata.artifact_sha256." in prompt
+    assert f"deploy/src/vuln sha256: {deploy_sha} (UNTRUSTED / DO NOT USE)" in prompt
 
 
 def test_pwn_debug_report_is_available_for_repair_context(tmp_path: Path) -> None:
@@ -599,6 +623,33 @@ def test_validate_gate_rejects_pwn_exp_deploy_src_sha(tmp_path: Path) -> None:
     assert isinstance(error, dict)
     assert error["code"] == "pwn_evidence_from_deploy_src"
     assert "deploy/src/vuln" in error["message"]
+
+
+def test_host_validation_overwrites_agent_claimed_passed_status(tmp_path: Path) -> None:
+    paths = _Paths(tmp_path)
+    challenge = _make_pwn_gate_challenge(paths)
+    metadata = json.loads((challenge / "metadata.json").read_text(encoding="utf-8"))
+    metadata["solve_status"] = "passed"
+    metadata["validation_status"] = "ready_for_validation"
+    (challenge / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+
+    changed = _stamp_validation_results_into_outputs(
+        {"pwn-0001": challenge},
+        [
+            {
+                "challenge_id": "pwn-0001",
+                "solve_status": "failed",
+                "validation_status": "nonzero_exit",
+                "validation_error": "solver failed after host validation",
+            }
+        ],
+    )
+
+    stamped = json.loads((challenge / "metadata.json").read_text(encoding="utf-8"))
+    assert changed is True
+    assert stamped["solve_status"] == "failed"
+    assert stamped["validation_status"] == "nonzero_exit"
+    assert stamped["solve_note"] == "solver failed after host validation"
 
 
 def test_validate_gate_accepts_pwn_metadata_artifact_binary_name(tmp_path: Path) -> None:

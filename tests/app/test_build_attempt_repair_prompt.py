@@ -111,10 +111,14 @@ def test_build_attempt_repair_prompt_includes_final_pwn_artifact_evidence(
 ) -> None:
     challenge_dir = tmp_path / "pwn-0001-demo"
     (challenge_dir / "attachments").mkdir(parents=True)
+    (challenge_dir / "deploy" / "src").mkdir(parents=True)
     (challenge_dir / "writenup").mkdir()
     artifact = b"\x7fELFfinal"
+    deploy = b"\x7fELFdeploy"
     (challenge_dir / "attachments" / "vuln").write_bytes(artifact)
+    (challenge_dir / "deploy" / "src" / "vuln").write_bytes(deploy)
     artifact_sha = hashlib.sha256(artifact).hexdigest()
+    deploy_sha = hashlib.sha256(deploy).hexdigest()
     (challenge_dir / "metadata.json").write_text(
         json.dumps(
             {
@@ -159,9 +163,12 @@ def test_build_attempt_repair_prompt_includes_final_pwn_artifact_evidence(
 
     assert "FINAL SOLVER EVIDENCE SOURCE:" in prompt
     assert "Use only ./attachments/vuln for exp.py and pwn_debug_report.json." in prompt
-    assert "Do not use deploy/src binaries for solver offsets, symbols, gadgets, or report sha." in prompt
+    assert "Do not use deploy/src/vuln for solver offsets, symbols, gadgets, or report sha." in prompt
+    assert "BINARY_SHA256 in exp.py is mandatory and must equal metadata.artifact_sha256." in prompt
+    assert "pwn_debug_report.json is host-generated from attachments/vuln; do not hand-edit binary.sha256." in prompt
     assert f"attachments/vuln sha256: {artifact_sha}" in prompt
     assert f"metadata.artifact_sha256: {artifact_sha}" in prompt
+    assert f"deploy/src/vuln sha256: {deploy_sha} (UNTRUSTED / DO NOT USE)" in prompt
     assert "- win: 0x40149d" in prompt
     assert "- main: 0x401391" in prompt
     assert "- vuln: 0x4012ad" in prompt

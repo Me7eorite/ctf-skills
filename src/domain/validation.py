@@ -852,7 +852,7 @@ def _pwn_solver_evidence_stale(
     if exp_text and exp_sha is None:
         details.append(
             validation_failure_detail(
-                phase="contract",
+                phase="validate",
                 code="pwn_exp_missing_binary_sha",
                 status="solver_evidence_stale",
                 message="writenup/exp.py must declare BINARY_SHA256 for the final artifact",
@@ -886,7 +886,7 @@ def _pwn_solver_evidence_stale(
     elif exp_sha is not None and expected_sha and exp_sha != expected_sha:
         details.append(
             validation_failure_detail(
-                phase="contract",
+                phase="validate",
                 code="pwn_exp_binary_sha_mismatch",
                 status="solver_evidence_stale",
                 message=(

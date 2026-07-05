@@ -3,7 +3,8 @@ import json
 import subprocess
 from pathlib import Path
 
-from domain.pwn_artifact_evidence import refresh_pwn_debug_report
+from core.jsonio import read_json
+from domain.pwn_artifact_evidence import ensure_pwn_solver_evidence, refresh_pwn_debug_report
 
 
 def test_refresh_pwn_debug_report_reads_final_attachment_not_deploy_src(
@@ -107,3 +108,129 @@ def test_refresh_pwn_debug_report_uses_metadata_artifact_name(
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["binary"]["path"] == "attachments/vault_service"
     assert report["binary"]["sha256"] == artifact_sha
+
+
+def test_ensure_pwn_solver_evidence_inserts_binary_sha_and_report(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    challenge = tmp_path / "pwn-0001-demo"
+    (challenge / "attachments").mkdir(parents=True)
+    (challenge / "writenup").mkdir()
+    artifact = b"\x7fELFfinal"
+    (challenge / "attachments" / "vuln").write_bytes(artifact)
+    artifact_sha = hashlib.sha256(artifact).hexdigest()
+    (challenge / "metadata.json").write_text(
+        json.dumps(
+            {
+                "id": "pwn-0001",
+                "category": "pwn",
+                "artifact": "attachments/vuln",
+                "artifact_sha256": "old-sha",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (challenge / "writenup" / "exp.py").write_text(
+        "#!/usr/bin/env python3\nprint('flag{demo}')\n",
+        encoding="utf-8",
+    )
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["readelf", "-sW"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout="  1: 000000000040149d    42 FUNC    GLOBAL DEFAULT   15 win\n",
+                stderr="",
+            )
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
+
+    monkeypatch.setattr("domain.pwn_artifact_evidence.subprocess.run", fake_run)
+
+    actions = ensure_pwn_solver_evidence(challenge)
+
+    assert "updated metadata.artifact_sha256 from attachments/vuln" in actions
+    assert read_json(challenge / "metadata.json")["artifact_sha256"] == artifact_sha
+    exp_text = (challenge / "writenup" / "exp.py").read_text(encoding="utf-8")
+    assert exp_text.startswith("#!/usr/bin/env python3\n")
+    assert f'BINARY_SHA256 = "{artifact_sha}"' in exp_text
+    report = read_json(challenge / "writenup" / "pwn_debug_report.json")
+    assert report["binary"]["path"] == "attachments/vuln"
+    assert report["binary"]["sha256"] == artifact_sha
+    assert report["symbols"]["win"] == "0x40149d"
+
+
+def test_ensure_pwn_solver_evidence_replaces_mismatched_binary_sha(tmp_path: Path) -> None:
+    challenge = tmp_path / "pwn-0001-demo"
+    (challenge / "attachments").mkdir(parents=True)
+    (challenge / "writenup").mkdir()
+    artifact = b"\x7fELFfinal"
+    (challenge / "attachments" / "vuln").write_bytes(artifact)
+    artifact_sha = hashlib.sha256(artifact).hexdigest()
+    (challenge / "metadata.json").write_text(
+        json.dumps(
+            {
+                "id": "pwn-0001",
+                "category": "pwn",
+                "artifact": "attachments/vuln",
+                "artifact_sha256": artifact_sha,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (challenge / "writenup" / "exp.py").write_text(
+        'BINARY_SHA256 = "deploy-or-old-sha"\n',
+        encoding="utf-8",
+    )
+
+    ensure_pwn_solver_evidence(challenge)
+
+    assert (challenge / "writenup" / "exp.py").read_text(encoding="utf-8") == (
+        f'BINARY_SHA256 = "{artifact_sha}"\n'
+    )
+
+
+def test_ensure_pwn_solver_evidence_is_isolated_across_multiple_pwn_challenges(
+    tmp_path: Path,
+) -> None:
+    first_sha = _write_minimal_pwn_challenge(tmp_path / "pwn-0001-demo", "one-final", "one-deploy")
+    second_sha = _write_minimal_pwn_challenge(tmp_path / "pwn-0002-demo", "two-final", "two-deploy")
+
+    ensure_pwn_solver_evidence(tmp_path / "pwn-0001-demo")
+    ensure_pwn_solver_evidence(tmp_path / "pwn-0002-demo")
+
+    first_report = read_json(tmp_path / "pwn-0001-demo" / "writenup" / "pwn_debug_report.json")
+    second_report = read_json(tmp_path / "pwn-0002-demo" / "writenup" / "pwn_debug_report.json")
+    assert first_report["binary"]["sha256"] == first_sha
+    assert second_report["binary"]["sha256"] == second_sha
+    assert first_report["binary"]["sha256"] != second_report["binary"]["sha256"]
+    assert f'BINARY_SHA256 = "{first_sha}"' in (
+        tmp_path / "pwn-0001-demo" / "writenup" / "exp.py"
+    ).read_text(encoding="utf-8")
+    assert f'BINARY_SHA256 = "{second_sha}"' in (
+        tmp_path / "pwn-0002-demo" / "writenup" / "exp.py"
+    ).read_text(encoding="utf-8")
+
+
+def _write_minimal_pwn_challenge(challenge: Path, final_text: str, deploy_text: str) -> str:
+    (challenge / "attachments").mkdir(parents=True)
+    (challenge / "deploy" / "src").mkdir(parents=True)
+    (challenge / "writenup").mkdir()
+    final = final_text.encode()
+    (challenge / "attachments" / "vuln").write_bytes(final)
+    (challenge / "deploy" / "src" / "vuln").write_bytes(deploy_text.encode())
+    final_sha = hashlib.sha256(final).hexdigest()
+    (challenge / "metadata.json").write_text(
+        json.dumps(
+            {
+                "id": challenge.name.split("-", 2)[0],
+                "category": "pwn",
+                "artifact": "attachments/vuln",
+                "artifact_sha256": final_sha,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (challenge / "writenup" / "exp.py").write_text("print('x')\n", encoding="utf-8")
+    return final_sha

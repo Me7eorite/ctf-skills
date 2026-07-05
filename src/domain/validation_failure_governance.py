@@ -100,6 +100,17 @@ _SOLVER_CODES = {
     "pwn_prompt_eof",
     "solver_evidence_stale",
     "exploit_timeout",
+    "pwn_exp_missing_binary_sha",
+    "pwn_exp_binary_sha_mismatch",
+    "pwn_evidence_from_deploy_src",
+    "pwn_debug_report_claims_wrong_artifact",
+}
+_PWN_SOLVER_EVIDENCE_CODES = {
+    "pwn_exp_missing_binary_sha",
+    "pwn_exp_binary_sha_mismatch",
+    "pwn_evidence_from_deploy_src",
+    "pwn_debug_report_claims_wrong_artifact",
+    "solver_evidence_stale",
 }
 _VOLATILE_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"/(?:workspace/executions|root/ctf-skills/work/executions)/[^\s\"')]+"), "<workspace-path>"),
@@ -146,6 +157,8 @@ def normalized_validation_failure_class(
         return "solver"
     if "pwn_prompt_eof" in detail_codes and not _readiness_established(result, detail_items):
         return "service-readiness"
+    if status in _SOLVER_STATUSES or detail_codes & _PWN_SOLVER_EVIDENCE_CODES:
+        return "solver"
     if status in _CONTRACT_STATUSES or detail_phases & {"contract", "gate"}:
         return "contract"
     if status in _SOLVER_STATUSES or detail_codes & _SOLVER_CODES:

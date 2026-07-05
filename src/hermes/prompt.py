@@ -317,11 +317,20 @@ def _render_validation_debug_context(context: Mapping[str, object] | None) -> st
             "- No inherited context was supplied; read `./input/shard.json`, "
             "`./logs/report.json`, and the claimed challenge directory before editing."
         )
-    return "```json\n" + json.dumps(
+    evidence_blocks: list[str] = []
+    pwn_evidence = context.get("pwn_final_artifact_evidence")
+    if isinstance(pwn_evidence, Mapping):
+        for item in pwn_evidence.values():
+            if isinstance(item, Mapping) and isinstance(item.get("instruction"), str):
+                evidence_blocks.append(item["instruction"])
+    rendered_json = "```json\n" + json.dumps(
         _compact_prompt_value(context),
         ensure_ascii=False,
         indent=2,
     ) + "\n```"
+    if evidence_blocks:
+        return "\n\n".join([*evidence_blocks, rendered_json])
+    return rendered_json
 
 
 def _compact_prompt_value(value: object, *, depth: int = 0) -> object:
