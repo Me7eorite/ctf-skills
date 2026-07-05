@@ -500,15 +500,17 @@ authoritative `validate/passed` or `validate/failed` event.
   `printf '3\n' | timeout 3 nc "$CHAL_HOST" "$CHAL_PORT" | grep -q "Choice:"`.
 - For Pwn, prefer a pwntools-based exploit skeleton when available. Set
   `context(os='linux', arch='amd64', log_level=os.environ.get('PWNLIB_LOG_LEVEL', 'info'))`
-  for amd64 Linux targets, use `ELF('./attachments/<binary>', checksec=False)`
+  for amd64 Linux targets, use `ELF('./' + metadata.artifact, checksec=False)`
+  or `ELF('./attachments/<binary>', checksec=False)`
   to inspect symbols/PLT/GOT and compute exploit offsets from the delivered
   artifact. After host build synchronizes the image's `/home/ctf/<binary>` into
   `attachments/<binary>`, do not trust `deploy/src/<binary>`, source-local
   rebuilds, old debug reports, old sha values, or hardcoded stale offsets.
   Record the final artifact sha in `writenup/exp.py` exactly as
   `BINARY_SHA256`; it must equal both `metadata.artifact_sha256` and the
-  SHA-256 of `attachments/vuln`. If `MAIN_OFFSET`, `WIN_OFFSET`, or ROP gadget
-  constants conflict with `readelf`/`objdump` output from `attachments/vuln`,
+  SHA-256 of the file named by `metadata.artifact`. If `MAIN_OFFSET`,
+  `WIN_OFFSET`, or ROP gadget constants conflict with `readelf`/`objdump`
+  output from `metadata.artifact`,
   stop and regenerate the exploit/report from the final artifact. Support a
   bounded local debug mode such as `LOCAL=1 python3 writenup/exp.py` that runs
   `process([binary_path])` against the local ELF. The default validation path
@@ -653,10 +655,11 @@ violates any of them fails validation regardless of what `validate.sh` prints:
   `"artifact": "attachments/<binary>"` and the matching
   `"artifact_sha256": "<sha256>"`. If the artifact is rebuilt, recompute the
   SHA-256 before marking `build_status` or `solve_status` as `passed`.
-- A `pwn` solver MUST treat `attachments/<binary>` as the authority for offsets,
-  gadgets, and return chains. Prefer `ELF('./attachments/vuln').symbols`,
-  `readelf -sW attachments/vuln`, and `objdump -d attachments/vuln` over
-  handwritten constants; do not derive exploit offsets from `deploy/src/vuln`
+- A `pwn` solver MUST treat the final player artifact named by
+  `metadata.artifact` under `attachments/` as the authority for offsets,
+  gadgets, and return chains. Prefer `ELF('./' + metadata.artifact).symbols`,
+  `readelf -sW "$metadata_artifact"`, and `objdump -d "$metadata_artifact"`
+  over handwritten constants; do not derive exploit offsets from `deploy/src/`
   after host build has synchronized the runtime ELF into attachments.
 - `validate.sh` MUST NOT contain `docker volume rm`, `docker volume prune`,
   Docker prune commands, or `docker-compose down -v`/`--volumes`. Destructive

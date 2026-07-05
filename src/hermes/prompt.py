@@ -210,17 +210,19 @@ Pwn exploit debugging acceleration:
   (`open`, `openat`, `execve`, `system`, etc.) must be NUL terminated: use
   `.asciz`, `.string`, or an explicit `\0`. Never emit `.ascii "/flag"`.
 - Load the local binary only from the delivered artifact, for example
+  `ELF('./' + metadata.artifact, checksec=False)` or
   `ELF('./attachments/<binary>', checksec=False)`, so symbols, PLT/GOT,
   architecture assumptions, gadgets, and offsets come from the final host-built
   ELF. After host build synchronizes the image's `/home/ctf/<binary>` into
   `attachments/<binary>`, do not trust `deploy/src/<binary>`, local rebuilds,
   old report offsets, old sha values, or source-level symbol addresses. Prefer
-  dynamic symbol discovery such as `ELF('./attachments/vuln').symbols` plus
+  dynamic symbol discovery from `metadata.artifact` plus
   `readelf`/`objdump` evidence over hardcoded old constants. Record the
   artifact sha used by `writenup/exp.py` exactly as `BINARY_SHA256`; it must
-  equal both `metadata.artifact_sha256` and the SHA-256 of `attachments/vuln`.
+  equal both `metadata.artifact_sha256` and the SHA-256 of the file named by
+  `metadata.artifact`.
   If `MAIN_OFFSET`, `WIN_OFFSET`, or ROP gadget constants conflict with
-  `readelf`/`objdump` output from `attachments/vuln`, treat the exploit as
+  `readelf`/`objdump` output from `metadata.artifact`, treat the exploit as
   stale and regenerate it instead of patching around the mismatch.
 - Add or preserve a local mode such as `LOCAL=1 python3 writenup/exp.py` that
   uses `process([binary_path])` for quick menu/offset smoke tests. The default

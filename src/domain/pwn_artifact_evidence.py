@@ -20,21 +20,23 @@ class PwnArtifactEvidenceError(ValueError):
 
 
 def final_pwn_artifact_evidence(challenge_dir: Path) -> dict[str, Any] | None:
-    """Return final solver evidence derived only from attachments/vuln."""
+    """Return final solver evidence derived only from the player attachment."""
 
     metadata = read_json(challenge_dir / "metadata.json", {})
     if not isinstance(metadata, dict) or metadata.get("category") != "pwn":
         return None
-    artifact = challenge_dir / PWN_FINAL_ARTIFACT_REL
+    artifact_rel = _pwn_final_artifact_rel(metadata)
+    artifact_prompt_path = f"./{artifact_rel}"
+    artifact = challenge_dir / artifact_rel
     if not artifact.is_file() or artifact.is_symlink():
         return {
-            "path": PWN_FINAL_ARTIFACT_PROMPT_PATH,
+            "path": artifact_prompt_path,
             "available": False,
             "metadata_artifact_sha256": metadata.get("artifact_sha256"),
-            "error": "attachments/vuln missing",
+            "error": f"{artifact_rel} missing",
         }
     return {
-        "path": PWN_FINAL_ARTIFACT_PROMPT_PATH,
+        "path": artifact_prompt_path,
         "available": True,
         "sha256": _sha256_file(artifact),
         "metadata_artifact_sha256": metadata.get("artifact_sha256"),
@@ -60,40 +62,43 @@ def final_pwn_artifact_prompt_block(challenge_dir: Path) -> str:
     available = "yes" if evidence.get("available") else "no"
     sha = evidence.get("sha256") or "(unavailable)"
     metadata_sha = evidence.get("metadata_artifact_sha256") or "(unavailable)"
+    artifact_path = str(evidence.get("path") or PWN_FINAL_ARTIFACT_PROMPT_PATH)
+    rel_artifact_path = artifact_path[2:] if artifact_path.startswith("./") else artifact_path
     return "\n".join(
         [
             "FINAL SOLVER EVIDENCE SOURCE:",
-            "Use only ./attachments/vuln for exp.py and pwn_debug_report.json.",
-            "Do not use deploy/src/vuln for solver offsets, symbols, gadgets, or report sha.",
-            f"- artifact path: {PWN_FINAL_ARTIFACT_PROMPT_PATH}",
+            f"Use only {artifact_path} for exp.py and pwn_debug_report.json.",
+            "Do not use deploy/src binaries for solver offsets, symbols, gadgets, or report sha.",
+            f"- artifact path: {artifact_path}",
             f"- artifact available: {available}",
-            f"- attachments/vuln sha256: {sha}",
+            f"- {rel_artifact_path} sha256: {sha}",
             f"- metadata.artifact_sha256: {metadata_sha}",
-            "- key symbols from attachments/vuln:",
+            f"- key symbols from {rel_artifact_path}:",
             *symbol_lines,
-            "- deploy/src/vuln is an untrusted build intermediate for solver evidence.",
+            "- deploy/src is an untrusted build intermediate for solver evidence.",
         ]
     )
 
 
 def refresh_pwn_debug_report(challenge_dir: Path) -> Path | None:
-    """Rewrite writenup/pwn_debug_report.json from final attachments/vuln only."""
+    """Rewrite writenup/pwn_debug_report.json from the final player attachment only."""
 
     metadata = read_json(challenge_dir / "metadata.json", {})
     if not isinstance(metadata, dict) or metadata.get("category") != "pwn":
         return None
-    artifact_path = challenge_dir / PWN_FINAL_ARTIFACT_REL
+    artifact_rel = _pwn_final_artifact_rel(metadata)
+    artifact_path = challenge_dir / artifact_rel
     if not artifact_path.is_file() or artifact_path.is_symlink():
-        raise PwnArtifactEvidenceError("attachments/vuln missing")
+        raise PwnArtifactEvidenceError(f"{artifact_rel} missing")
     artifact_sha = _sha256_file(artifact_path)
     metadata_sha = metadata.get("artifact_sha256")
     if metadata_sha != artifact_sha:
         raise PwnArtifactEvidenceError(
-            "metadata.artifact_sha256 does not match attachments/vuln"
+            f"metadata.artifact_sha256 does not match {artifact_rel}"
         )
     report = {
         "binary": {
-            "path": PWN_FINAL_ARTIFACT_REL,
+            "path": artifact_rel,
             "sha256": artifact_sha,
             "source": "final_artifact",
         },
@@ -104,6 +109,13 @@ def refresh_pwn_debug_report(challenge_dir: Path) -> Path | None:
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return report_path
+
+
+def _pwn_final_artifact_rel(metadata: dict[str, Any]) -> str:
+    artifact = metadata.get("artifact")
+    if isinstance(artifact, str) and artifact.startswith("attachments/") and ".." not in Path(artifact).parts:
+        return artifact
+    return PWN_FINAL_ARTIFACT_REL
 
 
 def _sha256_file(path: Path) -> str:

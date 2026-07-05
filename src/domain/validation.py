@@ -272,7 +272,7 @@ def classify_validation_failure(
                 path="writenup/exp.py",
                 hint=(
                     "Ignore stale solver evidence and rerun readelf, objdump, "
-                    "checksec, and ROPgadget against attachments/vuln; regenerate "
+                    "checksec, and ROPgadget against metadata.artifact; regenerate "
                     "offsets, gadgets, pwn_debug_report.json, and exp.py from "
                     "the final player artifact."
                 ),
@@ -447,13 +447,13 @@ def _classify_contract_error(message: str, *, status: str = "contract_failed") -
     elif "pwn final attachment" in message and "missing" in message:
         phase = "gate"
         code = "missing_artifact"
-        path = "attachments/vuln"
-        hint = "Copy the final host-built player ELF to attachments/vuln before validation."
-    elif "pwn metadata.artifact" in message and "attachments/vuln" in message:
+        path = "attachments/"
+        hint = "Copy the final host-built player ELF to the path named by metadata.artifact before validation."
+    elif "pwn metadata.artifact" in message and "attachments/" in message:
         phase = "gate"
         code = "artifact_path_mismatch"
         path = "metadata.json"
-        hint = "Set metadata.artifact to attachments/vuln for pwn challenges."
+        hint = "Set metadata.artifact to the final player ELF under attachments/."
     elif "metadata.artifact" in message and "executable" in message:
         phase = "gate"
         code = "artifact_type_mismatch"
@@ -732,8 +732,14 @@ def _pwn_solver_evidence_stale(
     expected_sha = metadata.get("artifact_sha256")
 
     details: list[dict[str, str]] = []
-    artifact_sha = _sha256_if_file(challenge_dir / "attachments" / "vuln")
-    deploy_src_sha = _sha256_if_file(challenge_dir / "deploy" / "src" / "vuln")
+    artifact_path = _pwn_final_artifact_path(challenge_dir, metadata)
+    artifact_rel = artifact_path.relative_to(challenge_dir).as_posix()
+    artifact_sha = _sha256_if_file(artifact_path)
+    deploy_src_path = challenge_dir / "deploy" / "src" / artifact_path.name
+    if not deploy_src_path.is_file():
+        deploy_src_path = challenge_dir / "deploy" / "src" / "vuln"
+    deploy_src_rel = deploy_src_path.relative_to(challenge_dir).as_posix()
+    deploy_src_sha = _sha256_if_file(deploy_src_path)
     if not isinstance(expected_sha, str) or not expected_sha:
         if artifact_sha:
             details.append(
@@ -743,11 +749,11 @@ def _pwn_solver_evidence_stale(
                     status="solver_evidence_stale",
                     message=(
                         "metadata.artifact_sha256 missing; compute it from the "
-                        "final attachments/vuln artifact before trusting solver evidence"
+                        f"final {artifact_rel} artifact before trusting solver evidence"
                     ),
                     path="metadata.json",
                     hint=(
-                        "Set metadata.artifact_sha256 to sha256(attachments/vuln), "
+                        f"Set metadata.artifact_sha256 to sha256({artifact_rel}), "
                         "then set writenup/exp.py BINARY_SHA256 to the same value."
                     ),
                 )
@@ -760,12 +766,12 @@ def _pwn_solver_evidence_stale(
                 code="pwn_artifact_sha_mismatch",
                 status="solver_evidence_stale",
                 message=(
-                    "metadata.artifact_sha256 does not match final attachments/vuln; "
+                    f"metadata.artifact_sha256 does not match final {artifact_rel}; "
                     "do not validate stale solver evidence"
                 ),
                 path="metadata.json",
                 hint=(
-                    "Recompute metadata.artifact_sha256 from attachments/vuln, then "
+                    f"Recompute metadata.artifact_sha256 from {artifact_rel}, then "
                     "rerun readelf/objdump/checksec/ROPgadget against that same file "
                     "and regenerate offsets, gadgets, pwn_debug_report.json, and exp.py."
                 ),
@@ -790,18 +796,18 @@ def _pwn_solver_evidence_stale(
                     code="pwn_evidence_from_deploy_src",
                     status="solver_evidence_stale",
                     message=(
-                        "Report appears to be derived from deploy/src/vuln, not "
-                        "attachments/vuln. Recompute from the final player artifact only."
+                        f"Report appears to be derived from {deploy_src_rel}, not "
+                        f"{artifact_rel}. Recompute from the final player artifact only."
                     ),
                     path="writenup/pwn_debug_report.json",
                     hint=(
-                        "Use only attachments/vuln for solver offsets, symbols, "
+                        f"Use only {artifact_rel} for solver offsets, symbols, "
                         "gadgets, and pwn_debug_report.json.binary.sha256."
                     ),
                 )
             )
         elif (
-            report_binary_path == "attachments/vuln"
+            report_binary_path == artifact_rel
             and artifact_sha
             and report_sha != artifact_sha
         ):
@@ -811,13 +817,13 @@ def _pwn_solver_evidence_stale(
                     code="pwn_debug_report_claims_wrong_artifact",
                     status="solver_evidence_stale",
                     message=(
-                        "writenup/pwn_debug_report.json claims attachments/vuln "
-                        "but binary.sha256 does not match the actual attachments/vuln"
+                        f"writenup/pwn_debug_report.json claims {artifact_rel} "
+                        f"but binary.sha256 does not match the actual {artifact_rel}"
                     ),
                     path="writenup/pwn_debug_report.json",
                     hint=(
                         "Regenerate pwn_debug_report.json from the final "
-                        "attachments/vuln artifact on disk."
+                        f"{artifact_rel} artifact on disk."
                     ),
                 )
             )
@@ -830,7 +836,7 @@ def _pwn_solver_evidence_stale(
                     message=(
                         "writenup/pwn_debug_report.json.binary.sha256 does not "
                         "match metadata.artifact_sha256; ignore the report and "
-                        "recompute exploit evidence from attachments/vuln"
+                        f"recompute exploit evidence from {artifact_rel}"
                     ),
                     path="writenup/pwn_debug_report.json",
                     hint=(
@@ -853,7 +859,7 @@ def _pwn_solver_evidence_stale(
                 path="writenup/exp.py",
                 hint=(
                     "Set BINARY_SHA256 to metadata.artifact_sha256 after deriving "
-                    "offsets from attachments/vuln."
+                    f"offsets from {artifact_rel}."
                 ),
             )
         )
@@ -870,11 +876,11 @@ def _pwn_solver_evidence_stale(
                 code="pwn_evidence_from_deploy_src",
                 status="solver_evidence_stale",
                 message=(
-                    "writenup/exp.py records the sha256 of deploy/src/vuln, not "
-                    "attachments/vuln. Recompute from the final player artifact only."
+                    f"writenup/exp.py records the sha256 of {deploy_src_rel}, not "
+                    f"{artifact_rel}. Recompute from the final player artifact only."
                 ),
                 path="writenup/exp.py",
-                hint="Set BINARY_SHA256 to metadata.artifact_sha256 for attachments/vuln.",
+                hint=f"Set BINARY_SHA256 to metadata.artifact_sha256 for {artifact_rel}.",
             )
         )
     elif exp_sha is not None and expected_sha and exp_sha != expected_sha:
@@ -890,7 +896,7 @@ def _pwn_solver_evidence_stale(
                 path="writenup/exp.py",
                 hint=(
                     "Recompute symbols, offsets, gadgets, and prompt sync from "
-                    "the current attachments/vuln and update the recorded sha."
+                    f"the current {artifact_rel} and update the recorded sha."
                 ),
             )
         )
@@ -916,6 +922,13 @@ def _pwn_solver_evidence_stale(
             )
         )
     return details
+
+
+def _pwn_final_artifact_path(challenge_dir: Path, metadata: dict[str, Any]) -> Path:
+    artifact = metadata.get("artifact")
+    if isinstance(artifact, str) and artifact.startswith("attachments/") and ".." not in Path(artifact).parts:
+        return challenge_dir / artifact
+    return challenge_dir / "attachments" / "vuln"
 
 
 def pwn_solver_evidence_failures(

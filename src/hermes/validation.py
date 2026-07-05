@@ -366,23 +366,24 @@ def _light_contract_gate(challenge_dir: Path, category: str) -> dict[str, str] |
         )
     if category == "pwn":
         artifact = metadata.get("artifact")
-        if artifact not in {None, "attachments/vuln"}:
+        if not isinstance(artifact, str) or not artifact.startswith("attachments/") or ".." in Path(artifact).parts:
             return validation_failure_detail(
                 phase="contract",
                 code="artifact_path_mismatch",
                 status="contract_failed",
-                message="pwn metadata.artifact must be attachments/vuln",
+                message="pwn metadata.artifact must point to the final player ELF under attachments/",
                 path="metadata.json",
-                hint="Set metadata.artifact to attachments/vuln for pwn challenges.",
+                hint="Set metadata.artifact to the final player ELF under attachments/.",
             )
-        if not (challenge_dir / "attachments" / "vuln").is_file():
+        artifact_path = challenge_dir / artifact
+        if not artifact_path.is_file():
             return validation_failure_detail(
                 phase="contract",
                 code="missing_artifact",
                 status="contract_failed",
-                message="pwn final attachment attachments/vuln missing",
-                path="attachments/vuln",
-                hint="Copy the final host-built player ELF to attachments/vuln before validation.",
+                message=f"pwn final attachment {artifact} missing",
+                path=artifact,
+                hint="Copy the final host-built player ELF to metadata.artifact before validation.",
             )
         stale_details = pwn_solver_evidence_failures(challenge_dir, metadata)
         if stale_details:

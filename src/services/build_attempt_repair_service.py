@@ -531,8 +531,9 @@ Rules:
   service ready state, the first banner line, the last recv position, and the
   failing phase before exit.
 - For Pwn solver repairs, derive all offsets, symbols, gadgets, and reports
-  from final `attachments/vuln` only. `writenup/exp.py` must declare
-  `BINARY_SHA256 = metadata.artifact_sha256`; aliases such as
+  from the final player ELF named by `metadata.artifact` under `attachments/`.
+  `writenup/exp.py` must declare `BINARY_SHA256 = metadata.artifact_sha256`;
+  aliases such as
   `ARTIFACT_SHA256`, SHAs from `deploy/src/vuln`, and old
   `pwn_debug_report.json` constants are stale.
 - For canary leaks, scan a broad bounded `%n$p` range, keep candidates stable

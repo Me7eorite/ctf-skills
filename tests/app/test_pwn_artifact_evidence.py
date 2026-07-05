@@ -69,3 +69,41 @@ def test_refresh_pwn_debug_report_reads_final_attachment_not_deploy_src(
     assert report["symbols"]["setup_fake_stack"] == "0x401250"
     assert report["symbols"]["fake_stack"] == "0x405000"
     assert any(command[:2] == ["readelf", "-sW"] for command in commands)
+
+
+def test_refresh_pwn_debug_report_uses_metadata_artifact_name(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    challenge = tmp_path / "pwn-0001-demo"
+    (challenge / "attachments").mkdir(parents=True)
+    (challenge / "writenup").mkdir()
+    artifact = b"\x7fELFvault"
+    (challenge / "attachments" / "vault_service").write_bytes(artifact)
+    artifact_sha = hashlib.sha256(artifact).hexdigest()
+    (challenge / "metadata.json").write_text(
+        json.dumps(
+            {
+                "id": "pwn-0001",
+                "category": "pwn",
+                "artifact": "attachments/vault_service",
+                "artifact_sha256": artifact_sha,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["readelf", "-sW"]:
+            assert str(command[-1]).endswith("attachments/vault_service")
+        if command[:2] == ["checksec", "--file"]:
+            assert str(command[2]).endswith("attachments/vault_service")
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
+
+    monkeypatch.setattr("domain.pwn_artifact_evidence.subprocess.run", fake_run)
+
+    report_path = refresh_pwn_debug_report(challenge)
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["binary"]["path"] == "attachments/vault_service"
+    assert report["binary"]["sha256"] == artifact_sha

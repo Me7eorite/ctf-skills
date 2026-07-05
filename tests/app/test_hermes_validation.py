@@ -393,7 +393,8 @@ def test_validation_debug_context_includes_final_pwn_artifact_evidence(
     assert evidence["pwn-0001"]["metadata_artifact_sha256"] == artifact_sha
     assert evidence["pwn-0001"]["symbols"]["win"] == "0x40149d"
     assert "FINAL SOLVER EVIDENCE SOURCE" in evidence["pwn-0001"]["instruction"]
-    assert "Do not use deploy/src/vuln" in evidence["pwn-0001"]["instruction"]
+    assert "metadata.artifact under attachments/" in evidence["pwn-0001"]["instruction"]
+    assert "Do not use deploy/src" in evidence["pwn-0001"]["instruction"]
 
 
 def test_pwn_debug_report_is_available_for_repair_context(tmp_path: Path) -> None:
@@ -598,6 +599,24 @@ def test_validate_gate_rejects_pwn_exp_deploy_src_sha(tmp_path: Path) -> None:
     assert isinstance(error, dict)
     assert error["code"] == "pwn_evidence_from_deploy_src"
     assert "deploy/src/vuln" in error["message"]
+
+
+def test_validate_gate_accepts_pwn_metadata_artifact_binary_name(tmp_path: Path) -> None:
+    paths = _Paths(tmp_path)
+    challenge = _make_pwn_gate_challenge(paths)
+    (challenge / "attachments" / "vuln").rename(challenge / "attachments" / "vault_service")
+    artifact = (challenge / "attachments" / "vault_service").read_bytes()
+    artifact_sha = hashlib.sha256(artifact).hexdigest()
+    (challenge / "writenup" / "exp.py").write_text(f'BINARY_SHA256 = "{artifact_sha}"\n', encoding="utf-8")
+    metadata = json.loads((challenge / "metadata.json").read_text(encoding="utf-8"))
+    metadata["artifact"] = "attachments/vault_service"
+    metadata["artifact_sha256"] = artifact_sha
+    (challenge / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    plan = ChallengeResumePlan("pwn-0001", challenge, "ok", first_pending_stage="validate")
+
+    error = validate_gate("pwn-0001", plan, paths, image_exists=lambda _image: True)  # type: ignore[arg-type]
+
+    assert error is None
 
 
 def test_validate_gate_catches_missing_validate_and_wp_before_build(tmp_path: Path) -> None:

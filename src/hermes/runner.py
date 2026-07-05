@@ -2122,7 +2122,7 @@ def _failed_challenge_debug_reports(
                     "reason": (
                         "debug report stale: pwn_debug_report.json.binary.sha256 "
                         "does not match metadata.artifact_sha256; recompute from "
-                        "attachments/vuln with readelf/objdump/checksec"
+                        "metadata.artifact with readelf/objdump/checksec"
                     ),
                     "metadata_artifact_sha256": expected_sha,
                     "report_binary_sha256": report_sha,
@@ -2158,9 +2158,9 @@ def _failed_pwn_final_artifact_evidence(
         evidence_by_id[challenge_id] = {
             **evidence,
             "instruction": (
-                "FINAL SOLVER EVIDENCE SOURCE: Use only ./attachments/vuln for "
-                "exp.py and pwn_debug_report.json. Do not use deploy/src/vuln "
-                "for solver offsets, symbols, gadgets, or report sha."
+                "FINAL SOLVER EVIDENCE SOURCE: Use only metadata.artifact under "
+                "attachments/ for exp.py and pwn_debug_report.json. Do not use "
+                "deploy/src for solver offsets, symbols, gadgets, or report sha."
             ),
         }
     return evidence_by_id
