@@ -27,7 +27,37 @@ def test_readiness_detail_outranks_contract_status() -> None:
         ],
     }
 
-    assert normalized_validation_failure_class(result) == "service-readiness"
+    assert normalized_validation_failure_class(result) == "validate-wrapper"
+
+
+def test_canonical_probe_ready_reclassifies_validate_readiness_failure_as_wrapper() -> None:
+    result = annotate_validation_result(
+        {
+            "challenge_id": "pwn-retwinwin",
+            "solve_status": "failed",
+            "validation_status": "nonzero_exit",
+            "validation_error": "validate.sh service readiness failed",
+            "validation_stderr_tail": "service not ready: readiness probe failed",
+            "validation_failure_details": [
+                {
+                    "phase": "readiness",
+                    "code": "pwn_service_readiness_failed",
+                    "message": "validate.sh service readiness failed",
+                }
+            ],
+            "pwn_debug_tcp_probe_status": "ready",
+            "pwn_debug_tcp_probe_matched_token": "Choice:",
+            "pwn_debug_tcp_probe_raw_output_tail": "Welcome\nChoice:",
+        }
+    )
+
+    assert result["validation_failure_class"] == "validate-wrapper"
+    assert "validate-wrapper" in result["validation_failure_signature"]
+    assert (
+        "validate_says_service_not_ready_but_canonical_tcp_probe_ready"
+        in result["classification_conflicts"]
+    )
+    assert "repair_validate_wrapper_before_service_startup" in result["classification_conflicts"]
 
 
 def test_non_validation_phase_has_no_class() -> None:

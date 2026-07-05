@@ -27,7 +27,7 @@ from domain.pwn_artifact_evidence import (
     ensure_pwn_solver_evidence,
     final_pwn_artifact_prompt_block,
 )
-from domain.validation_failure_governance import latest_failed_validation
+from domain.validation_failure_governance import latest_failed_validation, summarize_validation_entry
 from domain.validation_repair_policy import policy_for_validation_failure
 from hermes import process as hermes_process
 from persistence.models import build_attempts as build_model
@@ -274,6 +274,7 @@ class BuildAttemptRepairService:
                 if consistency_failure is not None
                 else latest_failed_validation(self.paths, row.id)
             )
+            first_failure = _first_validation_failure(self.paths, row.id)
             if consistency_failure is not None:
                 failure_summary = consistency_failure.get("validation_error") or failure_summary
             attempt = {
@@ -284,6 +285,7 @@ class BuildAttemptRepairService:
                 "category": task.category,
                 "failure_summary": failure_summary,
                 "latest_failure": latest_failure,
+                "first_failure": first_failure,
             }
             failure_details = _failure_details(latest_failure)
 
@@ -575,6 +577,7 @@ def _repair_prompt(context: dict[str, Any]) -> str:
     policy = context.get("repair_policy")
     policy_summary = getattr(policy, "summary", None) or "(none)"
     latest_failure = context.get("latest_failure") or {}
+    first_failure = context.get("first_failure") or {}
     validation_class = (
         latest_failure.get("validation_failure_class")
         if isinstance(latest_failure, dict)
@@ -608,6 +611,9 @@ Validation class:
 - validation_failure_class: {validation_class or "(none)"}
 - validation_failure_signature: {validation_signature or "(none)"}
 - repair_policy: {policy_summary}
+
+Governed repair context:
+{json.dumps(_governed_manual_repair_context(first_failure, latest_failure), ensure_ascii=False, indent=2)}
 
 Validation evidence:
 {json.dumps(_validation_evidence(latest_failure), ensure_ascii=False, indent=2)}
@@ -663,6 +669,10 @@ Rules:
   probing unless a managed pwn-debug run proves the service is unavailable.
   Treat cleanup/readiness probe tail noise as lower priority than the real
   exploit stage.
+- If `classification_conflicts` says validate.sh reported service-readiness
+  failure while canonical pwn-debug TCP probe read Choice:/menu/banner, the
+  service is reachable. Repair `validate.sh` readiness/capture first; do not
+  spend the round on xinetd/chroot/container startup or guessed exploit constants.
 - For Pwn solver repairs, Bound every `recvuntil` / `recvline` wait with short
   timeouts, cap brute-force or leak loops, and print bounded diagnostics for
   service ready state, the first banner line, the last recv position, and the
@@ -778,6 +788,73 @@ def _failure_details(latest_failure: dict[str, Any] | None) -> list[dict[str, An
     return []
 
 
+def _first_validation_failure(paths: ProjectPaths, attempt_id: UUID) -> dict[str, Any] | None:
+    summary = summarize_validation_entry(
+        read_json(
+            paths.executions / str(attempt_id) / "current" / "state" / "first-validation-failure.json",
+            None,
+        ),
+        source="first-validation-failure",
+    )
+    return summary if isinstance(summary, dict) else None
+
+
+def _governed_manual_repair_context(
+    first_failure: Any,
+    latest_failure: Any,
+) -> dict[str, Any]:
+    latest = latest_failure if isinstance(latest_failure, dict) else {}
+    first = first_failure if isinstance(first_failure, dict) else {}
+    return {
+        "root_validation_failure": _brief_failure(first or latest),
+        "current_blocker": _brief_failure(latest),
+        "classification_conflicts": latest.get("classification_conflicts") or [],
+        "evidence_bundle": {
+            "validate_stdout_tail": _budget_text(
+                latest.get("validation_stdout_tail"),
+                label="validation_stdout_tail",
+            ),
+            "validate_stderr_tail": _budget_text(
+                latest.get("validation_stderr_tail"),
+                label="validation_stderr_tail",
+            ),
+            "pwn_debug_tcp_probe": {
+                "status": latest.get("pwn_debug_tcp_probe_status") or "(unavailable)",
+                "matched_token": latest.get("pwn_debug_tcp_probe_matched_token") or "(unavailable)",
+                "raw_output_tail": latest.get("pwn_debug_tcp_probe_raw_output_tail") or "(unavailable)",
+            },
+            "final_flag_candidate": latest.get("validation_final_flag_candidate") or "(unavailable)",
+            "missing": latest.get("validation_diagnostic_unavailable") or [],
+        },
+    }
+
+
+def _brief_failure(value: dict[str, Any]) -> dict[str, Any]:
+    details = value.get("validation_failure_details")
+    code = None
+    if isinstance(details, list):
+        for detail in details:
+            if isinstance(detail, dict) and detail.get("code"):
+                code = detail["code"]
+                break
+    return {
+        key: item
+        for key, item in {
+            "challenge_id": value.get("challenge_id"),
+            "validation_status": value.get("validation_status"),
+            "validation_failure_class": value.get("validation_failure_class"),
+            "validation_failure_signature": value.get("validation_failure_signature"),
+            "pwn_failure_stage": value.get("pwn_failure_stage"),
+            "diagnostic_code": code,
+            "validation_error": value.get("validation_error"),
+            "repair_result": value.get("repair_result"),
+            "blocked_reason": value.get("blocked_reason"),
+            "expected_next_action": value.get("expected_next_action"),
+        }.items()
+        if item not in (None, "", [])
+    }
+
+
 def _semantic_repair_plan(failure_details: Any) -> str:
     if not isinstance(failure_details, list):
         return "- No semantic contract details were supplied."
@@ -873,8 +950,12 @@ def _pwn_stage_guard(latest_failure: Any) -> dict[str, Any]:
     stdout = str(latest_failure.get("validation_stdout_tail") or "")
     stderr = str(latest_failure.get("validation_stderr_tail") or "")
     text = f"{stdout}\n{stderr}".lower()
+    canonical_ready = (
+        latest_failure.get("pwn_debug_tcp_probe_status") == "ready"
+        and bool(latest_failure.get("pwn_debug_tcp_probe_matched_token"))
+    )
     return {
-        "service_ready": "service is ready" in text,
+        "service_ready": "service is ready" in text or canonical_ready,
         "exploit_started": bool(
             re.search(r"\b(running exploit|exploit phase|starting exploit|launching exploit)\b", text)
         ),
@@ -921,6 +1002,14 @@ def _validation_evidence(latest_failure: Any) -> dict[str, Any]:
         "missing_solver_output": latest_failure.get("missing_solver_output", False),
         "pwn_debug_failure_stage": latest_failure.get("pwn_debug_failure_stage")
         or latest_failure.get("pwn_failure_stage"),
+        "pwn_debug_tcp_probe": {
+            "status": latest_failure.get("pwn_debug_tcp_probe_status") or "(unavailable)",
+            "matched_token": latest_failure.get("pwn_debug_tcp_probe_matched_token") or "(unavailable)",
+            "raw_output_tail": _budget_text(
+                latest_failure.get("pwn_debug_tcp_probe_raw_output_tail"),
+                label="pwn_debug_tcp_probe_raw_output_tail",
+            ),
+        },
         "classification_conflicts": latest_failure.get("classification_conflicts") or [],
     }
     return evidence

@@ -20,6 +20,7 @@ const STATUSES = ["queued", "running", "succeeded", "failed", "lost"];
 const CATEGORIES = ["web", "pwn", "re"];
 const VALIDATION_FAILURE_LABELS = {
   timeout: "校验超时",
+  "validate-wrapper": "校验脚本探针失败",
   "service-readiness": "服务就绪失败",
   contract: "产物合约失败",
   solver: "exp 利用失败",
@@ -32,6 +33,8 @@ const VALIDATION_DETAIL_LABELS = {
   pwn_bruteforce_timeout: "Pwn 爆破超时",
   pwn_prompt_mismatch: "Pwn 提示不匹配",
   pwn_prompt_eof: "菜单/提示同步 EOF",
+  pwn_solver_prompt_desync: "exp 协议同步错位",
+  pwn_exploit_model_unproven: "利用模型缺少证据",
   pwn_service_readiness_failed: "服务未就绪",
   pwn_port_only_readiness: "端口探活不足",
   pwn_bad_readiness_probe: "就绪探针不可靠",

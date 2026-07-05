@@ -99,6 +99,18 @@ def policy_for_validation_failure(
             max_deterministic_rounds=2,
             summary="service-readiness: repair readiness wrappers/diagnostics before exploit tuning",
         )
+    if failure_class == "validate-wrapper":
+        return ValidationRepairPolicy(
+            failure_class=failure_class,
+            route_type="deterministic",
+            deterministic_mechanics=READINESS_MECHANICS,
+            hermes_allowed=True,
+            max_deterministic_rounds=2,
+            summary=(
+                "validate-wrapper: service is reachable; repair validate.sh "
+                "readiness probe/capture before startup or exploit tuning"
+            ),
+        )
     if failure_class == "compose_cli_mismatch":
         return ValidationRepairPolicy(
             failure_class=failure_class,
@@ -245,6 +257,84 @@ def validation_failure_fingerprints(
     return tuple(sorted(fingerprints))
 
 
+def validation_repair_progress_fingerprints(
+    results: Sequence[Mapping[str, Any]],
+) -> tuple[str, ...]:
+    """Return measurable failure/diagnostic progress markers for repair rounds."""
+    fingerprints: list[str] = []
+    for result in results:
+        if result.get("solve_status") != "failed":
+            continue
+        challenge_id = str(result.get("challenge_id") or "")
+        failure_class = result.get("validation_failure_class") or normalized_validation_failure_class(result)
+        signature = result.get("validation_failure_signature") or validation_failure_signature(
+            result,
+            failure_class=str(failure_class) if failure_class else None,
+        )
+        markers = _diagnostic_progress_markers(result)
+        fingerprints.append(
+            "|".join(
+                part
+                for part in (
+                    f"challenge={challenge_id}",
+                    f"class={failure_class}",
+                    f"signature={signature}",
+                    f"pwn_stage={result.get('pwn_failure_stage') or ''}",
+                    f"markers={','.join(markers)}",
+                )
+                if part
+            )
+        )
+    return tuple(sorted(fingerprints))
+
+
+def no_progress_repair_blocked(
+    *,
+    before_file_fingerprint: Sequence[str],
+    after_file_fingerprint: Sequence[str],
+    before_results: Sequence[Mapping[str, Any]],
+    after_results: Sequence[Mapping[str, Any]],
+) -> bool:
+    return (
+        tuple(before_file_fingerprint) == tuple(after_file_fingerprint)
+        and validation_repair_progress_fingerprints(before_results)
+        == validation_repair_progress_fingerprints(after_results)
+    )
+
+
+def _diagnostic_progress_markers(result: Mapping[str, Any]) -> tuple[str, ...]:
+    markers: list[str] = []
+    field_markers = {
+        "validation_stdout_tail": "validate_stdout_visible",
+        "validation_stderr_tail": "validate_stderr_visible",
+        "solver_stdout_tail": "solver_stdout_visible",
+        "solver_stderr_tail": "solver_stderr_visible",
+        "pwn_debug_tcp_probe_raw_output_tail": "tcp_probe_raw_visible",
+        "validation_final_flag_candidate": "final_flag_candidate_visible",
+    }
+    for field, marker in field_markers.items():
+        if result.get(field) not in (None, "", []):
+            markers.append(marker)
+    text = "\n".join(
+        str(result.get(key) or "")
+        for key in (
+            "validation_stdout_tail",
+            "validation_stderr_tail",
+            "solver_stdout_tail",
+            "solver_stderr_tail",
+            "validation_error",
+        )
+    )
+    if "Traceback" in text or "File \"" in text:
+        markers.append("traceback_visible")
+    if result.get("pwn_debug_tcp_probe_status"):
+        markers.append(f"tcp_probe_status={result.get('pwn_debug_tcp_probe_status')}")
+    unavailable = result.get("validation_diagnostic_unavailable")
+    if isinstance(unavailable, Sequence) and not isinstance(unavailable, (str, bytes)):
+        markers.append("unavailable=" + ",".join(sorted(str(item) for item in unavailable))[:160])
+    return tuple(sorted(set(markers)))
+
+
 def _evidence_fingerprint(result: Mapping[str, Any]) -> str:
     parts: list[str] = []
     for key in (
@@ -254,8 +344,9 @@ def _evidence_fingerprint(result: Mapping[str, Any]) -> str:
         "artifact_sha256",
         "metadata_artifact_sha256",
         "metadata.artifact_sha256",
-        "pwn_debug_result_sha256",
         "pwn_debug_report_sha256",
+        "pwn_debug_tcp_probe_status",
+        "pwn_debug_tcp_probe_matched_token",
         "exp_py_sha256",
         "exp_sha256",
     ):
@@ -273,7 +364,12 @@ def _solver_failure_fingerprint(
     if failure_class != "solver":
         return ""
     parts: list[str] = []
-    for key in ("output_manifest_hash", "validation_failure_class", "pwn_failure_stage"):
+    for key in (
+        "output_manifest_hash",
+        "validation_failure_class",
+        "pwn_failure_stage",
+        "validation_final_flag_candidate",
+    ):
         value = result.get(key)
         if value not in (None, "", []):
             parts.append(f"{key}={str(value)[:120]}")

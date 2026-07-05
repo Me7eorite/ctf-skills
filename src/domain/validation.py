@@ -183,6 +183,13 @@ def classify_validation_failure(
         elif "ModuleNotFoundError" in text or "No module named" in text:
             code = "missing_dependency"
             hint = "Make the solver offline-capable with the standard library or vendored helpers."
+        elif _looks_like_pwn_prompt_desync(text):
+            code = "pwn_solver_prompt_desync"
+            hint = (
+                "The service was reachable but solver I/O lost protocol sync; "
+                "use sendline/sendall(data + b'\\n') where the target consumes a "
+                "line delimiter, and pair sends with the exact menu prompt."
+            )
         elif _missing_solver_output_after_exploit(text):
             code = "validate_capture_failed"
             hint = (
@@ -537,12 +544,15 @@ def _classify_contract_error(message: str, *, status: str = "contract_failed") -
         code = "compose_cross_talk"
         path = "validate.sh"
         hint = "Set COMPOSE_PROJECT_NAME or pass docker-compose -p for every compose command."
-    elif "Pwn validate.sh uses CHAL_HOST/CHAL_PORT inside bash -c" in message:
+    elif (
+        "Pwn validate.sh uses CHAL_HOST/CHAL_PORT inside bash -c" in message
+        or "Pwn validate.sh uses a fixed-byte TCP readiness read" in message
+    ):
         code = "pwn_bad_readiness_probe"
         path = "validate.sh"
         hint = (
-            "Do not rely on unexported shell variables inside bash -c; either export "
-            "CHAL_HOST/CHAL_PORT before the probe or call nc directly in the current shell."
+            "Use a bounded socket/token readiness probe that returns after Choice:/menu/banner "
+            "bytes are seen, and preserve the raw probe tail even on timeout."
         )
     elif "canary leak filtering by 2^48" in message:
         code = "pwn_canary_width_filter"
@@ -615,6 +625,16 @@ def _looks_like_pwn_service_readiness_failure(text: str) -> bool:
         and ("container" in lower or "docker-compose" in lower)
         and ("started" in lower or "up " in lower or "xinetd" in lower)
         and ("choice:" in text or "menu prompt" in lower or "banner" in lower)
+    )
+
+
+def _looks_like_pwn_prompt_desync(text: str) -> bool:
+    lower = text.lower()
+    if any(marker in lower for marker in ("brokenpipeerror", "broken pipe", "protocol desync", "prompt desync")):
+        return True
+    return (
+        ("service is ready" in lower or "readiness passed" in lower or "probe passed" in lower)
+        and any(marker in lower for marker in ("eoferror", "got eof", "connection reset"))
     )
 
 
@@ -1404,6 +1424,12 @@ def _pwn_runtime_contract_errors(challenge_dir: Path) -> list[str]:
             "Pwn validate.sh uses nc -z readiness; replace port-only checks with "
             "a fresh connection that reads the application banner/menu"
         )
+    if validate_text and _validate_uses_fixed_byte_tcp_probe(validate_text):
+        errors.append(
+            "Pwn validate.sh uses a fixed-byte TCP readiness read; replace "
+            "head -c/dd fixed byte reads with a bounded socket loop that succeeds "
+            "as soon as an application banner/menu token is observed"
+        )
     if validate_text and _validate_uses_unexported_bash_nc_probe(validate_text):
         errors.append(
             "Pwn validate.sh uses CHAL_HOST/CHAL_PORT inside bash -c readiness "
@@ -1496,6 +1522,13 @@ def _validate_has_app_readiness_probe(text: str) -> bool:
         "remote(",
     )
     return any(token in text for token in readiness_tokens)
+
+
+def _validate_uses_fixed_byte_tcp_probe(text: str) -> bool:
+    return bool(
+        re.search(r"\bhead\s+-c\s+\d+\b.*?/dev/tcp/", text, re.S)
+        or re.search(r"\bdd\b[^\n;&|]*(?:count|bs)=\d+[^\n;&|]*/dev/tcp/", text, re.S)
+    )
 
 
 def _validate_uses_compose_without_project(text: str) -> bool:

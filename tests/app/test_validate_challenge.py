@@ -602,7 +602,7 @@ class MergeValidationIntoReportTests(unittest.TestCase):
 
             raw = json.loads(report.read_text(encoding="utf-8"))
             challenge = raw["challenges"][0]
-            self.assertEqual(challenge["validation_failure_class"], "service-readiness")
+            self.assertEqual(challenge["validation_failure_class"], "validate-wrapper")
             self.assertIn("pwn_bad_readiness_probe", challenge["validation_failure_signature"])
             self.assertEqual(
                 challenge["validation_failure_details"][0]["code"],

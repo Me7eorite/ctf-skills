@@ -267,6 +267,53 @@ def test_validation_repair_prompt_classifies_nonzero_exit() -> None:
     assert "pwndbg/gef" in prompt
 
 
+def test_validation_repair_prompt_surfaces_root_current_and_canonical_probe_conflict() -> None:
+    prompt = render_validation_repair_prompt(
+        attempt=1,
+        max_attempts=2,
+        validation_results=[
+            {
+                "challenge_id": "pwn-retwinwin",
+                "solve_status": "failed",
+                "validation_status": "nonzero_exit",
+                "validation_error": "validate.sh service readiness failed",
+                "validation_failure_class": "validate-wrapper",
+                "validation_failure_signature": "validate-wrapper|code=pwn_bad_readiness_probe",
+                "classification_conflicts": [
+                    "validate_says_service_not_ready_but_canonical_tcp_probe_ready"
+                ],
+                "pwn_debug_tcp_probe_status": "ready",
+                "pwn_debug_tcp_probe_matched_token": "Choice:",
+                "pwn_debug_tcp_probe_raw_output_tail": "Welcome\\nChoice:",
+            }
+        ],
+        debug_context={
+            "first_validation_failure": {
+                "round": 0,
+                "runner_phase": "validation",
+                "results": [
+                    {
+                        "challenge_id": "pwn-retwinwin",
+                        "solve_status": "failed",
+                        "validation_status": "nonzero_exit",
+                        "validation_failure_class": "validate-wrapper",
+                        "validation_failure_details": [
+                            {"code": "pwn_bad_readiness_probe"}
+                        ],
+                    }
+                ],
+            }
+        },
+    )
+
+    assert "Governed repair context" in prompt
+    assert "root_validation_failure" in prompt
+    assert "current_blocker" in prompt
+    assert "pwn_debug_tcp_probe" in prompt
+    assert "Welcome\\\\nChoice:" in prompt
+    assert "readiness/capture first" in prompt
+
+
 def test_validation_repair_prompt_describes_host_build_failure() -> None:
     prompt = render_validation_repair_prompt(
         attempt=1,

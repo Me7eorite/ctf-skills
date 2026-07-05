@@ -10,8 +10,10 @@ from domain.validation_repair_policy import (
     MECHANIC_PWN_SOLVER_EVIDENCE,
     MECHANIC_PWN_XINETD_SCAFFOLD,
     MECHANIC_VALIDATE_SOLVER_CAPTURE,
+    no_progress_repair_blocked,
     policy_for_validation_failure,
     validation_failure_fingerprints,
+    validation_repair_progress_fingerprints,
 )
 from services.build_attempt_auto_repair_service import auto_repair_challenge
 
@@ -52,9 +54,31 @@ def test_policy_keeps_deferred_scaffold_and_dockerfile_out_of_readiness_repairs(
         }
     )
 
-    assert policy.failure_class == "service-readiness"
+    assert policy.failure_class == "validate-wrapper"
     assert MECHANIC_PWN_XINETD_SCAFFOLD not in policy.deterministic_mechanics
     assert MECHANIC_DEPLOY_DOCKERFILE not in policy.deterministic_mechanics
+    assert MECHANIC_PWN_READINESS_PROBE in policy.deterministic_mechanics
+
+
+def test_policy_routes_validate_wrapper_conflict_to_probe_repair() -> None:
+    policy = policy_for_validation_failure(
+        {
+            "solve_status": "failed",
+            "validation_status": "nonzero_exit",
+            "validation_error": "service not ready",
+            "validation_failure_details": [
+                {"phase": "readiness", "code": "pwn_service_readiness_failed"}
+            ],
+            "pwn_debug_tcp_probe_status": "ready",
+            "pwn_debug_tcp_probe_matched_token": "Choice:",
+            "pwn_debug_tcp_probe_raw_output_tail": "Choice:",
+        }
+    )
+
+    assert policy.failure_class == "validate-wrapper"
+    assert policy.route_type == "deterministic"
+    assert policy.hermes_allowed is True
+    assert MECHANIC_PWN_READINESS_PROBE in policy.deterministic_mechanics
 
 
 def test_policy_routes_solver_to_hermes_with_diagnostic_mechanics_only() -> None:
@@ -223,6 +247,74 @@ def test_validation_failure_fingerprints_distinguish_stale_evidence_from_libc_le
     assert len(fingerprints) == 2
     assert any("solver_evidence_stale" in item and "old-sha" in item for item in fingerprints)
     assert any("pwn_libc_leak_failed" in item and "fresh-sha" in item for item in fingerprints)
+
+
+def test_validation_repair_progress_fingerprints_track_diagnostic_improvement() -> None:
+    before = validation_repair_progress_fingerprints(
+        [
+            {
+                "challenge_id": "pwn-0001",
+                "solve_status": "failed",
+                "validation_status": "nonzero_exit",
+                "validation_failure_details": [{"code": "pwn_prompt_eof"}],
+                "validation_diagnostic_unavailable": ["solver stdout unavailable"],
+            }
+        ]
+    )
+    after = validation_repair_progress_fingerprints(
+        [
+            {
+                "challenge_id": "pwn-0001",
+                "solve_status": "failed",
+                "validation_status": "nonzero_exit",
+                "validation_failure_details": [{"code": "pwn_prompt_eof"}],
+                "solver_stdout_tail": "sent payload\\nBrokenPipeError",
+                "pwn_debug_tcp_probe_status": "ready",
+                "pwn_debug_tcp_probe_raw_output_tail": "Choice:",
+            }
+        ]
+    )
+
+    assert before != after
+    assert "solver_stdout_visible" in after[0]
+    assert "tcp_probe_raw_visible" in after[0]
+
+
+def test_no_progress_repair_blocked_requires_unchanged_files_failure_and_diagnostics() -> None:
+    before = [
+        {
+            "challenge_id": "pwn-0001",
+            "solve_status": "failed",
+            "validation_status": "nonzero_exit",
+            "validation_failure_details": [{"code": "pwn_prompt_eof"}],
+        }
+    ]
+    same = [dict(before[0])]
+    improved_diagnostics = [
+        {
+            **before[0],
+            "solver_stdout_tail": "payload sent then BrokenPipeError",
+        }
+    ]
+
+    assert no_progress_repair_blocked(
+        before_file_fingerprint=("validate.sh=aaa", "writenup/exp.py=bbb"),
+        after_file_fingerprint=("validate.sh=aaa", "writenup/exp.py=bbb"),
+        before_results=before,
+        after_results=same,
+    )
+    assert not no_progress_repair_blocked(
+        before_file_fingerprint=("validate.sh=aaa", "writenup/exp.py=bbb"),
+        after_file_fingerprint=("validate.sh=aaa", "writenup/exp.py=bbb"),
+        before_results=before,
+        after_results=improved_diagnostics,
+    )
+    assert not no_progress_repair_blocked(
+        before_file_fingerprint=("validate.sh=aaa", "writenup/exp.py=bbb"),
+        after_file_fingerprint=("validate.sh=ccc", "writenup/exp.py=bbb"),
+        before_results=before,
+        after_results=same,
+    )
 
 
 def test_policy_routes_pwn_libc_leak_failed_to_solver_not_readiness() -> None:

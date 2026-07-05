@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
@@ -64,6 +65,7 @@ from domain.validation_failure_governance import (
 )
 from domain.validation_repair_policy import (
     automatic_hermes_allowed,
+    no_progress_repair_blocked,
     policies_by_challenge,
     repair_policy_summary,
     validation_failure_fingerprints,
@@ -262,6 +264,9 @@ def _stamp_validation_results_into_outputs(
                 "pwn_debug_result_path",
                 "pwn_debug_result_sha256",
                 "pwn_debug_actionable_summary",
+                "pwn_debug_tcp_probe_status",
+                "pwn_debug_tcp_probe_matched_token",
+                "pwn_debug_tcp_probe_raw_output_tail",
             ):
                 if result.get(field) not in (None, "", []):
                     updates[field] = result[field]
@@ -1286,6 +1291,11 @@ class HermesRunner:
             workspace,
             publication_contract,
         )
+        per_results = self._enrich_validation_results_with_pwn_debug(
+            workspace,
+            challenge_ids,
+            per_results,
+        )
         self._record_validation_round(workspace, 0, per_results, validated_set)
         merge_validation_into_report(report, per_results)
 
@@ -1381,6 +1391,11 @@ class HermesRunner:
                     workspace,
                     publication_contract,
                 )
+                per_results = self._enrich_validation_results_with_pwn_debug(
+                    workspace,
+                    challenge_ids,
+                    per_results,
+                )
                 validation_round += 1
                 self._record_validation_round(
                     workspace, validation_round, per_results, validated_set
@@ -1442,6 +1457,8 @@ class HermesRunner:
             )
             repair_log = workspace.logs / f"hermes-validation-debug-{repair_attempt}.log"
             pre_signature = _output_signature(workspace.output)
+            pre_repair_file_progress = _repair_file_progress_fingerprint(workspace.output)
+            pre_repair_results = [dict(result) for result in per_results]
             repair_root_output_snapshot = _project_root_output_snapshot(self.paths.root)
             repair_tailer = WorkspaceProgressTailer(workspace, self._progress.record)
             repair_tailer.start()
@@ -1534,11 +1551,50 @@ class HermesRunner:
                 workspace,
                 publication_contract,
             )
+            per_results = self._enrich_validation_results_with_pwn_debug(
+                workspace,
+                challenge_ids,
+                per_results,
+            )
             validation_round += 1
             self._record_validation_round(
                 workspace, validation_round, per_results, validated_set
             )
             merge_validation_into_report(report, per_results)
+            post_repair_file_progress = _repair_file_progress_fingerprint(workspace.output)
+            if no_progress_repair_blocked(
+                before_file_fingerprint=pre_repair_file_progress,
+                after_file_fingerprint=post_repair_file_progress,
+                before_results=pre_repair_results,
+                after_results=per_results,
+            ):
+                per_results = [
+                    {
+                        **result,
+                        "repair_result": "no_progress_repair_blocked",
+                        "blocked_reason": "no_progress_repair_blocked",
+                        "expected_next_action": (
+                            "collect new diagnostics or make a substantive validate.sh/exp.py "
+                            "repair before continuing automatic repair"
+                        ),
+                    }
+                    for result in per_results
+                ]
+                self._record_validation_round(
+                    workspace, validation_round + 1, per_results, validated_set
+                )
+                merge_validation_into_report(report, per_results)
+                self._progress.record(
+                    shard=original_shard_name,
+                    worker=worker,
+                    stage="validate",
+                    status="running",
+                    message=(
+                        "validation repair stopped: no_progress_repair_blocked "
+                        "(files, failure signature, and diagnostics did not improve)"
+                    ),
+                )
+                break
             repeated_failure_stop = stop_if_repeated_failure()
             try:
                 run_deterministic_repairs()
@@ -2006,6 +2062,71 @@ class HermesRunner:
                 run_pwn_debug(challenge_dir, timeout=8, run_exp=True, service_mode="managed")
             except Exception:  # noqa: BLE001 - diagnostics must not mask repair
                 continue
+
+    @staticmethod
+    def _enrich_validation_results_with_pwn_debug(
+        workspace: ExecutionWorkspace,
+        challenge_ids: list[str],
+        results: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Attach host-canonical Pwn readiness probe evidence to failed results."""
+        failed_ids = {
+            str(result.get("challenge_id"))
+            for result in results
+            if result.get("solve_status") == "failed" and result.get("challenge_id")
+        }
+        if not failed_ids:
+            return results
+        wanted = sorted(failed_ids & set(challenge_ids))
+        if not wanted:
+            return results
+        HermesRunner._ensure_workspace_pwn_debug_results(workspace, wanted)
+        debug_results = _failed_challenge_pwn_debug_results(
+            workspace.output / "challenges",
+            set(wanted),
+        )
+        if not debug_results:
+            return results
+        enriched: list[dict[str, Any]] = []
+        for result in results:
+            challenge_id = str(result.get("challenge_id") or "")
+            debug_entry = debug_results.get(challenge_id)
+            if result.get("solve_status") != "failed" or not isinstance(debug_entry, Mapping):
+                enriched.append(result)
+                continue
+            content = debug_entry.get("content")
+            if not isinstance(content, Mapping):
+                enriched.append(result)
+                continue
+            readiness = content.get("service_readiness")
+            probe = readiness.get("tcp_probe") if isinstance(readiness, Mapping) else None
+            additions: dict[str, Any] = {
+                "pwn_debug_result_path": debug_entry.get("path"),
+                "pwn_debug_result_sha256": content.get("result_sha256"),
+                "pwn_debug_actionable_summary": content.get("actionable_summary"),
+                "pwn_debug_status": content.get("failure_stage"),
+            }
+            if isinstance(probe, Mapping):
+                additions.update(
+                    {
+                        "pwn_debug_tcp_probe_status": probe.get("status"),
+                        "pwn_debug_tcp_probe_matched_token": probe.get("matched_token"),
+                        "pwn_debug_tcp_probe_raw_output_tail": probe.get("raw_output_tail"),
+                    }
+                )
+            enriched.append(
+                annotate_validation_result(
+                    {
+                        **result,
+                        **{
+                            key: value
+                            for key, value in additions.items()
+                            if value not in (None, "", [])
+                        },
+                    }
+                )
+            )
+        return enriched
 
     @staticmethod
     def _record_validation_round(
@@ -2577,6 +2698,51 @@ def _output_signature(output_dir: Path) -> tuple[int, int, int]:
         if stat.st_mtime_ns > max_mtime:
             max_mtime = stat.st_mtime_ns
     return (file_count, total_size, max_mtime)
+
+
+def _repair_file_progress_fingerprint(output_dir: Path) -> tuple[str, ...]:
+    """Fingerprint repair-relevant files, ignoring report-only churn."""
+    if not output_dir.exists():
+        return ()
+    fingerprints: list[str] = []
+    for challenge_dir in sorted((output_dir / "challenges").glob("*/*")):
+        if not challenge_dir.is_dir() or challenge_dir.is_symlink():
+            continue
+        metadata = read_json(challenge_dir / "metadata.json", {})
+        challenge_id = (
+            str(metadata.get("id") or challenge_dir.name)
+            if isinstance(metadata, Mapping)
+            else challenge_dir.name
+        )
+        parts: list[str] = [f"challenge={challenge_id}"]
+        if isinstance(metadata, Mapping):
+            for key in ("artifact", "artifact_sha256"):
+                value = metadata.get(key)
+                if value not in (None, "", []):
+                    parts.append(f"metadata_{key}={value}")
+        for relative in (
+            "validate.sh",
+            "writenup/exp.py",
+            "writenup/pwn_debug_report.json",
+        ):
+            path = challenge_dir / relative
+            if path.is_file() and not path.is_symlink():
+                parts.append(f"{relative}={_file_sha256(path)}")
+            else:
+                parts.append(f"{relative}=missing")
+        fingerprints.append("|".join(parts))
+    return tuple(fingerprints)
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return "unreadable"
+    return digest.hexdigest()
 
 
 def _assert_no_execution_context_leak(workspace: ExecutionWorkspace, text: str) -> None:

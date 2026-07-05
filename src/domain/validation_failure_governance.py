@@ -19,6 +19,7 @@ from core.paths import ProjectPaths
 
 VALIDATION_FAILURE_CLASSES = (
     "timeout",
+    "validate-wrapper",
     "service-readiness",
     "contract",
     "solver",
@@ -113,6 +114,8 @@ _SOLVER_CODES = {
     "pwn_shell_no_flag",
     "pwn_remote_local_mismatch",
     "pwn_prompt_eof",
+    "pwn_solver_prompt_desync",
+    "pwn_exploit_model_unproven",
     "validate_capture_failed",
     "solver_inconclusive",
     "solver_evidence_stale",
@@ -165,6 +168,8 @@ def normalized_validation_failure_class(
         return "compose_cli_mismatch"
     if status in _TIMEOUT_STATUSES or "timeout" in detail_codes:
         return "timeout"
+    if _validate_wrapper_readiness_failure(result, detail_items):
+        return "validate-wrapper"
     if "validate_capture_failed" in detail_codes or result.get("missing_solver_output") is True:
         return "validate_capture_failed"
     if pwn_stage in {"service_not_started", "external_unavailable"}:
@@ -175,6 +180,7 @@ def normalized_validation_failure_class(
         return "service-readiness"
     if pwn_stage in {
         "connection",
+        "prompt_desync",
         "leak",
         "canary_or_offset",
         "payload_control_flow",
@@ -192,6 +198,8 @@ def normalized_validation_failure_class(
         if detail_codes & _READINESS_CODES or "pwn_prompt_eof" in detail_codes:
             return "solver"
 
+    if "pwn_bad_readiness_probe" in detail_codes:
+        return "validate-wrapper"
     if detail_codes & _READINESS_CODES:
         return "service-readiness"
     if "pwn_prompt_eof" in detail_codes and readiness_observation == "failed-fresh-connection":
@@ -359,6 +367,9 @@ def _compose_cli_mismatch(result: Mapping[str, Any]) -> bool:
 def _classification_conflicts(result: Mapping[str, Any], failure_class: str | None) -> list[str]:
     conflicts: list[str] = []
     details = _failure_details(result)
+    if _canonical_tcp_probe_ready(result) and _validate_claims_readiness_failed(result, details):
+        conflicts.append("validate_says_service_not_ready_but_canonical_tcp_probe_ready")
+        conflicts.append("repair_validate_wrapper_before_service_startup")
     if _exploit_stage_started(result, details) and failure_class == "service-readiness":
         conflicts.append("exploit_started_but_classified_service_readiness")
     if _readiness_established(result, details) and failure_class == "service-readiness":
@@ -406,6 +417,9 @@ def attempt_level_validation_failure(results: Sequence[Mapping[str, Any]]) -> di
             "pwn_debug_actionable_summary",
             "pwn_debug_status",
             "pwn_debug_error",
+            "pwn_debug_tcp_probe_status",
+            "pwn_debug_tcp_probe_matched_token",
+            "pwn_debug_tcp_probe_raw_output_tail",
         )
         if (value := result.get(key)) not in (None, "", [])
     }
@@ -512,6 +526,12 @@ def _summarize_single_result(result: Mapping[str, Any], *, source: str) -> dict[
         ),
         "pwn_debug_status": normalized.get("pwn_debug_status"),
         "pwn_debug_error": _stable_text(normalized.get("pwn_debug_error"), limit=1000),
+        "pwn_debug_tcp_probe_status": normalized.get("pwn_debug_tcp_probe_status"),
+        "pwn_debug_tcp_probe_matched_token": normalized.get("pwn_debug_tcp_probe_matched_token"),
+        "pwn_debug_tcp_probe_raw_output_tail": _stable_text(
+            normalized.get("pwn_debug_tcp_probe_raw_output_tail"),
+            limit=1000,
+        ),
         "failure_kind": normalized.get("failure_kind"),
         "failure_hint": _stable_text(normalized.get("failure_hint"), limit=1000),
         "failed_step": _stable_text(normalized.get("failed_step"), limit=1000),
@@ -602,6 +622,7 @@ def _readiness_established(
         result.get("readiness_probe_status"),
         result.get("readiness_status"),
         result.get("readiness_established"),
+        result.get("pwn_debug_tcp_probe_status"),
     ]
     for detail in details:
         values.extend(
@@ -623,6 +644,8 @@ def _readiness_established(
             "true",
         }:
             return True
+    if _canonical_tcp_probe_ready(result):
+        return True
     return False
 
 
@@ -636,6 +659,7 @@ def _readiness_observation(
         result.get("readiness_status"),
         result.get("readiness_established"),
         result.get("readiness_observation"),
+        result.get("pwn_debug_tcp_probe_status"),
     ]
     for detail in details:
         values.extend(
@@ -670,6 +694,55 @@ def _readiness_observation(
     if any(marker in text for marker in _READINESS_UNAVAILABLE_MARKERS):
         return "unavailable"
     return "unavailable"
+
+
+def _validate_wrapper_readiness_failure(
+    result: Mapping[str, Any],
+    details: Sequence[Mapping[str, Any]],
+) -> bool:
+    detail_codes = {str(item.get("code") or "").strip() for item in details}
+    if "pwn_bad_readiness_probe" in detail_codes:
+        return True
+    return _canonical_tcp_probe_ready(result) and _validate_claims_readiness_failed(result, details)
+
+
+def _validate_claims_readiness_failed(
+    result: Mapping[str, Any],
+    details: Sequence[Mapping[str, Any]],
+) -> bool:
+    detail_codes = {str(item.get("code") or "").strip() for item in details}
+    if detail_codes & _READINESS_CODES or "pwn_prompt_eof" in detail_codes:
+        return True
+    if any(str(item.get("phase") or "").strip().lower() == "exploit" for item in details):
+        return False
+    status = str(result.get("validation_status") or result.get("status") or "").strip()
+    text = _combined_text(result).lower()
+    return (
+        status in {"service_readiness_failed", "readiness_failed", "contract_failed", "nonzero_exit"}
+        and any(
+            marker in text
+            for marker in (
+                "service not ready",
+                "readiness failed",
+                "readiness probe failed",
+                "no banner",
+                "no prompt",
+            )
+        )
+    )
+
+
+def _canonical_tcp_probe_ready(result: Mapping[str, Any]) -> bool:
+    status = str(result.get("pwn_debug_tcp_probe_status") or "").strip().lower()
+    token = str(result.get("pwn_debug_tcp_probe_matched_token") or "").strip()
+    raw_tail = str(result.get("pwn_debug_tcp_probe_raw_output_tail") or "")
+    if status == "ready" and (token or _raw_tail_has_prompt(raw_tail)):
+        return True
+    return bool(token and _raw_tail_has_prompt(raw_tail))
+
+
+def _raw_tail_has_prompt(raw_tail: str) -> bool:
+    return any(token in raw_tail for token in ("Choice:", "choice:", "Menu", "menu", "Welcome", ">"))
 
 
 def _exploit_stage_started(

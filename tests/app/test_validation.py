@@ -481,6 +481,24 @@ class ValidationTests(unittest.TestCase):
 
         self.assertTrue(any("inner shell sees empty host/port" in e for e in errors))
 
+    def test_pwn_validate_rejects_fixed_byte_tcp_readiness_probe(self):
+        challenge = self.paths.challenges / "pwn" / "pwn-readiness-head-001"
+        metadata = _write_minimal_pwn_contract(challenge)
+        (challenge / "validate.sh").write_text(
+            "#!/bin/bash\n"
+            "CHAL_HOST=localhost\n"
+            "CHAL_PORT=9004\n"
+            "export COMPOSE_PROJECT_NAME=cf_test\n"
+            "docker-compose -p \"$COMPOSE_PROJECT_NAME\" up -d\n"
+            "timeout 3 bash -c 'head -c 500 < /dev/tcp/$CHAL_HOST/$CHAL_PORT | grep -q Choice:'\n"
+            "python3 writenup/exp.py\n",
+            encoding="utf-8",
+        )
+
+        errors = self.validator.contract_errors(challenge, metadata)
+
+        self.assertTrue(any("fixed-byte TCP readiness read" in e for e in errors))
+
     def test_pwn_validate_allows_exported_bash_nc_probe(self):
         challenge = self.paths.challenges / "pwn" / "pwn-readiness-export-ok-001"
         metadata = _write_minimal_pwn_contract(challenge)
@@ -516,6 +534,21 @@ class ValidationTests(unittest.TestCase):
 
         self.assertEqual(details[0]["phase"], "exploit")
         self.assertNotEqual(details[0]["code"], "pwn_service_readiness_failed")
+
+    def test_broken_pipe_after_readiness_is_prompt_desync(self):
+        details = classify_validation_failure(
+            status="nonzero_exit",
+            stderr=(
+                "Service is ready\n"
+                "Running exploit...\n"
+                "BrokenPipeError: [Errno 32] Broken pipe\n"
+            ),
+            error="validate.sh exited non-zero",
+        )
+
+        self.assertEqual(details[0]["phase"], "exploit")
+        self.assertEqual(details[0]["code"], "pwn_solver_prompt_desync")
+        self.assertIn("sendline", details[0]["hint"])
 
     def test_timeout_after_running_exploit_is_exploit_timeout(self):
         details = classify_validation_failure(

@@ -29,6 +29,7 @@ FAILURE_STAGES = {
     "service_not_started",
     "external_unavailable",
     "connection",
+    "prompt_desync",
     "leak",
     "canary_or_offset",
     "payload_control_flow",
@@ -271,9 +272,12 @@ def classify_pwn_failure_stage(
     if any(marker in lower for marker in ("service not ready", "readiness", "no banner", "no prompt")):
         if "service is ready" not in lower and "readiness ok" not in lower:
             return "readiness"
+    if any(marker in lower for marker in ("brokenpipe", "broken pipe", "protocol desync", "prompt desync")):
+        if probe_status == "ready" or raw_probe:
+            return "prompt_desync"
     if any(marker in lower for marker in ("connection refused", "connection reset", "eoferror", "got eof")):
         if probe_status == "ready" or raw_probe:
-            return "connection"
+            return "prompt_desync"
         return "readiness"
     if isinstance(leak_sample, Mapping):
         stable = leak_sample.get("stable")

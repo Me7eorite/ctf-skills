@@ -537,6 +537,9 @@ def test_list_and_detail_expose_latest_validation_failure_context(
                             "[-] Failed to leak libc base\n"
                         ),
                         "validation_stderr_tail": "[readiness] no banner\n",
+                        "pwn_debug_tcp_probe_status": "ready",
+                        "pwn_debug_tcp_probe_matched_token": "Choice:",
+                        "pwn_debug_tcp_probe_raw_output_tail": "Welcome\nChoice:",
                     }
                 ],
             },
@@ -556,6 +559,7 @@ def test_list_and_detail_expose_latest_validation_failure_context(
     assert row["current_route"] == "solver"
     assert row["next_route"] == "solver_exploit_repair"
     assert row["root_failure"]["code"] == "solver_evidence_stale"
+    assert row["pwn_debug_tcp_probe_raw_output_tail"] == "Welcome Choice:"
 
     detail_response = client.get(f"/api/build-attempts/{attempt.id}")
     assert detail_response.status_code == 200
@@ -563,6 +567,9 @@ def test_list_and_detail_expose_latest_validation_failure_context(
     assert detail["validation_failure_class"] == "solver"
     assert detail["validation_stderr_tail"] == "[readiness] no banner"
     assert detail["current_blocker"] == "pwn_libc_leak_failed"
+    assert detail["pwn_debug_tcp_probe_status"] == "ready"
+    assert detail["pwn_debug_tcp_probe_matched_token"] == "Choice:"
+    assert detail["pwn_debug_tcp_probe_raw_output_tail"] == "Welcome Choice:"
 
 
 def test_list_derives_validation_context_only_for_returned_rows(

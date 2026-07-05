@@ -65,6 +65,9 @@ def render_validation_repair_prompt(
                     "pwn_debug_result_path",
                     "pwn_debug_result_sha256",
                     "pwn_debug_actionable_summary",
+                    "pwn_debug_tcp_probe_status",
+                    "pwn_debug_tcp_probe_matched_token",
+                    "pwn_debug_tcp_probe_raw_output_tail",
                     "pwn_debug_status",
                     "pwn_debug_error",
                     "failure_kind",
@@ -78,6 +81,7 @@ def render_validation_repair_prompt(
     repair_plan = _render_repair_plan(diagnostics)
     non_regression = _render_non_regression_section(prior_contract_errors)
     context_section = _render_validation_debug_context(debug_context)
+    governed_context = _render_governed_repair_context(diagnostics, debug_context)
     prompt = f"""You are continuing CTF challenge implementation after authoritative host validation failed.
 
 Validation debug round {attempt} of {max_attempts}. Work only inside the existing claimed challenge
@@ -86,6 +90,11 @@ source, Docker/Compose files, built artifact metadata, `validate.sh`, and `write
 
 Inherited build context:
 {context_section}
+
+Governed repair context:
+```json
+{governed_context}
+```
 
 Host validation diagnostics:
 ```json
@@ -140,6 +149,11 @@ Pwn repair evidence rules:
   `validation_failure_class`, and `classification_conflicts` when available.
   If service is ready and the exploit started, do not keep repairing readiness
   unless a managed pwn-debug run proves the service is unavailable.
+- If `classification_conflicts` says validate.sh reported readiness failure but
+  canonical pwn-debug TCP probe read a prompt/menu token, repair `validate.sh`
+  readiness/capture first. The service is reachable; do not spend the round on
+  xinetd, chroot, container startup, or exploit constants until the wrapper
+  reports that evidence correctly.
 - If `pwn_failure_stage` is `readiness`, fix service protocol, host/port,
   banner/menu probing, logs, and readiness diagnostics first. Do not turn this
   into a SHA-only or metadata-only repair.
@@ -402,6 +416,78 @@ def _compact_prompt_value(value: object, *, depth: int = 0) -> object:
             compacted.append(f"...[{len(value) - 40} more]")
         return compacted
     return value
+
+
+def _render_governed_repair_context(
+    diagnostics: Sequence[Mapping[str, object]],
+    debug_context: Mapping[str, object] | None,
+) -> str:
+    current = next((item for item in diagnostics if item), {})
+    first_failure: dict[str, object] = {}
+    history_tail: object = []
+    pwn_debug_results: object = {}
+    if isinstance(debug_context, Mapping):
+        first_failure = _summarize_round(debug_context.get("first_validation_failure"))
+        history_tail = debug_context.get("validation_history_tail") or []
+        pwn_debug_results = debug_context.get("pwn_debug_results") or {}
+    payload = {
+        "root_validation_failure": first_failure or _summarize_diagnostic(current),
+        "current_blocker": _summarize_diagnostic(current),
+        "classification_conflicts": current.get("classification_conflicts") or [],
+        "evidence_bundle": {
+            "validate_stdout_tail": current.get("validation_stdout_tail") or "(unavailable)",
+            "validate_stderr_tail": current.get("validation_stderr_tail") or "(unavailable)",
+            "solver_stdout_tail": current.get("solver_stdout_tail") or "(unavailable)",
+            "solver_stderr_tail": current.get("solver_stderr_tail") or "(unavailable)",
+            "pwn_debug_tcp_probe": {
+                "status": current.get("pwn_debug_tcp_probe_status") or "(unavailable)",
+                "matched_token": current.get("pwn_debug_tcp_probe_matched_token") or "(unavailable)",
+                "raw_output_tail": current.get("pwn_debug_tcp_probe_raw_output_tail") or "(unavailable)",
+            },
+            "final_flag_candidate": current.get("validation_final_flag_candidate") or "(unavailable)",
+            "validation_diagnostic_unavailable": current.get("validation_diagnostic_unavailable") or [],
+            "pwn_debug_results": pwn_debug_results,
+        },
+        "validation_history_tail": history_tail,
+    }
+    return json.dumps(_compact_prompt_value(payload), ensure_ascii=False, indent=2)
+
+
+def _summarize_round(value: object) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        return {}
+    results = value.get("results")
+    if isinstance(results, Sequence) and not isinstance(results, (str, bytes, bytearray)):
+        for result in results:
+            if isinstance(result, Mapping) and result.get("solve_status") == "failed":
+                return _summarize_diagnostic(result)
+    return _summarize_diagnostic(value)
+
+
+def _summarize_diagnostic(value: Mapping[str, object]) -> dict[str, object]:
+    details = value.get("validation_failure_details")
+    code = None
+    if isinstance(details, Sequence) and not isinstance(details, (str, bytes, bytearray)):
+        for detail in details:
+            if isinstance(detail, Mapping) and detail.get("code"):
+                code = detail.get("code")
+                break
+    return {
+        key: item
+        for key, item in {
+            "challenge_id": value.get("challenge_id"),
+            "validation_status": value.get("validation_status"),
+            "validation_failure_class": value.get("validation_failure_class"),
+            "validation_failure_signature": value.get("validation_failure_signature"),
+            "pwn_failure_stage": value.get("pwn_failure_stage"),
+            "diagnostic_code": code,
+            "validation_error": value.get("validation_error"),
+            "repair_result": value.get("repair_result"),
+            "blocked_reason": value.get("blocked_reason"),
+            "expected_next_action": value.get("expected_next_action"),
+        }.items()
+        if item not in (None, "", [])
+    }
 
 
 def _render_repair_plan(diagnostics: Sequence[Mapping[str, object]]) -> str:
@@ -790,12 +876,26 @@ def _pwn_repair_steps_from_failure_details(
             "If validate.sh is involved, print bounded diagnostics for service ready state, "
             "the first banner line, the last recv position, and the failing phase before exit."
         )
+    if "pwn_solver_prompt_desync" in codes:
+        steps.append(
+            "Fix solver protocol synchronization in `writenup/exp.py`: if target "
+            "source reads a fixed payload and then consumes a newline or delimiter, "
+            "send `payload + b\"\\n\"` or use pwntools `sendlineafter`/`sendafter` "
+            "with the exact menu token."
+        )
     if "pwn_service_readiness_failed" in codes or "pwn_bad_readiness_probe" in codes:
         steps.append(
             "Fix the service readiness probe before exploit tuning: check that "
             "`validate.sh` exports or directly uses `CHAL_HOST`/`CHAL_PORT`, "
             "starts only this challenge's `docker-compose` service, and reads "
             "a real banner/menu prompt such as `Choice:` from a fresh TCP connection."
+        )
+    if "pwn_bad_readiness_probe" in codes:
+        steps.append(
+            "`pwn_bad_readiness_probe` means the validation wrapper is suspect: "
+            "replace fixed-byte `head -c`/`dd`/EOF-based TCP reads with a bounded "
+            "socket loop that succeeds on Choice:/menu/banner and preserves the "
+            "raw output tail even when the timeout expires."
         )
     if "compose_cross_talk" in codes:
         steps.append(
@@ -833,6 +933,14 @@ def _pwn_repair_steps_from_failure_details(
             "The service was reachable but the final exploit did not recover a flag. "
             "Recheck prompt synchronization, payload layout, leak math, and the final "
             "`flag{...}` extraction path instead of relaxing validation."
+        )
+    if "pwn_exploit_model_unproven" in codes:
+        steps.append(
+            "Do not tune heap/ROP/canary constants blindly. First add or refresh "
+            "`writenup/pwn_debug_report.json` with chunk layout, size class, "
+            "overlap reachability, leak samples, base calculations, and gadget "
+            "evidence from the shipped artifact/container; if the evidence "
+            "contradicts the exploit model, rederive the solve path."
         )
     if "pwn_bruteforce_timeout" in codes:
         steps.append(
