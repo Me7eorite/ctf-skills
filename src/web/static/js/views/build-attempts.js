@@ -39,6 +39,7 @@ const VALIDATION_DETAIL_LABELS = {
   pwn_libc_leak_failed: "libc 泄漏失败",
   pwn_pie_base_failed: "PIE 基址错误",
   pwn_shell_no_flag: "Shell 未读到 flag",
+  pwn_exp_bad_artifact_path: "exp 附件路径错误",
   missing_dependency: "缺少依赖",
   flag_mismatch: "flag 不匹配",
   nonzero_exit: "validate.sh 非零退出",
@@ -1234,8 +1235,12 @@ function validationFailureSummary(attempt) {
   if (!failureClass) return "";
   const parts = [VALIDATION_FAILURE_LABELS[failureClass] || failureClass];
   const detail = latestValidationDetail(attempt);
-  const detailCode = String(detail?.code || "").trim();
+  const detailCode = String(attempt.current_blocker || detail?.code || "").trim();
   if (detailCode) parts.push(VALIDATION_DETAIL_LABELS[detailCode] || detailCode);
+  const stage = String(attempt.pwn_failure_stage || "").trim();
+  if (stage) parts.push(`stage=${stage}`);
+  const route = String(attempt.current_route || attempt.next_route || "").trim();
+  if (route) parts.push(`route=${route}`);
   const status = String(attempt.validation_status || "").trim();
   if (status && status !== detailCode) parts.push(status);
   return parts.join(" · ");
@@ -1256,6 +1261,17 @@ function validationFailureEvidence(attempt) {
   const signature = String(attempt.validation_failure_signature || "").trim();
   const prompt = signature.match(/prompt=([^|]+)/)?.[1];
   if (prompt) chunks.push(`等待提示 ${prompt}`);
+  const evidenceStatus = String(attempt.evidence_status || "").trim();
+  if (evidenceStatus) chunks.push(`evidence=${evidenceStatus}`);
+  const rootCode = String(attempt.root_failure?.code || "").trim();
+  const current = String(attempt.current_blocker || "").trim();
+  if (rootCode && current && rootCode !== current) {
+    chunks.push(`root=${rootCode}, current=${current}`);
+  }
+  const conflicts = Array.isArray(attempt.classification_conflicts)
+    ? attempt.classification_conflicts
+    : [];
+  if (conflicts.length) chunks.push(`classification_conflict=${conflicts.join(",")}`);
   const stderr = String(attempt.validation_stderr_tail || "").trim();
   if (stderr) chunks.push(stderr.replace(/\s+/g, " ").slice(0, 220));
   return chunks.find(Boolean) || "";

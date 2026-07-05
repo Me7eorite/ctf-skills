@@ -191,6 +191,56 @@ def test_validation_failure_fingerprints_keep_material_solver_and_readiness_fail
     )
 
 
+def test_validation_failure_fingerprints_distinguish_stale_evidence_from_libc_leak() -> None:
+    fingerprints = validation_failure_fingerprints(
+        [
+            {
+                "challenge_id": "pwn-0001",
+                "solve_status": "failed",
+                "validation_status": "solver_evidence_stale",
+                "metadata_artifact": "attachments/taskqueue",
+                "artifact_sha256": "old-sha",
+                "validation_failure_details": [
+                    {"phase": "contract", "code": "solver_evidence_stale"}
+                ],
+            },
+            {
+                "challenge_id": "pwn-0001",
+                "solve_status": "failed",
+                "validation_status": "nonzero_exit",
+                "metadata_artifact": "attachments/taskqueue",
+                "artifact_sha256": "fresh-sha",
+                "pwn_failure_stage": "leak",
+                "output_manifest_hash": "manifest-after-host-build",
+                "validation_stdout_tail": "Service ready, running exploit\nFailed to leak libc base\n",
+                "validation_failure_details": [
+                    {"phase": "exploit", "code": "pwn_libc_leak_failed"}
+                ],
+            },
+        ]
+    )
+
+    assert len(fingerprints) == 2
+    assert any("solver_evidence_stale" in item and "old-sha" in item for item in fingerprints)
+    assert any("pwn_libc_leak_failed" in item and "fresh-sha" in item for item in fingerprints)
+
+
+def test_policy_routes_pwn_libc_leak_failed_to_solver_not_readiness() -> None:
+    policy = policy_for_validation_failure(
+        {
+            "solve_status": "failed",
+            "validation_status": "nonzero_exit",
+            "pwn_failure_stage": "leak",
+            "validation_failure_details": [
+                {"phase": "exploit", "code": "pwn_libc_leak_failed"}
+            ],
+        }
+    )
+
+    assert policy.failure_class == "solver"
+    assert policy.route_type == "hermes"
+
+
 def test_policy_does_not_auto_repair_timeout_but_manual_can_request_hermes() -> None:
     result = {"solve_status": "failed", "validation_status": "timeout"}
 

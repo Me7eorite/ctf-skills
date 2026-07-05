@@ -245,11 +245,24 @@ def classify_pwn_failure_stage(
 
     service_mode = str(debug.get("service_mode") or "") if isinstance(debug, Mapping) else ""
     readiness_status = str(readiness.get("status") or "") if isinstance(readiness, Mapping) else ""
+    exploit_started = _exploit_started(text)
+    leak_failed = _leak_failed(text)
 
     if "contract" in lower or status in {"contract_failed", "solver_evidence_stale"}:
         return "contract"
     if service_mode == "not_started" or readiness_status == "not_started":
         return "service_not_started"
+    if leak_failed:
+        return "leak"
+    if exploit_started:
+        if any(marker in lower for marker in ("stack smashing", "canary", "bad offset", "cyclic", "saved rip")):
+            return "canary_or_offset"
+        if any(marker in lower for marker in ("got shell", "interactive shell", "$ ")) and not final_flag:
+            return "flag_read"
+        if any(marker in lower for marker in ("failed to extract flag", "flag not captured", "payload", "no flag")):
+            return "payload_control_flow"
+        if returncode not in (None, 0):
+            return "solver"
     if service_mode == "external" and any(marker in lower for marker in ("connection refused", "connection reset")):
         if probe_status != "ready" and not raw_probe:
             return "external_unavailable"
@@ -280,6 +293,38 @@ def classify_pwn_failure_stage(
     if returncode not in (None, 0):
         return "solver"
     return "unknown"
+
+
+def _exploit_started(text: str) -> bool:
+    lower = text.lower()
+    return bool(
+        re.search(r"\b(service\s+(?:is\s+)?ready[,;:\s-]+running exploit)\b", lower)
+        or re.search(r"\b(running exploit|exploit phase|starting exploit|launching exploit)\b", lower)
+        or re.search(r"(?im)^\s*\[\*\]\s*===\s*stage\s+\d+:", text)
+        or re.search(r"(?im)^\s*(?:stage\s+\d+|alloc|free|view|write|leak|payload|shell|flag)\b", text)
+    )
+
+
+def _leak_failed(text: str) -> bool:
+    lower = text.lower()
+    if any(
+        marker in lower
+        for marker in (
+            "pwn_libc_leak_failed",
+            "failed to leak libc base",
+            "failed to leak libc",
+            "leak failed",
+            "could not leak",
+            "empty leak",
+            "unstable leak",
+            "all-zero leak",
+            "all zero leak",
+        )
+    ):
+        return True
+    if "leak data" in lower and re.search(r"\b0{8,}\b", lower):
+        return True
+    return False
 
 
 class _ProbeComplete(Exception):

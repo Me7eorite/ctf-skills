@@ -722,8 +722,81 @@ def _looks_like_pwn_bad_libc_base(text: str) -> bool:
 def _looks_like_pwn_libc_leak_failure(text: str) -> bool:
     lower = text.lower()
     return (
-        ("libc" in lower or "puts@got" in lower or "got leak" in lower or "leak" in lower)
-        and ("leak failed" in lower or "could not leak" in lower or "failed to leak" in lower)
+        "pwn_libc_leak_failed" in lower
+        or "failed to leak libc base" in lower
+        or "empty leak" in lower
+        or "all-zero leak" in lower
+        or "all zero leak" in lower
+        or ("leak data" in lower and re.search(r"\b0{8,}\b", lower) is not None)
+        or (
+            ("libc" in lower or "puts@got" in lower or "got leak" in lower or "leak" in lower)
+            and ("leak failed" in lower or "could not leak" in lower or "failed to leak" in lower)
+        )
+    )
+
+
+def _pwn_exp_bad_artifact_path_failures(
+    challenge_dir: Path,
+    metadata: dict[str, Any],
+) -> list[dict[str, str]]:
+    if metadata.get("category") != "pwn":
+        return []
+    artifact = metadata.get("artifact")
+    if not isinstance(artifact, str) or not _safe_attachment_artifact(artifact):
+        return []
+    validate_text = _read_text(challenge_dir / "validate.sh") or ""
+    exp_text = _read_text(challenge_dir / "writenup" / "exp.py") or ""
+    if not validate_text or not exp_text:
+        return []
+    if not _validate_runs_exp_from_writenup(validate_text):
+        return []
+    if f"./{artifact}" not in exp_text and artifact not in exp_text:
+        return []
+    artifact_name = Path(artifact).name
+    return [
+        validation_failure_detail(
+            phase="validate",
+            code="pwn_exp_bad_artifact_path",
+            status="nonzero_exit",
+            message=(
+                "writenup/exp.py uses a challenge-root-relative artifact path "
+                f"({artifact}) even though validate.sh runs the solver from writenup; "
+                "that resolves to writenup/attachments and breaks solver startup"
+            ),
+            path="writenup/exp.py",
+            hint=(
+                "Resolve the artifact from the script location, e.g. "
+                "Path(__file__).resolve().parents[1] / "
+                f"'{artifact}', rather than hardcoding ./attachments/{artifact_name}."
+            ),
+        )
+    ]
+
+
+def _validate_runs_exp_from_writenup(validate_text: str) -> bool:
+    return bool(
+        re.search(
+            r"(?is)\bcd\s+(?:--\s+)?[\"']?(?:\$\{?(?:CHAL_ROOT|ROOT|WORKDIR|PWD)\}?/)?writenup[\"']?.{0,220}\b(?:python3?|python)\s+(?:\./)?exp\.py\b",
+            validate_text,
+        )
+        or re.search(
+            r"(?im)^\s*\(\s*cd\s+[\"']?writenup[\"']?\s*(?:&&|;).*\b(?:python3?|python)\s+(?:\./)?exp\.py\b",
+            validate_text,
+        )
+        or re.search(
+            r"(?im)^\s*pushd\s+[\"']?writenup[\"']?.*(?:\n.*){0,8}\b(?:python3?|python)\s+(?:\./)?exp\.py\b",
+            validate_text,
+        )
+    )
+
+
+def _safe_attachment_artifact(artifact: str) -> bool:
+    path = Path(artifact)
+    return (
+        artifact.startswith("attachments/")
+        and ".." not in path.parts
+        and len(path.parts) == 2
+        and bool(path.name)
     )
 
 
@@ -760,7 +833,7 @@ def _pwn_validation_stage(text: str) -> str | None:
     lower = text.lower()
     if re.search(r"\b(running exploit|exploit phase|starting exploit|launching exploit)\b", lower):
         return "exploit"
-    if re.search(r"\b(service is ready|readiness (?:ok|passed|succeeded)|probe passed)\b", lower):
+    if re.search(r"\b(service\s+(?:is\s+)?ready|readiness (?:ok|passed|succeeded)|probe passed)\b", lower):
         return "exploit"
     if re.search(r"\b(cleaning up|cleanup|docker-compose down|docker compose down)\b", lower):
         return "cleanup"
@@ -2017,6 +2090,20 @@ class ChallengeValidator:
                 "status": "solver_evidence_stale",
                 "error": error,
                 "failure_details": stale_solver_evidence,
+            }
+
+        solver_static_failures = _pwn_exp_bad_artifact_path_failures(
+            challenge_dir,
+            metadata,
+        )
+        if solver_static_failures:
+            error = "; ".join(item["message"] for item in solver_static_failures)
+            record_status("failed", "nonzero_exit", error)
+            return {
+                **record,
+                "status": "nonzero_exit",
+                "error": error,
+                "failure_details": solver_static_failures,
             }
 
         # 第一步：合约检查

@@ -23,7 +23,8 @@ from core.jsonio import read_json
 from core.queue import SUPPORTED_CATEGORIES
 from domain.build_attempts import BuildAttempt, BuildAttemptListItem, BuildAttemptStatus
 from domain.output_consistency import validate_workspace_success_state
-from domain.validation_failure_governance import latest_failed_validation
+from domain.validation_failure_governance import latest_failed_validation, summarize_validation_entry
+from domain.validation_repair_policy import policy_for_validation_failure
 from persistence.models import build_attempts as build_model
 from persistence.models import design_tasks as task_model
 from persistence.models import executions as exec_model
@@ -1654,6 +1655,19 @@ def _attempt_dict(
         if validation_fields:
             payload["solve_status"] = "failed"
             payload.update(validation_fields)
+            payload.update(_current_blocker_fields(validation_fields))
+        root_fields = _root_validation_failure_fields(paths, attempt.id)
+        if root_fields:
+            payload["root_failure"] = root_fields
+            payload.setdefault("root_failure_code", root_fields.get("code"))
+            payload.setdefault("root_failure_status", root_fields.get("validation_status"))
+    if artifact_metadata and artifact_metadata.get("category") == "pwn":
+        payload["evidence_status"] = (
+            "stale"
+            if artifact_metadata.get("solver_evidence_stale") is True
+            or artifact_metadata.get("validation_status") == "solver_evidence_stale"
+            else "not_stale"
+        )
     return payload
 
 
@@ -1991,6 +2005,18 @@ def _latest_validation_failure_fields(paths, attempt_id: UUID) -> dict[str, Any]
             "validation_returncode",
             "validation_final_flag_candidate",
             "validation_diagnostic_unavailable",
+            "missing_solver_output",
+            "classification_conflicts",
+            "batch_degraded",
+            "pause_pwn_lane",
+            "pwn_failure_stage",
+            "pwn_debug_failure_stage",
+            "pwn_debug_result_path",
+            "pwn_debug_result_sha256",
+            "pwn_debug_actionable_summary",
+            "repair_result",
+            "blocked_reason",
+            "expected_next_action",
         )
         if latest.get(key) not in (None, "", [])
     }
@@ -1999,6 +2025,61 @@ def _latest_validation_failure_fields(paths, attempt_id: UUID) -> dict[str, Any]
     if latest.get("round") is not None:
         fields["validation_failure_round"] = latest["round"]
     return fields
+
+
+def _current_blocker_fields(validation_fields: dict[str, Any]) -> dict[str, Any]:
+    detail_code = None
+    details = validation_fields.get("validation_failure_details")
+    if isinstance(details, list):
+        for detail in details:
+            if isinstance(detail, dict) and detail.get("code"):
+                detail_code = detail["code"]
+                break
+    policy = policy_for_validation_failure(validation_fields, operator_triggered=True)
+    current_route = (
+        "solver"
+        if policy.failure_class == "solver"
+        else "solver_exploit_repair"
+        if policy.route_type == "hermes" and policy.failure_class == "solver"
+        else policy.failure_class or policy.route_type
+    )
+    return {
+        "current_blocker": detail_code
+        or validation_fields.get("validation_status")
+        or validation_fields.get("validation_failure_class"),
+        "current_route": current_route,
+        "next_route": "solver_exploit_repair"
+        if policy.failure_class == "solver"
+        else policy.route_type,
+    }
+
+
+def _root_validation_failure_fields(paths, attempt_id: UUID) -> dict[str, Any]:
+    history = read_json(
+        paths.executions / str(attempt_id) / "current" / "state" / "validation-history.json",
+        None,
+    )
+    if not isinstance(history, list):
+        return {}
+    for entry in history:
+        summary = summarize_validation_entry(entry, source="validation-history")
+        if not summary or summary.get("failed_count"):
+            continue
+        details = summary.get("validation_failure_details")
+        code = None
+        if isinstance(details, list):
+            for detail in details:
+                if isinstance(detail, dict) and detail.get("code"):
+                    code = detail["code"]
+                    break
+        return {
+            "validation_status": summary.get("validation_status"),
+            "validation_failure_class": summary.get("validation_failure_class"),
+            "pwn_failure_stage": summary.get("pwn_failure_stage"),
+            "code": code or summary.get("validation_status"),
+            "round": summary.get("round"),
+        }
+    return {}
 
 
 def _failure_summaries(
@@ -2039,6 +2120,9 @@ def _repair_runs(paths, attempt_id: UUID) -> list[dict[str, Any]]:
                 "updated_at": last.get("created_at"),
                 "log_path": str(directory / "hermes.log"),
                 "events_path": str(events_path),
+                "repair_result": last.get("repair_result"),
+                "blocked_reason": last.get("blocked_reason"),
+                "expected_next_action": last.get("expected_next_action"),
                 "events": events,
             }
         )

@@ -214,8 +214,12 @@ def test_ensure_pwn_solver_evidence_uses_metadata_artifact_name(tmp_path: Path) 
                 "solver_evidence_stale": True,
                 "solver_evidence_stale_reason": "runtime ELF changed",
                 "validation_status": "solver_evidence_stale",
+                "validation_error": "old stale error",
+                "validation_failure_details": [{"code": "solver_evidence_stale"}],
                 "validation_failure_class": "old",
                 "validation_failure_signature": "old",
+                "pwn_failure_stage": "readiness",
+                "pwn_debug_actionable_summary": "Fix service readiness first",
                 "solve_note": "old stale note",
             }
         ),
@@ -239,8 +243,12 @@ def test_ensure_pwn_solver_evidence_uses_metadata_artifact_name(tmp_path: Path) 
         "solver_evidence_stale",
         "solver_evidence_stale_reason",
         "validation_status",
+        "validation_error",
+        "validation_failure_details",
         "validation_failure_class",
         "validation_failure_signature",
+        "pwn_failure_stage",
+        "pwn_debug_actionable_summary",
         "solve_note",
     ):
         assert field not in metadata

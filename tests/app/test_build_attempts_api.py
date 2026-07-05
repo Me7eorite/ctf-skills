@@ -502,22 +502,44 @@ def test_list_and_detail_expose_latest_validation_failure_context(
                     {
                         "challenge_id": "pwn-0001",
                         "solve_status": "failed",
-                        "validation_status": "nonzero_exit",
+                        "validation_status": "solver_evidence_stale",
                         "validation_failure_details": [
                             {
-                                "phase": "validate",
-                                "code": "pwn_prompt_eof",
-                                "message": "EOF waiting for Choice:",
-                                "path": "validate.sh",
+                                "phase": "contract",
+                                "code": "solver_evidence_stale",
+                                "message": "old pwn_debug_report.json sha mismatch",
+                                "path": "writenup/pwn_debug_report.json",
                             }
-                        ],
-                        "validation_stderr_tail": "EOFError while waiting for Choice:",
-                        "validation_diagnostic_unavailable": [
-                            "readiness probe result unavailable"
                         ],
                     }
                 ],
-            }
+            },
+            {
+                "round": 2,
+                "results": [
+                    {
+                        "challenge_id": "pwn-0001",
+                        "solve_status": "failed",
+                        "validation_status": "nonzero_exit",
+                        "pwn_failure_stage": "readiness",
+                        "validation_failure_details": [
+                            {
+                                "phase": "exploit",
+                                "code": "pwn_libc_leak_failed",
+                                "message": "Failed to leak libc base",
+                                "path": "writenup/exp.py",
+                            }
+                        ],
+                        "validation_stdout_tail": (
+                            "Service ready, running exploit...\n"
+                            "[*] === Stage 1: Libc leak via unsorted bin ===\n"
+                            "Leak data ... 000000...\n"
+                            "[-] Failed to leak libc base\n"
+                        ),
+                        "validation_stderr_tail": "[readiness] no banner\n",
+                    }
+                ],
+            },
         ],
     )
 
@@ -525,16 +547,22 @@ def test_list_and_detail_expose_latest_validation_failure_context(
     assert list_response.status_code == 200
     [row] = list_response.json()
     assert row["validation_failure_class"] == "solver"
-    assert row["validation_failure_details"][0]["code"] == "pwn_prompt_eof"
-    assert "pwn_prompt_eof" in row["validation_failure_signature"]
+    assert row["validation_failure_details"][0]["code"] == "pwn_libc_leak_failed"
+    assert "pwn_libc_leak_failed" in row["validation_failure_signature"]
     assert row["validation_failure_source"] == "validation-history"
-    assert row["validation_failure_round"] == 1
+    assert row["validation_failure_round"] == 2
+    assert row["pwn_failure_stage"] == "leak"
+    assert row["current_blocker"] == "pwn_libc_leak_failed"
+    assert row["current_route"] == "solver"
+    assert row["next_route"] == "solver_exploit_repair"
+    assert row["root_failure"]["code"] == "solver_evidence_stale"
 
     detail_response = client.get(f"/api/build-attempts/{attempt.id}")
     assert detail_response.status_code == 200
     detail = detail_response.json()
     assert detail["validation_failure_class"] == "solver"
-    assert detail["validation_stderr_tail"] == "EOFError while waiting for Choice:"
+    assert detail["validation_stderr_tail"] == "[readiness] no banner"
+    assert detail["current_blocker"] == "pwn_libc_leak_failed"
 
 
 def test_list_derives_validation_context_only_for_returned_rows(

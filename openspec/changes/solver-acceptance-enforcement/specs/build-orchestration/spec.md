@@ -32,6 +32,13 @@ Build attempt list and detail APIs SHALL expose solver acceptance status, solver
 - **THEN** attempt detail SHALL expose the blocked reason and solver-quality diagnostics
 - **AND** it SHALL retain the validation failure class and signature from failure governance when available
 
+#### Scenario: Attempt detail exposes root and current Pwn blockers
+- **WHEN** a Pwn attempt first fails with stale solver evidence
+- **AND** a later validation round refreshes evidence and fails with a solver exploit leak error
+- **THEN** attempt detail SHALL expose the stale evidence as `root_failure`
+- **AND** it SHALL expose the leak error as `current_blocker`
+- **AND** it SHALL expose a solver-focused current route and Pwn failure stage such as `leak`
+
 #### Scenario: Repair blocker preserves original validation root cause
 - **WHEN** a Web or Pwn attempt first fails host validation with a solver or readiness root cause
 - **AND** a later repair invocation fails with `repair_invocation_failed`

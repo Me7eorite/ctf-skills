@@ -10,7 +10,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from core.paths import ProjectPaths
 from domain.resume import ChallengeResumePlan
+from domain.validation import ChallengeValidator
+from domain.validation_failure_governance import annotate_validation_result
 from hermes.prompt import render_validation_repair_prompt
 from hermes.runner import (
     _failed_challenge_debug_reports,
@@ -722,6 +725,56 @@ def test_validate_gate_rejects_named_pwn_artifact_deploy_src_evidence(
     assert error["code"] == "pwn_evidence_from_deploy_src"
     assert "deploy/src/taskqueue" in error["message"]
     assert "attachments/taskqueue" in error["message"]
+
+
+def test_pwn_static_preflight_rejects_writenup_relative_artifact_path(tmp_path: Path) -> None:
+    challenge = tmp_path / "pwn-0001-demo"
+    (challenge / "attachments").mkdir(parents=True)
+    (challenge / "writenup").mkdir()
+    artifact = b"\x7fELFtaskqueue"
+    artifact_sha = hashlib.sha256(artifact).hexdigest()
+    (challenge / "attachments" / "taskqueue").write_bytes(artifact)
+    (challenge / "metadata.json").write_text(
+        json.dumps(
+            {
+                "id": "pwn-0001",
+                "category": "pwn",
+                "title": "Taskqueue",
+                "difficulty": "medium",
+                "build_status": "passed",
+                "flag": "flag{demo}",
+                "artifact": "attachments/taskqueue",
+                "artifact_sha256": artifact_sha,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (challenge / "validate.sh").write_text(
+        "#!/usr/bin/env bash\nset -e\n(cd writenup && python3 exp.py)\n",
+        encoding="utf-8",
+    )
+    (challenge / "writenup" / "exp.py").write_text(
+        f'BINARY_SHA256 = "{artifact_sha}"\nBINARY = "./attachments/taskqueue"\n',
+        encoding="utf-8",
+    )
+
+    result = ChallengeValidator(
+        ProjectPaths(root=tmp_path, repository=tmp_path),
+        timeout=1,
+    ).validate_one(challenge, persist_result=False)
+    annotated = annotate_validation_result(
+        {
+            "challenge_id": "pwn-0001",
+            "solve_status": "failed",
+            "validation_status": result["status"],
+            "validation_failure_details": result["failure_details"],
+        }
+    )
+
+    assert result["status"] == "nonzero_exit"
+    assert result["failure_details"][0]["code"] == "pwn_exp_bad_artifact_path"
+    assert annotated["validation_failure_class"] == "solver"
+    assert annotated["pwn_failure_stage"] == "solver"
 
 
 def test_host_validation_overwrites_agent_claimed_passed_status(tmp_path: Path) -> None:

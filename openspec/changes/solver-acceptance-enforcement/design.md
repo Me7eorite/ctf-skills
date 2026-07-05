@@ -16,6 +16,8 @@ The implementation already has several enforcement boundaries that this change m
 - `src/services/build_orchestration_service.py` already passes retry context with first/latest failure diagnostics for same-attempt retries. This change should preserve that binding and add solver acceptance/root-current blocked evidence to the existing retry context where available.
 - Same-attempt repair and revalidation are already attempt-scoped through `BuildAttemptRepairService` and `BuildAttemptRevalidationService`, with challenge roots normalized under the current attempt workspace. This change must not scan unrelated `work/executions/*` trees to infer solver acceptance.
 - `src/web/build_attempts_endpoints.py` already derives attempt-detail validation fields from latest validation history. Solver acceptance, root failure, current blocker, blocked reason, and route fields should be derived for the current returned rows/details only, not by global workspace scans.
+- Pwn host-build evidence refresh already exists through `ensure_pwn_solver_evidence()`. This change treats `metadata.artifact` as the authoritative final player attachment, with `attachments/vuln` retained only as a compatibility fallback when metadata is missing or invalid. Evidence refresh, report generation, and exploit SHA stamping must not special-case any one challenge binary name.
+- Current blocker routing must be fact-first. If validation logs show `Service ready, running exploit` or exploit-stage markers such as stages, heap operations, leaks, payloads, shells, or flag reads, then readiness has already succeeded for routing purposes. Readiness probe noise may remain as `classification_conflicts`, but it must not override a current solver/leak blocker.
 
 ## Gap Audit Summary
 
@@ -87,6 +89,9 @@ The current codebase covers more than the original sketch assumed:
 
 13. Preserve root failure when current blocker changes.
     Repair-infrastructure failures, including `repair_invocation_failed`, are current blockers. They must not erase the root host-validation failure from first-failure/history evidence, retry context, repair prompts, or attempt detail responses.
+
+14. Keep solver evidence and current blocker system-level.
+    Fixes for stale Pwn evidence, bad artifact paths, leak failures, and no-change repair outcomes must be implemented through metadata/artifact, validation governance, repair policy, and API/report fields. They must not patch a single generated `writenup/exp.py` or encode challenge-specific filenames such as `taskqueue` as control-flow exceptions.
 
 ## Risks / Trade-offs
 

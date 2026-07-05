@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -139,6 +140,7 @@ class BuildAttemptRepairService:
         prompt = _repair_prompt(context)
         prompt_path.write_text(prompt, encoding="utf-8")
         self._record_event(events_path, "solve", "running", "AI repair running")
+        pre_repair_fingerprint = _challenge_file_fingerprint(Path(context["challenge_dir"]))
         arguments = _hermes_arguments(context["category"])
         cwd = self.paths.executions / str(attempt_id) / "current"
         environment = _hermes_environment(
@@ -158,6 +160,28 @@ class BuildAttemptRepairService:
         if returncode != 0:
             message = f"Hermes repair exited with {returncode}"
             self._record_event(events_path, "solve", "failed", message)
+            return BuildAttemptRepairResult(
+                attempt_id=attempt_id,
+                repair_id=repair_id,
+                status="failed",
+                verification_status="not_run",
+                log_path=str(log_path),
+                events_path=str(events_path),
+                failure_summary=message,
+            )
+
+        post_repair_fingerprint = _challenge_file_fingerprint(Path(context["challenge_dir"]))
+        if pre_repair_fingerprint and pre_repair_fingerprint == post_repair_fingerprint:
+            message = "Hermes repair made no changes; solver exploit logic still needs repair"
+            self._record_event(
+                events_path,
+                "solve",
+                "failed",
+                message,
+                repair_result="no_change",
+                blocked_reason="solver_repair_noop",
+                expected_next_action="fix solver exploit logic",
+            )
             return BuildAttemptRepairResult(
                 attempt_id=attempt_id,
                 repair_id=repair_id,
@@ -295,13 +319,20 @@ class BuildAttemptRepairService:
         return context
 
     @staticmethod
-    def _record_event(path: Path, phase: str, status: str, message: str) -> None:
+    def _record_event(
+        path: Path,
+        phase: str,
+        status: str,
+        message: str,
+        **extra: Any,
+    ) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "created_at": beijing_now_isoformat(),
             "phase": phase,
             "status": status,
             "message": message,
+            **extra,
         }
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
@@ -638,6 +669,9 @@ Rules:
   failing phase before exit.
 - For Pwn solver repairs, derive all offsets, symbols, gadgets, and reports
   from the final player ELF named by `metadata.artifact` under `attachments/`.
+  Resolve that artifact from the challenge root in `writenup/exp.py`, e.g.
+  `Path(__file__).resolve().parents[1] / metadata.artifact`; do not use
+  `./attachments/<binary>` when `validate.sh` may run from `writenup`.
   `writenup/exp.py` must declare `BINARY_SHA256 = metadata.artifact_sha256`;
   aliases such as
   `ARTIFACT_SHA256`, SHAs from `deploy/src/<metadata.artifact basename>`, and old
@@ -912,6 +946,37 @@ def _file_context(challenge_dir: Path) -> str:
         text = path.read_text(encoding="utf-8", errors="replace")
         snippets.append(f"--- {relative} ---\n{_budget_text(text, label=relative, limit=6000)}")
     return "\n\n".join(snippets)
+
+
+def _challenge_file_fingerprint(challenge_dir: Path) -> str:
+    digest = hashlib.sha256()
+    if not challenge_dir.is_dir():
+        return ""
+    seen_file = False
+    for path in sorted(
+        item
+        for item in challenge_dir.rglob("*")
+        if item.is_file() and not item.is_symlink()
+    ):
+        try:
+            relative = path.relative_to(challenge_dir).as_posix()
+        except ValueError:
+            continue
+        if "/__pycache__/" in f"/{relative}/" or relative.endswith(".pyc"):
+            continue
+        try:
+            stat = path.stat()
+            content = path.read_bytes()
+        except OSError:
+            continue
+        seen_file = True
+        digest.update(relative.encode("utf-8", errors="replace"))
+        digest.update(b"\0")
+        digest.update(str(stat.st_mode & 0o777).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(content)
+        digest.update(b"\0")
+    return digest.hexdigest() if seen_file else ""
 
 
 def _stale_pwn_debug_report_context(path: Path, metadata: Any) -> str | None:

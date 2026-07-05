@@ -251,9 +251,10 @@ Pwn exploit debugging acceleration:
 - In Pwn assembly sources, every path or command string passed to syscall/libc
   (`open`, `openat`, `execve`, `system`, etc.) must be NUL terminated: use
   `.asciz`, `.string`, or an explicit `\0`. Never emit `.ascii "/flag"`.
-- Load the local binary only from the delivered artifact, for example
-  `ELF('./' + metadata.artifact, checksec=False)` or
-  `ELF('./attachments/<binary>', checksec=False)`, so symbols, PLT/GOT,
+- Load the local binary only from the delivered artifact by resolving the
+  challenge root from the script location, for example
+  `challenge_root = Path(__file__).resolve().parents[1]` and
+  `binary_path = challenge_root / metadata_artifact`, so symbols, PLT/GOT,
   architecture assumptions, gadgets, and offsets come from the final host-built
   ELF. After host build synchronizes the image's `/home/ctf/<binary>` into
   `attachments/<binary>`, do not trust `deploy/src/<binary>`, local rebuilds,
@@ -263,6 +264,10 @@ Pwn exploit debugging acceleration:
   artifact sha used by `writenup/exp.py` exactly as `BINARY_SHA256`; it must
   equal both `metadata.artifact_sha256` and the SHA-256 of the file named by
   `metadata.artifact`.
+  If `validate.sh` runs from `writenup`, paths like `./attachments/<binary>` or
+  `attachments/<binary>` inside `exp.py` are wrong because they resolve under
+  `writenup/`; do not use bare `ELF('./attachments/<binary>', checksec=False)`
+  in that case. Anchor through `Path(__file__).resolve().parents[1]` instead.
   If `MAIN_OFFSET`, `WIN_OFFSET`, or ROP gadget constants conflict with
   `readelf`/`objdump` output from `metadata.artifact`, treat the exploit as
   stale and regenerate it instead of patching around the mismatch.
@@ -323,7 +328,8 @@ Pwn exploit debugging acceleration:
   `writenup/pwn_debug_report.json.binary.sha256` equals
   `metadata.artifact_sha256`. If the inherited context marks the report stale,
   ignore all offsets/gadgets in it and rerun `readelf`, `objdump`, and
-  `checksec` against `attachments/<binary>` before editing `writenup/exp.py`.
+  `checksec` against the file named by `metadata.artifact` before editing
+  `writenup/exp.py`.
 - Before writing files or calling `./bin/progress`, verify the current directory
   is the execution workspace or the exact challenge root. Do not write absolute
   paths such as `/output/...`, `/attachments/...`, or `/writenup/exp.py`;

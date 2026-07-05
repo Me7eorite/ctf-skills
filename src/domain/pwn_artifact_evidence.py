@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from core.jsonio import read_json, write_json
+from domain.validation_state import VALIDATION_FAILURE_FIELDS
 
 PWN_FINAL_ARTIFACT_REL = "attachments/vuln"
 PWN_FINAL_ARTIFACT_PROMPT_PATH = "./attachments/vuln"
@@ -19,10 +20,18 @@ PWN_KEY_SYMBOLS = ("win", "main", "vuln", "setup_fake_stack", "fake_stack")
 _PWN_STALE_METADATA_FIELDS = (
     "solver_evidence_stale",
     "solver_evidence_stale_reason",
+    *VALIDATION_FAILURE_FIELDS,
     "validation_status",
-    "validation_failure_class",
-    "validation_failure_signature",
     "validation_elapsed",
+    "validation_returncode",
+    "validation_stdout_tail",
+    "validation_stderr_tail",
+    "validation_final_flag_candidate",
+    "validation_diagnostic_unavailable",
+    "classification_conflicts",
+    "batch_degraded",
+    "pause_pwn_lane",
+    "missing_solver_output",
     "solve_note",
 )
 _BINARY_SHA_RE = re.compile(
@@ -99,6 +108,8 @@ def final_pwn_artifact_prompt_block(challenge_dir: Path) -> str:
             "FINAL SOLVER EVIDENCE SOURCE:",
             f"Use only {artifact_path} for exp.py and pwn_debug_report.json.",
             "Do not use deploy/src binaries for solver offsets, symbols, gadgets, or report sha.",
+            "In exp.py, resolve metadata.artifact from the challenge root, "
+            "e.g. Path(__file__).resolve().parents[1] / metadata.artifact.",
             "BINARY_SHA256 in exp.py is mandatory and must equal metadata.artifact_sha256.",
             f"pwn_debug_report.json is host-generated from {artifact_path}; do not hand-edit binary.sha256.",
             f"- artifact path: {artifact_path}",

@@ -1506,6 +1506,16 @@ class HermesRunner:
                     "validation debug attempt %s made no changes under output/; aborting further debug attempts",
                     repair_attempt,
                 )
+                per_results = [
+                    {
+                        **result,
+                        "repair_result": "no_change",
+                        "blocked_reason": "solver_repair_noop",
+                        "expected_next_action": "fix solver exploit logic",
+                    }
+                    for result in per_results
+                ]
+                merge_validation_into_report(report, per_results)
                 self._progress.record(
                     shard=original_shard_name,
                     worker=worker,

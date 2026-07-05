@@ -107,11 +107,15 @@ def merge_validation_into_report(
             "validation_failure_class",
             "validation_failure_signature",
             "pwn_failure_stage",
+            "pwn_debug_failure_stage",
             "pwn_debug_result_path",
             "pwn_debug_result_sha256",
             "pwn_debug_actionable_summary",
             "pwn_debug_status",
             "pwn_debug_error",
+            "repair_result",
+            "blocked_reason",
+            "expected_next_action",
         ):
             if field in result and result[field] is not None:
                 target[field] = result[field]

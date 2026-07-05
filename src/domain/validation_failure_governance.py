@@ -121,6 +121,7 @@ _SOLVER_CODES = {
     "pwn_exp_binary_sha_mismatch",
     "pwn_evidence_from_deploy_src",
     "pwn_debug_report_claims_wrong_artifact",
+    "pwn_exp_bad_artifact_path",
 }
 _PWN_SOLVER_EVIDENCE_CODES = {
     "pwn_exp_missing_binary_sha",
@@ -300,6 +301,9 @@ def timeout_failure_subreason(result: Mapping[str, Any]) -> str | None:
 def annotate_validation_result(result: Mapping[str, Any]) -> dict[str, Any]:
     """Return a copy with normalized class/signature fields when applicable."""
     annotated = dict(result)
+    normalized_stage = _normalized_pwn_failure_stage(annotated)
+    if normalized_stage:
+        annotated["pwn_failure_stage"] = normalized_stage
     failure_class = normalized_validation_failure_class(annotated)
     conflicts = _classification_conflicts(annotated, failure_class)
     if conflicts:
@@ -317,6 +321,30 @@ def annotate_validation_result(result: Mapping[str, Any]) -> dict[str, Any]:
         annotated["pwn_debug_failure_stage"] = "service_not_started"
         annotated["batch_degraded"] = True
     return annotated
+
+
+def _normalized_pwn_failure_stage(result: Mapping[str, Any]) -> str | None:
+    current = str(result.get("pwn_failure_stage") or "").strip()
+    details = _failure_details(result)
+    detail_codes = {str(item.get("code") or "").strip() for item in details}
+    text = _combined_text(result).lower()
+    if (
+        "pwn_libc_leak_failed" in detail_codes
+        or "pwn_bad_libc_base" in detail_codes
+        or "failed to leak libc base" in text
+        or "empty leak" in text
+        or "all-zero leak" in text
+        or "all zero leak" in text
+        or ("leak data" in text and re.search(r"\b0{8,}\b", text))
+    ):
+        return "leak"
+    if "pwn_exp_bad_artifact_path" in detail_codes:
+        return "solver"
+    if current == "readiness" and _exploit_stage_started(result, details):
+        if any(code in detail_codes for code in ("pwn_payload_no_flag", "pwn_shell_no_flag")):
+            return "payload_control_flow"
+        return "solver"
+    return current or None
 
 
 def _compose_cli_mismatch(result: Mapping[str, Any]) -> bool:
@@ -487,6 +515,9 @@ def _summarize_single_result(result: Mapping[str, Any], *, source: str) -> dict[
         "failure_kind": normalized.get("failure_kind"),
         "failure_hint": _stable_text(normalized.get("failure_hint"), limit=1000),
         "failed_step": _stable_text(normalized.get("failed_step"), limit=1000),
+        "repair_result": normalized.get("repair_result"),
+        "blocked_reason": normalized.get("blocked_reason"),
+        "expected_next_action": normalized.get("expected_next_action"),
     }
     return {key: value for key, value in summary.items() if value not in (None, "", [])}
 

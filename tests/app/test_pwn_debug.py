@@ -124,3 +124,28 @@ def test_external_connection_refused_is_external_unavailable_not_readiness() -> 
     )
 
     assert stage == "external_unavailable"
+
+
+def test_ready_with_readiness_noise_and_libc_leak_failure_is_leak() -> None:
+    stage = classify_pwn_failure_stage(
+        status="nonzero_exit",
+        stdout_tail=(
+            "Service ready, running exploit...\n"
+            "[*] === Stage 1: Libc leak via unsorted bin ===\n"
+            "Leak data ... 000000...\n"
+            "[-] Failed to leak libc base\n"
+        ),
+        stderr_tail="[readiness] no banner or menu prompt received\n",
+        returncode=1,
+        pwn_debug={
+            "service_readiness": {
+                "tcp_probe": {
+                    "status": "connected",
+                    "raw_output_tail": "",
+                }
+            },
+            "exp_execution": {"returncode": 1},
+        },
+    )
+
+    assert stage == "leak"

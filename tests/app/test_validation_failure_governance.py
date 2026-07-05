@@ -6,6 +6,7 @@ from uuid import uuid4
 from core.jsonio import write_json
 from core.paths import ProjectPaths
 from domain.validation_failure_governance import (
+    annotate_validation_result,
     latest_failed_validation,
     normalized_validation_failure_class,
     timeout_failure_subreason,
@@ -131,6 +132,34 @@ def test_exploit_phase_nonzero_outranks_readiness_code() -> None:
     }
 
     assert normalized_validation_failure_class(result) == "solver"
+
+
+def test_libc_leak_failure_overrides_readiness_stage_and_route() -> None:
+    result = annotate_validation_result(
+        {
+            "solve_status": "failed",
+            "validation_status": "nonzero_exit",
+            "pwn_failure_stage": "readiness",
+            "validation_stdout_tail": (
+                "Service ready, running exploit...\n"
+                "[*] === Stage 1: Libc leak via unsorted bin ===\n"
+                "Leak data ... 000000...\n"
+                "[-] Failed to leak libc base\n"
+            ),
+            "validation_stderr_tail": "[readiness] no banner or menu prompt received\n",
+            "validation_failure_details": [
+                {
+                    "phase": "exploit",
+                    "code": "pwn_libc_leak_failed",
+                    "message": "Failed to leak libc base",
+                }
+            ],
+        }
+    )
+
+    assert result["validation_failure_class"] == "solver"
+    assert result["pwn_failure_stage"] == "leak"
+    assert "pwn_libc_leak_failed" in result["validation_failure_signature"]
 
 
 def test_exploit_phase_timeout_is_solver_io_timeout_not_readiness() -> None:

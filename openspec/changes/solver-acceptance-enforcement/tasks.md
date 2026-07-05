@@ -55,3 +55,15 @@
 - [ ] 6.2 Run focused unit and integration tests for validation, Pwn debug/governance, runner resume/repair, build orchestration, build-attempt APIs, revalidation, dashboard serialization, and `tests/app/test_dependency_direction.py` if package boundaries are touched.
 - [ ] 6.3 Run `uv run ruff`, `uv run mypy`, and `uv run openspec validate solver-acceptance-enforcement --strict` when the OpenSpec CLI is available; if unavailable, record it as a tooling blocker and run repo-native static checks instead.
 - [ ] 6.4 Document rollout behavior: Web/Pwn enforcement enabled for new attempts, older attempts readable with unavailable solver acceptance fields, Reverse unchanged.
+
+## Current Slice: Pwn Current Blocker and Artifact Evidence
+
+- [x] C.1 Classify Pwn exploit-stage leak failures from current logs as solver/leak even when readiness probe noise is present.
+- [x] C.2 Route `pwn_libc_leak_failed` / `Failed to leak libc base` / empty or all-zero leaks to solver repair, not service-readiness repair.
+- [x] C.3 Refresh Pwn solver evidence from `metadata.artifact`, including named safe attachments such as `attachments/taskqueue`, and clear stale metadata validation failure fields.
+- [x] C.4 Add static preflight for `validate.sh` running `writenup/exp.py` from `writenup` while `exp.py` uses a challenge-root-relative `attachments/<artifact>` path.
+- [x] C.5 Extend repeated-failure fingerprints with evidence and solver failure material so stale evidence and later exploit leak failures are treated as progress.
+- [x] C.6 Record no-change solver repair outcomes with `repair_result=no_change`, `blocked_reason=solver_repair_noop`, and `expected_next_action=fix solver exploit logic`.
+- [x] C.7 Expose root failure, current blocker, current route, evidence status, Pwn failure stage, and classification conflicts in build attempt APIs and dashboard summaries.
+- [x] C.8 Add focused regression tests for Pwn stage classification, artifact evidence refresh, stale field clearing, bad artifact path preflight, solver fingerprints, and API root/current blocker visibility.
+- [x] C.9 Run the requested focused pytest set, `uv run ruff check src tests/app`, and `uv run openspec validate solver-acceptance-enforcement --strict`.

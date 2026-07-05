@@ -235,8 +235,73 @@ def validation_failure_fingerprints(
         )
         if failure_class and signature:
             challenge_id = str(result.get("challenge_id") or "")
-            fingerprints.append(f"{challenge_id}:{failure_class}:{signature}")
+            evidence = _evidence_fingerprint(result)
+            solver = _solver_failure_fingerprint(result, failure_class=str(failure_class))
+            suffix = "|".join(part for part in (evidence, solver) if part)
+            fingerprints.append(
+                f"{challenge_id}:{failure_class}:{signature}"
+                + (f"|{suffix}" if suffix else "")
+            )
     return tuple(sorted(fingerprints))
+
+
+def _evidence_fingerprint(result: Mapping[str, Any]) -> str:
+    parts: list[str] = []
+    for key in (
+        "metadata_artifact",
+        "artifact",
+        "metadata.artifact",
+        "artifact_sha256",
+        "metadata_artifact_sha256",
+        "metadata.artifact_sha256",
+        "pwn_debug_result_sha256",
+        "pwn_debug_report_sha256",
+        "exp_py_sha256",
+        "exp_sha256",
+    ):
+        value = result.get(key)
+        if value not in (None, "", []):
+            parts.append(f"{key.replace('.', '_')}={str(value)[:80]}")
+    return "|".join(parts)
+
+
+def _solver_failure_fingerprint(
+    result: Mapping[str, Any],
+    *,
+    failure_class: str,
+) -> str:
+    if failure_class != "solver":
+        return ""
+    parts: list[str] = []
+    for key in ("output_manifest_hash", "validation_failure_class", "pwn_failure_stage"):
+        value = result.get(key)
+        if value not in (None, "", []):
+            parts.append(f"{key}={str(value)[:120]}")
+    details = result.get("validation_failure_details") or result.get("failure_details")
+    if isinstance(details, Sequence) and not isinstance(details, (str, bytes)):
+        for detail in details:
+            if isinstance(detail, Mapping):
+                code = detail.get("code")
+                if code:
+                    parts.append(f"detail_code={code}")
+                    break
+    text = "\n".join(
+        str(result.get(key) or "")
+        for key in ("validation_stdout_tail", "validation_stderr_tail", "validation_error")
+    ).lower()
+    for marker in (
+        "pwn_libc_leak_failed",
+        "failed to leak libc base",
+        "empty leak",
+        "all-zero leak",
+        "failed to extract flag",
+        "got eof",
+        "eoferror",
+    ):
+        if marker in text:
+            parts.append(f"exploit_marker={marker}")
+            break
+    return "|".join(parts)
 
 
 def repair_policy_summary(results: Sequence[Mapping[str, Any]]) -> str:

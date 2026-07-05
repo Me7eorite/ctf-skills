@@ -15,6 +15,9 @@ VALIDATION_FAILURE_FIELDS: tuple[str, ...] = (
     "pwn_debug_failure_stage",
     "pwn_debug_actionable_summary",
     "pwn_debug_error",
+    "repair_result",
+    "blocked_reason",
+    "expected_next_action",
 )
 
 

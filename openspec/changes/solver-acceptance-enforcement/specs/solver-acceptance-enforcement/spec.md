@@ -130,3 +130,39 @@ The system SHALL add solver acceptance evidence without removing or renaming exi
 - **WHEN** an older validation-history entry does not contain solver acceptance fields
 - **THEN** API and repair consumers SHALL expose solver acceptance as unavailable
 - **AND** they SHALL NOT reinterpret the older entry as a solver acceptance failure solely because the fields are absent
+
+### Requirement: Pwn current blocker follows exploit-stage evidence
+
+The system SHALL classify Pwn validation failures by the most advanced authoritative runtime evidence in the current validation attempt. If logs show that the service became ready and the exploit started, then readiness SHALL NOT be the current blocker unless a fresh managed diagnostic proves the service is unavailable before exploit execution. Readiness probe noise MAY be preserved as a classification conflict, but current repair routing SHALL follow solver/leak/payload evidence.
+
+#### Scenario: Leak failure outranks readiness noise
+- **WHEN** validation output contains `Service ready, running exploit`
+- **AND** output contains exploit-stage evidence such as `Stage 1`, heap operation markers, leak output, payload output, shell output, or flag-read output
+- **AND** output also contains readiness probe noise such as `no banner`
+- **AND** the exploit reports `pwn_libc_leak_failed`, `Failed to leak libc base`, `empty leak`, or an all-zero leak
+- **THEN** the normalized validation failure class SHALL be `solver`
+- **AND** `pwn_failure_stage` SHALL be `leak`
+- **AND** the next repair route SHALL be solver-focused rather than service-readiness-focused
+
+#### Scenario: Classification conflict does not override current blocker
+- **WHEN** readiness evidence and solver evidence conflict
+- **THEN** the system SHALL preserve a classification conflict marker when useful
+- **AND** current blocker, repair route, and operator guidance SHALL follow the solver evidence when the exploit has started
+
+### Requirement: Pwn final artifact evidence uses metadata artifact
+
+The system SHALL derive Pwn solver evidence from the final player attachment named by `metadata.artifact`. `attachments/vuln` and `deploy/src/vuln` MAY be mentioned only as legacy fallback or untrusted comparison paths; they SHALL NOT be treated as the fact source when `metadata.artifact` names another safe attachment path.
+
+#### Scenario: Named attachment refreshes solver evidence
+- **WHEN** `metadata.artifact` is `attachments/<safe-file-name>`
+- **AND** host build or revalidation refreshes Pwn solver evidence
+- **THEN** the system SHALL compute `metadata.artifact_sha256` from that exact attachment
+- **AND** it SHALL generate `writenup/pwn_debug_report.json` for that exact attachment
+- **AND** it SHALL update `writenup/exp.py` `BINARY_SHA256` to the same digest
+- **AND** stale validation/evidence failure fields SHALL be removed from metadata
+
+#### Scenario: Solver path is wrong when validate runs from writenup
+- **WHEN** `validate.sh` changes directory to `writenup` before executing `exp.py`
+- **AND** `writenup/exp.py` uses `./attachments/<artifact>` or `attachments/<artifact>` for the final artifact
+- **THEN** static preflight SHALL emit `pwn_exp_bad_artifact_path`
+- **AND** the failure SHALL route to solver repair, not contract or service-readiness repair
