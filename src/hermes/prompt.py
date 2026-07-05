@@ -68,6 +68,8 @@ def render_validation_repair_prompt(
                     "pwn_debug_tcp_probe_status",
                     "pwn_debug_tcp_probe_matched_token",
                     "pwn_debug_tcp_probe_raw_output_tail",
+                    "pwn_source_protocol_token",
+                    "pwn_source_protocol_token_source",
                     "pwn_debug_status",
                     "pwn_debug_error",
                     "failure_kind",
@@ -135,20 +137,39 @@ How to read `validation_error`:
   compose/metadata/challenge files.
 
 Pwn repair evidence rules:
-- For Pwn failures, treat `pwn_failure_stage` and the referenced
-  `pwn-debug-result.json` as the primary repair evidence. Do not finish by only
-  changing report text, metadata, SHA fields, or `writenup/pwn_debug_report.json`.
-  A repair is complete only after `./validate.sh` is rerun by the host and a
-  `flag{...}` token is captured from real stdout.
-- Solver repairs must prove, using pwn-debug evidence, that the service is
-  connectable, leak values are stable, canary/libc/PIE/gadget sources match the
-  current `metadata.artifact`, payload offsets come from disassembly or dynamic
-  verification, and `writenup/exp.py` actually emits a flag candidate.
+- For Pwn failures, first locate the failing `validate.sh` stage:
+  `start_compose`, `wait_container`, `derive_protocol_token`,
+  `wait_app_ready`, `run_solver`, `check_flag`, or `diagnostics`. Do not start
+  by guessing payload bytes.
+- Readiness tokens come from visible challenge evidence, not black-box guessing.
+  Prefer `pwn_source_protocol_token` when diagnostics include it, or inspect
+  `deploy/src/*.c`, `src/*`, README, writeup, and design files. Exact
+  full-token matching is not mandatory: if source says `Perfect Menu:`,
+  waiting for a stable substring such as `Perfect` is enough to prove
+  application response.
+- `nc` is allowed for connectivity testing, but `nc -z` is only port-open
+  evidence. It is not application readiness. `head -c`, `dd count=`, and
+  EOF-based TCP reads are validate-wrapper bugs for interactive services.
+- `pwn_debug` is auxiliary failure evidence. Use it when diagnostics conflict
+  (for example validate.sh says not ready but pwn_debug read a token), but do
+  not make it the main validation path.
+- Solver repairs must prove that service readiness has already been established
+  or fix the wrapper first; then show leak values are stable, canary/libc/PIE/
+  gadget sources match the current `metadata.artifact`, payload offsets come
+  from disassembly or dynamic verification, and `writenup/exp.py` emits a flag
+  candidate.
 - Structured diagnostics include `service_ready`, `exploit_started`,
   `exploit_exit_code`, solver stdout/stderr tails, `pwn_debug_failure_stage`,
   `validation_failure_class`, and `classification_conflicts` when available.
   If service is ready and the exploit started, do not keep repairing readiness
   unless a managed pwn-debug run proves the service is unavailable.
+- If service readiness read the token, later EOF, BrokenPipe, missing flag,
+  failed leak, or payload failure is solver/protocol work. The service is
+  already ready; do not repair startup.
+- If the wrapper probe fails but the container is Up and the port connects, do
+  not stop with only a readiness claim. Prefer to run `exp.py` anyway, capture
+  solver stdout/stderr/exit code, and then decide whether evidence points to
+  wrapper, service startup, binary path, or solver protocol.
 - If `classification_conflicts` says validate.sh reported readiness failure but
   canonical pwn-debug TCP probe read a prompt/menu token, repair `validate.sh`
   readiness/capture first. The service is reachable; do not spend the round on
@@ -444,6 +465,9 @@ def _render_governed_repair_context(
                 "matched_token": current.get("pwn_debug_tcp_probe_matched_token") or "(unavailable)",
                 "raw_output_tail": current.get("pwn_debug_tcp_probe_raw_output_tail") or "(unavailable)",
             },
+            "pwn_source_protocol_token": current.get("pwn_source_protocol_token") or "(unavailable)",
+            "pwn_source_protocol_token_source": current.get("pwn_source_protocol_token_source")
+            or "(unavailable)",
             "final_flag_candidate": current.get("validation_final_flag_candidate") or "(unavailable)",
             "validation_diagnostic_unavailable": current.get("validation_diagnostic_unavailable") or [],
             "pwn_debug_results": pwn_debug_results,
@@ -861,10 +885,9 @@ def _pwn_repair_steps_from_failure_details(
     steps = [
         "Root cause: Pwn validation failed in the exploit/runtime path.",
         (
-            "Before broad rewrites, create or update `writenup/pwn_debug_report.json` "
-            "with bounded evidence: checksec/file/libc, prompt transcript, offset, "
-            "leak values, computed bases, gadget addresses, local result, container "
-            "remote result, and the exact final failure code."
+            "Start with the current `validate.sh` stage and the source-derived "
+            "protocol token. Only use `pwn_debug` as auxiliary evidence when "
+            "diagnostics conflict or exploit evidence is missing."
         ),
     ]
     if "pwn_prompt_eof" in codes:
@@ -885,10 +908,10 @@ def _pwn_repair_steps_from_failure_details(
         )
     if "pwn_service_readiness_failed" in codes or "pwn_bad_readiness_probe" in codes:
         steps.append(
-            "Fix the service readiness probe before exploit tuning: check that "
-            "`validate.sh` exports or directly uses `CHAL_HOST`/`CHAL_PORT`, "
-            "starts only this challenge's `docker-compose` service, and reads "
-            "a real banner/menu prompt such as `Choice:` from a fresh TCP connection."
+            "Fix the relevant readiness layer before exploit tuning: service-readiness "
+            "means the container/app did not connect or emit the source-derived "
+            "token; validate-wrapper means `validate.sh` used port-only, fixed-byte, "
+            "EOF-based, unexported, or token-mismatched probing."
         )
     if "pwn_bad_readiness_probe" in codes:
         steps.append(

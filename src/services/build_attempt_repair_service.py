@@ -27,6 +27,7 @@ from domain.pwn_artifact_evidence import (
     ensure_pwn_solver_evidence,
     final_pwn_artifact_prompt_block,
 )
+from domain.validation import pwn_source_protocol_token
 from domain.validation_failure_governance import latest_failed_validation, summarize_validation_entry
 from domain.validation_repair_policy import policy_for_validation_failure
 from hermes import process as hermes_process
@@ -618,6 +619,9 @@ Governed repair context:
 Validation evidence:
 {json.dumps(_validation_evidence(latest_failure), ensure_ascii=False, indent=2)}
 
+Source-derived Pwn protocol token:
+{_pwn_source_protocol_prompt(Path(context["challenge_dir"]), latest_failure)}
+
 Structured Pwn stage guard:
 {json.dumps(_pwn_stage_guard(latest_failure), ensure_ascii=False, indent=2)}
 
@@ -664,6 +668,31 @@ Rules:
 - For Pwn Dockerfile repairs, do not add `chroot` to `apt-get install`;
   Ubuntu/Debian provide the `chroot` command via `coreutils`. Remove that
   package name or use `coreutils`.
+- For Pwn validation repairs, do not start by guessing payload bytes. First
+  identify the failing `validate.sh` stage: `start_compose`, `wait_container`,
+  `derive_protocol_token`, `wait_app_ready`, `run_solver`, `check_flag`, or
+  `diagnostics`.
+- Readiness is not a black-box guessing exercise. Use the source/design token
+  shown above when available; `deploy/src/*.c`, `src/*`, README, writeup, and
+  design files are valid protocol evidence. Exact full-token matching is not
+  mandatory: if source says `Perfect Menu:`, waiting for a stable substring
+  such as `Perfect` is enough to prove application response.
+- `nc` may be used for connectivity tests, but `nc -z` is only port-open
+  evidence. It is not application readiness. Replace `head -c`, `dd count=`,
+  and EOF-based reads with a bounded socket or `nc` loop that succeeds as soon
+  as the token is read.
+- If the service has read the token and `validate.sh` entered `run_solver`,
+  later EOF, BrokenPipe, missing flag, failed leak, or payload failure is a
+  solver/protocol issue. The service is already ready; do not repair startup.
+- If the wrapper probe fails but the container is Up and the port connects, do
+  not stop with only a readiness claim. Prefer to run `exp.py` anyway, capture
+  solver stdout/stderr/exit code, and then decide whether the evidence points
+  to wrapper, service startup, binary path, or solver protocol.
+- If solver stdout/stderr/exit code are missing, repair `validate.sh` capture
+  first before changing exploit logic.
+- If `exp.py` is protocol-desynchronized, focus on `sendline`/`sendafter`,
+  newline handling, and exact delimiters. In particular, check for target code
+  that reads a fixed payload and then consumes a newline with `getchar`.
 - If structured evidence has `service_ready=true` and `exploit_started=true`,
   do not repair service readiness, host/port wiring, container startup, or menu
   probing unless a managed pwn-debug run proves the service is unavailable.
@@ -1010,9 +1039,43 @@ def _validation_evidence(latest_failure: Any) -> dict[str, Any]:
                 label="pwn_debug_tcp_probe_raw_output_tail",
             ),
         },
+        "pwn_source_protocol_token": latest_failure.get("pwn_source_protocol_token")
+        or "(unavailable)",
+        "pwn_source_protocol_token_source": latest_failure.get(
+            "pwn_source_protocol_token_source"
+        )
+        or "(unavailable)",
         "classification_conflicts": latest_failure.get("classification_conflicts") or [],
     }
     return evidence
+
+
+def _pwn_source_protocol_prompt(challenge_dir: Path, latest_failure: Any) -> str:
+    token: str | None = None
+    source: str | None = None
+    if isinstance(latest_failure, dict):
+        token_value = latest_failure.get("pwn_source_protocol_token")
+        source_value = latest_failure.get("pwn_source_protocol_token_source")
+        token = str(token_value) if token_value not in (None, "", []) else None
+        source = str(source_value) if source_value not in (None, "", []) else None
+    if token is None:
+        derived = pwn_source_protocol_token(challenge_dir)
+        if derived:
+            token, source = derived
+    if token:
+        return (
+            f"- token: {token!r}\n"
+            f"- source: {source or '(unknown)'}\n"
+            "- service ready means a fresh CHAL_HOST/CHAL_PORT connection read "
+            "this token or a stable source-visible substring; after that, do "
+            "not repair startup."
+        )
+    return (
+        "- token: (not statically determined)\n"
+        "- fallback order: Choice:, menu, Menu, Welcome, >\n"
+        "- only use the fallback after checking deploy/src, src, README, writeup, "
+        "and design files."
+    )
 
 
 def _file_context(challenge_dir: Path) -> str:

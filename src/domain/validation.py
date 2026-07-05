@@ -112,6 +112,24 @@ _PWN_EXP_SHA_RE = re.compile(
 _PWN_BINARY_SHA_RE = re.compile(
     r"""(?im)\bBINARY_SHA256\s*=\s*["']([^"']+)["']"""
 )
+_PWN_PROTOCOL_TOKEN_FALLBACKS = ("Choice:", "menu", "Menu", "Welcome", ">")
+_PWN_PROTOCOL_TEXT_SUFFIXES = {
+    ".c",
+    ".cc",
+    ".cpp",
+    ".h",
+    ".hpp",
+    ".s",
+    ".S",
+    ".asm",
+    ".py",
+    ".md",
+    ".txt",
+    ".json",
+    ".yml",
+    ".yaml",
+}
+_PWN_QUOTED_STRING_RE = re.compile(r"""["']([^"'\r\n]{1,120})["']""")
 
 
 def validation_failure_detail(
@@ -551,8 +569,9 @@ def _classify_contract_error(message: str, *, status: str = "contract_failed") -
         code = "pwn_bad_readiness_probe"
         path = "validate.sh"
         hint = (
-            "Use a bounded socket/token readiness probe that returns after Choice:/menu/banner "
-            "bytes are seen, and preserve the raw probe tail even on timeout."
+            "Use a bounded socket/token readiness probe that returns after a "
+            "source-visible banner/menu token or stable substring is seen, and "
+            "preserve the raw probe tail even on timeout."
         )
     elif "canary leak filtering by 2^48" in message:
         code = "pwn_canary_width_filter"
@@ -1524,6 +1543,78 @@ def _validate_has_app_readiness_probe(text: str) -> bool:
     return any(token in text for token in readiness_tokens)
 
 
+def pwn_source_protocol_token(challenge_dir: Path) -> tuple[str, str] | None:
+    """Return the best visible Pwn banner/menu token and its workspace path.
+
+    Generated Pwn challenges are not black boxes to the validator: deploy source,
+    design notes, README, and writeups are organizer-visible evidence. Prefer a
+    concrete token from those files; callers can fall back to generic prompts
+    only when this returns ``None``.
+    """
+    for path in _pwn_protocol_evidence_paths(challenge_dir):
+        text = _read_text(path)
+        if not text:
+            continue
+        token = _pwn_protocol_token_from_text(text)
+        if token:
+            return token, path.relative_to(challenge_dir).as_posix()
+    return None
+
+
+def _pwn_protocol_evidence_paths(challenge_dir: Path) -> list[Path]:
+    roots = (
+        challenge_dir / "deploy" / "src",
+        challenge_dir / "src",
+        challenge_dir / "writenup",
+        challenge_dir,
+    )
+    filenames = {
+        "README.md",
+        "README.txt",
+        "readme.md",
+        "writeup.md",
+        "wp.md",
+        "design.md",
+        "metadata.json",
+    }
+    paths: list[Path] = []
+    seen: set[Path] = set()
+    for root in roots:
+        if not root.exists():
+            continue
+        candidates: list[Path]
+        if root.is_file():
+            candidates = [root]
+        elif root == challenge_dir:
+            candidates = [root / name for name in filenames]
+        else:
+            candidates = sorted(
+                path
+                for path in root.rglob("*")
+                if path.is_file() and path.suffix in _PWN_PROTOCOL_TEXT_SUFFIXES
+            )
+        for path in candidates:
+            if path.is_file() and path not in seen:
+                seen.add(path)
+                paths.append(path)
+    return paths
+
+
+def _pwn_protocol_token_from_text(text: str) -> str | None:
+    quoted = [match.group(1) for match in _PWN_QUOTED_STRING_RE.finditer(text)]
+    for token in _PWN_PROTOCOL_TOKEN_FALLBACKS:
+        if token == ">":
+            if any(candidate.strip() == ">" for candidate in quoted):
+                return token
+            continue
+        if any(token in candidate for candidate in quoted):
+            return token
+    for token in _PWN_PROTOCOL_TOKEN_FALLBACKS:
+        if token != ">" and token in text:
+            return token
+    return None
+
+
 def _validate_uses_fixed_byte_tcp_probe(text: str) -> bool:
     return bool(
         re.search(r"\bhead\s+-c\s+\d+\b.*?/dev/tcp/", text, re.S)
@@ -2121,6 +2212,10 @@ class ChallengeValidator:
 
         expected_flag = metadata.get("flag", "")
         record["expected_flag"] = expected_flag
+        source_token = pwn_source_protocol_token(challenge_dir)
+        if source_token and metadata.get("category") == "pwn":
+            record["pwn_source_protocol_token"] = source_token[0]
+            record["pwn_source_protocol_token_source"] = source_token[1]
 
         def record_status(
             solve_status: str,

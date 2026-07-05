@@ -267,6 +267,8 @@ def _stamp_validation_results_into_outputs(
                 "pwn_debug_tcp_probe_status",
                 "pwn_debug_tcp_probe_matched_token",
                 "pwn_debug_tcp_probe_raw_output_tail",
+                "pwn_source_protocol_token",
+                "pwn_source_protocol_token_source",
             ):
                 if result.get(field) not in (None, "", []):
                     updates[field] = result[field]

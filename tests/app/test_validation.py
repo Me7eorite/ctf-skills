@@ -12,6 +12,7 @@ from domain.validation import (
     is_elf,
     is_pe,
     pe_machine,
+    pwn_source_protocol_token,
 )
 
 
@@ -432,6 +433,32 @@ class ValidationTests(unittest.TestCase):
 
         self.assertFalse(any("nc -z readiness" in e for e in errors))
         self.assertFalse(any("without an isolated project" in e for e in errors))
+
+    def test_pwn_source_token_is_diagnostic_not_exact_contract(self):
+        challenge = self.paths.challenges / "pwn" / "pwn-source-token-001"
+        metadata = _write_minimal_pwn_contract(challenge)
+        (challenge / "deploy" / "src" / "vuln.c").write_text(
+            '#include <stdio.h>\nint main(){ printf("Choice:"); }\n',
+            encoding="utf-8",
+        )
+        (challenge / "validate.sh").write_text(
+            "#!/bin/bash\n"
+            "export COMPOSE_PROJECT_NAME=cf_test\n"
+            "docker-compose -p \"$COMPOSE_PROJECT_NAME\" up -d\n"
+            "python3 - <<'PY'\n"
+            "import socket\n"
+            "with socket.create_connection(('127.0.0.1', 9999), timeout=1) as s:\n"
+            "    data = s.recv(256)\n"
+            "    assert b'Welcome' in data\n"
+            "PY\n"
+            "python3 writenup/exp.py\n",
+            encoding="utf-8",
+        )
+
+        errors = self.validator.contract_errors(challenge, metadata)
+
+        self.assertEqual(pwn_source_protocol_token(challenge), ("Choice:", "deploy/src/vuln.c"))
+        self.assertFalse(any("source-derived protocol token" in e for e in errors))
 
     def test_web_validate_requires_isolated_compose_project(self):
         challenge = self.paths.challenges / "web" / "web-compose-project-001"

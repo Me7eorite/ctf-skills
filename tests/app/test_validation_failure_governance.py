@@ -30,6 +30,47 @@ def test_readiness_detail_outranks_contract_status() -> None:
     assert normalized_validation_failure_class(result) == "validate-wrapper"
 
 
+def test_nc_z_port_only_readiness_is_validate_wrapper() -> None:
+    result = {
+        "solve_status": "failed",
+        "validation_status": "contract_failed",
+        "validation_failure_details": [
+            {
+                "phase": "contract",
+                "code": "pwn_port_only_readiness",
+                "message": "Pwn validate.sh uses nc -z readiness",
+            }
+        ],
+    }
+
+    assert normalized_validation_failure_class(result) == "validate-wrapper"
+
+
+def test_ready_broken_pipe_is_solver_prompt_desync() -> None:
+    result = annotate_validation_result(
+        {
+            "solve_status": "failed",
+            "validation_status": "nonzero_exit",
+            "readiness_established": True,
+            "validation_stdout_tail": (
+                "[validate] wait_app_ready read token Choice:\n"
+                "[validate] run_solver\n"
+            ),
+            "validation_stderr_tail": "BrokenPipeError: [Errno 32] Broken pipe\n",
+            "validation_failure_details": [
+                {
+                    "phase": "exploit",
+                    "code": "pwn_solver_prompt_desync",
+                    "message": "BrokenPipe after readiness",
+                }
+            ],
+        }
+    )
+
+    assert result["validation_failure_class"] == "solver"
+    assert result["pwn_failure_stage"] == "prompt_desync"
+
+
 def test_canonical_probe_ready_reclassifies_validate_readiness_failure_as_wrapper() -> None:
     result = annotate_validation_result(
         {

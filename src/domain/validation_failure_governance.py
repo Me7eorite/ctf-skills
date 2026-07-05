@@ -47,8 +47,11 @@ _READINESS_CODES = {
     "compose_cross_talk",
     "pwn_bad_binary_path",
     "pwn_service_readiness_failed",
+}
+_VALIDATE_WRAPPER_CODES = {
     "pwn_port_only_readiness",
     "pwn_bad_readiness_probe",
+    "validate_capture_failed",
 }
 _READINESS_UNAVAILABLE_MARKERS = {
     "readiness probe result unavailable",
@@ -184,6 +187,7 @@ def normalized_validation_failure_class(
         "leak",
         "canary_or_offset",
         "payload_control_flow",
+        "exploit_model_unproven",
         "shell",
         "flag_read",
         "solver",
@@ -346,6 +350,15 @@ def _normalized_pwn_failure_stage(result: Mapping[str, Any]) -> str | None:
         or ("leak data" in text and re.search(r"\b0{8,}\b", text))
     ):
         return "leak"
+    if "pwn_solver_prompt_desync" in detail_codes:
+        return "prompt_desync"
+    if "pwn_exploit_model_unproven" in detail_codes:
+        return "exploit_model_unproven"
+    if (
+        ("brokenpipeerror" in text or "broken pipe" in text or "prompt desync" in text)
+        and _readiness_established(result, details)
+    ):
+        return "prompt_desync"
     if "pwn_exp_bad_artifact_path" in detail_codes:
         return "solver"
     if current == "readiness" and _exploit_stage_started(result, details):
@@ -420,6 +433,8 @@ def attempt_level_validation_failure(results: Sequence[Mapping[str, Any]]) -> di
             "pwn_debug_tcp_probe_status",
             "pwn_debug_tcp_probe_matched_token",
             "pwn_debug_tcp_probe_raw_output_tail",
+            "pwn_source_protocol_token",
+            "pwn_source_protocol_token_source",
         )
         if (value := result.get(key)) not in (None, "", [])
     }
@@ -532,6 +547,8 @@ def _summarize_single_result(result: Mapping[str, Any], *, source: str) -> dict[
             normalized.get("pwn_debug_tcp_probe_raw_output_tail"),
             limit=1000,
         ),
+        "pwn_source_protocol_token": normalized.get("pwn_source_protocol_token"),
+        "pwn_source_protocol_token_source": normalized.get("pwn_source_protocol_token_source"),
         "failure_kind": normalized.get("failure_kind"),
         "failure_hint": _stable_text(normalized.get("failure_hint"), limit=1000),
         "failed_step": _stable_text(normalized.get("failed_step"), limit=1000),
@@ -701,7 +718,7 @@ def _validate_wrapper_readiness_failure(
     details: Sequence[Mapping[str, Any]],
 ) -> bool:
     detail_codes = {str(item.get("code") or "").strip() for item in details}
-    if "pwn_bad_readiness_probe" in detail_codes:
+    if detail_codes & _VALIDATE_WRAPPER_CODES:
         return True
     return _canonical_tcp_probe_ready(result) and _validate_claims_readiness_failed(result, details)
 

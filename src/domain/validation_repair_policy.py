@@ -97,7 +97,10 @@ def policy_for_validation_failure(
             deterministic_mechanics=READINESS_MECHANICS,
             hermes_allowed=True,
             max_deterministic_rounds=2,
-            summary="service-readiness: repair readiness wrappers/diagnostics before exploit tuning",
+            summary=(
+                "service-readiness: container/service did not connect or did not "
+                "emit the source-derived banner/menu token within the readiness window"
+            ),
         )
     if failure_class == "validate-wrapper":
         return ValidationRepairPolicy(
@@ -107,8 +110,9 @@ def policy_for_validation_failure(
             hermes_allowed=True,
             max_deterministic_rounds=2,
             summary=(
-                "validate-wrapper: service is reachable; repair validate.sh "
-                "readiness probe/capture before startup or exploit tuning"
+                "validate-wrapper: repair validate.sh stage structure, token "
+                "readiness, CHAL_HOST/CHAL_PORT export, or solver capture before "
+                "startup or payload tuning"
             ),
         )
     if failure_class == "compose_cli_mismatch":
@@ -127,7 +131,10 @@ def policy_for_validation_failure(
             deterministic_mechanics=SOLVER_DIAGNOSTIC_MECHANICS,
             hermes_allowed=False,
             max_deterministic_rounds=1,
-            summary="validate-capture: repair validate.sh solver stdout/stderr/exit-code capture",
+            summary=(
+                "validate-capture: first repair validate.sh solver stdout/stderr/"
+                "exit-code capture; do not guess exploit payloads without solver output"
+            ),
         )
     if failure_class == "validation_inconclusive":
         return ValidationRepairPolicy(
@@ -143,7 +150,10 @@ def policy_for_validation_failure(
             deterministic_mechanics=SOLVER_DIAGNOSTIC_MECHANICS,
             hermes_allowed=True,
             max_deterministic_rounds=1,
-            summary="solver: Hermes repair with exp and validation diagnostics",
+            summary=(
+                "solver: readiness was established or wrapper evidence is sufficient; "
+                "repair exp.py protocol, leak, payload, or flag extraction"
+            ),
         )
     if failure_class == "timeout":
         timeout_subreason = timeout_failure_subreason(result)

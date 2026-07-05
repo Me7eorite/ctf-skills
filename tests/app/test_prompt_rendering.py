@@ -349,6 +349,38 @@ class RenderPromptTests(unittest.TestCase):
                 rendered,
             )
 
+    def test_prompt_requires_simple_pwn_validate_stage_structure(self):
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            paths = _seed_paths(tmp_path)
+            running_shard = tmp_path / "running.json"
+            running_shard.write_text("{}", encoding="utf-8")
+            rendered = render_prompt(
+                paths,  # type: ignore[arg-type]
+                running_shard,
+                tmp_path / "r.json",
+                worker="dry-01",
+                original_shard_name="s.json",
+            )
+
+            normalized = " ".join(rendered.split())
+            for stage in (
+                "start_compose",
+                "wait_container",
+                "derive_protocol_token",
+                "wait_app_ready",
+                "run_solver",
+                "check_flag",
+                "diagnostics",
+            ):
+                self.assertIn(stage, rendered)
+            self.assertIn("exact full-string match is not required", rendered)
+            self.assertIn("reading `Perfect` is enough", normalized)
+            self.assertIn("still run `run_solver` to capture solver evidence", rendered)
+            self.assertIn("20-30 second bound", normalized)
+            self.assertIn("`nc -z` is only port-open evidence and never application readiness", normalized)
+            self.assertIn("`dd count=N`", rendered)
+
     def test_design_context_instruction_is_conditional(self):
         with TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

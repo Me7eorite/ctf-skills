@@ -491,16 +491,28 @@ authoritative `validate/passed` or `validate/failed` event.
   not replace host validation, but the main agent must not leave obviously
   untested `writenup/exp.py` logic for a later repair pass.
 - For Pwn xinetd/chroot services, readiness in `validate.sh` must be an
-  application-level probe, not just `nc -z`. Wait until a fresh TCP connection
-  receives the expected banner/menu prompt such as `Choice:` before running the
-  exploit. A port-only check can pass while xinetd is still initializing or can
-  consume a short-lived service instance and cause the exploit to hit EOF.
-  Do not use fixed byte reads such as `head -c 200 < /dev/tcp/...` that wait
-  for EOF on interactive services. Use a short socket timeout and succeed as
-  soon as a stable token such as `Choice:`, the menu prompt, or a banner string
-  is observed. On readiness failure, print the actual probe tail plus
-  `$COMPOSE ps`, `$COMPOSE logs --no-color --tail=120`, CHAL_HOST, CHAL_PORT,
-  compose project, container, and image diagnostics to stderr.
+  application-level probe, not just `nc -z`. Structure the script as clear
+  named stages: `start_compose`, `wait_container`, `derive_protocol_token`,
+  `wait_app_ready`, `run_solver`, `check_flag`, and `diagnostics`.
+  `wait_container` only waits for Docker Compose/container `Up` state with a
+  20-30 second bound. `derive_protocol_token` must inspect visible challenge
+  evidence first: `deploy/src/*.c`, `src/*`, README, writeup, and design files.
+  If source contains `printf("Choice:")`, waiting for `Choice:` is good, but an
+  exact full-string match is not required when a stable visible substring proves
+  application response. For example, if the banner is `Perfect Menu:`, reading
+  `Perfect` is enough. Only when no token is statically visible may it fall back
+  to `Choice:`, `menu`, `Menu`, `Welcome`, or `>`. `wait_app_ready` must loop
+  fresh CHAL_HOST/CHAL_PORT connections with a short per-read timeout and
+  succeed as soon as the token or stable substring is read; do not wait for EOF.
+  A port-only check can pass while xinetd is still initializing or can consume a
+  short-lived service instance and cause the exploit to hit EOF.
+  Do not use fixed byte reads such as `head -c 200 < /dev/tcp/...` or
+  `dd count=N` that wait for EOF or a byte count on interactive services. You
+  may use `nc` for manual/script connectivity tests, but `nc -z` is only
+  port-open evidence and never application readiness. On readiness failure,
+  print the actual probe tail plus `$COMPOSE ps`, `$COMPOSE logs --no-color
+  --tail=120`, CHAL_HOST, CHAL_PORT, compose project, container, and image
+  diagnostics to stderr.
   Do not put `nc "$CHAL_HOST" "$CHAL_PORT"` behind `bash -c` unless both
   variables are exported first; prefer a current-shell probe such as
   `printf '3\n' | timeout 3 nc "$CHAL_HOST" "$CHAL_PORT" | grep -q "Choice:"`.
@@ -609,6 +621,15 @@ network-fetching dependency installation. Validation is offline-capable.
 
 After that gate, `validate.sh` must start the service, wait for
 health/readiness, run `writenup/exp.py`, and always clean up with a shell trap.
+For Pwn, keep those actions in the named stages above and print the current
+stage in failure diagnostics. If `wait_app_ready` cannot prove a token but the
+container is Up and the port connects, treat readiness as inconclusive when
+reasonable and still run `run_solver` to capture solver evidence; only classify
+startup/readiness after solver and diagnostics also point there. `run_solver`
+must capture solver stdout, stderr, and exit code; `check_flag` must extract
+`flag{...}` from solver stdout; and `diagnostics` must print bounded tails for
+compose ps/logs, CHAL_HOST, CHAL_PORT, readiness raw output, solver stdout,
+solver stderr, and solver exit code.
 It MUST isolate Docker Compose state for concurrent validation. Derive a stable
 project from the challenge root and run every compose command through that
 project, for example:

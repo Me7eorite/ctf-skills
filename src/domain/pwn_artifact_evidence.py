@@ -93,8 +93,16 @@ def final_pwn_artifact_prompt_block(challenge_dir: Path) -> str:
     metadata_sha = evidence.get("metadata_artifact_sha256") or "(unavailable)"
     artifact_path = str(evidence.get("path") or PWN_FINAL_ARTIFACT_PROMPT_PATH)
     rel_artifact_path = artifact_path[2:] if artifact_path.startswith("./") else artifact_path
+    deploy_counterpart = challenge_dir / "deploy" / "src" / Path(rel_artifact_path).name
+    deploy_sha_line: str | None = None
+    if deploy_counterpart.is_file() and not deploy_counterpart.is_symlink():
+        deploy_rel = deploy_counterpart.relative_to(challenge_dir).as_posix()
+        deploy_sha_line = (
+            f"- {deploy_rel} sha256: {_sha256_file(deploy_counterpart)} "
+            "(UNTRUSTED / DO NOT USE)"
+        )
     return "\n".join(
-        [
+        [line for line in [
             "FINAL SOLVER EVIDENCE SOURCE:",
             f"Use only {artifact_path} for exp.py and pwn_debug_report.json.",
             "Do not use deploy/src binaries for solver offsets, symbols, gadgets, or report sha.",
@@ -106,11 +114,12 @@ def final_pwn_artifact_prompt_block(challenge_dir: Path) -> str:
             f"- artifact available: {available}",
             f"- {rel_artifact_path} sha256: {sha}",
             f"- metadata.artifact_sha256: {metadata_sha}",
+            deploy_sha_line,
             f"- key symbols from {rel_artifact_path}:",
             *symbol_lines,
             f"- checksec: {json.dumps(evidence.get('checksec') or {}, ensure_ascii=False)}",
             f"- gadget summary: {json.dumps(evidence.get('gadgets') or {}, ensure_ascii=False)}",
-        ]
+        ] if line is not None]
     )
 
 

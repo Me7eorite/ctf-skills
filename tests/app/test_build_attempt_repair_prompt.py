@@ -159,6 +159,55 @@ def test_build_attempt_repair_prompt_includes_validation_evidence_and_debug_repo
     assert "print bounded diagnostics for service ready state" in normalized
 
 
+def test_build_attempt_repair_prompt_names_source_token_and_ready_boundary(tmp_path: Path) -> None:
+    challenge_dir = tmp_path / "pwn-0001-demo"
+    (challenge_dir / "deploy" / "src").mkdir(parents=True)
+    (challenge_dir / "writenup").mkdir()
+    (challenge_dir / "metadata.json").write_text('{"id":"pwn-0001","category":"pwn"}', encoding="utf-8")
+    (challenge_dir / "deploy" / "src" / "vuln.c").write_text(
+        'int main(){ printf("Choice:"); getchar(); }\n',
+        encoding="utf-8",
+    )
+
+    prompt = _repair_prompt(
+        {
+            "id": "attempt",
+            "design_task_id": "task",
+            "challenge_id": "pwn-0001",
+            "category": "pwn",
+            "challenge_dir": challenge_dir,
+            "failure_summary": "BrokenPipe after ready",
+            "failure_details": [
+                {
+                    "phase": "exploit",
+                    "code": "pwn_solver_prompt_desync",
+                    "message": "BrokenPipeError",
+                }
+            ],
+            "latest_failure": {
+                "validation_status": "nonzero_exit",
+                "validation_failure_class": "solver",
+                "pwn_source_protocol_token": "Choice:",
+                "pwn_source_protocol_token_source": "deploy/src/vuln.c",
+                "validation_stdout_tail": "[validate] wait_app_ready read token Choice:\n[validate] run_solver\n",
+                "validation_stderr_tail": "BrokenPipeError\n",
+            },
+            "file_context": _file_context(challenge_dir),
+        }
+    )
+
+    normalized = " ".join(prompt.split())
+    assert "token: 'Choice:'" in prompt
+    assert "source: deploy/src/vuln.c" in prompt
+    assert (
+        "service ready means a fresh CHAL_HOST/CHAL_PORT connection read this token "
+        "or a stable source-visible substring"
+    ) in normalized
+    assert "The service is already ready; do not repair startup" in normalized
+    assert "do not stop with only a readiness claim" in normalized
+    assert "sendline`/`sendafter" in prompt
+
+
 def test_build_attempt_repair_prompt_explains_semantic_failure(tmp_path: Path) -> None:
     challenge_dir = tmp_path / "pwn-0001-demo"
     challenge_dir.mkdir()
