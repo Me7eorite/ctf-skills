@@ -430,10 +430,14 @@ class ConfigureTerminalWorkspaceTests(unittest.TestCase):
         self.assertEqual(environment["TERMINAL_CONTAINER_PERSISTENT"], "true")
         self.assertEqual(environment["CTF_SKILLS_EXECUTION_ID"], "attempt")
         self.assertEqual(environment["CTF_SKILLS_HERMES_TASK_ID"], "ctf-build-attempt")
+        self.assertEqual(environment["CTF_SKILLS_HOST_WORKSPACE"], str(cwd.resolve()))
+        self.assertEqual(environment["CTF_SKILLS_CONTAINER_WORKSPACE"], "/workspace/current")
         self.assertIn("hermes_sitecustomize", environment["PYTHONPATH"])
         docker_env = json.loads(environment["TERMINAL_DOCKER_ENV"])
         self.assertEqual(docker_env["CTF_SKILLS_EXECUTION_ID"], "attempt")
         self.assertEqual(docker_env["CTF_SKILLS_HERMES_TASK_ID"], "ctf-build-attempt")
+        self.assertEqual(docker_env["CTF_SKILLS_HOST_WORKSPACE"], str(cwd.resolve()))
+        self.assertEqual(docker_env["CTF_SKILLS_CONTAINER_WORKSPACE"], "/workspace/current")
         extra_args = json.loads(environment["TERMINAL_DOCKER_EXTRA_ARGS"])
         self.assertIn("ctf-skills-owner=ctf-skills", extra_args)
         self.assertIn("ctf-skills-execution=attempt", extra_args)
@@ -479,6 +483,13 @@ class ConfigureTerminalWorkspaceTests(unittest.TestCase):
         terminal_tool_module = types.ModuleType("tools.terminal_tool")
         terminal_tool_module._task_env_overrides = {}
         terminal_tool_module._resolve_container_task_id = lambda _task_id: "default"
+        terminal_tool_module._get_env_config = lambda: {
+            "cwd": "/workspace/executions/other/current",
+            "docker_volumes": ["/root/ctf-skills/work/executions:/workspace/executions"],
+            "docker_extra_args": [],
+            "docker_env": {},
+            "docker_persist_across_processes": True,
+        }
 
         def register_task_env_overrides(task_id, overrides):
             terminal_tool_module._task_env_overrides[task_id] = overrides
@@ -491,6 +502,10 @@ class ConfigureTerminalWorkspaceTests(unittest.TestCase):
                 os.environ,
                 {
                     "CTF_SKILLS_HERMES_TASK_ID": "ctf-build-attempt",
+                    "CTF_SKILLS_EXECUTION_ID": "attempt",
+                    "CTF_SKILLS_HERMES_DOCKER_LABEL": "attempt-label",
+                    "CTF_SKILLS_HOST_WORKSPACE": "/host/current",
+                    "CTF_SKILLS_CONTAINER_WORKSPACE": "/workspace/current",
                     "TERMINAL_ENV": "docker",
                     "TERMINAL_CWD": "/workspace/current",
                 },
@@ -515,6 +530,15 @@ class ConfigureTerminalWorkspaceTests(unittest.TestCase):
             terminal_tool_module._resolve_container_task_id("hermes-session-id"),
             "ctf-build-attempt",
         )
+        config = terminal_tool_module._get_env_config()
+        self.assertEqual(config["cwd"], "/workspace/current")
+        self.assertEqual(config["docker_volumes"], ["/host/current:/workspace/current"])
+        self.assertFalse(config["docker_persist_across_processes"])
+        self.assertEqual(config["docker_env"]["CTF_SKILLS_EXECUTION_ID"], "attempt")
+        self.assertEqual(config["docker_env"]["CTF_SKILLS_HERMES_TASK_ID"], "ctf-build-attempt")
+        self.assertIn("ctf-skills-owner=ctf-skills", config["docker_extra_args"])
+        self.assertIn("ctf-skills-execution=attempt", config["docker_extra_args"])
+        self.assertIn("ctf-skills-hermes-run=attempt-label", config["docker_extra_args"])
 
 
 class TerminalWorkspaceVisibilityTests(unittest.TestCase):

@@ -37,6 +37,8 @@ _CTF_HERMES_EXECUTION_LABEL_KEY = "ctf-skills-execution"
 _CTF_HERMES_LABEL_ENV = "CTF_SKILLS_HERMES_DOCKER_LABEL"
 _CTF_HERMES_EXECUTION_ENV = "CTF_SKILLS_EXECUTION_ID"
 _CTF_HERMES_TASK_ENV = "CTF_SKILLS_HERMES_TASK_ID"
+_CTF_HERMES_HOST_WORKSPACE_ENV = "CTF_SKILLS_HOST_WORKSPACE"
+_CTF_HERMES_CONTAINER_WORKSPACE_ENV = "CTF_SKILLS_CONTAINER_WORKSPACE"
 _CTF_HERMES_BOOTSTRAP_DIR = Path(__file__).resolve().parents[1] / "hermes_sitecustomize"
 # The probe starts a full Hermes CLI process. On server-side custom providers,
 # plugin loading plus model metadata probing can take over a minute before the
@@ -90,7 +92,7 @@ def hermes_arguments() -> list[str]:
 
     hermes = shutil.which("hermes")
     if hermes:
-        return [hermes, "chat", "-Q", "--yolo", "-q"]
+        return [_hermes_launch_executable(Path(hermes)), "chat", "-Q", "--yolo", "-q"]
 
     for candidate in _hermes_executable_candidates():
         if candidate.is_file() and os.access(candidate, os.X_OK):
@@ -107,6 +109,37 @@ def hermes_arguments() -> list[str]:
         )
         return arguments
     return shlex.split(DEFAULT_HERMES_COMMAND)
+
+
+def _hermes_launch_executable(path: Path) -> str:
+    """Return an executable that preserves this process' environment.
+
+    Some local Hermes installs expose ``/usr/local/bin/hermes`` as a shell
+    wrapper that unsets ``PYTHONPATH`` before exec'ing the real venv entrypoint.
+    Challenge Factory uses ``PYTHONPATH`` to inject runtime isolation bootstrap
+    code, so bypass only that narrow wrapper shape and execute its target
+    directly.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return str(path)
+    if "unset PYTHONPATH" not in text:
+        return str(path)
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("exec "):
+            continue
+        try:
+            parts = shlex.split(stripped)
+        except ValueError:
+            continue
+        if len(parts) < 2 or parts[0] != "exec":
+            continue
+        target = Path(parts[1])
+        if target.is_file() and os.access(target, os.X_OK):
+            return str(target)
+    return str(path)
 
 
 def _hermes_executable_candidates() -> list[Path]:
@@ -300,6 +333,7 @@ def configure_terminal_workspace(
     if backend != "docker":
         return
     container_cwd, volumes = _docker_workspace_mapping(cwd)
+    host_workspace, container_workspace = _workspace_volume_parts(volumes[0])
     environment["_HERMES_GATEWAY"] = "1"
     environment["TERMINAL_CWD"] = container_cwd
     environment["TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE"] = "1"
@@ -314,6 +348,8 @@ def configure_terminal_workspace(
     task_id = docker_task_id(cwd)
     environment[_CTF_HERMES_LABEL_ENV] = label
     environment[_CTF_HERMES_TASK_ENV] = task_id
+    environment[_CTF_HERMES_HOST_WORKSPACE_ENV] = host_workspace
+    environment[_CTF_HERMES_CONTAINER_WORKSPACE_ENV] = container_workspace
     if attempt:
         environment[_CTF_HERMES_EXECUTION_ENV] = attempt
     _prepend_pythonpath(environment, _CTF_HERMES_BOOTSTRAP_DIR)
@@ -323,6 +359,8 @@ def configure_terminal_workspace(
         {
             _CTF_HERMES_LABEL_ENV: label,
             _CTF_HERMES_TASK_ENV: task_id,
+            _CTF_HERMES_HOST_WORKSPACE_ENV: host_workspace,
+            _CTF_HERMES_CONTAINER_WORKSPACE_ENV: container_workspace,
             **({_CTF_HERMES_EXECUTION_ENV: attempt} if attempt else {}),
         },
     )
@@ -410,6 +448,13 @@ def _prepend_pythonpath(environment: dict[str, str], path: Path) -> None:
     if entry in parts:
         return
     environment["PYTHONPATH"] = os.pathsep.join([entry, *parts])
+
+
+def _workspace_volume_parts(volume: str) -> tuple[str, str]:
+    host, separator, container = volume.partition(":")
+    if not separator:
+        return volume, "/workspace"
+    return host, container
 
 
 def _docker_workspace_mapping(cwd: Path) -> tuple[str, list[str]]:
@@ -999,6 +1044,8 @@ _INVOKE_LOGGED_ENV_KEYS = (
     _CTF_HERMES_EXECUTION_ENV,
     _CTF_HERMES_TASK_ENV,
     _CTF_HERMES_LABEL_ENV,
+    _CTF_HERMES_HOST_WORKSPACE_ENV,
+    _CTF_HERMES_CONTAINER_WORKSPACE_ENV,
 )
 
 
@@ -1145,6 +1192,8 @@ _LOGGED_ENV_KEYS = (
     _CTF_HERMES_EXECUTION_ENV,
     _CTF_HERMES_TASK_ENV,
     _CTF_HERMES_LABEL_ENV,
+    _CTF_HERMES_HOST_WORKSPACE_ENV,
+    _CTF_HERMES_CONTAINER_WORKSPACE_ENV,
 )
 
 

@@ -366,6 +366,32 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertEqual(Path(arguments[0]).as_posix(), "/root/.pyenv/shims/hermes")
         self.assertEqual(arguments[1:], ["chat", "-Q", "--yolo", "-q"])
 
+    def test_bypasses_hermes_wrapper_that_unsets_pythonpath(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "venv" / "bin" / "hermes"
+            target.parent.mkdir(parents=True)
+            target.write_text("#!/usr/bin/env python\n", encoding="utf-8")
+            target.chmod(0o755)
+            wrapper = root / "hermes"
+            wrapper.write_text(
+                "#!/usr/bin/env bash\n"
+                "unset PYTHONPATH\n"
+                "unset PYTHONHOME\n"
+                f"exec {str(target)!r} \"$@\"\n",
+                encoding="utf-8",
+            )
+            wrapper.chmod(0o755)
+
+            with (
+                patch.dict("os.environ", {}, clear=True),
+                patch("hermes.process.shutil.which", return_value=str(wrapper)),
+            ):
+                arguments = HermesRunner._hermes_arguments()
+
+        self.assertEqual(arguments[0], str(target))
+        self.assertEqual(arguments[1:], ["chat", "-Q", "--yolo", "-q"])
+
     def test_uses_configured_bin_dir_before_default_shims(self):
         def exists(path):
             return Path(path).as_posix() == "/opt/hermes/bin/hermes"
