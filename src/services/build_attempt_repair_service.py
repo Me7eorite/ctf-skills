@@ -507,6 +507,9 @@ Validation class:
 Validation evidence:
 {json.dumps(_validation_evidence(latest_failure), ensure_ascii=False, indent=2)}
 
+Structured Pwn stage guard:
+{json.dumps(_pwn_stage_guard(latest_failure), ensure_ascii=False, indent=2)}
+
 {final_pwn_artifact_prompt_block(Path(context["challenge_dir"]))}
 
 Attempt:
@@ -550,6 +553,11 @@ Rules:
 - For Pwn Dockerfile repairs, do not add `chroot` to `apt-get install`;
   Ubuntu/Debian provide the `chroot` command via `coreutils`. Remove that
   package name or use `coreutils`.
+- If structured evidence has `service_ready=true` and `exploit_started=true`,
+  do not repair service readiness, host/port wiring, container startup, or menu
+  probing unless a managed pwn-debug run proves the service is unavailable.
+  Treat cleanup/readiness probe tail noise as lower priority than the real
+  exploit stage.
 - For Pwn solver repairs, Bound every `recvuntil` / `recvline` wait with short
   timeouts, cap brute-force or leak loops, and print bounded diagnostics for
   service ready state, the first banner line, the last recv position, and the
@@ -660,6 +668,36 @@ def _failure_details(latest_failure: dict[str, Any] | None) -> list[dict[str, An
     return []
 
 
+def _pwn_stage_guard(latest_failure: Any) -> dict[str, Any]:
+    if not isinstance(latest_failure, dict):
+        return {
+            "service_ready": False,
+            "exploit_started": False,
+            "exploit_exit_code": None,
+            "exploit_stdout_tail": "(unavailable)",
+            "exploit_stderr_tail": "(unavailable)",
+            "pwn_debug_failure_stage": None,
+            "validation_failure_class": None,
+            "classification_conflicts": [],
+        }
+    stdout = str(latest_failure.get("validation_stdout_tail") or "")
+    stderr = str(latest_failure.get("validation_stderr_tail") or "")
+    text = f"{stdout}\n{stderr}".lower()
+    return {
+        "service_ready": "service is ready" in text,
+        "exploit_started": bool(
+            re.search(r"\b(running exploit|exploit phase|starting exploit|launching exploit)\b", text)
+        ),
+        "exploit_exit_code": latest_failure.get("validation_returncode"),
+        "exploit_stdout_tail": stdout[-1000:] if stdout else "(unavailable)",
+        "exploit_stderr_tail": stderr[-1000:] if stderr else "(unavailable)",
+        "pwn_debug_failure_stage": latest_failure.get("pwn_debug_failure_stage")
+        or latest_failure.get("pwn_failure_stage"),
+        "validation_failure_class": latest_failure.get("validation_failure_class"),
+        "classification_conflicts": latest_failure.get("classification_conflicts") or [],
+    }
+
+
 def _validation_evidence(latest_failure: Any) -> dict[str, Any]:
     if not isinstance(latest_failure, dict):
         return {
@@ -690,6 +728,10 @@ def _validation_evidence(latest_failure: Any) -> dict[str, Any]:
         "validation_contract_errors": latest_failure.get("validation_contract_errors")
         or [],
         "missing": missing,
+        "missing_solver_output": latest_failure.get("missing_solver_output", False),
+        "pwn_debug_failure_stage": latest_failure.get("pwn_debug_failure_stage")
+        or latest_failure.get("pwn_failure_stage"),
+        "classification_conflicts": latest_failure.get("classification_conflicts") or [],
     }
     return evidence
 

@@ -17,7 +17,22 @@ from uuid import UUID
 from core.jsonio import read_json
 from core.paths import ProjectPaths
 
-VALIDATION_FAILURE_CLASSES = ("timeout", "service-readiness", "contract", "solver")
+VALIDATION_FAILURE_CLASSES = (
+    "timeout",
+    "service-readiness",
+    "contract",
+    "solver",
+    "validate_capture_failed",
+    "validation_inconclusive",
+    "compose_cli_mismatch",
+)
+_SYSTEMIC_FAILURE_CLASSES = {
+    "validate_capture_failed",
+    "validation_inconclusive",
+    "pwn_debug_service_not_started",
+    "compose_cli_mismatch",
+    "classification_conflict",
+}
 
 _NO_VALIDATION_CLASS_PHASES = {
     "hermes_auth",
@@ -98,6 +113,8 @@ _SOLVER_CODES = {
     "pwn_shell_no_flag",
     "pwn_remote_local_mismatch",
     "pwn_prompt_eof",
+    "validate_capture_failed",
+    "solver_inconclusive",
     "solver_evidence_stale",
     "exploit_timeout",
     "pwn_exp_missing_binary_sha",
@@ -143,8 +160,16 @@ def normalized_validation_failure_class(
     detail_codes = {str(item.get("code") or "").strip() for item in detail_items}
     detail_phases = {str(item.get("phase") or "").strip() for item in detail_items}
 
+    if _compose_cli_mismatch(result):
+        return "compose_cli_mismatch"
     if status in _TIMEOUT_STATUSES or "timeout" in detail_codes:
         return "timeout"
+    if "validate_capture_failed" in detail_codes or result.get("missing_solver_output") is True:
+        return "validate_capture_failed"
+    if pwn_stage in {"service_not_started", "external_unavailable"}:
+        return "validation_inconclusive"
+    if pwn_stage == "readiness" and _exploit_stage_started(result, detail_items):
+        return "solver"
     if pwn_stage == "readiness":
         return "service-readiness"
     if pwn_stage in {
@@ -155,6 +180,8 @@ def normalized_validation_failure_class(
         "shell",
         "flag_read",
         "solver",
+        "service_not_started",
+        "external_unavailable",
     }:
         return "solver"
     if pwn_stage == "contract":
@@ -274,12 +301,43 @@ def annotate_validation_result(result: Mapping[str, Any]) -> dict[str, Any]:
     """Return a copy with normalized class/signature fields when applicable."""
     annotated = dict(result)
     failure_class = normalized_validation_failure_class(annotated)
+    conflicts = _classification_conflicts(annotated, failure_class)
+    if conflicts:
+        annotated["classification_conflicts"] = conflicts
+        annotated["batch_degraded"] = True
     if failure_class:
         annotated["validation_failure_class"] = failure_class
         signature = validation_failure_signature(annotated, failure_class=failure_class)
         if signature:
             annotated["validation_failure_signature"] = signature
+        if failure_class in _SYSTEMIC_FAILURE_CLASSES:
+            annotated["batch_degraded"] = True
+            annotated["pause_pwn_lane"] = True
+    if annotated.get("pwn_failure_stage") == "service_not_started":
+        annotated["pwn_debug_failure_stage"] = "service_not_started"
+        annotated["batch_degraded"] = True
     return annotated
+
+
+def _compose_cli_mismatch(result: Mapping[str, Any]) -> bool:
+    text = _combined_text(result).lower()
+    return (
+        "docker: 'compose' is not a docker command" in text
+        or "docker compose" in text
+        and "run 'docker command --help'" in text
+    )
+
+
+def _classification_conflicts(result: Mapping[str, Any], failure_class: str | None) -> list[str]:
+    conflicts: list[str] = []
+    details = _failure_details(result)
+    if _exploit_stage_started(result, details) and failure_class == "service-readiness":
+        conflicts.append("exploit_started_but_classified_service_readiness")
+    if _readiness_established(result, details) and failure_class == "service-readiness":
+        conflicts.append("service_ready_but_classified_service_readiness")
+    if result.get("missing_solver_output") is True and failure_class == "service-readiness":
+        conflicts.append("missing_solver_output_masked_by_readiness")
+    return conflicts
 
 
 def attempt_level_validation_failure(results: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -309,7 +367,12 @@ def attempt_level_validation_failure(results: Sequence[Mapping[str, Any]]) -> di
             "validation_returncode",
             "validation_final_flag_candidate",
             "validation_diagnostic_unavailable",
+            "missing_solver_output",
+            "classification_conflicts",
+            "batch_degraded",
+            "pause_pwn_lane",
             "pwn_failure_stage",
+            "pwn_debug_failure_stage",
             "pwn_debug_result_path",
             "pwn_debug_result_sha256",
             "pwn_debug_actionable_summary",
@@ -407,7 +470,12 @@ def _summarize_single_result(result: Mapping[str, Any], *, source: str) -> dict[
             limit=200,
         ),
         "validation_diagnostic_unavailable": normalized.get("validation_diagnostic_unavailable"),
+        "missing_solver_output": normalized.get("missing_solver_output"),
+        "classification_conflicts": normalized.get("classification_conflicts"),
+        "batch_degraded": normalized.get("batch_degraded"),
+        "pause_pwn_lane": normalized.get("pause_pwn_lane"),
         "pwn_failure_stage": normalized.get("pwn_failure_stage"),
+        "pwn_debug_failure_stage": normalized.get("pwn_debug_failure_stage"),
         "pwn_debug_result_path": normalized.get("pwn_debug_result_path"),
         "pwn_debug_result_sha256": normalized.get("pwn_debug_result_sha256"),
         "pwn_debug_actionable_summary": _stable_text(

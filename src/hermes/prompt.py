@@ -56,7 +56,12 @@ def render_validation_repair_prompt(
                     "validation_command",
                     "validation_final_flag_candidate",
                     "validation_diagnostic_unavailable",
+                    "missing_solver_output",
+                    "classification_conflicts",
+                    "batch_degraded",
+                    "pause_pwn_lane",
                     "pwn_failure_stage",
+                    "pwn_debug_failure_stage",
                     "pwn_debug_result_path",
                     "pwn_debug_result_sha256",
                     "pwn_debug_actionable_summary",
@@ -130,6 +135,11 @@ Pwn repair evidence rules:
   connectable, leak values are stable, canary/libc/PIE/gadget sources match the
   current `metadata.artifact`, payload offsets come from disassembly or dynamic
   verification, and `writenup/exp.py` actually emits a flag candidate.
+- Structured diagnostics include `service_ready`, `exploit_started`,
+  `exploit_exit_code`, solver stdout/stderr tails, `pwn_debug_failure_stage`,
+  `validation_failure_class`, and `classification_conflicts` when available.
+  If service is ready and the exploit started, do not keep repairing readiness
+  unless a managed pwn-debug run proves the service is unavailable.
 - If `pwn_failure_stage` is `readiness`, fix service protocol, host/port,
   banner/menu probing, logs, and readiness diagnostics first. Do not turn this
   into a SHA-only or metadata-only repair.

@@ -374,3 +374,60 @@ def test_signature_normalization_ignores_volatile_values_but_keeps_stable_marker
 
     assert validation_failure_signature(first) == validation_failure_signature(repeated_with_noise)
     assert validation_failure_signature(first) != validation_failure_signature(different_marker)
+
+def test_ready_running_cleanup_without_solver_output_is_capture_failed() -> None:
+    result = {
+        "solve_status": "failed",
+        "validation_status": "nonzero_exit",
+        "validation_stdout_tail": "[validate] Service is ready\n[validate] Running exploit script\n",
+        "validation_stderr_tail": (
+            "[validate] cleanup: docker-compose down\n"
+            "[readiness] no banner or menu prompt received\n"
+        ),
+        "missing_solver_output": True,
+    }
+
+    assert normalized_validation_failure_class(result) == "validate_capture_failed"
+
+
+def test_classification_conflict_records_ready_but_service_readiness() -> None:
+    from domain.validation_failure_governance import annotate_validation_result
+
+    result = annotate_validation_result(
+        {
+            "solve_status": "failed",
+            "validation_status": "nonzero_exit",
+            "pwn_failure_stage": "readiness",
+            "readiness_established": True,
+        }
+    )
+
+    assert result["validation_failure_class"] == "service-readiness"
+    assert "service_ready_but_classified_service_readiness" in result["classification_conflicts"]
+    assert result["batch_degraded"] is True
+
+
+def test_pwn_debug_service_not_started_is_validation_inconclusive() -> None:
+    result = {
+        "solve_status": "failed",
+        "validation_status": "nonzero_exit",
+        "pwn_failure_stage": "service_not_started",
+    }
+
+    assert normalized_validation_failure_class(result) == "validation_inconclusive"
+
+
+def test_compose_cli_mismatch_is_systemic_batch_degraded() -> None:
+    from domain.validation_failure_governance import annotate_validation_result
+
+    result = annotate_validation_result(
+        {
+            "solve_status": "failed",
+            "validation_status": "nonzero_exit",
+            "validation_stderr_tail": "docker: 'compose' is not a docker command. See 'docker --help'",
+        }
+    )
+
+    assert result["validation_failure_class"] == "compose_cli_mismatch"
+    assert result["batch_degraded"] is True
+    assert result["pause_pwn_lane"] is True

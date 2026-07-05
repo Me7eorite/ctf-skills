@@ -3,10 +3,14 @@ from __future__ import annotations
 import socket
 import threading
 import time
-from pathlib import Path
 
 import domain.pwn_debug as pwn_debug
-from domain.pwn_debug import classify_leak_value, classify_pwn_failure_stage, tcp_readiness_probe
+from domain.pwn_debug import (
+    classify_leak_value,
+    classify_pwn_failure_stage,
+    run_pwn_debug,
+    tcp_readiness_probe,
+)
 
 
 def test_tcp_readiness_probe_succeeds_without_waiting_for_eof() -> None:
@@ -67,25 +71,56 @@ def test_canary_candidate_classification_rejects_pointer_like_values() -> None:
     assert classify_leak_value("0x0") == "null"
     assert classify_leak_value("0x50") == "small"
 
+def test_pwn_debug_managed_uses_docker_compose_only(tmp_path, monkeypatch) -> None:
+    challenge = tmp_path / "pwn-0001-demo"
+    (challenge / "deploy").mkdir(parents=True)
+    (challenge / "deploy" / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
+    (challenge / "metadata.json").write_text('{"id":"pwn-0001","category":"pwn"}', encoding="utf-8")
+    commands: list[list[str]] = []
 
-def test_pwn_debug_compose_command_uses_legacy_docker_compose_only(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    challenge = tmp_path / "pwn-demo"
-    deploy = challenge / "deploy"
-    deploy.mkdir(parents=True)
-    compose = deploy / "docker-compose.yml"
-    compose.write_text("services: {}\n", encoding="utf-8")
-    calls: list[list[str]] = []
+    def fake_run(command, *, cwd=None, timeout=5, tail_limit=4000):
+        commands.append(list(command))
+        return {"status": "ok", "command": command, "returncode": 0}
 
-    def fake_run_optional(command, *, cwd, timeout, tail_limit=4000):
-        calls.append(list(command))
-        return {"status": "ok", "command": list(command), "returncode": 0}
+    monkeypatch.setattr(pwn_debug, "_run_optional", fake_run)
+    monkeypatch.setattr(pwn_debug, "_format_string_leak_sampling", lambda *a, **k: {"status": "skipped"})
 
-    monkeypatch.setattr(pwn_debug, "_run_optional", fake_run_optional)
+    result = run_pwn_debug(challenge, service_mode="managed", run_exp=False, timeout=1)
 
-    result = pwn_debug._compose_command(challenge, "ps", timeout=5)
+    compose_commands = [command for command in commands if command and command[0] == "docker-compose"]
+    assert result["service_mode"] == "managed"
+    assert any(command[-2:] == ["up", "-d"] for command in compose_commands)
+    assert any(command[-2:] == ["down", "--remove-orphans"] for command in compose_commands)
+    assert all(command[:2] != ["docker", "compose"] for command in commands)
+    assert all("-p" in command and "-f" in command for command in compose_commands)
 
-    assert result["status"] == "ok"
-    assert calls == [["docker-compose", "-f", str(compose), "ps"]]
+
+def test_pwn_debug_not_started_does_not_run_exp_or_claim_readiness(tmp_path, monkeypatch) -> None:
+    challenge = tmp_path / "pwn-0001-demo"
+    challenge.mkdir()
+    (challenge / "metadata.json").write_text('{"id":"pwn-0001","category":"pwn"}', encoding="utf-8")
+
+    def fail_run_exp(*_args, **_kwargs):
+        raise AssertionError("not_started mode must not run exp.py")
+
+    monkeypatch.setattr(pwn_debug, "_run_exp", fail_run_exp)
+
+    result = run_pwn_debug(challenge, service_mode="not_started", run_exp=True, timeout=1)
+
+    assert result["failure_stage"] == "service_not_started"
+    assert result["exp_execution"]["reason"] == "service_not_started"
+    assert "did not start service" in result["actionable_summary"]
+
+
+def test_external_connection_refused_is_external_unavailable_not_readiness() -> None:
+    stage = classify_pwn_failure_stage(
+        status="nonzero_exit",
+        stderr_tail="ConnectionRefusedError: [Errno 111] Connection refused",
+        returncode=1,
+        pwn_debug={
+            "service_mode": "external",
+            "service_readiness": {"tcp_probe": {"status": "failed", "raw_output_tail": ""}},
+        },
+    )
+
+    assert stage == "external_unavailable"

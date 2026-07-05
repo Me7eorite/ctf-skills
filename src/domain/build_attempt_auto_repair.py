@@ -85,15 +85,17 @@ except OSError as exc:
     last_error = exc
 
 text = b"".join(chunks).decode("latin-1", errors="replace")
-if text:
+matched = re.search(token_re, text)
+if matched:
     print(text, end="")
-elif last_error is not None:
+    raise SystemExit(0)
+if last_error is not None:
     print(f"[readiness] connection failed: {last_error}", file=sys.stderr)
+elif text:
+    print(f"[readiness] probe_tail={text[-200:]!r}", file=sys.stderr)
 else:
     print("[readiness] no banner or menu prompt received", file=sys.stderr)
-if text:
-    print(f"[readiness] probe_tail={text[-200:]!r}", file=sys.stderr)
-sys.exit(0 if re.search(token_re, text) else 1)
+raise SystemExit(1)
 PY
 }
 """
@@ -708,21 +710,38 @@ def _repair_validate_solver_capture(challenge_dir: Path, metadata: dict[str, Any
         text = validate.read_text(encoding="utf-8", errors="ignore")
     except OSError:
         return []
-    if "EXPLOIT_OUTPUT=$(python3 writenup/exp.py 2>&1)" not in text:
+    capture_re = re.compile(
+        r"(?P<prefix>(?:set \+e\n)*)"
+        r"EXPLOIT_OUTPUT=\$\((?P<command>(?:timeout\s+\d+\s+)?python3\s+writenup/exp\.py\s+2>&1)\)\n"
+        r"(?P<exit>\s*EXPLOIT_EXIT=\$\?\n)?"
+        r"(?P<suffix>(?:set -e\n?)*)",
+        re.MULTILINE,
+    )
+    match = capture_re.search(text)
+    if not match:
         return []
+    command = match.group("command")
     canonical_capture = (
         "set +e\n"
-        "EXPLOIT_OUTPUT=$(python3 writenup/exp.py 2>&1)\n"
+        f"EXPLOIT_OUTPUT=$({command})\n"
         "EXPLOIT_EXIT=$?\n"
-        "set -e"
+        "set -e\n"
     )
-    repaired = re.sub(
-        r"(?:set \+e\n)*EXPLOIT_OUTPUT=\$\(python3 writenup/exp\.py 2>&1\)\n"
-        r"EXPLOIT_EXIT=\$\?\n(?:set -e\n?)*",
-        canonical_capture + "\n",
-        text,
-        count=1,
-    )
+    repaired = capture_re.sub(canonical_capture, text, count=1)
+    echo_pos = repaired.find('echo "$EXPLOIT_OUTPUT"', match.start())
+    if echo_pos == -1 or echo_pos > match.start() + 260:
+        insert_at = match.start() + len(canonical_capture)
+        repaired = repaired[:insert_at] + 'echo "$EXPLOIT_OUTPUT"\n' + repaired[insert_at:]
+    if "Exploit exited nonzero" not in repaired:
+        echo_pos = repaired.find('echo "$EXPLOIT_OUTPUT"', match.start())
+        line_end = repaired.find("\n", echo_pos)
+        if echo_pos != -1 and line_end != -1:
+            diagnostic = (
+                "if [ \"$EXPLOIT_EXIT\" -ne 0 ]; then\n"
+                "    echo \"[validate] Exploit exited nonzero: $EXPLOIT_EXIT\" >&2\n"
+                "fi\n"
+            )
+            repaired = repaired[: line_end + 1] + diagnostic + repaired[line_end + 1:]
     repaired = repaired.replace("trap cleanup EXIT ERR", "trap cleanup EXIT")
     if repaired == text:
         return []

@@ -1206,3 +1206,33 @@ class IntendedPathNecessityTests(unittest.TestCase):
         self.assertFalse(
             _bare_run_reveals_flag(silent, "flag{the_secret}", timeout=10)
         )
+
+    def test_ready_running_cleanup_without_solver_output_is_not_readiness(self):
+        details = classify_validation_failure(
+            status="nonzero_exit",
+            stderr=(
+                "[validate] Service is ready\n"
+                "[validate] Running exploit script\n"
+                "[validate] cleanup: docker-compose down\n"
+                "[readiness] no banner or menu prompt received\n"
+            ),
+            error="validate.sh exited non-zero",
+        )
+
+        self.assertEqual(details[0]["phase"], "exploit")
+        self.assertEqual(details[0]["code"], "validate_capture_failed")
+
+    def test_readiness_noise_before_success_does_not_override_ready_state(self):
+        details = classify_validation_failure(
+            status="nonzero_exit",
+            stderr=(
+                "[readiness] no banner or menu prompt received\n"
+                "[validate] Service is ready\n"
+                "[validate] Running exploit script\n"
+                "failed to extract flag\n"
+            ),
+            error="validate.sh exited non-zero",
+        )
+
+        self.assertEqual(details[0]["phase"], "exploit")
+        self.assertNotEqual(details[0]["code"], "pwn_service_readiness_failed")

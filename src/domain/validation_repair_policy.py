@@ -99,6 +99,31 @@ def policy_for_validation_failure(
             max_deterministic_rounds=2,
             summary="service-readiness: repair readiness wrappers/diagnostics before exploit tuning",
         )
+    if failure_class == "compose_cli_mismatch":
+        return ValidationRepairPolicy(
+            failure_class=failure_class,
+            route_type="deterministic",
+            deterministic_mechanics=(MECHANIC_COMPOSE_VALIDATE_WRAPPER,),
+            hermes_allowed=False,
+            max_deterministic_rounds=1,
+            summary="compose-cli-mismatch: normalize docker compose invocations to docker-compose",
+        )
+    if failure_class == "validate_capture_failed":
+        return ValidationRepairPolicy(
+            failure_class=failure_class,
+            route_type="deterministic",
+            deterministic_mechanics=SOLVER_DIAGNOSTIC_MECHANICS,
+            hermes_allowed=False,
+            max_deterministic_rounds=1,
+            summary="validate-capture: repair validate.sh solver stdout/stderr/exit-code capture",
+        )
+    if failure_class == "validation_inconclusive":
+        return ValidationRepairPolicy(
+            failure_class=failure_class,
+            route_type="escalate",
+            hermes_allowed=False,
+            summary="validation-inconclusive: stop automatic repair and surface missing diagnostics",
+        )
     if failure_class == "solver":
         return ValidationRepairPolicy(
             failure_class=failure_class,

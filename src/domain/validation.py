@@ -178,6 +178,13 @@ def classify_validation_failure(
         elif "ModuleNotFoundError" in text or "No module named" in text:
             code = "missing_dependency"
             hint = "Make the solver offline-capable with the standard library or vendored helpers."
+        elif _missing_solver_output_after_exploit(text):
+            code = "validate_capture_failed"
+            hint = (
+                "validate.sh reached service ready and started the exploit, but the "
+                "solver stdout/stderr/exit code were not preserved. Wrap exp.py with "
+                "set +e capture, echo the output, record EXPLOIT_EXIT, then restore set -e."
+            )
         elif _looks_like_pwn_service_readiness_failure(text) and stage != "exploit":
             code = "pwn_service_readiness_failed"
             hint = (
@@ -561,6 +568,33 @@ def _looks_like_pwn_prompt_eof(text: str) -> bool:
     )
 
 
+def _missing_solver_output_after_exploit(text: str) -> bool:
+    lower = text.lower()
+    if "service is ready" not in lower:
+        return False
+    if not re.search(r"\b(running exploit|exploit phase|starting exploit|launching exploit)\b", lower):
+        return False
+    solver_markers = (
+        "exploit exited nonzero",
+        "traceback",
+        "exception",
+        "eoferror",
+        "connection refused",
+        "recv",
+        "send",
+        "timeout",
+        "timed out",
+        "leak",
+        "canary",
+        "payload",
+        "flag{",
+        "failed to extract flag",
+        "module not found",
+        "no module named",
+    )
+    return not any(marker in lower for marker in solver_markers)
+
+
 def _looks_like_pwn_service_readiness_failure(text: str) -> bool:
     lower = text.lower()
     if "service failed to start within" in lower:
@@ -719,12 +753,12 @@ def _looks_like_pwn_remote_local_mismatch(text: str) -> bool:
 
 def _pwn_validation_stage(text: str) -> str | None:
     lower = text.lower()
-    if re.search(r"\b(cleaning up|cleanup|docker-compose down|docker compose down)\b", lower):
-        return "cleanup"
     if re.search(r"\b(running exploit|exploit phase|starting exploit|launching exploit)\b", lower):
         return "exploit"
     if re.search(r"\b(service is ready|readiness (?:ok|passed|succeeded)|probe passed)\b", lower):
         return "exploit"
+    if re.search(r"\b(cleaning up|cleanup|docker-compose down|docker compose down)\b", lower):
+        return "cleanup"
     if re.search(r"\b(readiness|probe|waiting for service|checking service)\b", lower):
         return "readiness"
     return None
@@ -2168,6 +2202,13 @@ class ChallengeValidator:
         # 非零退出 → 失败
         if process.returncode != 0:
             record_status("failed", "nonzero_exit", f"validation exited {process.returncode}")
+            missing_solver_output = _missing_solver_output_after_exploit(
+                "\n".join(
+                    value
+                    for value in (record.get("stdout_tail"), record.get("stderr_tail"))
+                    if isinstance(value, str) and value
+                )
+            )
             pwn_debug_fields = self._pwn_debug_fields(
                 challenge_dir,
                 metadata,
@@ -2181,6 +2222,7 @@ class ChallengeValidator:
                 **record,
                 "status": "nonzero_exit",
                 **pwn_debug_fields,
+                "missing_solver_output": missing_solver_output,
                 "diagnostic_unavailable": _missing_validation_diagnostics(
                     stdout_tail=record.get("stdout_tail"),
                     stderr_tail=record.get("stderr_tail"),
@@ -2274,6 +2316,7 @@ class ChallengeValidator:
                 challenge_dir,
                 timeout=min(max(self.timeout, 1), 8),
                 run_exp=True,
+                service_mode="managed",
             )
         except Exception as exc:  # noqa: BLE001 - diagnostics must not mask validation
             debug_error = f"{exc.__class__.__name__}: {exc}"

@@ -26,6 +26,8 @@ PWN_DEBUG_FILENAME = "pwn-debug-result.json"
 READINESS_TOKENS = ("Choice:", "choice:", "menu", "Menu", ">", "$ ", "Welcome", "Input")
 FAILURE_STAGES = {
     "readiness",
+    "service_not_started",
+    "external_unavailable",
     "connection",
     "leak",
     "canary_or_offset",
@@ -36,6 +38,7 @@ FAILURE_STAGES = {
     "contract",
     "unknown",
 }
+SERVICE_MODES = {"managed", "external", "not_started"}
 
 
 def run_pwn_debug(
@@ -44,8 +47,11 @@ def run_pwn_debug(
     output_path: Path | None = None,
     timeout: int = 8,
     run_exp: bool = True,
+    service_mode: str = "external",
 ) -> dict[str, Any]:
     """Collect bounded Pwn diagnostics and write a stable JSON result."""
+    if service_mode not in SERVICE_MODES:
+        raise ValueError(f"unsupported pwn-debug service_mode: {service_mode}")
     challenge_dir = challenge_dir.resolve()
     metadata = read_json(challenge_dir / "metadata.json", {})
     if not isinstance(metadata, dict):
@@ -61,6 +67,7 @@ def run_pwn_debug(
         "symbols": {},
         "got_plt_gadgets": {},
         "inferred_stack_layout": _infer_stack_layout(challenge_dir),
+        "service_mode": service_mode,
         "service_readiness": {},
         "format_string_leak_sampling": {},
         "exp_execution": {},
@@ -71,14 +78,50 @@ def run_pwn_debug(
         result["tools"] = _tool_summaries(artifact)
         result["symbols"] = _symbol_summary(artifact)
         result["got_plt_gadgets"] = _got_plt_gadget_summary(artifact)
-    result["service_readiness"] = collect_service_readiness(challenge_dir, metadata)
-    result["format_string_leak_sampling"] = _format_string_leak_sampling(
-        challenge_dir,
-        metadata,
-        timeout=timeout,
-    )
-    if run_exp:
-        result["exp_execution"] = _run_exp(challenge_dir, timeout=timeout)
+    service_started = False
+    if service_mode == "managed":
+        result["managed_service"] = _compose_command(challenge_dir, "up", "-d", timeout=timeout)
+        service_started = result["managed_service"].get("status") == "ok"
+    elif service_mode == "not_started":
+        result["service_readiness"] = {
+            "status": "not_started",
+            "reason": "pwn-debug did not start service; validation result remains authoritative",
+        }
+    try:
+        if service_mode != "not_started":
+            result["service_readiness"] = collect_service_readiness(challenge_dir, metadata)
+        ready = _service_probe_ready(result.get("service_readiness"))
+        if service_mode == "managed" and not service_started:
+            result["exp_execution"] = {
+                "status": "skipped",
+                "reason": "managed docker-compose up did not complete",
+            }
+        elif service_mode == "not_started":
+            result["exp_execution"] = {
+                "status": "skipped",
+                "reason": "service_not_started",
+            }
+        else:
+            result["format_string_leak_sampling"] = _format_string_leak_sampling(
+                challenge_dir,
+                metadata,
+                timeout=timeout,
+            )
+            if run_exp and (service_mode == "external" or ready):
+                result["exp_execution"] = _run_exp(challenge_dir, timeout=timeout)
+            elif run_exp:
+                result["exp_execution"] = {
+                    "status": "skipped",
+                    "reason": "service probe did not reach ready state",
+                }
+    finally:
+        if service_mode == "managed":
+            result["managed_cleanup"] = _compose_command(
+                challenge_dir,
+                "down",
+                "--remove-orphans",
+                timeout=timeout,
+            )
     result["failure_stage"] = classify_pwn_failure_stage(
         pwn_debug=result,
         stdout_tail=_nested_text(result.get("exp_execution"), "stdout_tail"),
@@ -200,8 +243,16 @@ def classify_pwn_failure_stage(
     final_flag = exp.get("final_flag_candidate") if isinstance(exp, Mapping) else None
     leak_sample = debug.get("format_string_leak_sampling") if isinstance(debug, Mapping) else None
 
+    service_mode = str(debug.get("service_mode") or "") if isinstance(debug, Mapping) else ""
+    readiness_status = str(readiness.get("status") or "") if isinstance(readiness, Mapping) else ""
+
     if "contract" in lower or status in {"contract_failed", "solver_evidence_stale"}:
         return "contract"
+    if service_mode == "not_started" or readiness_status == "not_started":
+        return "service_not_started"
+    if service_mode == "external" and any(marker in lower for marker in ("connection refused", "connection reset")):
+        if probe_status != "ready" and not raw_probe:
+            return "external_unavailable"
     if probe_status in {"failed", "connected"} and not raw_probe:
         return "readiness"
     if any(marker in lower for marker in ("service not ready", "readiness", "no banner", "no prompt")):
@@ -441,8 +492,23 @@ def _compose_command(challenge_dir: Path, *args: str, timeout: int) -> dict[str,
     compose = challenge_dir / "deploy" / "docker-compose.yml"
     if not compose.is_file():
         return {"status": "skipped", "reason": "deploy/docker-compose.yml missing"}
-    command = ["docker-compose", "-f", str(compose), *args]
+    project = _compose_project_name(challenge_dir)
+    command = ["docker-compose", "-p", project, "-f", str(compose), *args]
     return _run_optional(command, cwd=challenge_dir, timeout=timeout)
+
+
+def _compose_project_name(challenge_dir: Path) -> str:
+    digest = hashlib.sha256(str(challenge_dir).encode("utf-8")).hexdigest()[:10]
+    stem = re.sub(r"[^a-zA-Z0-9]+", "-", challenge_dir.name).strip("-").lower()
+    stem = stem[:32] or "challenge"
+    return f"cf-{stem}-{digest}"
+
+
+def _service_probe_ready(readiness: Any) -> bool:
+    if not isinstance(readiness, Mapping):
+        return False
+    probe = readiness.get("tcp_probe")
+    return isinstance(probe, Mapping) and probe.get("status") == "ready"
 
 
 def _metadata_port(metadata: Mapping[str, Any]) -> int | None:
@@ -519,6 +585,13 @@ def _nested_int(value: Any, key: str) -> int | None:
 
 
 def _actionable_summary(stage: str, result: Mapping[str, Any]) -> str:
+    if stage == "service_not_started":
+        return "pwn-debug did not start service; validation result remains authoritative."
+    if stage == "external_unavailable":
+        return (
+            "External service was unavailable; do not override authoritative "
+            "validation with pwn-debug readiness claims."
+        )
     if stage == "readiness":
         return (
             "Fix service readiness first: container state, prompt/banner probe, "

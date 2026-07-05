@@ -623,6 +623,19 @@ Use `$COMPOSE up -d`, `$COMPOSE ps`, `$COMPOSE logs --no-color --tail=120`, and
 such as `deploy`, and do not use `down -v` / `--volumes`.
 The fixed flag comes from `deploy/docker-compose.yml`; `validate.sh` must not
 override it with a host-side `FLAG` environment variable.
+When running the Pwn/Web solver, `validate.sh` MUST preserve stdout, stderr, and exit code even under `set -e` using this exact pattern adapted only for the command:
+```bash
+set +e
+EXPLOIT_OUTPUT=$(timeout 60 python3 writenup/exp.py 2>&1)
+EXPLOIT_EXIT=$?
+set -e
+echo "$EXPLOIT_OUTPUT"
+if [ "$EXPLOIT_EXIT" -ne 0 ]; then
+    echo "[validate] Exploit exited nonzero: $EXPLOIT_EXIT" >&2
+fi
+```
+Do not write `EXPLOIT_OUTPUT=$(...)` while `set -e` is active without the surrounding `set +e` / `set -e` guard.
+Readiness probes may keep intermediate failures in a variable or `logs/readiness-probe.json`, but successful readiness must not emit `[readiness] no banner...` or probe-tail noise to stderr; only final readiness failure should dump probe tail, compose ps, and compose logs.
 When readiness or the exploit fails, `validate.sh` MUST emit bounded diagnostic
 evidence to stderr before exiting non-zero: the relevant `docker-compose ps`
 state, recent `docker-compose logs --no-color --tail=120` output, and the

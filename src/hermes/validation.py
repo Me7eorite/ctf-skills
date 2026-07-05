@@ -218,6 +218,7 @@ def run_validation(
                     "validation_stderr_tail": outcome.get("stderr_tail"),
                     "validation_final_flag_candidate": outcome.get("final_flag_candidate"),
                     "validation_diagnostic_unavailable": outcome.get("diagnostic_unavailable"),
+                    "missing_solver_output": outcome.get("missing_solver_output"),
                     "validation_contract_errors": contract_errors,
                     "validation_failure_details": failure_details,
                     "pwn_failure_stage": outcome.get("pwn_failure_stage"),

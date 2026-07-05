@@ -625,3 +625,26 @@ def test_pwn_readiness_probe_does_not_wait_for_tcp_eof(tmp_path: Path) -> None:
     assert result.returncode == 0
     assert elapsed < 1.5
     assert "SecureVault" in result.stdout
+
+def test_auto_repair_wraps_timeout_solver_capture_under_set_e(tmp_path: Path) -> None:
+    challenge_dir = tmp_path / "challenge"
+    challenge_dir.mkdir()
+    _write_metadata(challenge_dir, category="pwn")
+    validate = challenge_dir / "validate.sh"
+    validate.write_text(
+        "#!/bin/bash\n"
+        "set -e\n"
+        "echo '[validate] Running exploit script'\n"
+        "EXPLOIT_OUTPUT=$(timeout 60 python3 writenup/exp.py 2>&1)\n"
+        "echo done\n",
+        encoding="utf-8",
+    )
+
+    result = auto_repair_challenge(challenge_dir)
+
+    repaired = validate.read_text(encoding="utf-8")
+    assert result.changed is True
+    assert "set +e\nEXPLOIT_OUTPUT=$(timeout 60 python3 writenup/exp.py 2>&1)" in repaired
+    assert "EXPLOIT_EXIT=$?\nset -e" in repaired
+    assert 'echo "$EXPLOIT_OUTPUT"' in repaired
+    assert "Exploit exited nonzero" in repaired

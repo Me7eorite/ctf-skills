@@ -331,3 +331,34 @@ def test_build_attempt_repair_prompt_sanitizes_nul_text_context(tmp_path: Path) 
     assert r"stale\x00evidence" in prompt
     assert r"BINARY_SHA256='abc'\x00" in prompt
     assert "\x7fELF" not in prompt
+
+def test_build_attempt_repair_prompt_forbids_readiness_when_ready_and_exploit_started(tmp_path: Path) -> None:
+    challenge_dir = tmp_path / "pwn-0001-demo"
+    challenge_dir.mkdir()
+    prompt = _repair_prompt(
+        {
+            "id": "attempt",
+            "design_task_id": "task",
+            "challenge_id": "pwn-0001",
+            "category": "pwn",
+            "challenge_dir": challenge_dir,
+            "failure_summary": "validate failed",
+            "failure_details": [],
+            "latest_failure": {
+                "validation_status": "nonzero_exit",
+                "validation_failure_class": "validate_capture_failed",
+                "validation_stdout_tail": "[validate] Service is ready\n[validate] Running exploit script\n",
+                "validation_stderr_tail": "[validate] cleanup: docker-compose down\n",
+                "validation_returncode": 1,
+                "missing_solver_output": True,
+                "classification_conflicts": ["missing_solver_output_masked_by_readiness"],
+            },
+            "file_context": _file_context(challenge_dir),
+        }
+    )
+
+    normalized = " ".join(prompt.split())
+    assert '"service_ready": true' in prompt
+    assert '"exploit_started": true' in prompt
+    assert '"missing_solver_output": true' in prompt
+    assert "do not repair service readiness" in normalized

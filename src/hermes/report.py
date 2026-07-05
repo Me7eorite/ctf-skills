@@ -21,6 +21,7 @@ def _authoritative_result(result: dict[str, Any]) -> dict[str, Any]:
         and result.get("validation_command")
         and result.get("validation_returncode") == 0
         and result.get("validation_final_flag_candidate")
+        and result.get("missing_solver_output") is not True
     ):
         return result
     downgraded = dict(result)
@@ -28,8 +29,11 @@ def _authoritative_result(result: dict[str, Any]) -> dict[str, Any]:
     downgraded["validation_status"] = "pending_validation"
     downgraded["validation_error"] = (
         "passed status ignored: missing authoritative validate.sh command, "
-        "returncode, or flag candidate"
+        "returncode, flag candidate, or solver output"
     )
+    if result.get("missing_solver_output") is True:
+        downgraded["missing_solver_output"] = True
+        downgraded["validation_status"] = "validation_inconclusive"
     return downgraded
 
 
@@ -96,6 +100,10 @@ def merge_validation_into_report(
             "validation_stderr_tail",
             "validation_final_flag_candidate",
             "validation_diagnostic_unavailable",
+            "missing_solver_output",
+            "classification_conflicts",
+            "batch_degraded",
+            "pause_pwn_lane",
             "validation_contract_errors",
             "validation_failure_details",
             "validation_failure_class",

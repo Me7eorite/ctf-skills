@@ -760,3 +760,55 @@ def test_validator_passed_without_flag_candidate_is_not_solve_passed(tmp_path: P
     assert results[0]["solve_status"] == "failed"
     assert results[0]["validation_status"] == "pending_validation"
     assert "without a flag candidate" in results[0]["validation_error"]
+
+def test_report_and_metadata_do_not_pass_when_solver_output_missing(tmp_path: Path) -> None:
+    from hermes.report import merge_validation_into_report
+
+    report = tmp_path / "report.json"
+    merge_validation_into_report(
+        report,
+        [
+            {
+                "challenge_id": "pwn-0001",
+                "solve_status": "passed",
+                "validation_status": "passed",
+                "validation_command": ["bash", "validate.sh"],
+                "validation_returncode": 0,
+                "validation_final_flag_candidate": "flag{demo}",
+                "missing_solver_output": True,
+            }
+        ],
+    )
+
+    challenge = json.loads(report.read_text(encoding="utf-8"))["challenges"][0]
+    assert challenge["solve_status"] == "failed"
+    assert challenge["validation_status"] == "validation_inconclusive"
+    assert challenge["missing_solver_output"] is True
+
+
+def test_stamp_validation_results_marks_missing_solver_output_unpublishable(tmp_path: Path) -> None:
+    paths = _Paths(tmp_path)
+    challenge = _make_pwn_gate_challenge(paths)
+
+    changed = _stamp_validation_results_into_outputs(
+        {"pwn-0001": challenge},
+        [
+            {
+                "challenge_id": "pwn-0001",
+                "solve_status": "passed",
+                "validation_status": "passed",
+                "validation_command": ["bash", "validate.sh"],
+                "validation_returncode": 0,
+                "validation_final_flag_candidate": "flag{demo}",
+                "missing_solver_output": True,
+            }
+        ],
+    )
+
+    stamped = json.loads((challenge / "metadata.json").read_text(encoding="utf-8"))
+    assert changed is True
+    assert stamped["solve_status"] == "failed"
+    assert stamped["validation_status"] == "validation_inconclusive"
+    assert stamped["repaired"] is False
+    assert stamped["publishable"] is False
+    assert stamped["missing_solver_output"] is True
