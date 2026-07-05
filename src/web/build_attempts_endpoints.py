@@ -26,7 +26,7 @@ from domain.validation_failure_governance import latest_failed_validation
 from persistence.models import build_attempts as build_model
 from persistence.models import design_tasks as task_model
 from persistence.models import executions as exec_model
-from persistence.models.progress import ProgressEvent
+from persistence.models.progress import ProgressEvent, ProgressSnapshot
 from persistence.repositories import (
     BuildAttemptsRepository,
     ExecutionsRepository,
@@ -199,6 +199,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
                 [row.shard_basename for row in rows],
             )
             execution_summaries = _execution_summaries(session, [row.id for row in rows])
+            rows = _apply_resume_progress_fallbacks(session, _project_paths(app), rows)
         headers = {}
         if capped != requested_limit:
             headers["X-Limit-Capped"] = str(capped)
@@ -246,11 +247,11 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
                     category=category,
                     challenge_id=challenge_id,
                 )
-            events = session.scalars(
-                sa.select(ProgressEvent)
-                .where(ProgressEvent.shard == attempt.shard_basename)
-                .order_by(ProgressEvent.id.asc())
-            ).all()
+            events = _progress_events_for_attempt(
+                session,
+                _project_paths(app),
+                attempt,
+            )
             executions = ExecutionsRepository(session).list_for_attempt(attempt.id)
 
         event_payloads = [_progress_event_dict(row) for row in events]
@@ -1773,6 +1774,167 @@ def _list_item_dict(
         }
     )
     return row
+
+
+def _apply_resume_progress_fallbacks(
+    session,
+    paths,
+    rows: list[BuildAttemptListItem],
+) -> list[BuildAttemptListItem]:
+    shards_by_id = {
+        row.id: _progress_shard_candidates_for_attempt(paths, row)
+        for row in rows
+    }
+    lookup_shards = {
+        shard
+        for shards in shards_by_id.values()
+        for shard in shards
+    }
+    if not lookup_shards:
+        return rows
+    progress_by_source = {
+        shard: int(percent or 0)
+        for shard, percent in session.execute(
+            sa.select(
+                ProgressSnapshot.shard,
+                sa.func.max(ProgressSnapshot.percent),
+            )
+            .where(ProgressSnapshot.shard.in_(lookup_shards))
+            .group_by(ProgressSnapshot.shard)
+        ).all()
+    }
+    adjusted: list[BuildAttemptListItem] = []
+    for row in rows:
+        source_percent = max(
+            (progress_by_source.get(shard, 0) for shard in shards_by_id[row.id]),
+            default=0,
+        )
+        if source_percent > row.percent:
+            adjusted.append(replace(row, percent=source_percent))
+        else:
+            adjusted.append(row)
+    return adjusted
+
+
+def _progress_events_for_attempt(session, paths, attempt: BuildAttempt) -> list[ProgressEvent]:
+    shards = _progress_shard_candidates_for_attempt(paths, attempt)
+    if not shards:
+        shards = [attempt.shard_basename]
+    events = session.scalars(
+        sa.select(ProgressEvent)
+        .where(ProgressEvent.shard.in_(shards))
+        .order_by(ProgressEvent.id.asc())
+    ).all()
+    deduped: list[ProgressEvent] = []
+    seen: set[tuple[str, str, str, int, str]] = set()
+    for event in events:
+        key = _progress_event_key(event)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(event)
+    return deduped
+
+
+def _progress_shard_candidates_for_attempt(paths, attempt: BuildAttempt) -> list[str]:
+    candidates: list[str] = []
+    _append_progress_shard_candidate(candidates, attempt.shard_basename)
+    manifest_original = _current_manifest_original_shard(paths, attempt)
+    if manifest_original is not None:
+        _append_progress_shard_candidate(candidates, manifest_original)
+    source_shard = _resume_source_shard_for_attempt(paths, attempt)
+    if source_shard is not None:
+        _append_progress_shard_candidate(candidates, source_shard)
+    return candidates
+
+
+def _append_progress_shard_candidate(candidates: list[str], shard: str | None) -> None:
+    if not isinstance(shard, str) or Path(shard).name != shard:
+        return
+    if not shard.endswith(".json") or shard in candidates:
+        return
+    candidates.append(shard)
+
+
+def _current_manifest_original_shard(paths, attempt: BuildAttempt) -> str | None:
+    manifest = read_json(
+        paths.executions / str(attempt.id) / "current" / "input" / "manifest.json",
+        None,
+    )
+    if not isinstance(manifest, dict):
+        return None
+    if str(manifest.get("build_attempt_id")) != str(attempt.id):
+        return None
+    if str(manifest.get("design_task_id")) != str(attempt.design_task_id):
+        return None
+    original = manifest.get("original_shard_basename")
+    if not isinstance(original, str) or Path(original).name != original:
+        return None
+    if not original.endswith(".json"):
+        return None
+    return original
+
+
+def _resume_source_shard_for_attempt(paths, attempt: BuildAttempt) -> str | None:
+    payload = _shard_payload_for_attempt(paths, attempt)
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("execution_mode") != "resume":
+        return None
+    source = payload.get("resume_from_shard_basename")
+    if not isinstance(source, str) or Path(source).name != source:
+        return None
+    if not source.endswith(".json"):
+        return None
+    return source
+
+
+def _shard_payload_for_attempt(paths, attempt: BuildAttempt) -> dict[str, Any] | None:
+    for shard in _candidate_shard_paths(paths, attempt.shard_basename):
+        if shard.is_symlink() or not shard.is_file():
+            continue
+        payload = read_json(shard, None)
+        if (
+            isinstance(payload, dict)
+            and str(payload.get("build_attempt_id")) == str(attempt.id)
+            and str(payload.get("design_task_id")) == str(attempt.design_task_id)
+        ):
+            return payload
+    return None
+
+
+def _candidate_shard_paths(paths, shard_basename: str) -> list[Path]:
+    if Path(shard_basename).name != shard_basename:
+        return []
+    candidates = [
+        paths.shards / state / shard_basename
+        for state in ("pending", "done", "failed")
+    ]
+    running = paths.shards / "running"
+    candidates.append(running / shard_basename)
+    expected = Path(shard_basename)
+    candidates.extend(
+        candidate
+        for candidate in running.glob(f"{expected.stem}.*{expected.suffix}")
+        if not candidate.name.endswith(".claim.json")
+    )
+    seen: set[Path] = set()
+    unique: list[Path] = []
+    for candidate in candidates:
+        if candidate not in seen:
+            seen.add(candidate)
+            unique.append(candidate)
+    return unique
+
+
+def _progress_event_key(event: ProgressEvent) -> tuple[str, str, str, int, str]:
+    return (
+        event.challenge_id,
+        event.stage,
+        event.status,
+        event.percent,
+        event.message,
+    )
 
 
 def _latest_validation_failure_fields(paths, attempt_id: UUID) -> dict[str, Any]:

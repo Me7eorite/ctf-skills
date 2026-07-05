@@ -428,6 +428,11 @@ class BuildOrchestrationService:
                 source = session.get(build_model.BuildAttempt, retry_sources[task_id])
                 if source is None:
                     continue
+                _copy_progress_events(
+                    session,
+                    source_shard=source.shard_basename,
+                    target_shard=submission.shard_basename,
+                )
                 _copy_progress_snapshots(
                     session,
                     source_shard=source.shard_basename,
@@ -884,6 +889,34 @@ def _copy_progress_snapshots(
                 percent=row.percent,
                 message=row.message,
                 updated_at=now,
+            )
+        )
+
+
+def _copy_progress_events(
+    session: Session,
+    *,
+    source_shard: str,
+    target_shard: str,
+) -> None:
+    if source_shard == target_shard:
+        return
+    session.execute(sa.delete(ProgressEvent).where(ProgressEvent.shard == target_shard))
+    rows = session.scalars(
+        sa.select(ProgressEvent)
+        .where(ProgressEvent.shard == source_shard)
+        .order_by(ProgressEvent.id.asc())
+    ).all()
+    for row in rows:
+        session.add(
+            ProgressEvent(
+                shard=target_shard,
+                challenge_id=row.challenge_id,
+                worker=row.worker,
+                stage=row.stage,
+                status=row.status,
+                percent=row.percent,
+                message=row.message,
             )
         )
 

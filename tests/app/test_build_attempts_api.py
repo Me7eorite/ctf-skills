@@ -1200,6 +1200,17 @@ def test_retry_sequential_lane_pool_retries_failed_attempts_before_start(
                     message="validation running",
                 )
             )
+            session.add(
+                ProgressEvent(
+                    shard=attempt.shard_basename,
+                    challenge_id="",
+                    worker="worker-1",
+                    stage="validate",
+                    status="running",
+                    percent=64,
+                    message="historical validation running",
+                )
+            )
 
     tasks = _StubBuildTaskManager()
     client.app.state.dashboard_tasks = tasks
@@ -1232,8 +1243,165 @@ def test_retry_sequential_lane_pool_retries_failed_attempts_before_start(
             .order_by(ProgressSnapshot.shard)
         ).all()
         assert [item.percent for item in retry_progress] == [64, 64, 64]
+        retry_events = session.scalars(
+            sa.select(ProgressEvent)
+            .where(ProgressEvent.shard.in_([row.shard_basename for row in rows]))
+            .order_by(ProgressEvent.shard)
+        ).all()
+        assert [item.message for item in retry_events] == [
+            "historical validation running",
+            "historical validation running",
+            "historical validation running",
+        ]
     for retry_id in retry_ids:
         assert (client.app.state.project_paths.shards / "pending" / f"{retry_id}.json").is_file()
+
+
+def test_retry_resume_detail_and_list_fallback_to_source_progress(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    paths = client.app.state.project_paths
+    task_id = _seed_designed_task(session_factory)
+    with transaction(factory=session_factory) as session:
+        repo = BuildAttemptsRepository(session)
+        source = _create_canonical_attempt(repo, task_id)
+        repo.finalize_attempt(source.id, status="failed", error="source failed")
+        retry = _create_canonical_attempt(repo, task_id)
+        repo.update_to_running(retry.id, worker="stub-lane-01")
+        session.add(
+            ProgressSnapshot(
+                shard=source.shard_basename,
+                challenge_id="",
+                worker="worker-1",
+                stage="validate",
+                status="running",
+                percent=64,
+                message="validation running",
+            )
+        )
+        session.add(
+            ProgressSnapshot(
+                shard=retry.shard_basename,
+                challenge_id="",
+                worker="stub-lane-01",
+                stage="queued",
+                status="running",
+                percent=0,
+                message="Worker claimed 1 challenge(s)",
+            )
+        )
+        session.add(
+            ProgressEvent(
+                shard=source.shard_basename,
+                challenge_id="",
+                worker="worker-1",
+                stage="validate",
+                status="running",
+                percent=64,
+                message="source validation running",
+            )
+        )
+        session.add(
+            ProgressEvent(
+                shard=retry.shard_basename,
+                challenge_id="",
+                worker="stub-lane-01",
+                stage="queued",
+                status="running",
+                percent=0,
+                message="Worker claimed 1 challenge(s)",
+            )
+        )
+    running_shard = paths.shards / "running" / f"{Path(retry.shard_basename).stem}.stub-lane-01.json"
+    write_json(
+        running_shard,
+        {
+            "build_attempt_id": str(retry.id),
+            "design_task_id": str(task_id),
+            "execution_mode": "resume",
+            "resume_from_shard_basename": source.shard_basename,
+            "challenges": [{"id": "web-0001", "category": "web"}],
+        },
+    )
+
+    list_response = client.get("/api/build-attempts")
+    detail_response = client.get(f"/api/build-attempts/{retry.id}")
+
+    assert list_response.status_code == 200
+    row = next(item for item in list_response.json() if item["id"] == str(retry.id))
+    assert row["percent"] == 64
+    assert detail_response.status_code == 200
+    messages = [event["message"] for event in detail_response.json()["progress_events"]]
+    assert "source validation running" in messages
+    assert "Worker claimed 1 challenge(s)" in messages
+
+
+def test_running_attempt_progress_falls_back_to_current_manifest_shard(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    paths = client.app.state.project_paths
+    task_id = _seed_designed_task(session_factory)
+    attempt_id = uuid4()
+    db_shard = f"{attempt_id}.iter-011.json"
+    active_shard = f"{attempt_id}.iter-009.json"
+    with transaction(factory=session_factory) as session:
+        repo = BuildAttemptsRepository(session)
+        retry = repo.create_attempt(task_id, db_shard, attempt_id=attempt_id)
+        repo.update_to_running(retry.id, worker="stub-lane-01")
+        session.add(
+            ProgressSnapshot(
+                shard=active_shard,
+                challenge_id="pwn-0001",
+                worker="stub-lane-01",
+                stage="build",
+                status="passed",
+                percent=64,
+                message="Waiting for validate stage execution",
+            )
+        )
+        session.add(
+            ProgressEvent(
+                shard=active_shard,
+                challenge_id="pwn-0001",
+                worker="stub-lane-01",
+                stage="build",
+                status="passed",
+                percent=64,
+                message="Waiting for validate stage execution",
+            )
+        )
+    write_json(
+        paths.shards / "pending" / db_shard,
+        {
+            "build_attempt_id": str(attempt_id),
+            "design_task_id": str(task_id),
+            "execution_mode": "resume",
+            "resume_from_shard_basename": f"{attempt_id}.iter-010.json",
+            "challenges": [{"id": "pwn-0001", "category": "pwn"}],
+        },
+    )
+    manifest = paths.executions / str(attempt_id) / "current" / "input" / "manifest.json"
+    write_json(
+        manifest,
+        {
+            "build_attempt_id": str(attempt_id),
+            "design_task_id": str(task_id),
+            "original_shard_basename": active_shard,
+            "running_shard_basename": f"{Path(active_shard).stem}.stub-lane-01.json",
+        },
+    )
+
+    list_response = client.get("/api/build-attempts")
+    detail_response = client.get(f"/api/build-attempts/{attempt_id}")
+
+    assert list_response.status_code == 200
+    row = next(item for item in list_response.json() if item["id"] == str(attempt_id))
+    assert row["percent"] == 64
+    assert detail_response.status_code == 200
+    events = detail_response.json()["progress_events"]
+    assert [event["message"] for event in events] == ["Waiting for validate stage execution"]
 
 
 def test_sequential_lane_pool_rejects_default_over_cap(client: TestClient):
