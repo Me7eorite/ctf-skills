@@ -22,6 +22,7 @@ from core.clock import beijing_isoformat
 from core.jsonio import read_json
 from core.queue import SUPPORTED_CATEGORIES
 from domain.build_attempts import BuildAttempt, BuildAttemptListItem, BuildAttemptStatus
+from domain.output_consistency import validate_workspace_success_state
 from domain.validation_failure_governance import latest_failed_validation
 from persistence.models import build_attempts as build_model
 from persistence.models import design_tasks as task_model
@@ -1634,6 +1635,16 @@ def _attempt_dict(
     if artifact_metadata:
         payload["solve_status"] = artifact_metadata.get("solve_status")
         payload["validation_status"] = artifact_metadata.get("validation_status")
+    consistency = _success_consistency_status(attempt, project_root)
+    if consistency is not None:
+        payload["status"] = consistency["status"]
+        payload["solve_status"] = "failed"
+        payload["validation_status"] = consistency["status"]
+        payload["validation_consistency_reason"] = consistency["reason"]
+        if consistency.get("failure_details"):
+            payload["validation_failure_details"] = consistency["failure_details"]
+            payload["validation_error"] = consistency["reason"]
+        payload["publishable"] = False
     if failure_summary:
         payload["failure_summary"] = failure_summary
     if attempt.status not in {"failed", "lost"}:
@@ -1658,6 +1669,29 @@ def _attempt_artifact_metadata(
         None,
     )
     return metadata if isinstance(metadata, dict) else None
+
+
+def _success_consistency_status(
+    attempt: BuildAttempt,
+    project_root: Path,
+) -> dict[str, Any] | None:
+    if attempt.status != "succeeded":
+        return None
+    result = validate_workspace_success_state(
+        project_root / "work" / "executions" / str(attempt.id) / "current"
+    )
+    if result.get("ok"):
+        return None
+    status = result.get("status")
+    reason = result.get("reason")
+    payload: dict[str, Any] = {
+        "status": status if isinstance(status, str) and status else "validation_inconclusive",
+        "reason": reason if isinstance(reason, str) and reason else "success state is inconsistent",
+    }
+    details = result.get("failure_details")
+    if isinstance(details, list):
+        payload["failure_details"] = [item for item in details if isinstance(item, dict)]
+    return payload
 
 
 def _execution_dict(execution) -> dict[str, Any]:

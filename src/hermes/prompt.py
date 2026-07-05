@@ -448,6 +448,9 @@ def _repair_steps_for_status(
 ) -> list[str]:
     lower_error = error.lower()
     lower_output = f"{stdout_tail}\n{stderr_tail}".lower()
+    semantic_steps = _semantic_repair_steps_from_failure_details(failure_details)
+    if semantic_steps:
+        return semantic_steps
     pwn_steps = _pwn_repair_steps_from_failure_details(failure_details)
     if pwn_steps:
         return pwn_steps
@@ -667,6 +670,88 @@ def _repair_steps_for_status(
         "Use the status, error, stdout tail, and stderr tail above to make the smallest targeted fix.",
         "Rerun `validate.sh` before finishing and avoid changing challenge identity or delivery layout.",
     ]
+
+
+def _semantic_repair_steps_from_failure_details(
+    failure_details: Sequence[object],
+) -> list[str]:
+    details = [
+        item
+        for item in failure_details
+        if isinstance(item, Mapping)
+        and str(item.get("code") or "").startswith("semantic_")
+    ]
+    if not details:
+        return []
+
+    families = sorted(
+        {
+            str(item.get("declared_family") or "")
+            for item in details
+            if item.get("declared_family")
+        }
+    )
+    categories = sorted(
+        {
+            str(item.get("semantic_category") or "")
+            for item in details
+            if item.get("semantic_category")
+        }
+    )
+    sources = list(
+        dict.fromkeys(
+            str(item.get("source") or item.get("path") or "")
+            for item in details
+            if item.get("source") or item.get("path")
+        )
+    )
+    tokens = list(
+        dict.fromkeys(
+            str(item.get("conflict_token") or "")
+            for item in details
+            if item.get("conflict_token")
+        )
+    )
+    actions = list(
+        dict.fromkeys(
+            str(item.get("repair_action") or item.get("hint") or "")
+            for item in details
+            if item.get("repair_action") or item.get("hint")
+        )
+    )
+    steps = [
+        "Root cause: final artifact semantics conflict with the declared technique contract.",
+        (
+            "Keep the declared technique family intact"
+            + (f" (`{', '.join(families)}`)" if families else "")
+            + " unless metadata itself is genuinely wrong."
+        ),
+    ]
+    if categories:
+        steps.append(f"Category policy: `{', '.join(categories)}`.")
+    if sources:
+        steps.append(
+            "Inspect and edit the cited final evidence files: "
+            + ", ".join(f"`{source}`" for source in sources[:8])
+            + "."
+        )
+    if tokens:
+        steps.append(
+            "Remove or rewrite the conflicting semantic markers: "
+            + ", ".join(f"`{token}`" for token in tokens[:10])
+            + "."
+        )
+    if actions:
+        steps.extend(actions[:6])
+    steps.append(
+        "After editing, rerun `./validate.sh`; the final flag, writeup, report, "
+        "repair summary, source, and exploit must all describe the same technique family."
+    )
+    steps.append(
+        "Do not silence the validator by deleting evidence or changing metadata to a "
+        "different technique unless the actual challenge design has intentionally changed."
+    )
+    return steps
 
 
 def _pwn_repair_steps_from_failure_details(

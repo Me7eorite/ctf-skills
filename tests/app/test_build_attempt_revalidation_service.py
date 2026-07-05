@@ -43,12 +43,41 @@ pytestmark = pytest.mark.postgres
 
 class _PassingValidator:
     def validate_one(self, challenge_dir: Path) -> dict:
-        return {"path": str(challenge_dir), "status": "passed", "elapsed": 0.01}
+        return {
+            "path": str(challenge_dir),
+            "status": "passed",
+            "elapsed": 0.01,
+            "returncode": 0,
+            "command": ["bash", "validate.sh"],
+            "final_flag_candidate": "flag{demo}",
+        }
 
 
 class _RaisingValidator:
     def validate_one(self, challenge_dir: Path) -> dict:
         raise RuntimeError(f"validator crashed for {challenge_dir.name}")
+
+
+def test_revalidation_repair_context_allows_diagnostic_file_references() -> None:
+    BuildAttemptRevalidationService._assert_no_organizer_file_leaks(
+        {
+            "repair_requested": True,
+            "repair_context": {
+                "latest_failure": {
+                    "validation_failure_details": [
+                        {
+                            "code": "forbidden_solver_source",
+                            "message": "solver references metadata.json",
+                            "path": "writenup/exp.py",
+                        }
+                    ],
+                    "validation_contract_errors": [
+                        "writenup/exp.py must not read metadata.json"
+                    ],
+                }
+            },
+        }
+    )
 
 
 class _RecordingValidator:
@@ -57,7 +86,14 @@ class _RecordingValidator:
 
     def validate_one(self, challenge_dir: Path) -> dict:
         self.paths.append(challenge_dir)
-        return {"path": str(challenge_dir), "status": "passed", "elapsed": 0.01}
+        return {
+            "path": str(challenge_dir),
+            "status": "passed",
+            "elapsed": 0.01,
+            "returncode": 0,
+            "command": ["bash", "validate.sh"],
+            "final_flag_candidate": "flag{demo}",
+        }
 
 
 @pytest.fixture(scope="module")
@@ -171,6 +207,72 @@ def test_revalidate_repairs_failed_attempt_without_creating_sibling(
             (event.stage, event.status) for event in events
         }
 
+    assert not (paths.shards / "failed" / basename).exists()
+    assert (paths.shards / "done" / basename).exists()
+
+
+def test_revalidate_downgrades_inconsistent_success_and_revalidates(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    paths = ProjectPaths(root=tmp_path, repository=tmp_path)
+    paths.initialize()
+    task_id, attempt_id, basename, challenge_id = _seed_failed_attempt(
+        session_factory
+    )
+    _write_failed_shard(paths, task_id, attempt_id, basename, challenge_id)
+    _write_web_challenge(paths, challenge_id)
+    failed_shard = paths.shards / "failed" / basename
+    done_shard = paths.shards / "done" / basename
+    done_shard.parent.mkdir(parents=True, exist_ok=True)
+    failed_shard.replace(done_shard)
+    with transaction(factory=session_factory) as session:
+        row = session.get(build_model.BuildAttempt, attempt_id)
+        row.status = "succeeded"
+        row.artifact_status = "present"
+        row.resulting_challenge_dir = f"work/challenges/web/{challenge_id}-demo"
+        row.error = None
+        session.get(task_model.DesignTask, task_id).status = "built"
+    state_dir = paths.executions / str(attempt_id) / "current" / "state"
+    state_dir.mkdir(parents=True)
+    write_json(
+        state_dir / "publish-status.json",
+        {"status": "succeeded", "output_manifest_hash": "abc"},
+    )
+    write_json(
+        state_dir / "validated-output.json",
+        {
+            "output_manifest_hash": "abc",
+            "output_paths": {challenge_id: "output/challenges/web/missing"},
+            "validate_paths": {challenge_id: "output/challenges/web/missing/validate.sh"},
+            "results": [
+                {
+                    "challenge_id": challenge_id,
+                    "solve_status": "passed",
+                    "validation_status": "passed",
+                    "validation_returncode": 0,
+                    "validation_final_flag_candidate": "flag{demo}",
+                }
+            ],
+        },
+    )
+
+    service = BuildAttemptRevalidationService(
+        paths=paths,
+        progress=PostgresProgressStore(session_factory),
+        session_factory=session_factory,
+        validator=_PassingValidator(),  # type: ignore[arg-type]
+        image_exists=lambda _image: True,
+    )
+
+    service.revalidate(attempt_id)
+
+    with session_factory() as session:
+        row = session.get(build_model.BuildAttempt, attempt_id)
+        assert row is not None
+        assert row.status == "succeeded"
+        assert row.error is None
+        assert session.get(task_model.DesignTask, task_id).status == "built"
     assert not (paths.shards / "failed" / basename).exists()
     assert (paths.shards / "done" / basename).exists()
 

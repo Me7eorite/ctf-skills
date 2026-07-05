@@ -23,6 +23,11 @@ from core.clock import beijing_now_isoformat
 from core.jsonio import read_json, write_json
 from core.paths import ProjectPaths
 from domain.pwn_debug import classify_pwn_failure_stage, run_pwn_debug
+from domain.semantic_policy import (
+    semantic_contract_error_messages,
+    semantic_contract_failure_details,
+)
+from domain.validation_state import clear_validation_failure_fields
 
 # ========== ELF 架构识别 ==========
 
@@ -1364,115 +1369,6 @@ def _pwn_canary_candidate_is_implausible(value: str | int) -> bool:
     )
 
 
-def _pwn_technique_consistency_errors(challenge_dir: Path, metadata: dict) -> list[str]:
-    declared = _metadata_technique_text(metadata)
-    if not declared:
-        return []
-    strict_tokens = (
-        "srop",
-        "sigreturn",
-        "orw",
-        "ret2libc",
-        "got overwrite",
-        "got_overwrite",
-    )
-    if not any(token in declared for token in strict_tokens):
-        return []
-    if "ret2win" in declared or "win function" in declared:
-        return []
-
-    allows_ret2win = str(metadata.get("allow_ret2win") or "").lower() in {"1", "true", "yes"}
-    source_text = "\n".join(
-        _read_text(path) or ""
-        for path in sorted((challenge_dir / "deploy" / "src").glob("**/*"))
-        if path.is_file() and path.suffix in {".c", ".cc", ".cpp", ".h", ".S", ".s"}
-    )
-    exp_text = _read_text(challenge_dir / "writenup" / "exp.py") or ""
-    writeup_text = _read_text(challenge_dir / "writenup" / "wp.md") or ""
-    combined = f"{source_text}\n{exp_text}"
-    errors: list[str] = []
-    flag_text = "\n".join(
-        str(metadata.get(key) or "")
-        for key in ("flag", "validation_final_flag_candidate")
-    ).lower()
-    misleading_flag_tokens = ("ret2win", "rop_win", "win_func", "winfunction")
-    if not allows_ret2win and any(token in flag_text for token in misleading_flag_tokens):
-        errors.append(
-            "pwn technique consistency failed: flag naming implies ret2win/rop_win "
-            "while metadata declares a stricter pwn technique"
-        )
-    if not allows_ret2win and re.search(r"\b(?:read_flag|print_flag|win)\s*\(", combined):
-        errors.append(
-            "pwn technique consistency failed: declared technique is "
-            f"{metadata.get('primary_technique')!r}, but source/exp exposes a "
-            "read_flag()/win()/print_flag() ret2win shortcut"
-        )
-    if ("srop" in declared or "sigreturn" in declared) and not re.search(
-        r"\b(?:SigreturnFrame|sigreturn|rt_sigreturn|SYS_rt_sigreturn|syscall)\b",
-        exp_text,
-    ):
-        errors.append(
-            "pwn technique consistency failed: SROP design requires the reference "
-            "exploit to use sigreturn/SigreturnFrame/syscall evidence, not a "
-            "different shortcut"
-        )
-    if "orw" in declared and not all(
-        re.search(pattern, exp_text, re.IGNORECASE)
-        for pattern in (r"\bopen(?:at)?\b", r"\bread\b", r"\bwrite\b")
-    ):
-        errors.append(
-            "pwn technique consistency failed: ORW design requires open/read/write "
-            "stages in writenup/exp.py"
-        )
-    if "ret2libc" in declared and not re.search(
-        r"\b(?:libc\.address|libc_base|system|execve|/bin/sh)\b",
-        exp_text,
-        re.IGNORECASE,
-    ):
-        errors.append(
-            "pwn technique consistency failed: ret2libc design requires libc base "
-            "and system/execve evidence in writenup/exp.py"
-        )
-    if ("got overwrite" in declared or "got_overwrite" in declared) and not re.search(
-        r"\b(?:got|GOT|write_primitive|overwrite)\b",
-        exp_text,
-    ):
-        errors.append(
-            "pwn technique consistency failed: GOT overwrite design requires a GOT "
-            "target and write primitive in writenup/exp.py"
-        )
-    writeup_lower = writeup_text.lower()
-    if "srop" in writeup_lower and "srop" not in declared and "sigreturn" not in declared:
-        errors.append(
-            "pwn technique consistency failed: writeup describes SROP but metadata "
-            "declares a different primary technique"
-        )
-    if "ret2win" in writeup_lower and not allows_ret2win and any(token in declared for token in strict_tokens):
-        errors.append(
-            "pwn technique consistency failed: writeup describes ret2win while "
-            "metadata declares a stricter pwn technique"
-        )
-    return errors
-
-
-def _metadata_technique_text(metadata: Mapping[str, Any]) -> str:
-    parts: list[str] = []
-    for key in (
-        "primary_technique",
-        "secondary_technique",
-        "actual_solution_type",
-        "learning_objective",
-        "description",
-    ):
-        value = metadata.get(key)
-        if isinstance(value, str):
-            parts.append(value)
-    techniques = metadata.get("techniques")
-    if isinstance(techniques, list):
-        parts.extend(str(item) for item in techniques if item)
-    return " ".join(parts).lower()
-
-
 def _validate_has_app_readiness_probe(text: str) -> bool:
     readiness_tokens = (
         "Choice:",
@@ -2277,6 +2173,22 @@ class ChallengeValidator:
                         contract_errors=[necessity],
                     ),
                 }
+            semantic_details = semantic_contract_failure_details(
+                challenge_dir,
+                metadata,
+                validation_result=record,
+            )
+            if semantic_details:
+                errors = [item["message"] for item in semantic_details]
+                error = "; ".join(errors)
+                record_status("failed", "contract_failed", error)
+                return {
+                    **record,
+                    "status": "contract_failed",
+                    "error": error,
+                    "contract_errors": errors,
+                    "failure_details": semantic_details,
+                }
             record_status("passed", "passed")
             return {**record, "status": "passed"}
 
@@ -2426,7 +2338,7 @@ class ChallengeValidator:
                 errors.extend(_host_chroot_setup_errors(challenge_dir, metadata))
                 errors.extend(_pwn_dockerfile_scaffold_errors(challenge_dir))
                 errors.extend(_pwn_runtime_contract_errors(challenge_dir))
-                errors.extend(_pwn_technique_consistency_errors(challenge_dir, metadata))
+            errors.extend(semantic_contract_error_messages(challenge_dir, metadata))
 
         target_format = metadata.get("target_format", "elf")
         if category in {"re", "pwn"} and target_format == "elf":
@@ -2631,12 +2543,7 @@ class ChallengeValidator:
         if solve_status == "passed":
             metadata["repaired"] = True
             metadata["publishable"] = True
-            for field in (
-                "validation_failure_class",
-                "validation_failure_signature",
-                "validation_failure_details",
-            ):
-                metadata.pop(field, None)
+            clear_validation_failure_fields(metadata)
         else:
             metadata["repaired"] = False
             metadata["publishable"] = False

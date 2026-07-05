@@ -1,3 +1,5 @@
+import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -590,8 +592,9 @@ class ValidationTests(unittest.TestCase):
 
         errors = self.validator.contract_errors(challenge, metadata)
 
-        self.assertTrue(any("technique consistency failed" in e for e in errors))
-        self.assertTrue(any("read_flag()/win()/print_flag()" in e for e in errors))
+        self.assertTrue(any("declared_family=srop" in e for e in errors))
+        self.assertTrue(any("conflict_token='read_flag'" in e for e in errors))
+        self.assertTrue(any("source=deploy/src/vuln.c" in e for e in errors))
 
     def test_pwn_strict_design_rejects_ret2win_flag_naming(self):
         challenge = self.paths.challenges / "pwn" / "pwn-ret2libc-flag-001"
@@ -613,7 +616,122 @@ class ValidationTests(unittest.TestCase):
 
         errors = self.validator.contract_errors(challenge, metadata)
 
-        self.assertTrue(any("flag naming implies ret2win/rop_win" in e for e in errors))
+        self.assertTrue(any("declared_family=ret2libc" in e for e in errors))
+        self.assertTrue(any("conflict_token='rop_win'" in e for e in errors))
+        self.assertTrue(any("source=metadata.json" in e for e in errors))
+
+    def test_pwn_canary_ret2libc_rejects_ret2win_in_writeup_report_and_repair_summary(self):
+        challenge = self.paths.challenges / "pwn" / "pwn-ret2libc-report-001"
+        metadata = _write_minimal_pwn_contract(challenge)
+        metadata["primary_technique"] = "canary_leak"
+        metadata["secondary_technique"] = "ret2libc"
+        (challenge / "writenup").mkdir(parents=True, exist_ok=True)
+        (challenge / "writenup" / "exp.py").write_text(
+            "canary = leak_canary()\nlibc_base = leak - 0x29dc0\nsystem('/bin/sh')\n",
+            encoding="utf-8",
+        )
+        (challenge / "writenup" / "wp.md").write_text(
+            "This accidentally says ret2win.\n",
+            encoding="utf-8",
+        )
+        (challenge / "logs").mkdir()
+        (challenge / "logs" / "report.json").write_text(
+            '{"summary": "ret2win path was used"}',
+            encoding="utf-8",
+        )
+        (challenge / "logs" / "repair-summary.md").write_text(
+            "repair introduced ret2win\n",
+            encoding="utf-8",
+        )
+
+        errors = self.validator.contract_errors(challenge, metadata)
+
+        self.assertTrue(any("source=writenup/wp.md" in e for e in errors))
+        self.assertTrue(any("source=logs/report.json" in e for e in errors))
+        self.assertTrue(any("source=logs/repair-summary.md" in e for e in errors))
+
+    def test_pwn_ret2win_override_allows_declared_ret2win(self):
+        challenge = self.paths.challenges / "pwn" / "pwn-ret2win-001"
+        metadata = _write_minimal_pwn_contract(challenge)
+        metadata["primary_technique"] = "ret2win"
+        metadata["allow_ret2win"] = True
+        metadata["flag"] = "flag{rop_win_demo}"
+        (challenge / "writenup").mkdir(parents=True, exist_ok=True)
+        (challenge / "writenup" / "exp.py").write_text(
+            "payload = p64(elf.symbols['win'])\n",
+            encoding="utf-8",
+        )
+
+        errors = self.validator.contract_errors(challenge, metadata)
+
+        self.assertFalse(any("semantic contract failed" in e for e in errors))
+
+    def test_pwn_host_validation_passed_but_final_semantic_contract_failed_is_not_publishable(self):
+        challenge = self.paths.challenges / "pwn" / "pwn-final-contract-001"
+        metadata = _write_minimal_pwn_contract(challenge)
+        artifact = challenge / "attachments" / "pwn_task"
+        artifact_sha = hashlib.sha256(artifact.read_bytes()).hexdigest()
+        metadata.update(
+            {
+                "id": "pwn-final-contract-001",
+                "primary_technique": "canary_leak",
+                "secondary_technique": "ret2libc",
+                "artifact": "attachments/pwn_task",
+                "artifact_sha256": artifact_sha,
+            }
+        )
+        (challenge / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+        (challenge / "writenup").mkdir(parents=True, exist_ok=True)
+        (challenge / "writenup" / "wp.md").write_text(
+            "# wp\n\n## Leak\n\n" + ("canary leak ret2libc " * 40) + "\n\n## Exploit\n\n",
+            encoding="utf-8",
+        )
+        (challenge / "writenup" / "exp.py").write_text(
+            f'BINARY_SHA256 = "{artifact_sha}"\n'
+            "canary = leak_canary()\n"
+            "libc_base = leak - 0x29dc0\n"
+            "payload = flat(pop_rdi, binsh, system)\n",
+            encoding="utf-8",
+        )
+        (challenge / "README.md").write_text(
+            "# readme\n\n## Build\n\n" + ("ret2libc canary " * 40) + "\n\n## Solve\n\n",
+            encoding="utf-8",
+        )
+        (challenge / "validate.sh").write_text(
+            "#!/bin/sh\n"
+            "mkdir -p logs\n"
+            "printf '{\"summary\":\"ret2win shortcut\"}' > logs/report.json\n"
+            "printf 'flag{%s}\\n' demo\n",
+            encoding="utf-8",
+        )
+        (challenge / "validate.sh").chmod(0o755)
+
+        result = self.validator.validate_one(challenge)
+        stamped = json.loads((challenge / "metadata.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(result["status"], "contract_failed")
+        self.assertTrue(any("source=logs/report.json" in e for e in result["contract_errors"]))
+        self.assertEqual(result["failure_details"][0]["declared_family"], "ret2libc")
+        self.assertEqual(result["failure_details"][0]["conflict_token"], "ret2win")
+        self.assertEqual(result["failure_details"][0]["source"], "logs/report.json")
+        self.assertIn("repair_action", result["failure_details"][0])
+        self.assertFalse(stamped["publishable"])
+        self.assertEqual(stamped["validation_status"], "contract_failed")
+
+    def test_web_semantic_policy_example_is_extensible(self):
+        challenge = self.paths.challenges / "web" / "web-sqli-policy-001"
+        metadata = _write_minimal_web_contract(challenge)
+        metadata["primary_technique"] = "boolean blind sqli"
+        (challenge / "writenup" / "wp.md").write_text(
+            "Use select statements, not hardcoded_admin_password shortcuts.\n",
+            encoding="utf-8",
+        )
+
+        errors = self.validator.contract_errors(challenge, metadata)
+
+        self.assertTrue(any("category=web" in e for e in errors))
+        self.assertTrue(any("declared_family=sql_injection" in e for e in errors))
+        self.assertTrue(any("conflict_token='hardcoded_admin_password'" in e for e in errors))
 
     def test_pwn_artifact_hygiene_rejects_repair_residue(self):
         challenge = self.paths.challenges / "pwn" / "pwn-hygiene-001"

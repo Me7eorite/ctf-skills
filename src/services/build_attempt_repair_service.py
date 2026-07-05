@@ -19,6 +19,8 @@ from core.build_timeout import validation_repair_timeout_cap
 from core.clock import beijing_now_isoformat
 from core.jsonio import read_json
 from core.paths import ProjectPaths
+from core.queue import ShardQueue
+from domain.output_consistency import validate_workspace_success_state
 from domain.pwn_artifact_evidence import (
     PwnArtifactEvidenceError,
     ensure_pwn_solver_evidence,
@@ -210,7 +212,16 @@ class BuildAttemptRepairService:
             ).one_or_none()
             if row is None:
                 raise BuildAttemptRepairError(f"build attempt {attempt_id} does not exist")
-            if row.status != "failed":
+            consistency_failure = _attempt_success_consistency_failure(self.paths, row)
+            if consistency_failure is not None:
+                _downgrade_inconsistent_success_to_failed(
+                    self.paths,
+                    row,
+                    task_model.DesignTask,
+                    session,
+                    reason=str(consistency_failure.get("validation_error") or "success state is inconsistent"),
+                )
+            if row.status != "failed" and consistency_failure is None:
                 raise BuildAttemptRepairError(f"build attempt is {row.status}, expected failed")
             latest = session.scalars(
                 sa.select(build_model.BuildAttempt)
@@ -234,7 +245,13 @@ class BuildAttemptRepairService:
             if task is None or task.status != "build_failed":
                 raise BuildAttemptRepairError("repair requires a parent task in build_failed status")
             failure_summary = _failure_summary(session, row) or row.error
-            latest_failure = latest_failed_validation(self.paths, row.id)
+            latest_failure = (
+                consistency_failure
+                if consistency_failure is not None
+                else latest_failed_validation(self.paths, row.id)
+            )
+            if consistency_failure is not None:
+                failure_summary = consistency_failure.get("validation_error") or failure_summary
             attempt = {
                 "id": row.id,
                 "shard_basename": row.shard_basename,
@@ -246,7 +263,7 @@ class BuildAttemptRepairService:
             }
             failure_details = _failure_details(latest_failure)
 
-        payload = _failed_payload(self.paths, attempt["shard_basename"])
+        payload = _attempt_payload(self.paths, attempt["shard_basename"])
         challenge_ids = _challenge_ids(payload)
         if len(challenge_ids) != 1:
             raise BuildAttemptRepairError("repair requires a failed shard with exactly one challenge")
@@ -290,16 +307,69 @@ class BuildAttemptRepairService:
             handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
-def _failed_payload(paths: ProjectPaths, shard_basename: str) -> dict[str, Any]:
+def _attempt_payload(paths: ProjectPaths, shard_basename: str) -> dict[str, Any]:
     if Path(shard_basename).name != shard_basename:
         raise BuildAttemptRepairError("build attempt shard basename is invalid")
-    shard = paths.shards / "failed" / shard_basename
-    if shard.is_symlink() or not shard.is_file():
-        raise BuildAttemptRepairError("failed shard is missing")
+    candidates = (
+        paths.shards / "failed" / shard_basename,
+        paths.shards / "done" / shard_basename,
+    )
+    shard = next((candidate for candidate in candidates if candidate.is_file()), None)
+    if shard is None or shard.is_symlink():
+        raise BuildAttemptRepairError("attempt shard is missing")
     payload = read_json(shard, None)
     if not isinstance(payload, dict):
-        raise BuildAttemptRepairError("failed shard payload is invalid")
+        raise BuildAttemptRepairError("attempt shard payload is invalid")
     return payload
+
+
+def _attempt_success_consistency_failure(paths: ProjectPaths, row) -> dict[str, Any] | None:
+    if row.status != "succeeded":
+        return None
+    result = validate_workspace_success_state(
+        paths.executions / str(row.id) / "current"
+    )
+    if result.get("ok"):
+        return None
+    status = str(result.get("status") or "validation_inconclusive")
+    reason = str(result.get("reason") or "success state is inconsistent")
+    details = result.get("failure_details")
+    return {
+        "source": "publish-consistency",
+        "challenge_id": None,
+        "validation_status": status,
+        "validation_error": reason,
+        "validation_failure_class": status,
+        "validation_failure_details": details if isinstance(details, list) else [],
+    }
+
+
+def _downgrade_inconsistent_success_to_failed(
+    paths: ProjectPaths,
+    row,
+    task_cls,
+    session,
+    *,
+    reason: str,
+) -> None:
+    failed = paths.shards / "failed" / row.shard_basename
+    done = paths.shards / "done" / row.shard_basename
+    if not failed.exists() and done.is_file() and not done.is_symlink():
+        failed.parent.mkdir(parents=True, exist_ok=True)
+        done.replace(failed)
+        done_claim = ShardQueue._claim_path(done)
+        failed_claim = ShardQueue._claim_path(failed)
+        if done_claim.exists() and not done_claim.is_symlink():
+            failed_claim.parent.mkdir(parents=True, exist_ok=True)
+            done_claim.replace(failed_claim)
+    now = datetime.now(timezone.utc)
+    row.status = "failed"
+    row.error = f"{reason}"
+    row.finished_at = now
+    task = session.get(task_cls, row.design_task_id)
+    if task is not None:
+        task.status = "build_failed"
+        task.updated_at = now
 
 
 @contextmanager
@@ -484,6 +554,7 @@ def _repair_prompt(context: dict[str, Any]) -> str:
         if isinstance(latest_failure, dict)
         else None
     )
+    semantic_plan = _semantic_repair_plan(context.get("failure_details") or [])
     prompt = f"""You are repairing an existing CTF challenge artifact.
 
 This is not a new build, not a resume, and not a clean rebuild.
@@ -498,6 +569,9 @@ Failure summary:
 
 Structured failure details:
 {json.dumps(context.get("failure_details") or [], ensure_ascii=False, indent=2)}
+
+Semantic contract repair plan:
+{semantic_plan}
 
 Validation class:
 - validation_failure_class: {validation_class or "(none)"}
@@ -666,6 +740,86 @@ def _failure_details(latest_failure: dict[str, Any] | None) -> list[dict[str, An
             if item
         ]
     return []
+
+
+def _semantic_repair_plan(failure_details: Any) -> str:
+    if not isinstance(failure_details, list):
+        return "- No semantic contract details were supplied."
+    details = [
+        item
+        for item in failure_details
+        if isinstance(item, dict)
+        and str(item.get("code") or "").startswith("semantic_")
+    ]
+    if not details:
+        return "- No semantic contract details were supplied."
+    families = sorted(
+        {
+            str(item.get("declared_family") or "")
+            for item in details
+            if item.get("declared_family")
+        }
+    )
+    observed = sorted(
+        {
+            str(item.get("observed_family") or "")
+            for item in details
+            if item.get("observed_family")
+        }
+    )
+    sources = list(
+        dict.fromkeys(
+            str(item.get("source") or item.get("path") or "")
+            for item in details
+            if item.get("source") or item.get("path")
+        )
+    )
+    tokens = list(
+        dict.fromkeys(
+            str(item.get("conflict_token") or item.get("conflict_pattern") or "")
+            for item in details
+            if item.get("conflict_token") or item.get("conflict_pattern")
+        )
+    )
+    actions = list(
+        dict.fromkeys(
+            str(item.get("repair_action") or item.get("hint") or "")
+            for item in details
+            if item.get("repair_action") or item.get("hint")
+        )
+    )
+    lines = [
+        "- Root cause: final artifact semantics conflict with the declared technique contract.",
+        (
+            "- Preserve the declared technique family"
+            + (f" (`{', '.join(families)}`)" if families else "")
+            + " unless the metadata declaration is genuinely wrong."
+        ),
+    ]
+    if observed:
+        lines.append(f"- Observed conflicting family: `{', '.join(observed)}`.")
+    if sources:
+        lines.append(
+            "- Inspect and edit the cited final evidence files: "
+            + ", ".join(f"`{source}`" for source in sources[:8])
+            + "."
+        )
+    if tokens:
+        lines.append(
+            "- Remove or rewrite the conflicting semantic markers: "
+            + ", ".join(f"`{token}`" for token in tokens[:10])
+            + "."
+        )
+    lines.extend(f"- {action}" for action in actions[:6])
+    lines.append(
+        "- Do not silence the validator by deleting evidence, changing metadata to a different technique, "
+        "or bypassing validation unless the actual challenge design has intentionally changed."
+    )
+    lines.append(
+        "- After editing, rerun host validation; the final flag, writeup, report, source, and exploit "
+        "must all describe the same technique family."
+    )
+    return "\n".join(lines)
 
 
 def _pwn_stage_guard(latest_failure: Any) -> dict[str, Any]:

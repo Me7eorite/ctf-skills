@@ -727,6 +727,9 @@ class ExecutionWorkspaceTests(unittest.TestCase):
                         "challenge_id": "web-0001",
                         "solve_status": "passed",
                         "validation_status": "passed",
+                        "validation_command": ["bash", "validate.sh"],
+                        "validation_returncode": 0,
+                        "validation_final_flag_candidate": "flag{demo}",
                     }
                 ],
                 validation_set,

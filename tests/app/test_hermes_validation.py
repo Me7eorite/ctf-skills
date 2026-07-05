@@ -337,6 +337,55 @@ def test_validation_repair_prompt_blocks_metadata_replacement_cheat() -> None:
     assert "same cheat in another form" in prompt
 
 
+def test_validation_repair_prompt_explains_semantic_contract_failure() -> None:
+    prompt = render_validation_repair_prompt(
+        attempt=1,
+        max_attempts=3,
+        validation_results=[
+            {
+                "challenge_id": "pwn-0001",
+                "solve_status": "failed",
+                "validation_status": "contract_failed",
+                "validation_error": (
+                    "semantic contract failed: category=pwn "
+                    "declared_family=ret2libc conflict_token='ret2win' "
+                    "source=logs/report.json"
+                ),
+                "validation_contract_errors": [
+                    "semantic contract failed: category=pwn "
+                    "declared_family=ret2libc conflict_token='ret2win' "
+                    "source=logs/report.json"
+                ],
+                "validation_failure_details": [
+                    {
+                        "phase": "contract",
+                        "code": "semantic_forbidden_term",
+                        "status": "contract_failed",
+                        "semantic_category": "pwn",
+                        "declared_family": "ret2libc",
+                        "observed_family": "ret2win",
+                        "conflict_token": "ret2win",
+                        "source": "logs/report.json",
+                        "path": "logs/report.json",
+                        "repair_action": (
+                            "`logs/report.json` contains `ret2win`, which indicates "
+                            "a ret2win/direct-win shortcut but metadata declares "
+                            "`ret2libc`."
+                        ),
+                    }
+                ],
+            }
+        ],
+    )
+
+    assert "Root cause: final artifact semantics conflict" in prompt
+    assert "declared technique family intact (`ret2libc`)" in prompt
+    assert "`logs/report.json`" in prompt
+    assert "`ret2win`" in prompt
+    assert "final flag, writeup, report" in prompt
+    assert "Do not silence the validator" in prompt
+
+
 def test_validation_debug_prompt_includes_inherited_context() -> None:
     prompt = render_validation_repair_prompt(
         attempt=1,

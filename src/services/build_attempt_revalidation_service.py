@@ -20,6 +20,7 @@ from core.jsonio import read_json
 from core.paths import ProjectPaths
 from core.queue import ShardQueue
 from core.state import ProgressStore
+from domain.output_consistency import validate_workspace_success_state
 from domain.pwn_artifact_evidence import PwnArtifactEvidenceError, ensure_pwn_solver_evidence
 from domain.resume import ChallengeResumePlan, find_challenge_directory
 from domain.validation import ChallengeValidator
@@ -192,6 +193,14 @@ class BuildAttemptRevalidationService:
                 raise BuildAttemptRevalidationNotFoundError(
                     f"build attempt {attempt_id} does not exist"
                 )
+            consistency_failure = _attempt_success_consistency_failure(self.paths, row)
+            if consistency_failure is not None:
+                _downgrade_inconsistent_success_to_failed(
+                    self.paths,
+                    row,
+                    session,
+                    reason=consistency_failure,
+                )
             if row.status != "failed":
                 raise BuildAttemptRevalidationError(
                     f"build attempt is {row.status}, expected failed"
@@ -242,10 +251,10 @@ class BuildAttemptRevalidationService:
             return
         context = payload.get("repair_context", {})
         text = json.dumps(context, ensure_ascii=False)
-        for needle in ("metadata.json", "challenge.yml", "writenup/output", "exp.py"):
+        for needle in ("/root/ctf-skills/work/executions/", "/workspace/executions/"):
             if needle in text:
                 raise BuildAttemptRevalidationError(
-                    f"failed shard repair context leaks organizer file reference: {needle}"
+                    f"failed shard repair context leaks execution path reference: {needle}"
                 )
 
     def _failed_payload(
@@ -604,6 +613,47 @@ def _lock_task(session, task_id: UUID) -> task_model.DesignTask | None:
         .where(task_model.DesignTask.id == task_id)
         .with_for_update()
     ).one_or_none()
+
+
+def _attempt_success_consistency_failure(
+    paths: ProjectPaths,
+    row,
+) -> str | None:
+    if row.status != "succeeded":
+        return None
+    result = validate_workspace_success_state(
+        paths.executions / str(row.id) / "current"
+    )
+    if result.get("ok"):
+        return None
+    return str(result.get("reason") or "success state is inconsistent")
+
+
+def _downgrade_inconsistent_success_to_failed(
+    paths: ProjectPaths,
+    row,
+    session,
+    *,
+    reason: str,
+) -> None:
+    failed = paths.shards / "failed" / row.shard_basename
+    done = paths.shards / "done" / row.shard_basename
+    if not failed.exists() and done.is_file() and not done.is_symlink():
+        failed.parent.mkdir(parents=True, exist_ok=True)
+        done.replace(failed)
+        done_claim = ShardQueue._claim_path(done)
+        failed_claim = ShardQueue._claim_path(failed)
+        if done_claim.exists() and not done_claim.is_symlink():
+            failed_claim.parent.mkdir(parents=True, exist_ok=True)
+            done_claim.replace(failed_claim)
+    now = datetime.now(timezone.utc)
+    row.status = "failed"
+    row.error = reason
+    row.finished_at = now
+    task = session.get(task_model.DesignTask, row.design_task_id)
+    if task is not None:
+        task.status = "build_failed"
+        task.updated_at = now
 
 
 def _attempt_execution_workspace(

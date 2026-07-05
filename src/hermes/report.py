@@ -10,19 +10,17 @@ from typing import Any
 
 from core.jsonio import read_json, write_json
 from domain.validation_failure_governance import annotate_validation_result
+from domain.validation_state import (
+    authoritative_validation_pass,
+    clear_validation_failure_fields,
+)
 
 
 def _authoritative_result(result: dict[str, Any]) -> dict[str, Any]:
     """Require real validate.sh flag evidence before report-level passed."""
     if result.get("solve_status") != "passed":
         return result
-    if (
-        result.get("validation_status") == "passed"
-        and result.get("validation_command")
-        and result.get("validation_returncode") == 0
-        and result.get("validation_final_flag_candidate")
-        and result.get("missing_solver_output") is not True
-    ):
+    if authoritative_validation_pass(result):
         return result
     downgraded = dict(result)
     downgraded["solve_status"] = "failed"
@@ -118,18 +116,8 @@ def merge_validation_into_report(
             if field in result and result[field] is not None:
                 target[field] = result[field]
         if target["solve_status"] == "passed":
-            for field in (
-                "validation_error",
-                "validation_contract_errors",
-                "validation_failure_details",
-                "validation_failure_class",
-                "validation_failure_signature",
-                "pwn_failure_stage",
-                "pwn_debug_actionable_summary",
-                "pwn_debug_error",
-            ):
-                if field not in result or result[field] in (None, "", []):
-                    target.pop(field, None)
+            if authoritative_validation_pass(result):
+                clear_validation_failure_fields(target)
         if target["solve_status"] == "failed":
             any_failed = True
 

@@ -159,6 +159,52 @@ def test_build_attempt_repair_prompt_includes_validation_evidence_and_debug_repo
     assert "print bounded diagnostics for service ready state" in normalized
 
 
+def test_build_attempt_repair_prompt_explains_semantic_failure(tmp_path: Path) -> None:
+    challenge_dir = tmp_path / "pwn-0001-demo"
+    challenge_dir.mkdir()
+
+    prompt = _repair_prompt(
+        {
+            "id": "attempt",
+            "design_task_id": "task",
+            "challenge_id": "pwn-0001",
+            "category": "pwn",
+            "challenge_dir": challenge_dir,
+            "failure_summary": "semantic contract failed",
+            "failure_details": [
+                {
+                    "phase": "contract",
+                    "code": "semantic_forbidden_term",
+                    "status": "contract_failed",
+                    "semantic_category": "pwn",
+                    "declared_family": "ret2libc",
+                    "observed_family": "ret2win",
+                    "conflict_token": "ret2win",
+                    "source": "logs/report.json",
+                    "path": "logs/report.json",
+                    "repair_action": (
+                        "`logs/report.json` contains `ret2win`; remove the shortcut "
+                        "and preserve the declared ret2libc path."
+                    ),
+                }
+            ],
+            "latest_failure": {
+                "validation_status": "contract_failed",
+                "validation_failure_class": "contract",
+            },
+            "file_context": _file_context(challenge_dir),
+        }
+    )
+
+    assert "Semantic contract repair plan:" in prompt
+    assert "final artifact semantics conflict" in prompt
+    assert "declared technique family (`ret2libc`)" in prompt
+    assert "Observed conflicting family: `ret2win`" in prompt
+    assert "`logs/report.json`" in prompt
+    assert "`ret2win`" in prompt
+    assert "Do not silence the validator" in prompt
+
+
 def test_build_attempt_repair_prompt_includes_final_pwn_artifact_evidence(
     tmp_path: Path,
     monkeypatch,

@@ -641,6 +641,62 @@ def test_successful_attempt_does_not_expose_stale_validation_failure_context(
     assert detail.get("validation_failure_details") is None
 
 
+def test_successful_attempt_with_missing_validated_output_is_inconclusive(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory, category="web")
+    with transaction(factory=session_factory) as session:
+        repo = BuildAttemptsRepository(session)
+        attempt = repo.create_attempt(task_id, f"{uuid4()}.json")
+        repo.update_to_terminal(
+            attempt.id,
+            status="succeeded",
+            artifact_status="present",
+            resulting_challenge_dir="work/challenges/web/web-missing-demo",
+        )
+
+    state_dir = (
+        client.app.state.project_paths.executions
+        / str(attempt.id)
+        / "current"
+        / "state"
+    )
+    state_dir.mkdir(parents=True)
+    write_json(
+        state_dir / "publish-status.json",
+        {"status": "succeeded", "output_manifest_hash": "abc"},
+    )
+    write_json(
+        state_dir / "validated-output.json",
+        {
+            "output_manifest_hash": "abc",
+            "output_paths": {"web-0001": "output/challenges/web/web-0001-demo"},
+            "validate_paths": {"web-0001": "output/challenges/web/web-0001-demo/validate.sh"},
+            "results": [
+                {
+                    "challenge_id": "web-0001",
+                    "solve_status": "passed",
+                    "validation_status": "passed",
+                    "validation_returncode": 0,
+                    "validation_final_flag_candidate": "flag{demo}",
+                }
+            ],
+        },
+    )
+
+    detail_response = client.get(f"/api/build-attempts/{attempt.id}")
+    assert detail_response.status_code == 200
+    detail = detail_response.json()
+    assert detail["status"] == "validation_inconclusive"
+    assert detail["validation_status"] == "validation_inconclusive"
+    assert detail["publishable"] is False
+    assert "validated output path is missing" in detail["validation_consistency_reason"]
+    assert detail["validation_error"] == detail["validation_consistency_reason"]
+    assert detail["validation_failure_details"][0]["code"] == "validated_output_path_missing"
+    assert detail["validation_failure_details"][0]["path"] == "output/challenges/web/web-0001-demo"
+
+
 def test_failed_attempt_validation_history_overrides_agent_pending_report(
     client: TestClient,
     session_factory: SessionFactory,

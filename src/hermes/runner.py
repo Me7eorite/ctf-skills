@@ -68,6 +68,10 @@ from domain.validation_repair_policy import (
     repair_policy_summary,
     validation_failure_fingerprints,
 )
+from domain.validation_state import (
+    authoritative_validation_pass,
+    clear_validation_failure_fields,
+)
 from hermes import process as hermes_process
 from hermes.build_publisher import (
     PublicationContract,
@@ -207,14 +211,7 @@ def _stamp_validation_results_into_outputs(
     changed = False
     for result in per_results:
         result = annotate_validation_result(result)
-        authoritative_pass = (
-            result.get("solve_status") == "passed"
-            and result.get("validation_status") == "passed"
-            and result.get("validation_command")
-            and result.get("validation_returncode") == 0
-            and result.get("validation_final_flag_candidate")
-            and result.get("missing_solver_output") is not True
-        )
+        authoritative_pass = authoritative_validation_pass(result)
         if result.get("solve_status") == "passed" and not authoritative_pass:
             result = {
                 **result,
@@ -276,18 +273,7 @@ def _stamp_validation_results_into_outputs(
                 metadata.pop("solve_note", None)
             before = dict(metadata)
             if authoritative_pass:
-                for field in (
-                    "validation_error",
-                    "validation_contract_errors",
-                    "validation_failure_details",
-                    "validation_failure_class",
-                    "validation_failure_signature",
-                    "pwn_failure_stage",
-                    "pwn_debug_failure_stage",
-                    "pwn_debug_actionable_summary",
-                    "pwn_debug_error",
-                ):
-                    metadata.pop(field, None)
+                clear_validation_failure_fields(metadata)
             metadata.update(updates)
             for key, value in list(metadata.items()):
                 if value is None and key in {"validation_failure_class", "validation_failure_signature"}:
@@ -1620,6 +1606,12 @@ class HermesRunner:
                 raise WorkspacePromotionError(
                     "workspace output changed after successful validation"
                 )
+            self._record_validated_output(
+                workspace,
+                validation_round,
+                per_results,
+                publish_validation_set,
+            )
             publish_workspace_output(
                 self.paths,
                 workspace,
@@ -2031,8 +2023,29 @@ class HermesRunner:
             first_path = workspace.state / "first-validation-failure.json"
             if not first_path.exists():
                 write_json(first_path, entry)
-        else:
-            write_json(workspace.state / "validated-output.json", entry)
+
+    @staticmethod
+    def _record_validated_output(
+        workspace: ExecutionWorkspace,
+        round_no: int,
+        results: list[dict[str, Any]],
+        validation_set: WorkspaceValidationSet,
+    ) -> None:
+        entry = {
+            "round": round_no,
+            "runner_phase": "validation",
+            "output_manifest_hash": validation_set.output_manifest_hash,
+            "output_paths": {
+                challenge_id: path.relative_to(workspace.root).as_posix()
+                for challenge_id, path in validation_set.candidates.items()
+            },
+            "validate_paths": {
+                challenge_id: (path / "validate.sh").relative_to(workspace.root).as_posix()
+                for challenge_id, path in validation_set.candidates.items()
+            },
+            "results": _annotate_validation_results(results),
+        }
+        write_json(workspace.state / "validated-output.json", entry)
 
     @staticmethod
     def _validation_debug_context(
