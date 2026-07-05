@@ -460,7 +460,8 @@ def test_validation_debug_context_includes_final_pwn_artifact_evidence(
     assert evidence["pwn-0001"]["path"] == "./attachments/vuln"
     assert evidence["pwn-0001"]["sha256"] == artifact_sha
     assert evidence["pwn-0001"]["metadata_artifact_sha256"] == artifact_sha
-    assert evidence["pwn-0001"]["deploy_src_vuln_sha256"] == deploy_sha
+    assert evidence["pwn-0001"]["deploy_src_path"] == "deploy/src/vuln"
+    assert evidence["pwn-0001"]["deploy_src_sha256"] == deploy_sha
     assert evidence["pwn-0001"]["symbols"]["win"] == "0x40149d"
     assert "FINAL SOLVER EVIDENCE SOURCE" in evidence["pwn-0001"]["instruction"]
     assert "Use only ./attachments/vuln for exp.py and pwn_debug_report.json." in evidence["pwn-0001"]["instruction"]
@@ -687,6 +688,40 @@ def test_validate_gate_rejects_pwn_exp_deploy_src_sha(tmp_path: Path) -> None:
     assert isinstance(error, dict)
     assert error["code"] == "pwn_evidence_from_deploy_src"
     assert "deploy/src/vuln" in error["message"]
+
+
+def test_validate_gate_rejects_named_pwn_artifact_deploy_src_evidence(
+    tmp_path: Path,
+) -> None:
+    paths = _Paths(tmp_path)
+    challenge = _make_pwn_gate_challenge(paths)
+    (challenge / "attachments" / "vuln").rename(challenge / "attachments" / "taskqueue")
+    final = (challenge / "attachments" / "taskqueue").read_bytes()
+    artifact_sha = hashlib.sha256(final).hexdigest()
+    deploy = b"\x7fELFtaskqueue-deploy"
+    (challenge / "deploy" / "src" / "taskqueue").write_bytes(deploy)
+    deploy_sha = hashlib.sha256(deploy).hexdigest()
+    (challenge / "writenup" / "exp.py").write_text(
+        f'BINARY_SHA256 = "{artifact_sha}"\n',
+        encoding="utf-8",
+    )
+    (challenge / "writenup" / "pwn_debug_report.json").write_text(
+        json.dumps({"binary": {"path": "deploy/src/taskqueue", "sha256": deploy_sha}}),
+        encoding="utf-8",
+    )
+    metadata = json.loads((challenge / "metadata.json").read_text(encoding="utf-8"))
+    metadata["artifact"] = "attachments/taskqueue"
+    metadata["artifact_sha256"] = artifact_sha
+    (challenge / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    plan = ChallengeResumePlan("pwn-0001", challenge, "ok", first_pending_stage="validate")
+
+    error = validate_gate("pwn-0001", plan, paths, image_exists=lambda _image: True)  # type: ignore[arg-type]
+
+    assert isinstance(error, dict)
+    assert error["status"] == "solver_evidence_stale"
+    assert error["code"] == "pwn_evidence_from_deploy_src"
+    assert "deploy/src/taskqueue" in error["message"]
+    assert "attachments/taskqueue" in error["message"]
 
 
 def test_host_validation_overwrites_agent_claimed_passed_status(tmp_path: Path) -> None:

@@ -211,6 +211,12 @@ def test_ensure_pwn_solver_evidence_uses_metadata_artifact_name(tmp_path: Path) 
                 "category": "pwn",
                 "artifact": "attachments/taskqueue",
                 "artifact_sha256": deploy_sha,
+                "solver_evidence_stale": True,
+                "solver_evidence_stale_reason": "runtime ELF changed",
+                "validation_status": "solver_evidence_stale",
+                "validation_failure_class": "old",
+                "validation_failure_signature": "old",
+                "solve_note": "old stale note",
             }
         ),
         encoding="utf-8",
@@ -229,6 +235,15 @@ def test_ensure_pwn_solver_evidence_uses_metadata_artifact_name(tmp_path: Path) 
     assert "updated metadata.artifact_sha256 from attachments/taskqueue" in actions
     metadata = read_json(challenge / "metadata.json")
     assert metadata["artifact_sha256"] == artifact_sha
+    for field in (
+        "solver_evidence_stale",
+        "solver_evidence_stale_reason",
+        "validation_status",
+        "validation_failure_class",
+        "validation_failure_signature",
+        "solve_note",
+    ):
+        assert field not in metadata
     report = read_json(challenge / "writenup" / "pwn_debug_report.json")
     assert report["binary"] == {
         "path": "attachments/taskqueue",

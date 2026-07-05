@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -114,20 +115,26 @@ def _pwn_challenge(workspace: ExecutionWorkspace, *, name: str = "pwn-0001-baby-
     return challenge
 
 
-def _pwn_challenge_with_artifact(workspace: ExecutionWorkspace) -> Path:
+def _pwn_challenge_with_artifact(
+    workspace: ExecutionWorkspace,
+    *,
+    artifact_name: str = "vuln",
+    server_binary: str | None = None,
+) -> Path:
     challenge = _pwn_challenge(workspace)
     (challenge / "attachments").mkdir()
-    (challenge / "attachments" / "vuln").write_bytes(b"host-elf")
+    (challenge / "attachments" / artifact_name).write_bytes(b"host-elf")
     (challenge / "deploy" / "_files").mkdir(parents=True)
+    runtime_binary = server_binary or artifact_name
     (challenge / "deploy" / "_files" / "ctf.xinetd").write_text(
         "service ctf\n{\n"
         "  server = /usr/sbin/chroot\n"
-        "  server_args = --userspec=1000:1000 /home/ctf ./vuln\n"
+        f"  server_args = --userspec=1000:1000 /home/ctf ./{runtime_binary}\n"
         "}\n",
         encoding="utf-8",
     )
     metadata = read_json(challenge / "metadata.json")
-    metadata["artifact"] = "attachments/vuln"
+    metadata["artifact"] = f"attachments/{artifact_name}"
     metadata["artifact_sha256"] = "old"
     (challenge / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
     return challenge
@@ -268,8 +275,6 @@ def test_host_builder_syncs_pwn_runtime_elf_to_attachment(tmp_path: Path) -> Non
     assert (challenge / "attachments" / "vuln").read_bytes() == b"runtime-elf"
     metadata = read_json(challenge / "metadata.json")
     assert metadata["artifact_sha256"] == "7b890f6cd0e6fa34864e726aa2cda390c35f43277e388d2e6b5c455dae01ba9b"
-    assert metadata["solver_evidence_stale"] is True
-    assert "attachments/" in metadata["solver_evidence_stale_reason"]
     debug_report = read_json(challenge / "writenup" / "pwn_debug_report.json")
     assert debug_report["binary"] == {
         "path": "attachments/vuln",
@@ -285,8 +290,99 @@ def test_host_builder_syncs_pwn_runtime_elf_to_attachment(tmp_path: Path) -> Non
         "validation_failure_class",
         "validation_failure_signature",
         "validation_elapsed",
+        "solver_evidence_stale",
+        "solver_evidence_stale_reason",
     ):
         assert field not in metadata
+
+
+def test_host_builder_syncs_named_pwn_runtime_elf_and_refreshes_solver_evidence(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    challenge = _pwn_challenge_with_artifact(
+        workspace,
+        artifact_name="taskqueue",
+        server_binary="taskqueue",
+    )
+    (challenge / "deploy" / "src" / "taskqueue").write_bytes(b"deploy-elf")
+    (challenge / "writenup").mkdir()
+    (challenge / "writenup" / "exp.py").write_text('BINARY_SHA256 = "old"\n', encoding="utf-8")
+    (challenge / "writenup" / "pwn_debug_report.json").write_text(
+        json.dumps({"binary": {"path": "deploy/src/taskqueue", "sha256": "old"}}),
+        encoding="utf-8",
+    )
+    metadata = read_json(challenge / "metadata.json")
+    metadata.update(
+        {
+            "solver_evidence_stale": True,
+            "solver_evidence_stale_reason": "old build",
+            "validation_status": "solver_evidence_stale",
+            "validation_failure_class": "old",
+            "validation_failure_signature": "old",
+            "solve_note": "old stale note",
+        }
+    )
+    (challenge / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    validation_set = WorkspaceValidationSet(
+        candidates={"pwn-0001": challenge},
+        output_manifest_hash="sha256:before",
+    )
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[:3] == ["docker", "image", "inspect"]:
+            return subprocess.CompletedProcess(command, 0, stdout="sha256:image\n", stderr="")
+        if command[:2] == ["docker", "create"]:
+            return subprocess.CompletedProcess(command, 0, stdout="container123\n", stderr="")
+        if command[:2] == ["docker", "cp"]:
+            Path(command[3]).write_bytes(b"taskqueue-runtime-elf")
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if command[:2] == ["docker", "rm"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if command[:3] == ["docker", "image", "prune"]:
+            return subprocess.CompletedProcess(command, 0, stdout="Total reclaimed space: 0B\n", stderr="")
+        if command[:2] == ["readelf", "-sW"]:
+            assert str(command[-1]).endswith("attachments/taskqueue")
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
+        if command[:1] == ["checksec"]:
+            assert str(command[2]).endswith("attachments/taskqueue")
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
+        assert kwargs["cwd"] == challenge
+        return subprocess.CompletedProcess(command, 0, stdout="built\n", stderr="")
+
+    with patch("hermes.host_build.subprocess.run", side_effect=fake_run):
+        HostBuilder().build_workspace(workspace, validation_set)
+
+    assert [
+        "docker",
+        "cp",
+        "container123:/home/ctf/taskqueue",
+        str(challenge / "attachments" / "taskqueue"),
+    ] in calls
+    artifact_sha = hashlib.sha256(b"taskqueue-runtime-elf").hexdigest()
+    assert hashlib.sha256((challenge / "deploy" / "src" / "taskqueue").read_bytes()).hexdigest() != artifact_sha
+    metadata = read_json(challenge / "metadata.json")
+    assert metadata["artifact"] == "attachments/taskqueue"
+    assert metadata["artifact_sha256"] == artifact_sha
+    for field in (
+        "solver_evidence_stale",
+        "solver_evidence_stale_reason",
+        "validation_status",
+        "validation_failure_class",
+        "validation_failure_signature",
+        "solve_note",
+    ):
+        assert field not in metadata
+    debug_report = read_json(challenge / "writenup" / "pwn_debug_report.json")
+    assert debug_report["binary"] == {
+        "path": "attachments/taskqueue",
+        "sha256": artifact_sha,
+        "source": "final_artifact",
+    }
+    exp_text = (challenge / "writenup" / "exp.py").read_text(encoding="utf-8")
+    assert f'BINARY_SHA256 = "{artifact_sha}"' in exp_text
 
 
 def test_host_builder_uses_short_pwn_slug_for_workspace_image(tmp_path: Path) -> None:

@@ -925,7 +925,7 @@ Web / Pwn:
 - Pwn `writenup/exp.py` MUST declare `BINARY_SHA256 = metadata.artifact_sha256`.
   The host gate rejects solvers that only declare aliases such as
   `ARTIFACT_SHA256`, or whose debug report/solver SHA was copied from
-  `deploy/src/vuln` or an old build.
+  `deploy/src/<metadata.artifact basename>` or an old build.
 - Pwn source, metadata, writeup, and `writenup/exp.py` MUST match the declared
   primary technique. If the design says SROP/ORW/ret2libc/GOT overwrite, do not
   add hidden `read_flag()` / `win()` / ret2win shortcuts and do not solve by

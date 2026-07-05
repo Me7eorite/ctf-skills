@@ -16,6 +16,15 @@ from core.jsonio import read_json, write_json
 PWN_FINAL_ARTIFACT_REL = "attachments/vuln"
 PWN_FINAL_ARTIFACT_PROMPT_PATH = "./attachments/vuln"
 PWN_KEY_SYMBOLS = ("win", "main", "vuln", "setup_fake_stack", "fake_stack")
+_PWN_STALE_METADATA_FIELDS = (
+    "solver_evidence_stale",
+    "solver_evidence_stale_reason",
+    "validation_status",
+    "validation_failure_class",
+    "validation_failure_signature",
+    "validation_elapsed",
+    "solve_note",
+)
 _BINARY_SHA_RE = re.compile(
     r"(?m)^(?P<prefix>\s*BINARY_SHA256\s*=\s*)[\"'][^\"']*[\"']"
 )
@@ -34,9 +43,7 @@ def final_pwn_artifact_evidence(challenge_dir: Path) -> dict[str, Any] | None:
     artifact_rel = _pwn_final_artifact_rel(metadata)
     artifact_prompt_path = f"./{artifact_rel}"
     artifact = challenge_dir / artifact_rel
-    deploy_src = challenge_dir / "deploy" / "src" / Path(artifact_rel).name
-    if not deploy_src.is_file() or deploy_src.is_symlink():
-        deploy_src = challenge_dir / "deploy" / "src" / "vuln"
+    deploy_src, deploy_src_rel = _pwn_deploy_src_counterpart(challenge_dir, artifact_rel)
     deploy_src_sha = (
         _sha256_file(deploy_src)
         if deploy_src.is_file() and not deploy_src.is_symlink()
@@ -48,7 +55,8 @@ def final_pwn_artifact_evidence(challenge_dir: Path) -> dict[str, Any] | None:
             "available": False,
             "metadata_artifact": metadata.get("artifact"),
             "metadata_artifact_sha256": metadata.get("artifact_sha256"),
-            "deploy_src_vuln_sha256": deploy_src_sha,
+            "deploy_src_path": deploy_src_rel,
+            "deploy_src_sha256": deploy_src_sha,
             "error": f"{artifact_rel} missing",
         }
     artifact_sha = _sha256_file(artifact)
@@ -59,7 +67,8 @@ def final_pwn_artifact_evidence(challenge_dir: Path) -> dict[str, Any] | None:
         "metadata_artifact": metadata.get("artifact"),
         "metadata_artifact_sha256": metadata.get("artifact_sha256"),
         "symbols": _readelf_symbols(artifact),
-        "deploy_src_vuln_sha256": deploy_src_sha,
+        "deploy_src_path": deploy_src_rel,
+        "deploy_src_sha256": deploy_src_sha,
     }
 
 
@@ -83,7 +92,8 @@ def final_pwn_artifact_prompt_block(challenge_dir: Path) -> str:
     metadata_sha = evidence.get("metadata_artifact_sha256") or "(unavailable)"
     artifact_path = str(evidence.get("path") or PWN_FINAL_ARTIFACT_PROMPT_PATH)
     rel_artifact_path = artifact_path[2:] if artifact_path.startswith("./") else artifact_path
-    deploy_sha = evidence.get("deploy_src_vuln_sha256") or "(unavailable)"
+    deploy_src_path = str(evidence.get("deploy_src_path") or "deploy/src/vuln")
+    deploy_sha = evidence.get("deploy_src_sha256") or "(unavailable)"
     return "\n".join(
         [
             "FINAL SOLVER EVIDENCE SOURCE:",
@@ -97,7 +107,7 @@ def final_pwn_artifact_prompt_block(challenge_dir: Path) -> str:
             f"- metadata.artifact_sha256: {metadata_sha}",
             f"- key symbols from {rel_artifact_path}:",
             *symbol_lines,
-            f"- deploy/src/vuln sha256: {deploy_sha} (UNTRUSTED / DO NOT USE)",
+            f"- {deploy_src_path} sha256: {deploy_sha} (UNTRUSTED / DO NOT USE)",
         ]
     )
 
@@ -121,10 +131,17 @@ def ensure_pwn_solver_evidence(challenge_dir: Path) -> tuple[str, ...]:
     if _ensure_host_readable(artifact_path, artifact_rel=artifact_rel):
         actions.append(f"made {artifact_rel} readable for host validation")
     artifact_sha = _sha256_file(artifact_path)
+    metadata_changed = False
     if metadata.get("artifact_sha256") != artifact_sha:
         metadata["artifact_sha256"] = artifact_sha
-        write_json(metadata_path, metadata)
+        metadata_changed = True
         actions.append(f"updated metadata.artifact_sha256 from {artifact_rel}")
+    for field in _PWN_STALE_METADATA_FIELDS:
+        if field in metadata:
+            metadata.pop(field, None)
+            metadata_changed = True
+    if metadata_changed:
+        write_json(metadata_path, metadata)
 
     report_path = _write_pwn_debug_report(
         challenge_dir,
@@ -269,6 +286,14 @@ def _pwn_final_artifact_rel(metadata: dict[str, Any]) -> str:
     if isinstance(artifact, str) and artifact.startswith("attachments/") and ".." not in Path(artifact).parts:
         return artifact
     return PWN_FINAL_ARTIFACT_REL
+
+
+def _pwn_deploy_src_counterpart(challenge_dir: Path, artifact_rel: str) -> tuple[Path, str]:
+    deploy_src = challenge_dir / "deploy" / "src" / Path(artifact_rel).name
+    if deploy_src.is_file() and not deploy_src.is_symlink():
+        return deploy_src, deploy_src.relative_to(challenge_dir).as_posix()
+    fallback = challenge_dir / "deploy" / "src" / "vuln"
+    return fallback, fallback.relative_to(challenge_dir).as_posix()
 
 
 def _sha256_file(path: Path) -> str:

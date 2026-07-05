@@ -274,6 +274,59 @@ def test_build_attempt_repair_prompt_includes_final_pwn_artifact_evidence(
     assert "- vuln: 0x4012ad" in prompt
 
 
+def test_build_attempt_repair_prompt_uses_metadata_artifact_deploy_counterpart(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    challenge_dir = tmp_path / "pwn-0001-demo"
+    (challenge_dir / "attachments").mkdir(parents=True)
+    (challenge_dir / "deploy" / "src").mkdir(parents=True)
+    (challenge_dir / "writenup").mkdir()
+    artifact = b"\x7fELFtaskqueue-final"
+    deploy = b"\x7fELFtaskqueue-deploy"
+    (challenge_dir / "attachments" / "taskqueue").write_bytes(artifact)
+    (challenge_dir / "deploy" / "src" / "taskqueue").write_bytes(deploy)
+    artifact_sha = hashlib.sha256(artifact).hexdigest()
+    deploy_sha = hashlib.sha256(deploy).hexdigest()
+    (challenge_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "id": "pwn-0001",
+                "category": "pwn",
+                "artifact": "attachments/taskqueue",
+                "artifact_sha256": artifact_sha,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["readelf", "-sW"]:
+            assert str(command[-1]).endswith("attachments/taskqueue")
+        if command[:1] == ["checksec"]:
+            assert str(command[2]).endswith("attachments/taskqueue")
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
+
+    monkeypatch.setattr("domain.pwn_artifact_evidence.subprocess.run", fake_run)
+
+    prompt = _repair_prompt(
+        {
+            "id": "attempt",
+            "design_task_id": "task",
+            "challenge_id": "pwn-0001",
+            "category": "pwn",
+            "challenge_dir": challenge_dir,
+            "failure_summary": "stale evidence",
+            "failure_details": [],
+            "file_context": _file_context(challenge_dir),
+        }
+    )
+
+    assert "Use only ./attachments/taskqueue for exp.py and pwn_debug_report.json." in prompt
+    assert f"attachments/taskqueue sha256: {artifact_sha}" in prompt
+    assert f"deploy/src/taskqueue sha256: {deploy_sha} (UNTRUSTED / DO NOT USE)" in prompt
+
+
 def test_file_context_omits_stale_pwn_debug_report_trusted_body(tmp_path: Path) -> None:
     challenge_dir = tmp_path / "pwn-0001-demo"
     (challenge_dir / "writenup").mkdir(parents=True)

@@ -640,7 +640,7 @@ Rules:
   from the final player ELF named by `metadata.artifact` under `attachments/`.
   `writenup/exp.py` must declare `BINARY_SHA256 = metadata.artifact_sha256`;
   aliases such as
-  `ARTIFACT_SHA256`, SHAs from `deploy/src/vuln`, and old
+  `ARTIFACT_SHA256`, SHAs from `deploy/src/<metadata.artifact basename>`, and old
   `pwn_debug_report.json` constants are stale.
 - For canary leaks, scan a broad bounded `%n$p` range, keep candidates stable
   across multiple fresh connections, require low byte `0x00`, and do not filter

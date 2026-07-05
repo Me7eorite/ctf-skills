@@ -798,9 +798,7 @@ def _pwn_solver_evidence_stale(
     artifact_path = _pwn_final_artifact_path(challenge_dir, metadata)
     artifact_rel = artifact_path.relative_to(challenge_dir).as_posix()
     artifact_sha = _sha256_if_file(artifact_path)
-    deploy_src_path = challenge_dir / "deploy" / "src" / artifact_path.name
-    if not deploy_src_path.is_file():
-        deploy_src_path = challenge_dir / "deploy" / "src" / "vuln"
+    deploy_src_path = _pwn_deploy_src_counterpart(challenge_dir, artifact_path.name)
     deploy_src_rel = deploy_src_path.relative_to(challenge_dir).as_posix()
     deploy_src_sha = _sha256_if_file(deploy_src_path)
     if not isinstance(expected_sha, str) or not expected_sha:
@@ -869,11 +867,25 @@ def _pwn_solver_evidence_stale(
                     ),
                 )
             )
-        elif (
-            report_binary_path == artifact_rel
-            and artifact_sha
-            and report_sha != artifact_sha
-        ):
+        elif report_binary_path != artifact_rel:
+            details.append(
+                validation_failure_detail(
+                    phase="validate",
+                    code="pwn_debug_report_claims_wrong_artifact",
+                    status="solver_evidence_stale",
+                    message=(
+                        "writenup/pwn_debug_report.json binary.path must equal "
+                        f"metadata.artifact ({artifact_rel}); found "
+                        f"{report_binary_path or '(missing)'}"
+                    ),
+                    path="writenup/pwn_debug_report.json",
+                    hint=(
+                        "Regenerate pwn_debug_report.json from the final "
+                        f"{artifact_rel} artifact on disk."
+                    ),
+                )
+            )
+        elif artifact_sha and report_sha != artifact_sha:
             details.append(
                 validation_failure_detail(
                     phase="validate",
@@ -968,7 +980,7 @@ def _pwn_solver_evidence_stale(
     for conflict in offset_conflicts:
         code = (
             "pwn_evidence_from_deploy_src"
-            if "matches deploy/src/vuln" in conflict
+            if "matches deploy/src/" in conflict
             else "solver_evidence_stale"
         )
         details.append(
@@ -980,7 +992,7 @@ def _pwn_solver_evidence_stale(
                 path="writenup/exp.py",
                 hint=(
                     "Do not reuse hardcoded offsets from deploy/src or old reports; "
-                    "derive win/main/leak offsets from the current attachments ELF."
+                    f"derive win/main/leak offsets from the current {artifact_rel} ELF."
                 ),
             )
         )
@@ -992,6 +1004,13 @@ def _pwn_final_artifact_path(challenge_dir: Path, metadata: dict[str, Any]) -> P
     if isinstance(artifact, str) and artifact.startswith("attachments/") and ".." not in Path(artifact).parts:
         return challenge_dir / artifact
     return challenge_dir / "attachments" / "vuln"
+
+
+def _pwn_deploy_src_counterpart(challenge_dir: Path, artifact_name: str) -> Path:
+    deploy_src = challenge_dir / "deploy" / "src" / artifact_name
+    if deploy_src.is_file() and not deploy_src.is_symlink():
+        return deploy_src
+    return challenge_dir / "deploy" / "src" / "vuln"
 
 
 def pwn_solver_evidence_failures(
@@ -1076,7 +1095,9 @@ def _pwn_exp_offset_conflicts(challenge_dir: Path, metadata: dict[str, Any]) -> 
     conflicts: list[str] = []
     symbols = _elf_function_symbols(artifact_path)
     deploy_symbols: dict[str, int] = {}
-    deploy_artifact_path = challenge_dir / "deploy" / "src" / "vuln"
+    deploy_artifact_path = _pwn_deploy_src_counterpart(challenge_dir, artifact_path.name)
+    deploy_artifact_rel = deploy_artifact_path.relative_to(challenge_dir).as_posix()
+    artifact_rel = artifact_path.relative_to(challenge_dir).as_posix()
     deploy_sha = _sha256_if_file(deploy_artifact_path)
     artifact_sha = _sha256_if_file(artifact_path)
     if deploy_sha and artifact_sha and deploy_sha != artifact_sha and is_elf(deploy_artifact_path):
@@ -1088,14 +1109,14 @@ def _pwn_exp_offset_conflicts(challenge_dir: Path, metadata: dict[str, Any]) -> 
             deploy_actual = deploy_symbols.get(symbol_name)
             if deploy_actual is not None and expected == deploy_actual:
                 conflicts.append(
-                    f"{offset_name.upper()}_ADDR={expected:#x} matches deploy/src/vuln "
+                    f"{offset_name.upper()}_ADDR={expected:#x} matches {deploy_artifact_rel} "
                     f"symbol {symbol_name}={deploy_actual:#x} but conflicts with "
-                    f"attachments/{artifact_path.name} symbol {symbol_name}={actual:#x}"
+                    f"{artifact_rel} symbol {symbol_name}={actual:#x}"
                 )
                 continue
             conflicts.append(
                 f"{offset_name.upper()}_OFFSET={expected:#x} conflicts with "
-                f"attachments/{artifact_path.name} symbol {symbol_name}={actual:#x}"
+                f"{artifact_rel} symbol {symbol_name}={actual:#x}"
             )
     expected_leak = offsets.get("leak")
     if expected_leak is not None:
@@ -1104,7 +1125,7 @@ def _pwn_exp_offset_conflicts(challenge_dir: Path, metadata: dict[str, Any]) -> 
             rendered = ", ".join(f"{item:#x}" for item in sorted(return_offsets)[:5])
             conflicts.append(
                 f"LEAK_OFFSET={expected_leak:#x} conflicts with current "
-                f"attachments/{artifact_path.name} call-return offsets after greet: {rendered}"
+                f"{artifact_rel} call-return offsets after greet: {rendered}"
             )
     return conflicts
 
