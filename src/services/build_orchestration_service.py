@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import time
@@ -32,11 +34,15 @@ from persistence.repositories import (
     BuildAttemptsRepository,
     ChallengeDesignRepository,
     DesignDifficultyReviewRepository,
+    DesignEvidenceRepository,
+    DesignProfileReservationRepository,
     DesignTaskRepository,
     ExecutionsRepository,
 )
 from persistence.session import SessionFactory, transaction
 from services.design_difficulty_validator import DesignDifficultyValidator
+from services.design_governance import DesignGovernanceError, validate_build_contract
+from services.design_task_planning_service import DesignTaskPlanningService
 
 LOG = logging.getLogger(__name__)
 BUILD_GOVERNANCE_MODE_ENV = "BUILD_GOVERNANCE_MODE"
@@ -164,6 +170,17 @@ class _PreparedSubmission:
     retry_context: dict[str, Any] | None = None
     repair_mode: bool = False
     difficulty_review: DifficultyReviewResult | None = None
+    governance: _GovernedBuildContract | None = None
+
+
+@dataclass(frozen=True)
+class _GovernedBuildContract:
+    design_evidence_id: UUID
+    reservation_id: UUID
+    profile: Mapping[str, Any]
+    profile_signature: str
+    build_contract: Mapping[str, Any]
+    contract_sha256: str
 
 
 class BuildOrchestrationService:
@@ -318,6 +335,7 @@ class BuildOrchestrationService:
         latest_design: design_dto.ChallengeDesign,
         *,
         build_attempt_id: UUID,
+        governance: _GovernedBuildContract | None = None,
         resume_from_shard_basename: str | None = None,
         execution_mode: str = "resume",
         repair_requested: bool = False,
@@ -326,15 +344,41 @@ class BuildOrchestrationService:
     ) -> dict[str, Any]:
         """Render one attributed shard without filesystem or database effects."""
         challenge = _design_challenge(latest_design.payload)
-        matrix_values = _matrix_values(design_task, challenge)
+        matrix_values = _matrix_values(
+            design_task,
+            challenge,
+            governance=governance,
+        )
         fields = MATRIX_FIELDS.get(design_task.category, GENERIC_MATRIX_FIELDS)
         rendered_challenge = {field: matrix_values[field] for field in fields}
         rendered_challenge["design"] = dict(latest_design.payload)
+        if governance is not None:
+            rendered_challenge.update(
+                {
+                    field: matrix_values[field]
+                    for field in (
+                        "language",
+                        "runtime",
+                        "target_format",
+                        "artifact_format",
+                        "interaction",
+                        "flag_concealment",
+                    )
+                }
+            )
+            rendered_challenge["compiler"] = matrix_values["compiler"]
+            rendered_challenge["design_evidence_id"] = str(governance.design_evidence_id)
+            rendered_challenge["contract_sha256"] = governance.contract_sha256
+            rendered_challenge["required_profile"] = dict(governance.profile)
+            rendered_challenge["build_contract"] = dict(governance.build_contract)
         payload: dict[str, Any] = {
             "build_attempt_id": str(build_attempt_id),
             "design_task_id": str(design_task.id),
             "challenges": [rendered_challenge],
         }
+        if governance is not None:
+            payload["design_evidence_id"] = str(governance.design_evidence_id)
+            payload["contract_sha256"] = governance.contract_sha256
         if execution_mode == "clean":
             payload["execution_mode"] = "clean"
             if resume_from_shard_basename is not None:
@@ -495,18 +539,33 @@ class BuildOrchestrationService:
                 if design is None:
                     raise BuildOrchestrationError(f"design task {task_id} has no validated draft design")
                 self._validate_design_quality_for_submit(design)
+                governance = self._governance_contract_for_submit(session, task)
                 difficulty_review = DesignDifficultyValidator().review(
                     design_task=task,
                     challenge_design=design,
                 )
                 if not difficulty_review.passed:
                     reason = difficulty_review.reasons[0] if difficulty_review.reasons else "difficulty review failed"
-                    self._record_failed_review_and_request_revision(
-                        task_id=task.id,
-                        challenge_design_id=design.id,
-                        result=difficulty_review,
-                        review_error=_review_error_message(difficulty_review),
-                    )
+                    review_error = _review_error_message(difficulty_review)
+                    if self._governed_design_task(task):
+                        self._record_failed_review(
+                            task_id=task.id,
+                            challenge_design_id=design.id,
+                            result=difficulty_review,
+                        )
+                        DesignTaskPlanningService(
+                            session_factory=self.session_factory,
+                        ).request_design_revision(
+                            task.id,
+                            reason=review_error,
+                        )
+                    else:
+                        self._record_failed_review_and_request_revision(
+                            task_id=task.id,
+                            challenge_design_id=design.id,
+                            result=difficulty_review,
+                            review_error=review_error,
+                        )
                     raise BuildOrchestrationError(
                         f"design task {task_id} failed pre-build difficulty review: {reason}",
                         code="difficulty_review_failed",
@@ -550,6 +609,7 @@ class BuildOrchestrationService:
                     task,
                     design,
                     build_attempt_id=container_id,
+                    governance=governance,
                     resume_from_shard_basename=payload_resume_from,
                     execution_mode=execution_mode,
                     repair_requested=task_id in (repair_sources or {}),
@@ -575,6 +635,7 @@ class BuildOrchestrationService:
                         retry_context=dict((retry_contexts or {}).get(task_id) or {}),
                         repair_mode=task_id in (repair_sources or {}),
                         difficulty_review=difficulty_review,
+                        governance=governance,
                     )
                 )
         return prepared
@@ -617,6 +678,27 @@ class BuildOrchestrationService:
                     expected_source_id=retry_sources.get(row.id),
                     execution_mode=submission.execution_mode,
                 )
+                current_governance = self._governance_contract_for_submit(
+                    session,
+                    current,
+                )
+                if (
+                    submission.governance is None
+                    and current_governance is not None
+                ) or (
+                    submission.governance is not None
+                    and (
+                        current_governance is None
+                        or current_governance.design_evidence_id
+                        != submission.governance.design_evidence_id
+                        or current_governance.contract_sha256
+                        != submission.governance.contract_sha256
+                    )
+                ):
+                    raise BuildOrchestrationError(
+                        "build contract changed before submission commit",
+                        code="stale_build_contract",
+                    )
                 if submission.difficulty_review is not None:
                     DesignDifficultyReviewRepository(session).record(
                         design_task_id=row.id,
@@ -629,6 +711,16 @@ class BuildOrchestrationService:
                         submission.shard_basename,
                         attempt_id=submission.attempt_id,
                         idempotency_key=submission.idempotency_key,
+                        design_evidence_id=(
+                            submission.governance.design_evidence_id
+                            if submission.governance is not None
+                            else None
+                        ),
+                        contract_sha256=(
+                            submission.governance.contract_sha256
+                            if submission.governance is not None
+                            else None
+                        ),
                     )
                 if submission.minting:
                     exec_repo = ExecutionsRepository(session)
@@ -701,6 +793,74 @@ class BuildOrchestrationService:
             code="design_quality_gate_failed",
         )
 
+    def _governance_contract_for_submit(
+        self,
+        session: Session,
+        task: task_dto.DesignTask,
+    ) -> _GovernedBuildContract | None:
+        if self.governance_mode not in GOVERNED_BUILD_ADMISSION_MODES:
+            return None
+        if task.current_design_evidence_id is None:
+            raise BuildOrchestrationError(
+                f"design task {task.id} has no committed DesignEvidence",
+                code="design_evidence_missing",
+            )
+        evidence_repo = DesignEvidenceRepository(session)
+        evidence = evidence_repo.latest_live_for_task(task.id)
+        if evidence is None or evidence.id != task.current_design_evidence_id:
+            raise BuildOrchestrationError(
+                f"design task {task.id} has no live current DesignEvidence",
+                code="design_evidence_missing",
+            )
+        if task.current_reservation_id is None:
+            raise BuildOrchestrationError(
+                f"design task {task.id} has no committed reservation",
+                code="design_reservation_missing",
+            )
+        reservation = DesignProfileReservationRepository(session).get(
+            task.current_reservation_id
+        )
+        if reservation is None or reservation.state != "committed":
+            raise BuildOrchestrationError(
+                f"design task {task.id} reservation is not committed",
+                code="design_reservation_not_committed",
+            )
+        if evidence.profile_signature != reservation.profile_signature:
+            raise BuildOrchestrationError(
+                f"design task {task.id} evidence profile does not match reservation",
+                code="design_profile_mismatch",
+            )
+        if dict(evidence.profile) != dict(reservation.profile):
+            raise BuildOrchestrationError(
+                f"design task {task.id} evidence profile does not match reservation",
+                code="design_profile_mismatch",
+            )
+        try:
+            validate_build_contract(
+                evidence.build_contract,
+                required_profile=evidence.profile,
+                category=task.category,
+            )
+        except DesignGovernanceError as exc:
+            raise BuildOrchestrationError(
+                f"design task {task.id} build contract is incomplete: {exc}",
+                code="build_contract_incomplete",
+            ) from exc
+        return _GovernedBuildContract(
+            design_evidence_id=evidence.id,
+            reservation_id=reservation.id,
+            profile=dict(evidence.profile),
+            profile_signature=evidence.profile_signature,
+            build_contract=dict(evidence.build_contract),
+            contract_sha256=_contract_sha256(evidence.build_contract),
+        )
+
+    def _governed_design_task(self, task: task_dto.DesignTask) -> bool:
+        return bool(
+            self.governance_mode in GOVERNED_BUILD_ADMISSION_MODES
+            and task.current_design_evidence_id is not None
+        )
+
     def _write_staged_payload(self, submission: _PreparedSubmission) -> Path:
         destination = self.paths.build_attempt_staging / f"{submission.attempt_id}.json"
         temporary = destination.with_suffix(destination.suffix + ".tmp")
@@ -752,6 +912,20 @@ class BuildOrchestrationService:
                 design_task_id=task_id,
                 challenge_design_id=challenge_design_id,
                 review_error=review_error,
+            )
+
+    def _record_failed_review(
+        self,
+        *,
+        task_id: UUID,
+        challenge_design_id: UUID,
+        result: DifficultyReviewResult,
+    ) -> None:
+        with transaction(factory=self.session_factory) as session:
+            DesignDifficultyReviewRepository(session).record(
+                design_task_id=task_id,
+                challenge_design_id=challenge_design_id,
+                result=result,
             )
 
     @staticmethod
@@ -846,19 +1020,28 @@ def _normalize_governance_mode(raw: str | None) -> str:
 def _matrix_values(
     task: task_dto.DesignTask,
     challenge: Mapping[str, Any],
+    *,
+    governance: _GovernedBuildContract | None = None,
 ) -> dict[str, Any]:
     plan = challenge.get("implementation_plan")
     plan = plan if isinstance(plan, Mapping) else {}
     constraints = task.constraints
     profile = generation_profile(task.category)
+    governed_values = _governed_matrix_values(governance)
 
     def value(name: str, default: Any) -> Any:
+        if name in governed_values:
+            return governed_values[name]
         return challenge.get(name, plan.get(name, constraints.get(name, default)))
 
     language_default = "c"
     compiler_default = "gcc"
     target_format_default = "elf"
-    if task.category == "re":
+    if governance is not None:
+        language_default = value("language", None)
+        target_format_default = value("target_format", None)
+        compiler_default = value("compiler", "contract-specified")
+    elif task.category == "re":
         language_default = value("language", "c")
         language_key = str(language_default).strip().lower()
         defaults = RE_LANGUAGE_DEFAULTS.get(language_key, RE_LANGUAGE_DEFAULTS["c"])
@@ -885,6 +1068,9 @@ def _matrix_values(
         "language": value("language", language_default),
         "compiler": value("compiler", compiler_default),
         "target_format": value("target_format", target_format_default),
+        "artifact_format": value("artifact_format", target_format_default),
+        "interaction": value("interaction", "unspecified"),
+        "flag_concealment": value("flag_concealment", "unspecified"),
         "architecture": value("architecture", "x86_64"),
         "mitigations": value("mitigations", {}),
         "target_platform": value("target_platform", "linux/amd64"),
@@ -900,6 +1086,50 @@ def _matrix_values(
             "launcher": profile.capabilities.launcher,
         },
     }
+
+
+def _governed_matrix_values(
+    governance: _GovernedBuildContract | None,
+) -> dict[str, Any]:
+    if governance is None:
+        return {}
+    implementation = governance.profile.get("implementation")
+    if not isinstance(implementation, Mapping):
+        raise BuildOrchestrationError(
+            "governed profile missing implementation axis",
+            code="build_contract_incomplete",
+        )
+    values: dict[str, Any] = {}
+    required = {
+        "language": "language",
+        "runtime": "runtime",
+        "artifact_format": "artifact_format",
+        "interaction": "interaction",
+        "flag_concealment": "flag_concealment",
+    }
+    for output_name, profile_name in required.items():
+        raw = implementation.get(profile_name)
+        if not isinstance(raw, str) or not raw.strip():
+            raise BuildOrchestrationError(
+                f"build contract missing governed implementation.{profile_name}",
+                code="build_contract_incomplete",
+            )
+        values[output_name] = raw.strip()
+    values["target_format"] = values["artifact_format"]
+    compiler = implementation.get("compiler")
+    if isinstance(compiler, str) and compiler.strip():
+        values["compiler"] = compiler.strip()
+    return values
+
+
+def _contract_sha256(contract: Mapping[str, Any]) -> str:
+    canonical = json.dumps(
+        dict(contract),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _payload_matches_attempt(

@@ -78,28 +78,35 @@
       one transaction; reject stale conflicting ledger versions.
 - [x] 5.7 Tests for forged finding IDs, invented compared IDs, profile drift,
       incomplete contracts, stale ledgers, retries, and atomic completion.
-- [ ] 5.8 Add `request_design_revision`: supersede the live design/evidence,
+- [x] 5.8 Add `request_design_revision`: supersede the live design/evidence,
       release and re-reserve under locks, clear stale review, and return eligible
       `designed|build_failed|unpublished-built` tasks to `draft`; require plan
       approval before queue, reject active builds, and preserve released
       production versions.
+- [x] 5.9 Route governed failed pre-build difficulty reviews through
+      `request_design_revision` diagnostics instead of the legacy direct
+      supersede/requeue helper; keep legacy behavior available only for
+      non-governed `legacy`/`legacy_trial` submissions.
 
 ## 6. Build as construction
 
-- [ ] 6.1 Embed evidence ID, required profile, and complete build contract in
+- [x] 6.1 Embed evidence ID, required profile, and complete build contract in
       attributed shard payloads and persist `build_attempts.design_evidence_id`
       plus contract hash.
-- [ ] 6.2 Remove defaults for governed fields (`language`, `runtime`,
+- [x] 6.2 Remove defaults for governed fields (`language`, `runtime`,
       `artifact_format`, interaction, concealment); missing values fail with
       `build_contract_incomplete`.
-- [ ] 6.3 Update shard prompt: contract is authoritative; Build may only use
+- [x] 6.2a Keep legacy/shadow renderer defaults isolated from committed governed
+      contracts so C/ELF/unspecified fallbacks cannot make a governed task
+      production-eligible.
+- [x] 6.3 Update shard prompt: contract is authoritative; Build may only use
       `allowed_implementation_freedom`; infeasibility returns
       `design_unbuildable`.
-- [ ] 6.4 Preserve contract identity across retry/resume; require a new Design
+- [x] 6.4 Preserve contract identity across retry/resume; require a new Design
       evidence version for contract changes.
-- [ ] 6.5 Make BuildReconciler roll parent state only from attempts bound to the
+- [x] 6.5 Make BuildReconciler roll parent state only from attempts bound to the
       task's current DesignEvidence; older attempts remain immutable history.
-- [ ] 6.6 Tests proving Build payload cannot mutate or omit governed fields and
+- [x] 6.6 Tests proving Build payload cannot mutate or omit governed fields and
       an old successful attempt cannot overwrite a revised draft's state.
 
 ## 7. Artifact observation and contract validation
@@ -169,6 +176,9 @@
       and `design_unbuildable` recovery.
 - [ ] 10.5 Extend hermes runner/reconciler contracts so accepted bound
       observations, not metadata solve status alone, own governed success.
+- [ ] 10.6 Keep this change's single-change strict validation green; document
+      unrelated active-change validation failures separately so rollout evidence
+      does not depend on fixing other in-progress proposals first.
 
 ## 11. Rollout evidence
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import subprocess
 import threading
@@ -20,11 +22,17 @@ from domain.challenge_designs import ChallengeDesign
 from domain.design_tasks import DesignTask
 from persistence.models import build_attempts as build_model
 from persistence.models import challenge_designs as design_model
+from persistence.models import design_profile_reservations as reservation_model
 from persistence.models import design_tasks as task_model
 from persistence.models import executions as exec_model
 from persistence.models import research as research_model
 from persistence.models.progress import ProgressEvent, ProgressSnapshot
-from persistence.repositories import BuildAttemptsRepository, ExecutionsRepository
+from persistence.repositories import (
+    BuildAttemptsRepository,
+    DesignEvidenceRepository,
+    DesignProfileReservationRepository,
+    ExecutionsRepository,
+)
 from persistence.session import SessionFactory, transaction
 from services import BuildOrchestrationError, BuildOrchestrationService
 from services.build_orchestration_service import (
@@ -86,9 +94,12 @@ def _clean_database(session_factory: SessionFactory) -> None:
         session.execute(sa.delete(exec_model.Execution))
         session.execute(sa.delete(exec_model.BuildFeedbackSnapshot))
         session.execute(sa.delete(build_model.BuildAttempt))
+        session.execute(sa.delete(design_model.DesignEvidence))
         session.execute(sa.delete(design_model.DesignDifficultyReview))
         session.execute(sa.delete(design_model.ChallengeDesign))
         session.execute(sa.delete(design_model.DesignAttempt))
+        session.execute(sa.delete(reservation_model.DesignProfileReservation))
+        session.execute(sa.delete(reservation_model.DesignProfileLedger))
         session.execute(sa.delete(task_model.DesignTask))
         session.execute(sa.delete(research_model.ResearchRun))
         session.execute(sa.delete(research_model.GenerationRequest))
@@ -188,6 +199,135 @@ def _seed_designed_task(
         session.add_all([request, run, task, design_attempt, design])
         session.commit()
         return task.id
+
+
+def _governed_profile() -> dict[str, object]:
+    return {
+        "semantic": {"family": "injection", "sub_technique": "sqli"},
+        "solve": {
+            "analysis_mode": "blackbox",
+            "required_action": "payload_injection",
+            "chain_shape": "inject-exfiltrate",
+            "required_tool_class": "http_client",
+        },
+        "implementation": {
+            "artifact_format": "container",
+            "language": "python",
+            "runtime": "flask",
+            "interaction": "http_form",
+            "control_structure": "route_handler",
+            "flag_concealment": "database_record",
+        },
+        "presentation": {
+            "scenario_type": "reporting_app",
+            "input_model": "web_form",
+        },
+    }
+
+
+def _build_contract(profile: dict[str, object]) -> dict[str, object]:
+    return {
+        "artifact_ids": ["primary"],
+        "fixture_ids": ["admin-password"],
+        "required_profile": profile,
+        "required_player_actions": ["payload_injection"],
+        "required_components": ["web-service"],
+        "required_asset_flow": [
+            {
+                "stage_id": "recover-password",
+                "produced_asset_or_capability": "admin password",
+                "verification_harness": {
+                    "test_kind": "fixture_assertion",
+                    "fixture_ref": "admin-password",
+                    "assertion": "non_empty",
+                },
+                "dependency_harness": {
+                    "test_kind": "solver_without_fixture",
+                    "fixture_ref": "admin-password",
+                    "assertion": "must_fail",
+                },
+            }
+        ],
+        "forbidden_shortcuts": [
+            {
+                "id": "direct-run",
+                "test_kind": "artifact_direct_run",
+                "artifact_ref": "primary",
+                "assertion": "stdout_not_contains_flag",
+            }
+        ],
+        "acceptance_tests": [],
+        "allowed_implementation_freedom": ["file_names"],
+    }
+
+
+def _contract_sha256(contract: dict[str, object]) -> str:
+    canonical = json.dumps(
+        contract,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _attach_governed_evidence(session_factory: SessionFactory, task_id: UUID) -> dict[str, UUID]:
+    from domain.design.profile_taxonomy import canonical_profile_signatures
+
+    profile = _governed_profile()
+    with session_factory() as session:
+        task = session.get(task_model.DesignTask, task_id)
+        assert task is not None
+        design = session.scalar(
+            sa.select(design_model.ChallengeDesign).where(
+                design_model.ChallengeDesign.design_task_id == task_id,
+                design_model.ChallengeDesign.status == "draft",
+            )
+        )
+        assert design is not None
+        existing = session.scalar(
+            sa.select(reservation_model.DesignProfileReservation).where(
+                reservation_model.DesignProfileReservation.design_task_id == task.id,
+                reservation_model.DesignProfileReservation.state.in_(("reserved", "committed")),
+            )
+        )
+        if existing is None:
+            signatures = canonical_profile_signatures(profile, category=task.category, policy_version=1)
+            reservation_repo = DesignProfileReservationRepository(session)
+            ledger = reservation_repo.lock_ledger(task.category, policy_version=1)
+            ledger.ledger_version += 1
+            reservation = reservation_repo.reserve_task(
+                design_task_id=task.id,
+                generation_request_id=task.generation_request_id,
+                profile=profile,
+                profile_signature=signatures.combined_profile_signature,
+                occupancy_scope="web",
+                exclusive_signature_key=f"build-review-{task.id}",
+                taxonomy_version=1,
+                policy_version=1,
+                ledger_version=ledger.ledger_version,
+            )
+            reservation_repo.set_current_reservation(task.id, reservation.id)
+        else:
+            reservation_repo = DesignProfileReservationRepository(session)
+            reservation = existing
+            profile = dict(reservation.profile)
+            signatures = canonical_profile_signatures(profile, category=task.category, policy_version=1)
+        committed = reservation_repo.commit_reservation(reservation.id)
+        evidence = DesignEvidenceRepository(session).create_live(
+            design_task_id=task.id,
+            challenge_design_id=design.id,
+            research_finding_ids=[],
+            profile=profile,
+            profile_signature=signatures.combined_profile_signature,
+            distinctness_claim="Distinct solve and implementation profile.",
+            compared_challenge_ids=[],
+            evidence={"claims": ["research-backed claim"]},
+            build_contract=_build_contract(profile),
+            ledger_version=committed.ledger_version,
+        )
+        session.commit()
+        return {"reservation_id": reservation.id, "evidence_id": evidence.id}
 
 
 def _service(
@@ -310,6 +450,73 @@ def test_prebuild_difficulty_review_blocks_failed_medium_design(
 
 
 @pytest.mark.parametrize("governance_mode", ["trial", "production"])
+def test_governed_failed_prebuild_review_requests_design_revision(
+    governance_mode: str,
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    invalid_payload = _payload("web-invalid-medium", difficulty="medium")
+    invalid_payload["challenges"][0].update(
+        {
+            "prompt": (
+                "Recover the admin note from the support portal while preserving "
+                "the expected customer support workflow."
+            ),
+            "techniques": ["boolean blind sqli", "idor"],
+            "actual_solution_type": ["boolean blind sqli"],
+            "unintended_solutions": ["Direct flag reads require admin session."],
+        }
+    )
+    task_id = _seed_designed_task(
+        session_factory,
+        difficulty="medium",
+        design_payload=invalid_payload,
+    )
+    ids = _attach_governed_evidence(session_factory, task_id)
+    service = _service(tmp_path, session_factory, governance_mode=governance_mode)
+
+    with pytest.raises(BuildOrchestrationError) as excinfo:
+        service.submit_single(task_id)
+
+    assert excinfo.value.code == "difficulty_review_failed"
+    with session_factory() as session:
+        assert BuildAttemptsRepository(session).list_for_design_task(task_id) == []
+        task = session.get(task_model.DesignTask, task_id)
+        assert task is not None
+        assert task.status == "draft"
+        assert task.plan_reviewed_at is None
+        assert task.current_design_evidence_id is None
+        assert task.current_reservation_id != ids["reservation_id"]
+        old_reservation = session.get(
+            reservation_model.DesignProfileReservation,
+            ids["reservation_id"],
+        )
+        old_evidence = session.get(design_model.DesignEvidence, ids["evidence_id"])
+        draft_count = session.scalar(
+            sa.select(sa.func.count())
+            .select_from(design_model.ChallengeDesign)
+            .where(
+                design_model.ChallengeDesign.design_task_id == task_id,
+                design_model.ChallengeDesign.status == "draft",
+            )
+        )
+        review = session.scalar(
+            sa.select(design_model.DesignDifficultyReview).where(
+                design_model.DesignDifficultyReview.design_task_id == task_id
+            )
+        )
+
+        assert old_reservation is not None and old_reservation.state == "released"
+        assert old_evidence is not None
+        assert old_evidence.superseded_at is not None
+        assert old_evidence.supersession_reason is not None
+        assert "Pre-build difficulty review failed" in old_evidence.supersession_reason
+        assert draft_count == 0
+        assert review is not None and review.passed is False
+    assert not list((service.paths.shards / "pending").glob("*.json"))
+
+
+@pytest.mark.parametrize("governance_mode", ["trial", "production"])
 def test_governed_submit_blocks_failed_design_quality_without_build_work(
     governance_mode: str,
     tmp_path: Path,
@@ -352,6 +559,70 @@ def test_shadow_submit_keeps_failed_design_quality_non_blocking(
         assert BuildAttemptsRepository(session).get(attempt_id) is not None
         assert session.get(task_model.DesignTask, task_id).status == "building"
     assert list((service.paths.shards / "pending").glob("*.json"))
+
+
+@pytest.mark.parametrize("governance_mode", ["trial", "production"])
+def test_governed_submit_embeds_contract_and_persists_attempt_binding(
+    governance_mode: str,
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory)
+    ids = _attach_governed_evidence(session_factory, task_id)
+    service = _service(tmp_path, session_factory, governance_mode=governance_mode)
+
+    attempt_id = service.submit_single(task_id)
+
+    with session_factory() as session:
+        attempt = BuildAttemptsRepository(session).get(attempt_id)
+        evidence = DesignEvidenceRepository(session).get(ids["evidence_id"])
+        assert attempt is not None
+        assert evidence is not None
+        assert attempt.design_evidence_id == ids["evidence_id"]
+        assert attempt.contract_sha256 == _contract_sha256(dict(evidence.build_contract))
+
+    [pending] = list((service.paths.shards / "pending").glob("*.json"))
+    payload = read_json(pending)
+    challenge = payload["challenges"][0]
+    assert payload["design_evidence_id"] == str(ids["evidence_id"])
+    assert payload["contract_sha256"] == _contract_sha256(dict(evidence.build_contract))
+    assert challenge["design_evidence_id"] == str(ids["evidence_id"])
+    assert challenge["build_contract"] == dict(evidence.build_contract)
+    assert challenge["required_profile"] == dict(evidence.profile)
+    assert challenge["language"] == "python"
+    assert challenge["target_format"] == "container"
+    assert challenge["runtime"] == "flask"
+
+
+@pytest.mark.parametrize("governance_mode", ["trial", "production"])
+def test_governed_submit_rejects_incomplete_contract_without_defaulting(
+    governance_mode: str,
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory)
+    ids = _attach_governed_evidence(session_factory, task_id)
+    with session_factory() as session:
+        evidence = session.get(design_model.DesignEvidence, ids["evidence_id"])
+        assert evidence is not None
+        contract = dict(evidence.build_contract)
+        required_profile = dict(contract["required_profile"])
+        implementation = dict(required_profile["implementation"])
+        implementation.pop("artifact_format")
+        required_profile["implementation"] = implementation
+        contract["required_profile"] = required_profile
+        evidence.build_contract = contract
+        session.commit()
+    service = _service(tmp_path, session_factory, governance_mode=governance_mode)
+
+    with pytest.raises(BuildOrchestrationError) as excinfo:
+        service.submit_single(task_id)
+
+    assert excinfo.value.code == "build_contract_incomplete"
+    with session_factory() as session:
+        assert BuildAttemptsRepository(session).list_for_design_task(task_id) == []
+    assert not service.paths.build_attempt_staging.exists()
+    assert not list((service.paths.shards / "pending").glob("*.json"))
 
 
 @pytest.mark.parametrize("category", ["web", "pwn", "re"])

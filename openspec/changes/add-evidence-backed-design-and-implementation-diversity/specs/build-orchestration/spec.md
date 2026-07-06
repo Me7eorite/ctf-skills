@@ -10,8 +10,9 @@ governed. Historical designs without evidence MAY be rebuilt only through an
 explicit `legacy_trial` mode that is recorded as non-production and cannot pass
 production corpus admission.
 
-Failure SHALL return a machine-readable reason and SHALL create no
-BuildAttempt, staged shard, counter increment, or parent status change.
+Evidence, reservation, contract, and quality-gate admission failures SHALL
+return a machine-readable reason and SHALL create no BuildAttempt, staged
+shard, counter increment, difficulty review, or parent status change.
 
 Governed evidence and quality-gate admission checks SHALL run before the
 pre-build difficulty review. When they fail, the system SHALL NOT record a
@@ -19,7 +20,9 @@ difficulty review, supersede the current draft, requeue the task, or otherwise
 invoke difficulty-review retry behavior. Difficulty review MAY run only after a
 live committed DesignEvidence row and category-valid build contract are
 available. A later difficulty-review failure MAY request a new Design revision,
-but SHALL NOT mutate a committed DesignEvidence/build contract in place.
+but SHALL NOT mutate a committed DesignEvidence/build contract in place, SHALL
+NOT directly requeue the task, and SHALL NOT bypass the `draft -> queued`
+plan-review checkpoint.
 
 Governed fields SHALL come from the committed contract. The renderer SHALL NOT
 default missing governed language/runtime, artifact format, interaction,
@@ -48,6 +51,19 @@ control structure, solve action, or flag-concealment fields.
 - **WHEN** the shard payload is rendered
 - **THEN** submission fails with `build_contract_incomplete`
 - **AND** it does not default to ELF
+
+#### Scenario: Governed difficulty failure requests revision instead of requeue
+
+- **GIVEN** a governed task with committed DesignEvidence and a category-valid
+  build contract
+- **AND** its pre-build difficulty review fails
+- **WHEN** Build submission is requested
+- **THEN** the failed review is recorded with revision diagnostics
+- **AND** no BuildAttempt, staged shard, counter increment, or parent build
+  transition is created
+- **AND** the committed DesignEvidence and build contract remain immutable
+- **AND** any retry requires the service-backed Design revision path and the
+  normal `draft -> queued` plan-review checkpoint
 
 ### Requirement: Build is a contract-bound construction stage
 

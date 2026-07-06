@@ -143,6 +143,38 @@ class DesignEvidenceRepository:
         self.session.refresh(row)
         return _evidence(row)
 
+    def supersede_live_for_task(
+        self,
+        design_task_id: UUID,
+        *,
+        reason: str,
+        superseded_by_evidence_id: UUID | None = None,
+    ) -> dto.DesignEvidence | None:
+        if not reason.strip():
+            raise DesignEvidencePersistenceError("supersession reason is required")
+        row = self.session.scalars(
+            sa.select(model.DesignEvidence)
+            .where(
+                model.DesignEvidence.design_task_id == design_task_id,
+                model.DesignEvidence.superseded_at.is_(None),
+            )
+            .with_for_update()
+            .limit(1)
+        ).one_or_none()
+        if row is None:
+            return None
+        now = _utcnow()
+        row.superseded_at = now
+        row.superseded_by_evidence_id = superseded_by_evidence_id
+        row.supersession_reason = reason.strip()
+        task = self.session.get(task_model.DesignTask, design_task_id)
+        if task is not None and task.current_design_evidence_id == row.id:
+            task.current_design_evidence_id = None
+            task.updated_at = now
+        self.session.flush()
+        self.session.refresh(row)
+        return _evidence(row)
+
 
 def _evidence(row: model.DesignEvidence) -> dto.DesignEvidence:
     return dto.DesignEvidence(

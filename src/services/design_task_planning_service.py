@@ -47,8 +47,12 @@ from domain.research_validators import (
     _quality_ratio,
     _quality_soft_pass_slack,
 )
+from persistence.models import challenge_designs as challenge_model
 from persistence.models import design_tasks as design_model
 from persistence.repositories import (
+    BuildAttemptsRepository,
+    ChallengeDesignRepository,
+    DesignEvidenceRepository,
     DesignProfileReservationRepository,
     DesignTaskRepository,
     ResearchRepository,
@@ -310,6 +314,92 @@ class DesignTaskPlanningService:
                 candidates=[candidate],
             )
             return {"outcome": outcome, "task": _row_to_dto(current)}
+
+    def request_design_revision(
+        self,
+        design_task_id: UUID,
+        *,
+        reason: str,
+    ) -> dto.DesignTask:
+        """Supersede the current governed design and return the task to draft."""
+        if not reason.strip():
+            raise DesignTaskValidationError("revision reason is required")
+        with transaction(factory=self.session_factory) as session:
+            task_request_id = session.scalar(
+                sa.select(design_model.DesignTask.generation_request_id).where(
+                    design_model.DesignTask.id == design_task_id
+                )
+            )
+            if task_request_id is None:
+                raise DesignTaskValidationError(
+                    f"design task {design_task_id} does not exist"
+                )
+            research_repo = ResearchRepository(session)
+            request = research_repo.get_generation_request(task_request_id)
+            if request is None:
+                raise DesignTaskValidationError(
+                    f"generation_request {task_request_id} does not exist"
+                )
+            research_repo.lock_generation_request(request.id)
+            task = session.scalars(
+                sa.select(design_model.DesignTask)
+                .where(design_model.DesignTask.id == design_task_id)
+                .with_for_update()
+            ).one()
+            if task.status not in {"designed", "build_failed", "built"}:
+                raise DesignTaskValidationError(
+                    f"design task {task.id} is {task.status}; expected designed, build_failed, or built"
+                )
+            active = BuildAttemptsRepository(session).active_for_design_task(task.id)
+            if active is not None:
+                raise DesignTaskValidationError("active build attempt prevents design revision")
+            if task.status == "built" and _has_released_production_membership(session, task.id):
+                raise DesignTaskValidationError(
+                    "released production design requires a new DesignTask version"
+                )
+
+            now = _utcnow()
+            design_repo = ChallengeDesignRepository(session)
+            design = design_repo.latest_design(task.id)
+            if design is not None:
+                design_row = session.get(challenge_model.ChallengeDesign, design.id)
+                if design_row is not None:
+                    design_row.status = "superseded"
+                    design_row.updated_at = now
+                attempt_row = session.get(challenge_model.DesignAttempt, design.design_attempt_id)
+                if attempt_row is not None:
+                    attempt_row.last_error = reason.strip()
+
+            DesignEvidenceRepository(session).supersede_live_for_task(
+                task.id,
+                reason=reason,
+            )
+            reservation_repo = DesignProfileReservationRepository(session)
+            if task.current_reservation_id is not None:
+                reservation_repo.release_reservation(
+                    task.current_reservation_id,
+                    bump_ledger=True,
+                )
+
+            candidate = {
+                "diversity_flags": {
+                    "family": _semantic_value(task, "family"),
+                    "sub_technique": _semantic_value(task, "sub_technique"),
+                }
+            }
+            task.status = "draft"
+            task.plan_reviewed_at = None
+            task.current_design_evidence_id = None
+            task.updated_at = now
+            session.flush()
+            self._allocate_reservations(
+                session=session,
+                generation_request=request,
+                tasks=[task],
+                candidates=[candidate],
+            )
+            session.refresh(task)
+            return _row_to_dto(task)
 
     def _allocate_reservations(
         self,
@@ -693,8 +783,25 @@ def _row_to_dto(row: design_model.DesignTask) -> dto.DesignTask:
         updated_at=row.updated_at,
         diversity_flags=(dict(row.diversity_flags) if row.diversity_flags is not None else None),
         current_reservation_id=row.current_reservation_id,
+        current_design_evidence_id=row.current_design_evidence_id,
         plan_reviewed_at=row.plan_reviewed_at,
     )
+
+
+def _semantic_value(row: design_model.DesignTask, field: str) -> str:
+    flags = row.diversity_flags or {}
+    value = flags.get(field)
+    if value:
+        return str(value)
+    if field == "family":
+        return resolve_family({"label": row.primary_technique}, category=row.category)
+    return resolve_sub_technique({"label": row.primary_technique})
+
+
+def _has_released_production_membership(session, design_task_id: UUID) -> bool:
+    # Corpus publication tables land later in this change. Until they exist in
+    # the model layer, no row can mark a task as production-released.
+    return False
 
 
 def _utcnow() -> datetime:

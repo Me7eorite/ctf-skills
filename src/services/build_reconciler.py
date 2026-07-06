@@ -320,8 +320,23 @@ class BuildReconciler:
                 continue
             if latest.status in ("queued", "running"):
                 continue
-            task.status = "built" if latest.status == "succeeded" else "build_failed"
+            if self._matches_current_design_evidence(session, latest):
+                task.status = "built" if latest.status == "succeeded" else "build_failed"
+            elif task.status == "building":
+                task.status = "build_failed" if latest.status in {"failed", "lost"} else task.status
             task.updated_at = now
+
+    def _matches_current_design_evidence(
+        self,
+        session: Session,
+        row: build_model.BuildAttempt,
+    ) -> bool:
+        task = session.get(task_model.DesignTask, row.design_task_id)
+        if task is None or task.current_design_evidence_id is None:
+            return True
+        if row.design_evidence_id is None:
+            return False
+        return row.design_evidence_id == task.current_design_evidence_id
 
     def tick_once_sync(self) -> None:
         """Open one short transaction and run a single reconciliation tick.
@@ -583,7 +598,10 @@ class BuildReconciler:
         row.error = error
         task = session.get(task_model.DesignTask, row.design_task_id)
         if task is not None:
-            task.status = "built" if status == "succeeded" else "build_failed"
+            if self._matches_current_design_evidence(session, row):
+                task.status = "built" if status == "succeeded" else "build_failed"
+            elif task.status == "building" and status in {"failed", "lost"}:
+                task.status = "build_failed"
             task.updated_at = now
 
 

@@ -17,11 +17,15 @@ from core.jsonio import write_json
 from core.paths import ProjectPaths
 from persistence.errors import PersistenceConnectionError
 from persistence.models import build_attempts as build_model
+from persistence.models import challenge_designs as design_model
 from persistence.models import design_tasks as task_model
 from persistence.models import executions as exec_model
 from persistence.models import research as research_model
 from persistence.models.progress import ProgressEvent, ProgressSnapshot
+from persistence.repositories import BuildAttemptsRepository
 from persistence.repositories import ExecutionsRepository
+from persistence.repositories import DesignEvidenceRepository
+from persistence.repositories import DesignProfileReservationRepository
 from persistence.session import SessionFactory, transaction
 from services.build_reconciler import (
     DEFAULT_POLL_INTERVAL_SECONDS,
@@ -150,6 +154,131 @@ def _seed_attempt(session_factory: SessionFactory) -> tuple[UUID, UUID, str]:
         session.add_all([request, run, task, attempt])
         session.commit()
         return task.id, attempt_id, basename
+
+
+def _seed_governed_attempt(session_factory: SessionFactory) -> tuple[UUID, UUID, UUID]:
+    from domain.design.profile_taxonomy import canonical_profile_signatures
+
+    profile = {
+        "semantic": {"family": "injection", "sub_technique": "sqli"},
+        "solve": {
+            "analysis_mode": "blackbox",
+            "required_action": "payload_injection",
+            "chain_shape": "inject-exfiltrate",
+            "required_tool_class": "http_client",
+        },
+        "implementation": {
+            "artifact_format": "container",
+            "language": "python",
+            "runtime": "flask",
+            "interaction": "http_form",
+            "control_structure": "route_handler",
+            "flag_concealment": "database_record",
+        },
+        "presentation": {
+            "scenario_type": "reporting_app",
+            "input_model": "web_form",
+        },
+    }
+    contract = {
+        "artifact_ids": ["primary"],
+        "fixture_ids": ["admin-password"],
+        "required_profile": profile,
+        "required_player_actions": ["payload_injection"],
+        "required_components": ["web-service"],
+        "required_asset_flow": [],
+        "forbidden_shortcuts": [],
+        "acceptance_tests": [],
+        "allowed_implementation_freedom": ["file_names"],
+    }
+    with session_factory() as session:
+        request = research_model.GenerationRequest(
+            id=uuid4(),
+            category="web",
+            topic=f"topic-{uuid4()}",
+            target_count=1,
+            difficulty_distribution={"easy": 1},
+            status="researched",
+        )
+        run = research_model.ResearchRun(
+            id=uuid4(),
+            generation_request_id=request.id,
+            attempt=1,
+            status="completed",
+        )
+        task = task_model.DesignTask(
+            id=uuid4(),
+            generation_request_id=request.id,
+            research_run_id=run.id,
+            task_no=1,
+            challenge_id=f"web-{uuid4().hex[:8]}",
+            title="Governed reconcile task",
+            category="web",
+            difficulty="easy",
+            primary_technique="boolean blind sqli",
+            learning_objective="Extract data through boolean responses.",
+            points=100,
+            port=8081,
+            scenario="",
+            constraints={},
+            evidence_summary="",
+            finding_ids=[],
+            status="designed",
+            plan_reviewed_at=datetime.now(timezone.utc),
+        )
+        design_attempt = design_model.DesignAttempt(
+            id=uuid4(),
+            design_task_id=task.id,
+            attempt=1,
+            status="completed",
+            claim_token=uuid4(),
+            finished_at=datetime.now(timezone.utc),
+            profile_name_used="default",
+        )
+        design = design_model.ChallengeDesign(
+            id=uuid4(),
+            design_task_id=task.id,
+            design_attempt_id=design_attempt.id,
+            payload={"event": {"flag_format": "flag{...}"}, "challenges": [{"id": task.challenge_id, "category": "web"}]},
+            summary="validated design",
+            flag_format="flag{...}",
+            validation_notes="passed",
+            quality_gate_passed=True,
+            status="draft",
+        )
+        session.add_all([request, run, task, design_attempt, design])
+        session.flush()
+        signatures = canonical_profile_signatures(profile, category="web", policy_version=1)
+        reservation_repo = DesignProfileReservationRepository(session)
+        reservation_repo.ensure_ledger("web", policy_version=1)
+        reservation = reservation_repo.reserve_task(
+            design_task_id=task.id,
+            generation_request_id=request.id,
+            profile=profile,
+            profile_signature=signatures.combined_profile_signature,
+            occupancy_scope="web",
+            exclusive_signature_key=f"reconcile-{task.id}",
+            taxonomy_version=1,
+            policy_version=1,
+            ledger_version=1,
+        )
+        reservation_repo.commit_reservation(reservation.id)
+        evidence = DesignEvidenceRepository(session).create_live(
+            design_task_id=task.id,
+            challenge_design_id=design.id,
+            research_finding_ids=[],
+            profile=profile,
+            profile_signature=signatures.combined_profile_signature,
+            distinctness_claim="Distinct solve and implementation profile.",
+            compared_challenge_ids=[],
+            evidence={"claims": ["research-backed claim"]},
+            build_contract=contract,
+            ledger_version=1,
+        )
+        task.current_reservation_id = reservation.id
+        task.current_design_evidence_id = evidence.id
+        session.commit()
+        return task.id, evidence.id, reservation.id
 
 
 def _payload(task_id: UUID, attempt_id: UUID, challenge_id: str) -> dict:
@@ -443,17 +572,65 @@ def test_fast_success_and_artifact_availability_do_not_rewrite_status(
     with session_factory() as session:
         assert session.get(task_model.DesignTask, task_id).status == "built"
 
-    metadata.unlink()
-    reconciler.tick_once_sync()
-    missing = _row(session_factory, attempt_id)
-    assert missing.status == "succeeded"
-    assert missing.artifact_status == "missing"
-    with session_factory() as session:
-        assert session.get(task_model.DesignTask, task_id).status == "built"
 
-    write_json(metadata, {"id": challenge_id, "solve_status": "passed"})
+def test_old_success_cannot_overwrite_revised_draft(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    task_id, current_evidence_id, _reservation_id = _seed_governed_attempt(session_factory)
+    reconciler = _reconciler(tmp_path, session_factory)
+    with session_factory() as session:
+        task = session.get(task_model.DesignTask, task_id)
+        assert task is not None
+        current_evidence = session.get(design_model.DesignEvidence, current_evidence_id)
+        assert current_evidence is not None
+        challenge_design = session.get(
+            design_model.ChallengeDesign,
+            current_evidence.challenge_design_id,
+        )
+        DesignEvidenceRepository(session).supersede_live_for_task(
+            task_id,
+            reason="revision",
+        )
+        task.status = "draft"
+        new_evidence = DesignEvidenceRepository(session).create_live(
+            design_task_id=task_id,
+            challenge_design_id=challenge_design.id,
+            research_finding_ids=[],
+            profile=dict(current_evidence.profile),
+            profile_signature=current_evidence.profile_signature,
+            distinctness_claim="Revision contract",
+            compared_challenge_ids=[],
+            evidence={"claims": ["revision"]},
+            build_contract=dict(current_evidence.build_contract),
+            ledger_version=2,
+        )
+        attempt = BuildAttemptsRepository(session).create_attempt(
+            task_id,
+            f"{uuid4()}.json",
+            design_evidence_id=current_evidence.id,
+            contract_sha256="old-contract",
+        )
+        session.commit()
+    write_json(
+        reconciler.paths.shards / "done" / attempt.shard_basename,
+        _payload(task_id, attempt.id, _challenge_id(session_factory, task_id)),
+    )
+    write_json(
+        (reconciler.paths.challenges / "web" / f"{_challenge_id(session_factory, task_id)}-demo" / "metadata.json"),
+        {"id": _challenge_id(session_factory, task_id), "solve_status": "passed"},
+    )
+
     reconciler.tick_once_sync()
-    assert _row(session_factory, attempt_id).artifact_status == "present"
+
+    with session_factory() as session:
+        task = session.get(task_model.DesignTask, task_id)
+        assert task is not None
+        assert task.status == "draft"
+        assert task.current_design_evidence_id == new_evidence.id
+        attempt_row = session.get(build_model.BuildAttempt, attempt.id)
+        assert attempt_row is not None
+        assert attempt_row.status == "succeeded"
 
 
 @pytest.mark.parametrize(

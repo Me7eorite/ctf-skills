@@ -477,6 +477,7 @@ class RenderPromptTests(unittest.TestCase):
             # Fail-rather-than-substitute instruction is present.
             self.assertIn("report its `build_status` as `failed`", rendered)
             self.assertIn("Do not build a generic", rendered)
+            self.assertIn("design_unbuildable", rendered)
 
     def test_build_contract_section_absent_without_challenges(self):
         with TemporaryDirectory() as tmp:

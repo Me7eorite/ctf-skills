@@ -396,9 +396,24 @@ fails, its retry/requeue behavior applies, but it must not mutate or supersede
 a committed DesignEvidence/build contract in place; remediation is a new
 Design evidence version through the explicit revision path.
 
+For governed tasks, the difficulty-review integration is therefore narrowed to
+diagnostics plus a revision request. It may append a
+`design_difficulty_reviews` row and store operator-facing revision feedback,
+but it may not call the legacy draft-supersession/requeue helper directly. The
+only allowed mutation path after a failed governed difficulty review is
+`request_design_revision`, which returns the task to `draft`, clears
+`plan_reviewed_at`, releases/re-reserves the profile, and requires the normal
+plan-review checkpoint before another Design attempt. Legacy and
+`legacy_trial` submissions may keep the older retry/requeue behavior because
+they have no committed governance contract and cannot satisfy production
+admission.
+
 The full contract and evidence ID are embedded in the attributed shard.
 Governed matrix values have no generic defaults. Missing governed values cause
-`build_contract_incomplete`.
+`build_contract_incomplete`. The legacy renderer may keep category defaults
+for non-governed `legacy`, `legacy_trial`, and shadow-observation paths, but
+those fallback values must never be copied into or treated as a committed
+governed contract.
 
 Historical designs without evidence remain readable and revalidatable. They may
 be rebuilt only through an explicit operator-only `legacy_trial` mode that is

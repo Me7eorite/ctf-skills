@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -11,6 +12,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from persistence.models.base import Base
 from persistence.models.design_tasks import DesignTask
 from persistence.models.research import CreatedAt, UuidPk
+
+if TYPE_CHECKING:
+    from persistence.models.challenge_designs import DesignEvidence
 
 
 class BuildAttempt(Base):
@@ -88,6 +92,11 @@ class BuildAttempt(Base):
     )
     error: Mapped[str | None] = mapped_column(sa.Text())
     idempotency_key: Mapped[str | None] = mapped_column(sa.Text())
+    design_evidence_id: Mapped[UUID | None] = mapped_column(
+        sa.Uuid(),
+        sa.ForeignKey("design_evidence.id", ondelete="SET NULL"),
+    )
+    contract_sha256: Mapped[str | None] = mapped_column(sa.Text())
     current_execution_id: Mapped[UUID | None] = mapped_column(sa.Uuid())
     latest_execution_id: Mapped[UUID | None] = mapped_column(sa.Uuid())
     successful_execution_id: Mapped[UUID | None] = mapped_column(sa.Uuid())
@@ -96,3 +105,4 @@ class BuildAttempt(Base):
     finished_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
 
     design_task: Mapped[DesignTask] = relationship()
+    design_evidence: Mapped[DesignEvidence | None] = relationship("DesignEvidence")

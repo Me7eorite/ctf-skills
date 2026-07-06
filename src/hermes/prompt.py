@@ -1516,6 +1516,8 @@ The GOVERNED fields below come from the committed design for each challenge.
 They are locked: implement them exactly. Do NOT substitute or silently fall
 back to a generic language, compiler, target format, architecture, or technique
 (for example building a C/ELF/x86_64 artifact when another value is declared).
+The build contract itself is authoritative, and the only permitted freedom is
+the explicitly declared `allowed_implementation_freedom` inside that contract.
 
 {listing}
 
@@ -1524,7 +1526,8 @@ that challenge and report its `build_status` as `failed` with a concrete reason
 (such as the missing toolchain or unsupported target). Do not build a generic
 substitute and do not change the challenge's declared identity to make it
 buildable. You MAY freely choose only the implementation details that are NOT
-listed above.
+listed above. If the contract cannot be implemented at all, fail with
+`design_unbuildable` instead of rewriting the challenge into a different shape.
 """
 
 

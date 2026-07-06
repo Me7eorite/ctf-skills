@@ -15,10 +15,17 @@ import sqlalchemy as sa
 from sqlalchemy import create_engine
 
 from domain.design_task_validators import DesignTaskValidationError
+from persistence.models import build_attempts as build_model
+from persistence.models import challenge_designs as cd_model
 from persistence.models import design_profile_reservations as reservation_model
 from persistence.models import design_tasks as dt_model
 from persistence.models import research as model
-from persistence.repositories import DesignProfileReservationRepository, DesignTaskRepository
+from persistence.repositories import (
+    BuildAttemptsRepository,
+    DesignEvidenceRepository,
+    DesignProfileReservationRepository,
+    DesignTaskRepository,
+)
 from persistence.session import SessionFactory
 from services import DesignTaskPlanningService, ResearchJobService
 from services import design_task_planning_service as planning_module
@@ -55,6 +62,11 @@ def clean_database(session_factory: SessionFactory):
     with session_factory() as session:
         session.execute(sa.delete(reservation_model.DesignProfileReservation))
         session.execute(sa.delete(reservation_model.DesignProfileLedger))
+        session.execute(sa.delete(cd_model.DesignEvidence))
+        session.execute(sa.delete(cd_model.DesignDifficultyReview))
+        session.execute(sa.delete(cd_model.ChallengeDesign))
+        session.execute(sa.delete(cd_model.DesignAttempt))
+        session.execute(sa.delete(build_model.BuildAttempt))
         session.execute(sa.delete(dt_model.DesignTask))
         session.execute(sa.delete(model.ResearchFindingSource))
         session.execute(sa.delete(model.ResearchFinding))
@@ -582,6 +594,195 @@ def test_regenerate_releases_replaced_reservations(session_factory: SessionFacto
         assert first_reservation.design_task_id is None
         assert second_task.current_reservation_id == second_tasks[0].current_reservation_id
         assert [row.id for row in active_reservations] == [second_task.current_reservation_id]
+
+
+def _governed_profile() -> dict[str, object]:
+    return {
+        "semantic": {"family": "injection", "sub_technique": "sqli"},
+        "solve": {
+            "analysis_mode": "blackbox",
+            "required_action": "payload_injection",
+            "chain_shape": "inject-exfiltrate",
+            "required_tool_class": "http_client",
+        },
+        "implementation": {
+            "artifact_format": "container",
+            "language": "python",
+            "runtime": "flask",
+            "interaction": "http_form",
+            "control_structure": "route_handler",
+            "flag_concealment": "database_record",
+        },
+        "presentation": {
+            "scenario_type": "reporting_app",
+            "input_model": "web_form",
+        },
+    }
+
+
+def _build_contract(profile: dict[str, object]) -> dict[str, object]:
+    return {
+        "artifact_ids": ["primary"],
+        "fixture_ids": ["admin-password"],
+        "required_profile": profile,
+        "required_player_actions": ["payload_injection"],
+        "required_components": ["web-service"],
+        "required_asset_flow": [
+            {
+                "stage_id": "recover-password",
+                "produced_asset_or_capability": "admin password",
+                "verification_harness": {
+                    "test_kind": "fixture_assertion",
+                    "fixture_ref": "admin-password",
+                    "assertion": "non_empty",
+                },
+                "dependency_harness": {
+                    "test_kind": "solver_without_fixture",
+                    "fixture_ref": "admin-password",
+                    "assertion": "must_fail",
+                },
+            }
+        ],
+        "forbidden_shortcuts": [
+            {
+                "id": "direct-run",
+                "test_kind": "artifact_direct_run",
+                "artifact_ref": "primary",
+                "assertion": "stdout_not_contains_flag",
+            }
+        ],
+        "acceptance_tests": [],
+        "allowed_implementation_freedom": ["file_names"],
+    }
+
+
+def _commit_governed_design(session_factory: SessionFactory, task_id) -> dict[str, object]:
+    from domain.design.profile_taxonomy import canonical_profile_signatures
+
+    profile = _governed_profile()
+    with session_factory() as session:
+        task = session.get(dt_model.DesignTask, task_id)
+        assert task is not None
+        reservation = session.get(
+            reservation_model.DesignProfileReservation,
+            task.current_reservation_id,
+        )
+        assert reservation is not None
+        profile = dict(reservation.profile)
+        signatures = canonical_profile_signatures(profile, category=task.category, policy_version=1)
+        reservation_repo = DesignProfileReservationRepository(session)
+        attempt = cd_model.DesignAttempt(
+            id=uuid4(),
+            design_task_id=task.id,
+            attempt=1,
+            status="completed",
+            claim_token=uuid4(),
+            finished_at=datetime.now(timezone.utc),
+            profile_name_used="default",
+        )
+        design = cd_model.ChallengeDesign(
+            id=uuid4(),
+            design_task_id=task.id,
+            design_attempt_id=attempt.id,
+            payload={"event": {"flag_format": "flag{...}"}, "challenges": [{"id": task.challenge_id}]},
+            summary="governed design",
+            flag_format="flag{...}",
+            validation_notes="passed",
+            quality_gate_passed=True,
+            status="draft",
+        )
+        session.add_all([attempt, design])
+        session.flush()
+        reservation_repo.commit_reservation(reservation.id)
+        evidence = DesignEvidenceRepository(session).create_live(
+            design_task_id=task.id,
+            challenge_design_id=design.id,
+            research_finding_ids=[],
+            profile=profile,
+            profile_signature=signatures.combined_profile_signature,
+            distinctness_claim="Distinct solve and implementation profile.",
+            compared_challenge_ids=[],
+            evidence={"claims": ["research-backed claim"]},
+            build_contract=_build_contract(profile),
+            ledger_version=reservation.ledger_version,
+        )
+        task.status = "designed"
+        task.plan_reviewed_at = datetime.now(timezone.utc)
+        session.commit()
+        return {
+            "reservation_id": reservation.id,
+            "design_id": design.id,
+            "attempt_id": attempt.id,
+            "evidence_id": evidence.id,
+        }
+
+
+def test_request_design_revision_supersedes_evidence_and_returns_to_draft(
+    session_factory: SessionFactory,
+):
+    request, _ = _seed(
+        session_factory,
+        target_count=1,
+        distribution={"easy": 1},
+        finding_labels=["blind SQLi"],
+    )
+    service = DesignTaskPlanningService(session_factory)
+    [task] = service.generate_for_request(request.id)
+    ids = _commit_governed_design(session_factory, task.id)
+
+    revised = service.request_design_revision(task.id, reason="quality failure")
+
+    assert revised.status == "draft"
+    assert revised.plan_reviewed_at is None
+    assert revised.current_reservation_id is not None
+    assert revised.current_reservation_id != ids["reservation_id"]
+    assert revised.current_design_evidence_id is None
+    with session_factory() as session:
+        old_reservation = session.get(
+            reservation_model.DesignProfileReservation,
+            ids["reservation_id"],
+        )
+        old_design = session.get(cd_model.ChallengeDesign, ids["design_id"])
+        old_attempt = session.get(cd_model.DesignAttempt, ids["attempt_id"])
+        old_evidence = session.get(cd_model.DesignEvidence, ids["evidence_id"])
+        active_reservations = session.scalars(
+            sa.select(reservation_model.DesignProfileReservation).where(
+                reservation_model.DesignProfileReservation.design_task_id == task.id,
+                reservation_model.DesignProfileReservation.state.in_(("reserved", "committed")),
+            )
+        ).all()
+
+        assert old_reservation is not None and old_reservation.state == "released"
+        assert old_design is not None and old_design.status == "superseded"
+        assert old_attempt is not None and old_attempt.last_error == "quality failure"
+        assert old_evidence is not None
+        assert old_evidence.superseded_at is not None
+        assert old_evidence.supersession_reason == "quality failure"
+        assert [row.id for row in active_reservations] == [revised.current_reservation_id]
+
+
+def test_request_design_revision_rejects_active_build(
+    session_factory: SessionFactory,
+):
+    request, _ = _seed(
+        session_factory,
+        target_count=1,
+        distribution={"easy": 1},
+        finding_labels=["blind SQLi"],
+    )
+    service = DesignTaskPlanningService(session_factory)
+    [task] = service.generate_for_request(request.id)
+    ids = _commit_governed_design(session_factory, task.id)
+    with session_factory() as session:
+        BuildAttemptsRepository(session).create_attempt(task.id, f"{uuid4()}.json")
+        session.commit()
+
+    with pytest.raises(DesignTaskValidationError, match="active build attempt"):
+        service.request_design_revision(task.id, reason="quality failure")
+
+    with session_factory() as session:
+        assert session.get(dt_model.DesignTask, task.id).status == "designed"
+        assert session.get(cd_model.DesignEvidence, ids["evidence_id"]).superseded_at is None
 
 
 def _fake_finding(label: str) -> model.ResearchFinding:

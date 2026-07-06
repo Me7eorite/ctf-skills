@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID
 
@@ -33,6 +33,8 @@ class BuildAttempt:
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
+    design_evidence_id: UUID | None = field(default=None, kw_only=True)
+    contract_sha256: str | None = field(default=None, kw_only=True)
 
 
 @dataclass(frozen=True)
