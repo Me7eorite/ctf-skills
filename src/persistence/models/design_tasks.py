@@ -101,6 +101,10 @@ class DesignTask(Base):
         sa.Uuid(),
         sa.ForeignKey("design_profile_reservations.id", ondelete="SET NULL"),
     )
+    current_design_evidence_id: Mapped[UUID | None] = mapped_column(
+        sa.Uuid(),
+        sa.ForeignKey("design_evidence.id", ondelete="SET NULL"),
+    )
     plan_reviewed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     next_build_attempt_no: Mapped[int] = mapped_column(
         sa.Integer(),

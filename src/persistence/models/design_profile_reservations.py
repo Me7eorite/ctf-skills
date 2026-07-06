@@ -11,6 +11,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from persistence.models.base import Base
+from persistence.models.design_tasks import DesignTask
 from persistence.models.research import (
     ChallengeCategory,
     CreatedAt,
@@ -18,7 +19,6 @@ from persistence.models.research import (
     UpdatedAt,
     UuidPk,
 )
-from persistence.models.design_tasks import DesignTask
 
 
 class DesignProfileLedger(Base):

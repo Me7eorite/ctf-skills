@@ -62,21 +62,21 @@
 
 ## 5. Evidence-backed Design prompt and output
 
-- [ ] 5.1 Build a bounded ledger snapshot containing siblings, nearest
+- [x] 5.1 Build a bounded ledger snapshot containing siblings, nearest
       historical profiles, quota usage, forbidden signatures, and version.
-- [ ] 5.2 Extend Design prompt/schema with reservation, ledger context,
+- [x] 5.2 Extend Design prompt/schema with reservation, ledger context,
       evidence, distinctness claim, compared challenge IDs, and build contract.
-- [ ] 5.3 Add `design_evidence` model/DTO/repository/migration with
+- [x] 5.3 Add `design_evidence` model/DTO/repository/migration with
       `superseded_at`, `superseded_by_evidence_id`, `supersession_reason`,
       `evidence_version`, and one-unsuperseded-row partial unique constraint.
-- [ ] 5.4 Validate evidence finding IDs against the task ResearchRun and compare
+- [x] 5.4 Validate evidence finding IDs against the task ResearchRun and compare
       IDs against the supplied ledger snapshot.
-- [ ] 5.5 Validate exact profile equality with the reservation and validate the
+- [x] 5.5 Validate exact profile equality with the reservation and validate the
       structured build contract, declared artifact/fixture IDs, closed harness
       registry, and per-stage asset verification/dependency harnesses.
-- [ ] 5.6 Commit ChallengeDesign, DesignEvidence, and reservation transition in
+- [x] 5.6 Commit ChallengeDesign, DesignEvidence, and reservation transition in
       one transaction; reject stale conflicting ledger versions.
-- [ ] 5.7 Tests for forged finding IDs, invented compared IDs, profile drift,
+- [x] 5.7 Tests for forged finding IDs, invented compared IDs, profile drift,
       incomplete contracts, stale ledgers, retries, and atomic completion.
 - [ ] 5.8 Add `request_design_revision`: supersede the live design/evidence,
       release and re-reserve under locks, clear stale review, and return eligible

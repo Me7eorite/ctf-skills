@@ -85,6 +85,28 @@ class DesignProfileReservationRepository:
             for row in rows
         ]
 
+    def list_active_for_request(
+        self,
+        generation_request_id: UUID,
+        *,
+        exclude_reservation_id: UUID | None = None,
+    ) -> list[dto.DesignProfileReservation]:
+        stmt = (
+            sa.select(model.DesignProfileReservation)
+            .where(
+                model.DesignProfileReservation.generation_request_id
+                == generation_request_id,
+                model.DesignProfileReservation.state.in_(("reserved", "committed")),
+            )
+            .order_by(
+                model.DesignProfileReservation.created_at,
+                model.DesignProfileReservation.id,
+            )
+        )
+        if exclude_reservation_id is not None:
+            stmt = stmt.where(model.DesignProfileReservation.id != exclude_reservation_id)
+        return [_reservation(row) for row in self.session.scalars(stmt)]
+
     def get_latest_reservation_version(self, design_task_id: UUID) -> int:
         value = self.session.scalar(
             sa.select(sa.func.max(model.DesignProfileReservation.reservation_version)).where(
@@ -92,6 +114,10 @@ class DesignProfileReservationRepository:
             )
         )
         return int(value or 0)
+
+    def get(self, reservation_id: UUID) -> dto.DesignProfileReservation | None:
+        row = self.session.get(model.DesignProfileReservation, reservation_id)
+        return _reservation(row) if row else None
 
     def reserve_task(
         self,

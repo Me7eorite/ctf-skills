@@ -6,6 +6,7 @@ from persistence.models.challenge_designs import (
     ChallengeDesign,
     DesignAttempt,
     DesignDifficultyReview,
+    DesignEvidence,
 )
 from persistence.models.design_profile_reservations import (
     DesignProfileLedger,
@@ -37,6 +38,7 @@ __all__ = [
     "ChallengeCategory",
     "ChallengeDesign",
     "DesignDifficultyReview",
+    "DesignEvidence",
     "DesignAttempt",
     "DesignProfileLedger",
     "DesignProfileReservation",

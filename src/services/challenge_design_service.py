@@ -12,6 +12,7 @@ import sqlalchemy as sa
 
 from core.paths import ProjectPaths
 from domain import challenge_designs as design_dto
+from domain import design_profile_reservations as reservation_dto
 from domain import design_tasks as task_dto
 from domain import research as research_dto
 from domain.challenge_design_validators import (
@@ -23,6 +24,8 @@ from domain.challenge_design_validators import (
 from persistence.models import design_tasks as dt_model
 from persistence.repositories import (
     ChallengeDesignRepository,
+    DesignEvidenceRepository,
+    DesignProfileReservationRepository,
     DesignTaskRepository,
     ResearchRepository,
 )
@@ -30,6 +33,13 @@ from persistence.session import SessionFactory, transaction
 from services.design_agent_executor import (
     DesignChallengeExecutor,
     last_error_for_exit_code,
+)
+from services.design_governance import (
+    DesignGovernanceError,
+    DesignLedgerSnapshot,
+    build_design_ledger_snapshot,
+    detect_conflicting_ledger_advance,
+    validate_design_evidence_output,
 )
 from services.design_prompt import (
     DesignPromptContext,
@@ -77,6 +87,8 @@ class _AttemptStart:
     # same batch, so this design can plan AGAINST them and avoid collapsing into
     # the same concept / mechanism / solution shape.
     prior_designs: Sequence[Mapping[str, Any]] = ()
+    reservation: reservation_dto.DesignProfileReservation | None = None
+    ledger_snapshot: DesignLedgerSnapshot | None = None
 
 
 PromptContextLoader = Callable[[ProjectPaths], DesignPromptContext]
@@ -126,6 +138,16 @@ class ChallengeDesignService:
                 started.sources,
                 previous_error=started.previous_error,
                 prior_designs=started.prior_designs,
+                reservation=(
+                    _reservation_prompt_mapping(started.reservation)
+                    if started.reservation is not None
+                    else None
+                ),
+                ledger_snapshot=(
+                    started.ledger_snapshot.as_prompt_mapping()
+                    if started.ledger_snapshot is not None
+                    else None
+                ),
             )
             prompt_path.parent.mkdir(parents=True, exist_ok=True)
             prompt_path.write_text(prompt_text, encoding="utf-8")
@@ -183,6 +205,40 @@ class ChallengeDesignService:
                     validation_notes,
                     quality_gate_passed,
                 )
+                if started.reservation is not None and started.ledger_snapshot is not None:
+                    reservation_repo = DesignProfileReservationRepository(session)
+                    evidence_repo = DesignEvidenceRepository(session)
+                    evidence_payload = validate_design_evidence_output(
+                        challenge=validated.challenge,
+                        design_task=started.design_task,
+                        reservation=started.reservation,
+                        findings=started.findings,
+                        ledger_snapshot=started.ledger_snapshot,
+                    )
+                    if detect_conflicting_ledger_advance(
+                        evidence_repo=evidence_repo,
+                        reservation_repo=reservation_repo,
+                        design_task=started.design_task,
+                        reservation=started.reservation,
+                        consumed_snapshot=started.ledger_snapshot,
+                    ):
+                        raise DesignGovernanceError("stale_design_ledger")
+                    reservation_repo.commit_reservation(started.reservation.id)
+                    evidence_repo.create_live(
+                        design_task_id=design.design_task_id,
+                        challenge_design_id=design.id,
+                        research_finding_ids=evidence_payload["research_finding_ids"],
+                        profile=evidence_payload["profile"],
+                        profile_signature=evidence_payload["profile_signature"],
+                        distinctness_claim=evidence_payload["distinctness_claim"],
+                        compared_challenge_ids=evidence_payload["compared_challenge_ids"],
+                        evidence={
+                            **dict(evidence_payload["evidence"]),
+                            "challenge_id": started.design_task.challenge_id,
+                        },
+                        build_contract=evidence_payload["build_contract"],
+                        ledger_version=evidence_payload["ledger_version"],
+                    )
                 task = DesignTaskRepository(session).get_design_task(design.design_task_id)
                 if task is None:
                     raise ChallengeDesignNotFoundError(
@@ -198,6 +254,8 @@ class ChallengeDesignService:
                     error=None,
                 )
         except ChallengeDesignValidationError as exc:
+            return self._fail_attempt(attempt, log_rel, str(exc), started.max_attempts)
+        except DesignGovernanceError as exc:
             return self._fail_attempt(attempt, log_rel, str(exc), started.max_attempts)
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
@@ -257,6 +315,25 @@ class ChallengeDesignService:
             prior_designs = _collect_prior_designs(
                 task_repo, design_repo, design_task
             )
+            reservation = None
+            ledger_snapshot = None
+            if design_task.current_reservation_id is not None:
+                reservation_repo = DesignProfileReservationRepository(session)
+                reservation = reservation_repo.get(design_task.current_reservation_id)
+                if reservation is None:
+                    raise ChallengeDesignConflictError(
+                        f"reservation {design_task.current_reservation_id} does not exist"
+                    )
+                if reservation.state != "reserved":
+                    raise ChallengeDesignConflictError(
+                        f"reservation {reservation.id} is {reservation.state}, expected reserved"
+                    )
+                ledger_snapshot = build_design_ledger_snapshot(
+                    evidence_repo=DesignEvidenceRepository(session),
+                    reservation_repo=reservation_repo,
+                    design_task=design_task,
+                    reservation=reservation,
+                )
             return _AttemptStart(
                 attempt=attempt,
                 design_task=design_task,
@@ -268,6 +345,8 @@ class ChallengeDesignService:
                     latest_attempt.last_error if latest_attempt is not None else None
                 ),
                 prior_designs=prior_designs,
+                reservation=reservation,
+                ledger_snapshot=ledger_snapshot,
             )
 
     def _record_ledger(
@@ -411,6 +490,22 @@ def _filter_task_findings(
         return list(findings)
     wanted = set(finding_ids)
     return [finding for finding in findings if finding.id in wanted]
+
+
+def _reservation_prompt_mapping(
+    reservation: reservation_dto.DesignProfileReservation | None,
+) -> dict[str, Any] | None:
+    if reservation is None:
+        return None
+    return {
+        "id": str(reservation.id),
+        "reservation_version": reservation.reservation_version,
+        "reserved_profile": dict(reservation.profile),
+        "profile_signature": reservation.profile_signature,
+        "taxonomy_version": reservation.taxonomy_version,
+        "policy_version": reservation.policy_version,
+        "ledger_version": reservation.ledger_version,
+    }
 
 
 def _validation_notes(base_notes: str, quality_notes: Sequence[str]) -> str:

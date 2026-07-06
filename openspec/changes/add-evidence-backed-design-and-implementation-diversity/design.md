@@ -386,6 +386,16 @@ For a governed `trial` or `production` build,
 - DesignEvidence profile signature matches the reservation;
 - build contract validates for the category.
 
+These governed evidence and quality gates run before any pre-build difficulty
+review. A failure in these gates is a pure admission failure: it returns a
+machine-readable error and creates no BuildAttempt, staged shard, difficulty
+review row, counter increment, or parent status change. The existing
+pre-build difficulty review remains applicable only after the governed
+evidence contract is present and structurally valid. If that later review
+fails, its retry/requeue behavior applies, but it must not mutate or supersede
+a committed DesignEvidence/build contract in place; remediation is a new
+Design evidence version through the explicit revision path.
+
 The full contract and evidence ID are embedded in the attributed shard.
 Governed matrix values have no generic defaults. Missing governed values cause
 `build_contract_incomplete`.

@@ -132,3 +132,54 @@ class DesignDifficultyReview(Base):
 
     design_task: Mapped[DesignTask] = relationship()
     challenge_design: Mapped[ChallengeDesign] = relationship()
+
+
+class DesignEvidence(Base):
+    __tablename__ = "design_evidence"
+    __table_args__ = (
+        sa.CheckConstraint("evidence_version > 0", name="ck_design_evidence_version_positive"),
+        sa.UniqueConstraint(
+            "design_task_id",
+            "evidence_version",
+            name="uq_design_evidence_task_version",
+        ),
+        sa.Index(
+            "uq_design_evidence_live_task",
+            "design_task_id",
+            unique=True,
+            postgresql_where=sa.text("superseded_at IS NULL"),
+        ),
+        sa.Index("ix_design_evidence_profile_signature", "profile_signature"),
+        sa.Index("ix_design_evidence_challenge_design", "challenge_design_id"),
+    )
+
+    id: Mapped[UuidPk]
+    design_task_id: Mapped[UUID] = mapped_column(
+        sa.Uuid(),
+        sa.ForeignKey("design_tasks.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    evidence_version: Mapped[int] = mapped_column(sa.Integer(), nullable=False)
+    challenge_design_id: Mapped[UUID] = mapped_column(
+        sa.Uuid(),
+        sa.ForeignKey("challenge_designs.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    research_finding_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    profile: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    profile_signature: Mapped[str] = mapped_column(sa.Text(), nullable=False)
+    distinctness_claim: Mapped[str] = mapped_column(sa.Text(), nullable=False)
+    compared_challenge_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    build_contract: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    ledger_version: Mapped[int] = mapped_column(sa.Integer(), nullable=False)
+    created_at: Mapped[CreatedAt]
+    superseded_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    superseded_by_evidence_id: Mapped[UUID | None] = mapped_column(
+        sa.Uuid(),
+        sa.ForeignKey("design_evidence.id", ondelete="SET NULL"),
+    )
+    supersession_reason: Mapped[str | None] = mapped_column(sa.Text())
+
+    design_task: Mapped[DesignTask] = relationship(foreign_keys=[design_task_id])
+    challenge_design: Mapped[ChallengeDesign] = relationship()

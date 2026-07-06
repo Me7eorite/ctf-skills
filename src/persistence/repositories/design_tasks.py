@@ -288,6 +288,7 @@ def _design_task(row: model.DesignTask) -> dto.DesignTask:
             dict(row.diversity_flags) if row.diversity_flags is not None else None
         ),
         current_reservation_id=row.current_reservation_id,
+        current_design_evidence_id=row.current_design_evidence_id,
         status=row.status,
         created_at=row.created_at,
         updated_at=row.updated_at,

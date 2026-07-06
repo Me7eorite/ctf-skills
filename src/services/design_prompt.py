@@ -56,6 +56,8 @@ def build_design_prompt(
     sources: Sequence[ResearchSource],
     previous_error: str | None = None,
     prior_designs: Sequence[Mapping[str, Any]] = (),
+    reservation: Mapping[str, Any] | None = None,
+    ledger_snapshot: Mapping[str, Any] | None = None,
 ) -> str:
     """Build a deterministic Hermes prompt without filesystem or DB access."""
     reference_names = list(ALWAYS_REFERENCE_FILES)
@@ -78,6 +80,7 @@ def build_design_prompt(
         _render_findings(findings),
         "## Research Sources",
         _render_sources(sources),
+        _render_governance_context(reservation, ledger_snapshot),
         "## References",
         *(
             _render_reference(
@@ -88,7 +91,7 @@ def build_design_prompt(
         ),
         _render_retry_feedback(previous_error),
         "## Output Contract",
-        _render_output_contract(design_task),
+        _render_output_contract(design_task, governed=reservation is not None),
         "## Pinned Values (copy verbatim into `challenges[0]`)",
         _render_pinned_values(design_task),
     ]
@@ -364,14 +367,15 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
 }
 
 
-def _render_output_contract(task: DesignTask) -> str:
+def _render_output_contract(task: DesignTask, *, governed: bool = False) -> str:
     """Render the JSON Schema + 3 short invariants.
 
     Phase 4: the old 25-line negative-list got modelled into the schema
     above so the agent can self-validate against one block instead of
     scanning a wall of prose rules.
     """
-    schema_text = json.dumps(_OUTPUT_SCHEMA, ensure_ascii=False, indent=2)
+    schema = _governed_output_schema() if governed else _OUTPUT_SCHEMA
+    schema_text = json.dumps(schema, ensure_ascii=False, indent=2)
     container_artifacts_hint = ""
     if task.category == "web":
         container_artifacts_hint = (
@@ -441,6 +445,17 @@ def _render_output_contract(task: DesignTask) -> str:
         if task.difficulty != "easy"
         else "\n7. `actual_solution_type` is optional for `easy`."
     )
+    governance_hint = (
+        "\n8. This task has a governed profile reservation. Copy the supplied "
+        "`reserved_profile` exactly into `challenges[0].governed_profile`; "
+        "do not choose alternate governed values. Provide "
+        "`design_evidence`, `distinctness_claim`, `compared_challenge_ids`, "
+        "and `build_contract`. The build contract is authoritative for Build: "
+        "use only symbolic artifact/fixture ids and closed harness kinds, never "
+        "shell commands, argv, executable paths, or file contents."
+        if governed
+        else ""
+    )
     invariants = (
         "Invariants (enforced server-side; violating any of these fails "
         "the attempt):\n"
@@ -473,8 +488,87 @@ def _render_output_contract(task: DesignTask) -> str:
         + uniqueness_hint
         + asset_flow_hint
         + solution_type_hint
+        + governance_hint
     )
     return f"{invariants}\n\n```json\n{schema_text}\n```"
+
+
+def _governed_output_schema() -> dict[str, Any]:
+    schema = json.loads(json.dumps(_OUTPUT_SCHEMA))
+    challenge_schema = schema["properties"]["challenges"]["items"]
+    challenge_schema["required"] = [
+        *challenge_schema["required"],
+        "governed_profile",
+        "design_evidence",
+        "distinctness_claim",
+        "compared_challenge_ids",
+        "build_contract",
+    ]
+    properties = challenge_schema["properties"]
+    properties["governed_profile"] = {"type": "object"}
+    properties["design_evidence"] = {
+        "type": "object",
+        "required": ["research_finding_ids", "claims"],
+        "properties": {
+            "research_finding_ids": {
+                "type": "array",
+                "items": {"type": "string", "format": "uuid"},
+                "minItems": 1,
+            },
+            "claims": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+                "minItems": 1,
+            },
+            "notes": {"type": "string"},
+        },
+    }
+    properties["distinctness_claim"] = {"type": "string", "minLength": 1}
+    properties["compared_challenge_ids"] = {
+        "type": "array",
+        "items": {"type": "string", "minLength": 1},
+    }
+    properties["build_contract"] = {
+        "type": "object",
+        "required": [
+            "required_profile",
+            "required_player_actions",
+            "required_components",
+            "required_asset_flow",
+            "forbidden_shortcuts",
+            "acceptance_tests",
+            "allowed_implementation_freedom",
+        ],
+    }
+    return schema
+
+
+def _render_governance_context(
+    reservation: Mapping[str, Any] | None,
+    ledger_snapshot: Mapping[str, Any] | None,
+) -> str:
+    if reservation is None:
+        return ""
+    return "\n".join(
+        [
+            "## Governed Design Reservation",
+            "This is authoritative server-provided governance context. Copy "
+            "`reserved_profile` exactly into `challenges[0].governed_profile` "
+            "and into `challenges[0].build_contract.required_profile`.",
+            "",
+            "```json",
+            json.dumps(
+                {
+                    "reservation": dict(reservation),
+                    "ledger_snapshot": dict(ledger_snapshot or {}),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                indent=2,
+            ),
+            "```",
+        ]
+    )
 
 
 def _render_retry_feedback(previous_error: str | None) -> str:

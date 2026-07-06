@@ -60,4 +60,5 @@ class DesignTask:
     updated_at: datetime
     diversity_flags: Mapping[str, Any] | None = None  # 技术多样性标记
     current_reservation_id: UUID | None = None  # 当前 reservation ID
+    current_design_evidence_id: UUID | None = None  # 当前 DesignEvidence ID
     plan_reviewed_at: datetime | None = None  # 规划审核时间；None 表示未审核或旧数据

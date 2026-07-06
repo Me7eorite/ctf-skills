@@ -13,6 +13,14 @@ production corpus admission.
 Failure SHALL return a machine-readable reason and SHALL create no
 BuildAttempt, staged shard, counter increment, or parent status change.
 
+Governed evidence and quality-gate admission checks SHALL run before the
+pre-build difficulty review. When they fail, the system SHALL NOT record a
+difficulty review, supersede the current draft, requeue the task, or otherwise
+invoke difficulty-review retry behavior. Difficulty review MAY run only after a
+live committed DesignEvidence row and category-valid build contract are
+available. A later difficulty-review failure MAY request a new Design revision,
+but SHALL NOT mutate a committed DesignEvidence/build contract in place.
+
 Governed fields SHALL come from the committed contract. The renderer SHALL NOT
 default missing governed language/runtime, artifact format, interaction,
 control structure, solve action, or flag-concealment fields.
@@ -24,6 +32,8 @@ control structure, solve action, or flag-concealment fields.
 - **WHEN** governed trial or production Build submission is requested
 - **THEN** it fails with `design_quality_gate_failed`
 - **AND** no filesystem or database build work is created
+- **AND** no pre-build difficulty review is recorded
+- **AND** the design task status remains unchanged
 
 #### Scenario: Legacy trial cannot become production evidence
 

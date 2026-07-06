@@ -8,11 +8,15 @@ from persistence.repositories.challenge_designs import (
     ChallengeDesignPersistenceError,
     ChallengeDesignRepository,
 )
+from persistence.repositories.design_difficulty_reviews import DesignDifficultyReviewRepository
+from persistence.repositories.design_evidence import (
+    DesignEvidencePersistenceError,
+    DesignEvidenceRepository,
+)
 from persistence.repositories.design_profile_reservations import (
     DesignProfileReservationPersistenceError,
     DesignProfileReservationRepository,
 )
-from persistence.repositories.design_difficulty_reviews import DesignDifficultyReviewRepository
 from persistence.repositories.design_tasks import DesignTaskRepository
 from persistence.repositories.executions import (
     ExecutionPersistenceError,
@@ -30,6 +34,8 @@ __all__ = [
     "BuildAttemptsRepository",
     "DesignTaskRepository",
     "DesignDifficultyReviewRepository",
+    "DesignEvidencePersistenceError",
+    "DesignEvidenceRepository",
     "ExecutionPersistenceError",
     "ExecutionsRepository",
     "PostgresProgressStore",
