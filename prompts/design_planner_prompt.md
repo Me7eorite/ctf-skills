@@ -2,8 +2,9 @@
 
 You are pre-planning ONE challenge task before the full design is written. The
 downstream design agent will receive your reply alongside the parent task row,
-so your job is to lock the **techniques and the chain shape** for that one
-task, not to enumerate every implementation detail.
+so your job is to choose the **mechanism and chain shape** for that one task,
+not to enumerate every implementation detail. The system may provide advisory
+vocabulary, but no mechanism is pre-assigned by code.
 
 ## Inputs
 
@@ -40,6 +41,9 @@ file writes.
 ```json
 {{
   "considered_techniques": ["string", "string", "string"],
+  "chosen_mechanism": "the mechanism you choose from the request/research/design evidence",
+  "semantic_fingerprint": "stable short fingerprint of the mechanism + asset flow",
+  "diversity_rationale": "why this mechanism/flow is meaningfully different from sibling tasks",
   "chain_outline": "1-3 sentence outline of how the techniques chain together to reach the flag",
   "asset_flow": [
     {{
@@ -59,6 +63,13 @@ Rules:
 
 - `considered_techniques` MUST contain 3 or 4 distinct techniques for `hard`
   and at least 2 for `expert`.
+- `chosen_mechanism` MUST be selected by you from the inputs; do not assume
+  any code-assigned rotation or template.
+- `semantic_fingerprint` MUST be specific enough to compare against sibling
+  designs without prescribing binary internals, function names, or exploit
+  payload shape.
+- `diversity_rationale` MUST explain the creative choice, not cite a forced
+  mechanism assignment.
 - `chain_outline` MUST describe how the techniques connect — not a list of
   independent steps.
 - `asset_flow` MUST encode the required chain: `medium` needs ≥1 effective

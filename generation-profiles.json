@@ -1,7 +1,15 @@
 {
   "version": 1,
-  "categories": {
+  "profiles": {
     "web": {
+      "display_name": "Web",
+      "capabilities": {
+        "requires_container": true,
+        "requires_network_service": true,
+        "requires_solver": true,
+        "requires_player_artifact": false,
+        "launcher": "docker_compose"
+      },
       "required_artifact": "single-service Docker image",
       "runtime_rotation": [
         {"runtime": "python", "frameworks": ["Flask", "FastAPI", "Django"]},
@@ -21,6 +29,14 @@
       ]
     },
     "pwn": {
+      "display_name": "Pwn",
+      "capabilities": {
+        "requires_container": true,
+        "requires_network_service": true,
+        "requires_solver": true,
+        "requires_player_artifact": true,
+        "launcher": "xinetd_chroot"
+      },
       "required_artifact": "Linux ELF plus single-service Docker image",
       "language_toolchains": {
         "c": {"compilers": ["gcc", "clang"], "target_format": "elf"},
@@ -40,6 +56,14 @@
       ]
     },
     "re": {
+      "display_name": "Reverse",
+      "capabilities": {
+        "requires_container": false,
+        "requires_network_service": false,
+        "requires_solver": true,
+        "requires_player_artifact": true,
+        "launcher": null
+      },
       "required_artifact": "compiled player-facing binary in attachments/",
       "artifact_rotation": [
         {"format": "elf", "languages": ["c", "cpp", "rust", "go"]},
@@ -65,5 +89,6 @@
         "Record compiler, flags, SHA-256, file format, and architecture."
       ]
     }
-  }
+  },
+  "categories": {}
 }

@@ -293,7 +293,9 @@ class ChallengeDesignService:
                     "fingerprint": challenge_fingerprint(
                         {**challenge, "diversity_flags": flags}
                     ),
-                    "core_mechanism": flags.get("core_mechanism"),
+                    "chosen_mechanism": flags.get("chosen_mechanism"),
+                    "semantic_fingerprint": flags.get("semantic_fingerprint"),
+                    "diversity_rationale": flags.get("diversity_rationale"),
                     **digest,
                 },
             )

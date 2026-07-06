@@ -30,10 +30,9 @@ from uuid import UUID
 
 import sqlalchemy as sa
 
-from core.jsonio import read_json
-from core.paths import ProjectPaths
 from domain import design_tasks as dto
 from domain import research as research_dto
+from domain.generation_profile import category_profile_config
 from domain.design.technique_taxonomy import resolve_family, resolve_sub_technique
 from domain.design_task_validators import DesignTaskValidationError
 from domain.research_validators import (
@@ -393,9 +392,6 @@ def _plan_candidates(
         technique_quota=profile.technique_quota,
         cooldown_window=profile.cooldown_window,
     )
-    mechanisms = _allocate_core_mechanisms(
-        category, len(difficulty_slots), start_offset=_mechanism_offset(category)
-    )
     for index, difficulty in enumerate(difficulty_slots):
         task_no = index + 1
         allocation = allocations[index]
@@ -421,7 +417,14 @@ def _plan_candidates(
             "finding_ids": [f.id for f in task_findings],
             "diversity_flags": {
                 **dict(allocation.diversity_flags),
-                "core_mechanism": mechanisms[index],
+                "advisory_mechanism_vocabulary": _advisory_mechanisms_for_category(category),
+                "chosen_mechanism": None,
+                "semantic_fingerprint": None,
+                "diversity_rationale": (
+                    "Model must choose the challenge mechanism from request, "
+                    "research, and design evidence; code does not pre-assign an "
+                    "exploit/template mechanism."
+                ),
             },
         }
         # Phase 2 (D5=b): for hard/expert tasks the optional Hermes
@@ -459,6 +462,11 @@ def _apply_planner_enrichment(
     candidate["constraints"]["_planner_techniques"] = list(
         enrichment.considered_techniques
     )
+    flags = dict(candidate.get("diversity_flags") or {})
+    flags["chosen_mechanism"] = enrichment.chosen_mechanism
+    flags["semantic_fingerprint"] = enrichment.semantic_fingerprint
+    flags["diversity_rationale"] = enrichment.diversity_rationale
+    candidate["diversity_flags"] = flags
     if enrichment.novelty_seed:
         candidate["constraints"]["_novelty_seed"] = enrichment.novelty_seed
 
@@ -694,10 +702,8 @@ def _allocate_primary_findings(
     return allocations
 
 
-# Per-category implementation/flag-protection mechanism catalogs. This is the
-# "core mechanism" axis that prevents implementation collapse (e.g. every RE
-# challenge defaulting to XOR). Operators can override via
-# generation-profiles.json -> categories.<cat>.mechanisms.
+# Per-category advisory mechanism vocabulary. These examples help the model talk
+# about diversity, but code must not assign one as a binding exploit mechanism.
 _DEFAULT_MECHANISMS: dict[str, tuple[str, ...]] = {
     "re": (
         "xor_keystream",
@@ -734,45 +740,15 @@ _DEFAULT_MECHANISMS: dict[str, tuple[str, ...]] = {
 }
 
 
-def _mechanisms_for_category(category: str) -> tuple[str, ...]:
-    configured = _generation_profile_category(category).get("mechanisms")
+def _advisory_mechanisms_for_category(category: str) -> tuple[str, ...]:
+    configured = _generation_profile_category(category).get("advisory_mechanisms")
+    if not isinstance(configured, list):
+        configured = _generation_profile_category(category).get("mechanisms")
     if isinstance(configured, list):
         cleaned = tuple(m for m in configured if isinstance(m, str) and m.strip())
         if cleaned:
             return cleaned
     return _DEFAULT_MECHANISMS.get(category, ("generic_gate",))
-
-
-def _allocate_core_mechanisms(
-    category: str, count: int, *, start_offset: int = 0
-) -> list[str]:
-    """Deterministically rotate a flag-protection / core mechanism per task.
-
-    Round-robin over the category catalog so a batch spreads evenly across
-    mechanisms instead of every task collapsing to the same default (XOR for
-    RE, win-function for PWN, weak-creds for Web). ``start_offset`` continues
-    the rotation across batches (so a second batch does not restart at the same
-    mechanism). Deterministic -> testable; the assigned mechanism is later
-    injected as a binding design constraint.
-    """
-    catalog = _mechanisms_for_category(category)
-    base = max(0, start_offset)
-    return [catalog[(base + i) % len(catalog)] for i in range(max(0, count))]
-
-
-def _mechanism_offset(category: str) -> int:
-    """Cross-batch rotation offset = how many prior designs of this category
-    are recorded in the experience ledger (mod catalog size). Best-effort."""
-    try:
-        from services.design_ledger import recent_entries
-
-        prior = len(
-            recent_entries(ProjectPaths.discover(), category=category, limit=5000)
-        )
-        catalog = _mechanisms_for_category(category)
-        return prior % len(catalog)
-    except Exception:  # noqa: BLE001 — offset is an optimization
-        return 0
 
 
 def _diversity_profile(
@@ -799,18 +775,10 @@ def _diversity_profile(
 
 def _generation_profile_category(category: str) -> Mapping[str, Any]:
     try:
-        path = ProjectPaths.discover().generation_profile
-        payload = read_json(path, {})
+        return category_profile_config(category)
     except Exception as exc:  # noqa: BLE001 - missing/malformed profile should not block planning
         _LOGGER.warning("could not read generation profile: %s", exc)
         return {}
-    if not isinstance(payload, Mapping):
-        return {}
-    categories = payload.get("categories")
-    if not isinstance(categories, Mapping):
-        return {}
-    row = categories.get(category)
-    return row if isinstance(row, Mapping) else {}
 
 
 def _positive_int(value: Any, default: int) -> int:

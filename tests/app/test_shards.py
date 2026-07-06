@@ -32,8 +32,9 @@ class ShardTests(unittest.TestCase):
 
         created = split_matrix(matrix, self.paths.shards / "pending", size=1)
 
-        self.assertEqual(len(created), 3)
+        self.assertEqual(len(created), 4)
         self.assertTrue(all(path.exists() for path in created))
+        self.assertTrue(any(path.name.startswith("crypto-") for path in created))
 
     def test_split_challenges_preserves_unknown_design_field(self):
         design = {
@@ -125,6 +126,17 @@ class ShardTests(unittest.TestCase):
 
         claimed = ShardQueue(self.paths).claim("worker-1", category="web")
 
+        self.assertEqual(ShardQueue(self.paths).original_name(claimed), shard.name)
+
+    def test_category_claim_accepts_non_default_category(self):
+        shard = self._write_payload(
+            "crypto-0001.json",
+            {"challenges": [{"id": "crypto-0001", "category": "crypto"}]},
+        )
+
+        claimed = ShardQueue(self.paths).claim("worker-1", category="crypto")
+
+        self.assertIsNotNone(claimed)
         self.assertEqual(ShardQueue(self.paths).original_name(claimed), shard.name)
 
     def test_require_build_attempt_skips_matching_legacy_shard(self):

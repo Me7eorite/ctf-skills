@@ -527,14 +527,14 @@ def _fake_finding(label: str) -> model.ResearchFinding:
     )
 
 
-def _fake_request(difficulty_distribution):
+def _fake_request(difficulty_distribution, *, category: str = "web"):
     from types import MappingProxyType
 
     from domain.research import GenerationRequest
 
     return GenerationRequest(
         id=uuid4(),
-        category="web",
+        category=category,
         topic="JWT key confusion",
         target_count=sum(difficulty_distribution.values()),
         difficulty_distribution=MappingProxyType(dict(difficulty_distribution)),
@@ -621,6 +621,9 @@ def test_plan_candidates_applies_hermes_planner_enrichment_for_hard():
                 chain_outline="A → B → C reach flag.",
                 scenario_seed="Internal supervisor approval portal.",
                 novelty_seed=None,
+                chosen_mechanism="approval-chain token confusion",
+                semantic_fingerprint="approval-token-confusion",
+                diversity_rationale="Different state transition than sibling tasks.",
                 raw_response="{...}",
             )
 
@@ -794,39 +797,34 @@ def test_generate_replaces_archived_tasks(session_factory: SessionFactory):
     assert {t.id for t in second}.isdisjoint({t.id for t in first})
 
 
-def test_allocate_core_mechanisms_rotates_round_robin():
-    mechs = planning_module._allocate_core_mechanisms("re", 10)
-    catalog = planning_module._DEFAULT_MECHANISMS["re"]
-    # 10 tasks over a 10-item catalog → every mechanism used exactly once,
-    # so XOR is 1/10, not the whole batch.
-    assert len(mechs) == 10
-    assert set(mechs) == set(catalog)
-    assert mechs.count("xor_keystream") == 1
-    # no adjacent repeats
-    assert all(a != b for a, b in zip(mechs, mechs[1:]))
+def test_plan_candidates_do_not_preassign_core_mechanism():
+    findings = [_fake_finding("symbolic execution")]
+    request = _fake_request({"easy": 1}, category="re")
+    run = _fake_run()
 
+    [candidate] = planning_module._plan_candidates(request, run, findings)
+    flags = candidate["diversity_flags"]
 
-def test_allocate_core_mechanisms_spreads_when_more_tasks_than_catalog():
-    catalog = planning_module._DEFAULT_MECHANISMS["re"]
-    mechs = planning_module._allocate_core_mechanisms("re", len(catalog) + 3)
-    # even spread: max count - min count <= 1
-    counts = {m: mechs.count(m) for m in catalog}
-    assert max(counts.values()) - min(counts.values()) <= 1
+    assert "core_mechanism" not in flags
+    assert flags["chosen_mechanism"] is None
+    assert flags["semantic_fingerprint"] is None
+    assert "symbolic execution" not in flags["advisory_mechanism_vocabulary"]
+    assert flags["advisory_mechanism_vocabulary"] == planning_module._DEFAULT_MECHANISMS["re"]
 
 
 def test_mechanisms_for_category_honors_profile_override(monkeypatch):
     monkeypatch.setattr(
         planning_module,
         "_generation_profile_category",
-        lambda category: {"mechanisms": ["custom_a", "custom_b"]},
+        lambda category: {"advisory_mechanisms": ["custom_a", "custom_b"]},
     )
-    assert planning_module._mechanisms_for_category("re") == ("custom_a", "custom_b")
+    assert planning_module._advisory_mechanisms_for_category("re") == ("custom_a", "custom_b")
 
 
 def test_mechanisms_for_category_falls_back_to_default(monkeypatch):
     monkeypatch.setattr(
         planning_module, "_generation_profile_category", lambda category: {}
     )
-    assert planning_module._mechanisms_for_category("re") == (
+    assert planning_module._advisory_mechanisms_for_category("re") == (
         planning_module._DEFAULT_MECHANISMS["re"]
     )

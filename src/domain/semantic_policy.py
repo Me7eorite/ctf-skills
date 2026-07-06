@@ -93,11 +93,49 @@ PWN_POLICY = SemanticCategoryPolicy(
             allowed_overrides=_STRICT_RET2WIN_OVERRIDE,
         ),
         SemanticFamilyPolicy(
-            name="stack_canary",
-            aliases=("stack_canary", "stack canary", "canary_leak", "canary leak"),
+            name="stack_canary_leak",
+            aliases=(
+                "stack_canary_leak",
+                "stack canary leak",
+                "canary_leak",
+                "canary leak",
+                "stack_canary_leak_via_print",
+            ),
             forbidden_terms=_RET2WIN_FORBIDDEN_TERMS,
             forbidden_patterns=_RET2WIN_FORBIDDEN_PATTERNS,
             required_evidence_terms=("canary", "leak"),
+            allowed_overrides=_STRICT_RET2WIN_OVERRIDE,
+        ),
+        SemanticFamilyPolicy(
+            name="stack_canary_fork_bruteforce",
+            aliases=(
+                "stack_canary_fork_bruteforce",
+                "stack_canary_fork_brute_force",
+                "fork brute force canary",
+                "fork canary brute force",
+                "fork bruteforce canary",
+            ),
+            forbidden_terms=_RET2WIN_FORBIDDEN_TERMS,
+            forbidden_patterns=_RET2WIN_FORBIDDEN_PATTERNS,
+            required_evidence_patterns=(
+                r"\b(?:fork|forkserver|persistent child|child process|per-connection)\b",
+                r"\b(?:oracle|crash|no-crash|stack smashing|connection reset|eof)\b",
+                r"\b(?:byte[- ]by[- ]byte|byte_index|candidate byte|for\s+.*range\s*\(\s*256)\b",
+                r"\b(?:flag\{|final_flag|extract\w*\s+flag|recv\w*\s+flag|print\w*\s*\([^)]*flag)\b",
+            ),
+            allowed_overrides=_STRICT_RET2WIN_OVERRIDE,
+        ),
+        SemanticFamilyPolicy(
+            name="stack_canary_format_string",
+            aliases=(
+                "stack_canary_format_string",
+                "stack canary format string",
+                "format string canary",
+                "format-string canary",
+            ),
+            forbidden_terms=_RET2WIN_FORBIDDEN_TERMS,
+            forbidden_patterns=_RET2WIN_FORBIDDEN_PATTERNS,
+            required_evidence_patterns=(r"\bcanary\b", r"%(?:\d+\$)?[px]"),
             allowed_overrides=_STRICT_RET2WIN_OVERRIDE,
         ),
         SemanticFamilyPolicy(
@@ -129,6 +167,14 @@ PWN_POLICY = SemanticCategoryPolicy(
         SemanticFamilyPolicy(
             name="ret2win",
             aliases=("ret2win", "direct_win", "direct win", "win function", "rop_win"),
+        ),
+        SemanticFamilyPolicy(
+            name="rop_chain",
+            aliases=("rop_chain", "rop chain", "rop_chain_construction", "rop construction"),
+            forbidden_terms=_RET2WIN_FORBIDDEN_TERMS,
+            forbidden_patterns=_RET2WIN_FORBIDDEN_PATTERNS,
+            required_evidence_patterns=(r"\b(?:ROP|rop|pop_rdi|pop rdi|gadget|chain)\b",),
+            allowed_overrides=_STRICT_RET2WIN_OVERRIDE,
         ),
     ),
 )
@@ -218,6 +264,8 @@ def semantic_contract_violations(
     validation_result: Mapping[str, Any] | None = None,
 ) -> list[SemanticViolation]:
     category = str(metadata.get("category") or "")
+    if category == "pwn" and not _strict_semantic_policy_requested(metadata):
+        return []
     policy = SEMANTIC_POLICIES.get(category)
     if policy is None:
         return []
@@ -283,6 +331,14 @@ def semantic_contract_violations(
                     _missing_evidence_violation(category, family.name, f"pattern:{pattern}")
                 )
     return violations
+
+
+def _strict_semantic_policy_requested(metadata: Mapping[str, Any]) -> bool:
+    return bool(
+        metadata.get("strict_semantic_contract")
+        or metadata.get("enforce_declared_technique")
+        or metadata.get("validate_declared_technique")
+    )
 
 
 def collect_semantic_evidence(

@@ -744,6 +744,22 @@ function timeoutLabel(attempt) {
   return `${Math.floor(seconds)}s (${attempt.timeout_source || "-"})`;
 }
 
+function renderResumeProgress(summary) {
+  if (!summary?.source_shard) return "-";
+  const stages = Array.isArray(summary.carried_stages) && summary.carried_stages.length
+    ? ` · 已继承 ${summary.carried_stages.join("/")}`
+    : "";
+  const percent = Number(summary.source_percent);
+  const sourceState = Number.isFinite(percent) && summary.source_stage
+    ? ` · 来源 ${summary.source_stage}/${summary.source_status || "-"} ${Math.floor(percent)}%`
+    : "";
+  return `
+    <span class="ba-resume-source" title="${escapeHtml(summary.source_shard)}">
+      ${escapeHtml(shortShardName(summary.source_shard))}
+    </span>${escapeHtml(stages + sourceState)}
+  `;
+}
+
 function designTaskLabel(attempt) {
   const title = String(attempt.title || "").trim();
   if (title && !/^题目设计\s+[0-9a-f-]{6,}$/i.test(title)) return title;
@@ -1014,6 +1030,7 @@ function renderDetail(root) {
         <div><dt>文件队列</dt><dd>${fileQueueToken(attempt.shard_basename)}</dd></div>
         <div><dt>worker</dt><dd>${escapeHtml(attempt.worker || "-")}</dd></div>
         <div><dt>执行轮次</dt><dd>${escapeHtml(executionCountLabel(attempt))}</dd></div>
+        <div><dt>恢复来源</dt><dd>${renderResumeProgress(attempt.resume_progress)}</dd></div>
         <div><dt>Hermes 超时</dt><dd>${escapeHtml(timeoutLabel(attempt))}</dd></div>
         <div><dt>开始时间</dt><dd>${escapeHtml(formatDateTime(attempt.started_at))}</dd></div>
         <div><dt>完成时间</dt><dd>${escapeHtml(formatDateTime(attempt.finished_at))}</dd></div>
@@ -1042,7 +1059,7 @@ function renderDetail(root) {
         <div><div class="card-title">进度事件</div></div>
         <span class="pill" id="ba-progress-event-count">${(attempt.progress_events || []).length}</span>
       </div>
-      ${renderProgressEvents(attempt.progress_events || [])}
+      ${renderProgressEvents(attempt.progress_events || [], attempt.shard_basename)}
     </section>
   `;
 }
@@ -1122,23 +1139,32 @@ function renderRepairRuns(runs) {
   `;
 }
 
-function renderProgressEvents(events) {
+function renderProgressEvents(events, currentShard = "") {
   return `
     <div id="ba-progress-events" class="ba-events">
       ${events.length
-        ? events.map(renderProgressEvent).join("")
+        ? events.map((event) => renderProgressEvent(event, currentShard)).join("")
         : `<div class="empty" data-empty-events>没有进度事件</div>`}
     </div>
   `;
 }
 
-function renderProgressEvent(event) {
+function renderProgressEvent(event, currentShard = "") {
   const tone = event.message?.startsWith("carry-forward:") ? "warning" : "normal";
+  const shard = event.shard || "";
+  const sourceLabel = shard && currentShard && shard !== currentShard ? "活动轮" : "当前轮";
   return `
     <div class="ba-event ba-event-${tone} mono" data-progress-event-id="${event.id}">
-      #${event.id} ${escapeHtml(event.stage)}/${escapeHtml(event.status)}
-      ${event.challenge_id ? escapeHtml(event.challenge_id) : "shard"}
-      ${escapeHtml(event.message || "")}
+      <div>
+        #${event.id} ${escapeHtml(event.stage)}/${escapeHtml(event.status)}
+        ${event.challenge_id ? escapeHtml(event.challenge_id) : "shard"}
+        ${escapeHtml(event.message || "")}
+      </div>
+      ${shard ? `
+        <div class="ba-event-meta">
+          ${escapeHtml(sourceLabel)} · ${escapeHtml(shortShardName(shard))}
+        </div>
+      ` : ""}
     </div>
   `;
 }
@@ -1168,7 +1194,10 @@ function patchDetailEvents(nextDetail) {
       || appended.some((event, index) => knownIds.has(event.id)
       || (index > 0 && appended[index - 1].id >= event.id))) return false;
   container.querySelector("[data-empty-events]")?.remove();
-  container.insertAdjacentHTML("beforeend", appended.map(renderProgressEvent).join(""));
+  container.insertAdjacentHTML(
+    "beforeend",
+    appended.map((event) => renderProgressEvent(event, state.detail?.shard_basename || "")).join(""),
+  );
   for (const event of appended) {
     const node = container.querySelector(`[data-progress-event-id="${event.id}"]`);
     if (node) detailEventNodes.set(event.id, node);

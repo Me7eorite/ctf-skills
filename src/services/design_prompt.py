@@ -597,25 +597,31 @@ def _render_design_task(task: DesignTask) -> str:
         f"- scenario: {task.scenario}",
         f"- constraints: {_stable_json(task.constraints)}",
     ]
-    mechanism = _assigned_mechanism(task)
-    if mechanism:
+    vocabulary = _advisory_mechanism_vocabulary(task)
+    if vocabulary:
         lines.append(
-            f"- assigned core_mechanism: `{mechanism}` — the flag/key protection "
-            "(re), exploitation primitive (pwn), or solve shape (web) MUST use "
-            "THIS mechanism. Do NOT default to a generic shortcut (e.g. plain "
-            "XOR for re, win-function for pwn, weak-creds for web); the assigned "
-            "mechanism is what keeps the batch diverse."
+            "- advisory_mechanism_vocabulary: "
+            + json.dumps(vocabulary, ensure_ascii=False, sort_keys=True)
+            + " — examples only; choose the mechanism from the request, "
+            "research evidence, and coherent design."
         )
+    lines.extend(
+        [
+            "- chosen_mechanism: MUST be declared by the design model, not pre-assigned by code.",
+            "- semantic_fingerprint: MUST summarize the final mechanism/asset flow in one stable phrase.",
+            "- diversity_rationale: MUST explain why this design differs from sibling tasks without relying on a forced template.",
+        ]
+    )
     return "\n".join(lines)
 
 
-def _assigned_mechanism(task: DesignTask) -> str | None:
+def _advisory_mechanism_vocabulary(task: DesignTask) -> list[str]:
     flags = getattr(task, "diversity_flags", None)
     if isinstance(flags, Mapping):
-        value = flags.get("core_mechanism")
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return None
+        value = flags.get("advisory_mechanism_vocabulary")
+        if isinstance(value, (list, tuple)):
+            return [str(item) for item in value if str(item).strip()]
+    return []
 
 
 def _render_prior_designs(prior_designs: Sequence[Mapping[str, Any]]) -> str:

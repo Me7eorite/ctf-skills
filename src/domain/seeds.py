@@ -12,12 +12,13 @@ from typing import Any
 
 from core.jsonio import read_json, write_json
 from core.paths import ProjectPaths
-from core.queue import SUPPORTED_CATEGORIES, split_challenges
+from core.queue import split_challenges
+from domain.generation_profile import generation_profile
 
 # 允许的难度值
 DIFFICULTIES = {"easy", "medium", "hard", "expert"}
-# 种子 ID 格式: 类别-小写字母数字组合（如 web-0001、pwn-sqli-basic）
-SEED_ID = re.compile(r"^(web|pwn|re)-[a-z0-9][a-z0-9-]*$")
+# 种子 ID 格式: 类别-小写字母数字组合（如 web-0001、crypto-basic）
+SEED_ID = re.compile(r"^[a-z0-9][a-z0-9-]*-[a-z0-9][a-z0-9-]*$")
 # 必须为非空字符串的文本字段
 REQUIRED_TEXT_FIELDS = (
     "id",                  # 题目 ID
@@ -122,11 +123,11 @@ def validate_seed(seed: Any) -> dict[str, Any]:
     校验规则:
       - 必须是 dict
       - 必填文本字段不能为空
-      - category 必须是 web/pwn/re 之一
+      - category 必须是非空安全类别代码
       - id 必须符合 "{类别}-xxx" 格式
       - difficulty 必须是 easy/medium/hard/expert
       - points 必须是正整数
-      - web/pwn 必须指定有效端口（1-65535）
+      - 需要网络服务的 profile 必须指定有效端口（1-65535）
 
     规范化操作:
       - 文本字段做 strip
@@ -151,12 +152,12 @@ def validate_seed(seed: Any) -> dict[str, Any]:
     # 2. 类别校验
     category = normalized["category"].lower()
     normalized["category"] = category
-    if category not in SUPPORTED_CATEGORIES:
-        raise ValueError("category 必须是 web、pwn 或 re")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", category):
+        raise ValueError("category 必须是安全的非空类别代码")
 
     # 3. ID 格式校验
     if not SEED_ID.fullmatch(normalized["id"].lower()):
-        raise ValueError("id 必须类似 web-0001、pwn-0001 或 re-0001")
+        raise ValueError("id 必须类似 web-0001 或 crypto-0001")
     normalized["id"] = normalized["id"].lower()
     # ID 前缀必须与 category 匹配
     if not normalized["id"].startswith(f"{category}-"):
@@ -177,14 +178,14 @@ def validate_seed(seed: Any) -> dict[str, Any]:
         raise ValueError("points 必须是正整数")
     normalized["points"] = points
 
-    # 6. 端口校验（仅 web/pwn 需要）
-    if category in {"web", "pwn"}:
+    # 6. 端口校验（需要网络服务的 profile）
+    if generation_profile(category).capabilities.requires_network_service:
         try:
             port = int(normalized.get("port", 0))
         except (TypeError, ValueError) as exc:
-            raise ValueError("Web/Pwn 种子必须配置有效端口（1-65535）") from exc
+            raise ValueError("网络服务种子必须配置有效端口（1-65535）") from exc
         if not 1 <= port <= 65535:
-            raise ValueError("Web/Pwn 种子必须配置有效端口（1-65535）")
+            raise ValueError("网络服务种子必须配置有效端口（1-65535）")
         normalized["port"] = port
 
     return normalized

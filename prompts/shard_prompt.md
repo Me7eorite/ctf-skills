@@ -105,6 +105,12 @@ layout unless the failure explicitly requires a local correction. For Re
 repairs, the solver and `validate.sh` must derive the flag from the artifact in
 `attachments/`; do not introduce `dist/`, `metadata.json`, `challenge.yml`, or
 Docker/Compose files as solver inputs.
+For repair and retry runs, read the latest validation-history context before
+choosing a repair route. Treat validation-history as authoritative over
+`logs/report.json`, repair summaries, and any Hermes self-report. If the latest
+failure is `contract_failed`, repair the contract, artifact hygiene, or
+semantic blocker first; do not keep tuning an older timeout or solver-I/O
+symptom.
 
 All required files must live directly under that canonical challenge root. Do
 not run or create a separate scaffolder that writes `output/challenges/...`
@@ -540,29 +546,13 @@ authoritative `validate/passed` or `validate/failed` event.
   Use `PWNLIB_LOG_LEVEL=debug` or `context(..., log_level='debug')` while tuning
   menu synchronization, leaks, offsets, and payload bytes; drop back to concise
   output for normal validation.
-- When leaking stack canaries through `%n$p`, scan a broad bounded range and
-  identify canary-like values by stability across multiple fresh connections
-  and low byte `0x00`. Exclude NULL/small integers and obvious stack/libc/PIE
-  addresses such as `0x7fff...`, `0x7f...`, and `0x55...`; a pointer whose low
-  byte is 00 is not a canary. Do not reject values merely because they are
-  greater than `2^48`; amd64 canaries commonly use the upper seven bytes and
-  will often exceed that threshold.
-- Never fall back to guessed stack addresses such as `0x7fffffffxxxx` without a
-  live leak that proves the address for the current process. Establish a
-  reliable stack/PIE/libc leak first or switch to a provably valid exploit chain.
-- For fork-per-connection canary brute force, print byte-level progress
-  diagnostics (`byte_index`, candidate byte, attempt count), set short
-  connect/recv timeouts for every attempt, fail before the validation budget is
-  exhausted with the current position, and improve the crash oracle instead of
-  blindly waiting on slow sockets.
-- For ROP/ret2libc/PIE Pwn tasks, follow a structured debug loop before
-  finishing the exploit: identify mitigations with `checksec`/`file`, compute
-  the exact overflow offset with cyclic/core/headless gdb, discover gadgets from
-  the actual ELF/libc, leak a GOT/libc or PIE pointer when needed, verify
-  computed bases are plausible and page-aligned, add an amd64 `ret` stack
-  alignment gadget when libc calls crash around `movaps`, and retest against
-  the container service path. Do not ship guessed gadget, libc, PIE, or offset
-  constants.
+- For Pwn, choose the exploitation technique from the design and evidence. Use
+  bounded diagnostics appropriate to that technique, derive constants from the
+  final player artifact or live service behavior, and do not ship guessed
+  addresses, stale offsets, or payloads that are unrelated to the declared
+  design. The xinetd/chroot scaffold is a deployment contract only; it does not
+  imply ret2libc, canary brute force, SROP, ORW, GOT overwrite, ret2win, fixed
+  symbols, fixed function names, or any specific payload structure.
 - Write `writenup/pwn_debug_report.json` for Pwn challenges when the solve path
   needed debugging or when the exploit is non-trivial. Keep it bounded and
   organizer-facing; include keys such as `checksec`, `binary`, `libc`,
@@ -703,15 +693,17 @@ violates any of them fails validation regardless of what `validate.sh` prints:
   `readelf -sW "$metadata_artifact"`, and `objdump -d "$metadata_artifact"`
   over handwritten constants; do not derive exploit offsets from `deploy/src/`
   after host build has synchronized the runtime ELF into attachments.
-- Pwn source, metadata, writeup, and `writenup/exp.py` MUST match the declared
-  primary technique. If the design says SROP/ORW/ret2libc/GOT overwrite, do not
-  add hidden `read_flag()` / `win()` / ret2win shortcuts and do not solve by
-  returning directly to such a helper unless ret2win is explicitly declared.
-  SROP writeups and solvers must actually use sigreturn/SigreturnFrame/syscall
-  evidence.
+- Pwn source, metadata, writeup, and `writenup/exp.py` SHOULD be self-consistent
+  with the model-chosen mechanism. The validator checks solvability, anti-cheat,
+  artifact integrity, and deployment ABI; it does not require a fixed exploit
+  family, helper function name, symbol table shape, or payload structure.
 - `validate.sh` MUST NOT contain `docker volume rm`, `docker volume prune`,
   Docker prune commands, or `docker-compose down -v`/`--volumes`. Destructive
   Docker cleanup is rejected before execution.
+- Final challenge directories MUST NOT contain repair residue such as
+  `__pycache__/`, `*.pyc`, `debug_*`, `test_behavior.py`, backup/temp files,
+  nested `output/` trees, or stray deploy flag files. Clean these before
+  reporting any stage as passed.
 
 ## 5. Document
 
@@ -800,7 +792,7 @@ At minimum:
 {
   "id": "<id>",
   "title": "<title>",
-  "category": "<web|pwn|re>",
+  "category": "<requested category>",
   "difficulty": "<easy|medium|hard|expert>",
   "template": "<template>",
   "runtime": "<web runtime or null>",
@@ -830,6 +822,10 @@ Write one JSON report to:
 Include each challenge ID, path, design/build/solve status, selected runtime or
 artifact format, commands executed, and errors. A shard is successful only when
 every challenge has a real artifact and a passing reference solve.
+`logs/report.json` is only a Hermes self-report. Do not use it to promote a
+failed validation-history result to passed/repaired, and do not finish with
+"probably works" or "repair is feasible"; rerun the validator path and require
+a real final flag.
 
 # Final Constraints
 

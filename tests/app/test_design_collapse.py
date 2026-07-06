@@ -8,13 +8,13 @@ from domain.design.collapse import (
 )
 
 
-def _ch(cid, mechanism, technique="t", shape=None, category="re", difficulty="easy"):
+def _ch(cid, semantic_fingerprint, technique="t", shape=None, category="re", difficulty="easy"):
     challenge = {
         "id": cid,
         "category": category,
         "difficulty": difficulty,
         "primary_technique": technique,
-        "diversity_flags": {"core_mechanism": mechanism},
+        "diversity_flags": {"semantic_fingerprint": semantic_fingerprint},
     }
     if shape:
         challenge["asset_flow"] = [
@@ -31,8 +31,8 @@ def test_fingerprint_is_stable_and_shape_sensitive():
     assert challenge_fingerprint(a) != challenge_fingerprint(c)  # mechanism differs
 
 
-def test_batch_collapse_flags_dominant_mechanism():
-    # 5 of 6 use XOR -> mechanism collapse.
+def test_batch_collapse_flags_dominant_semantic_fingerprint():
+    # 5 of 6 use the same fingerprint -> semantic collapse.
     batch = [
         _ch("re-1", "xor_keystream", "ptrace"),
         _ch("re-2", "xor_keystream", "rdtsc"),
@@ -43,8 +43,8 @@ def test_batch_collapse_flags_dominant_mechanism():
     ]
     report = compute_batch_collapse(batch)
     assert report["collapsed"] is True
-    assert report["mechanism"]["dominant"] == "xor_keystream"
-    assert any("core_mechanism collapse" in r for r in report["reasons"])
+    assert report["semantic_fingerprint"]["dominant"] == "xor_keystream"
+    assert any("semantic_fingerprint collapse" in r for r in report["reasons"])
 
 
 def test_batch_diverse_mechanisms_not_collapsed():

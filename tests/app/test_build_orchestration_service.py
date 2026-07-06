@@ -28,6 +28,7 @@ from persistence.repositories import BuildAttemptsRepository, ExecutionsReposito
 from persistence.session import SessionFactory, transaction
 from services import BuildOrchestrationError, BuildOrchestrationService
 from services.build_orchestration_service import (
+    GENERIC_MATRIX_FIELDS,
     MATRIX_FIELDS,
     STAGING_ORPHAN_GRACE_SECONDS,
 )
@@ -357,6 +358,58 @@ def test_render_payload_uses_exact_category_matrix_fields(
     )
 
     assert set(payload["challenges"][0]) == set(MATRIX_FIELDS[category]) | {"design"}
+
+
+def test_render_payload_allows_non_default_category_with_generic_profile(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    now = datetime.now(timezone.utc)
+    task = DesignTask(
+        id=uuid4(),
+        generation_request_id=uuid4(),
+        research_run_id=uuid4(),
+        task_no=1,
+        challenge_id="crypto-0001",
+        title="Matrix contract",
+        category="crypto",
+        difficulty="easy",
+        primary_technique="lattice toy example",
+        learning_objective="Recover the secret through the distributed artifact.",
+        points=100,
+        port=None,
+        scenario="distinct scenario",
+        constraints={},
+        evidence_summary="",
+        finding_ids=(),
+        status="designed",
+        created_at=now,
+        updated_at=now,
+    )
+    design = ChallengeDesign(
+        id=uuid4(),
+        design_task_id=task.id,
+        design_attempt_id=uuid4(),
+        payload={"event": {"flag_format": "flag{...}"}, "challenges": [{}]},
+        summary="summary",
+        flag_format="flag{...}",
+        validation_notes="passed",
+        quality_gate_passed=True,
+        status="draft",
+        created_at=now,
+        updated_at=now,
+    )
+
+    payload = _service(tmp_path, session_factory).render_shard_payload(
+        task,
+        design,
+        build_attempt_id=uuid4(),
+    )
+
+    challenge = payload["challenges"][0]
+    assert set(challenge) == set(GENERIC_MATRIX_FIELDS) | {"design"}
+    assert challenge["category"] == "crypto"
+    assert challenge["capabilities"]["requires_solver"] is True
 
 
 def test_ineligible_batch_is_all_or_nothing(
@@ -700,7 +753,7 @@ def test_default_retry_reuses_container_and_appends_execution(
         assert claimed.status == "claimed"
 
 
-def test_retry_progress_carry_forward_ignores_terminal_failed_progress(
+def test_retry_progress_carry_forward_keeps_snapshot_without_copying_events(
     tmp_path: Path,
     session_factory: SessionFactory,
     monkeypatch,
@@ -775,9 +828,7 @@ def test_retry_progress_carry_forward_ignores_terminal_failed_progress(
             sa.select(ProgressSnapshot).where(ProgressSnapshot.shard == target_shard)
         ).all()
 
-    assert [(event.stage, event.status, event.percent) for event in events] == [
-        ("build", "passed", 64)
-    ]
+    assert events == []
     assert [(item.stage, item.status, item.percent) for item in snapshots] == [
         ("build", "passed", 64)
     ]

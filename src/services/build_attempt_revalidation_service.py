@@ -263,6 +263,12 @@ class BuildAttemptRevalidationService:
                 raise BuildAttemptRevalidationError(
                     f"failed shard repair context leaks execution path reference: {needle}"
                 )
+        lowered = text.lower()
+        for filename in ("metadata.json", "challenge.yml"):
+            if filename in lowered and ("flag" in lowered or "answer" in lowered):
+                raise BuildAttemptRevalidationError(
+                    f"failed shard repair context suggests reading organizer answer file: {filename}"
+                )
 
     def _failed_payload(
         self,

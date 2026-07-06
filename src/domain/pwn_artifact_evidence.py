@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from core.jsonio import read_json, write_json
+from domain.generation_profile import generation_profile
 from domain.validation_state import VALIDATION_FAILURE_FIELDS
 
 PWN_FINAL_ARTIFACT_REL = "attachments/vuln"
@@ -47,7 +48,7 @@ def final_pwn_artifact_evidence(challenge_dir: Path) -> dict[str, Any] | None:
     """Return final solver evidence derived only from the player attachment."""
 
     metadata = read_json(challenge_dir / "metadata.json", {})
-    if not isinstance(metadata, dict) or metadata.get("category") != "pwn":
+    if not isinstance(metadata, dict) or not _uses_pwn_artifact_evidence(metadata):
         return None
     artifact_rel = _pwn_final_artifact_rel(metadata)
     artifact_prompt_path = f"./{artifact_rel}"
@@ -69,7 +70,7 @@ def final_pwn_artifact_evidence(challenge_dir: Path) -> dict[str, Any] | None:
         "metadata_artifact_sha256": metadata.get("artifact_sha256"),
         "symbols": _readelf_symbols(artifact),
         "checksec": _checksec(artifact),
-        "gadgets": _gadget_summary(artifact),
+        "gadgets": _gadget_summary(artifact, metadata=metadata),
     }
 
 
@@ -128,7 +129,7 @@ def ensure_pwn_solver_evidence(challenge_dir: Path) -> tuple[str, ...]:
 
     metadata_path = challenge_dir / "metadata.json"
     metadata = read_json(metadata_path, {})
-    if not isinstance(metadata, dict) or metadata.get("category") != "pwn":
+    if not isinstance(metadata, dict) or not _uses_pwn_artifact_evidence(metadata):
         return ()
     artifact_rel = _pwn_final_artifact_rel(metadata)
     if artifact_rel == PWN_FINAL_ARTIFACT_REL and metadata.get("artifact") != PWN_FINAL_ARTIFACT_REL:
@@ -190,7 +191,7 @@ def refresh_pwn_debug_report(challenge_dir: Path) -> Path | None:
     """Rewrite writenup/pwn_debug_report.json from the final player attachment only."""
 
     metadata = read_json(challenge_dir / "metadata.json", {})
-    if not isinstance(metadata, dict) or metadata.get("category") != "pwn":
+    if not isinstance(metadata, dict) or not _uses_pwn_artifact_evidence(metadata):
         return None
     artifact_rel = _pwn_final_artifact_rel(metadata)
     artifact_path = challenge_dir / artifact_rel
@@ -225,7 +226,7 @@ def _write_pwn_debug_report(
         },
         "symbols": _readelf_symbols(artifact_path),
         "checksec": _checksec(artifact_path),
-        "gadgets": _gadget_summary(artifact_path),
+        "gadgets": _gadget_summary(artifact_path, metadata=read_json(challenge_dir / "metadata.json", {})),
     }
     report_path = challenge_dir / "writenup" / "pwn_debug_report.json"
     report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -300,6 +301,19 @@ def _pwn_final_artifact_rel(metadata: dict[str, Any]) -> str:
     return PWN_FINAL_ARTIFACT_REL
 
 
+def _uses_pwn_artifact_evidence(metadata: dict[str, Any]) -> bool:
+    profile = generation_profile(str(metadata.get("category") or ""), metadata=metadata)
+    return bool(
+        metadata.get("category") == "pwn"
+        or profile.capabilities.launcher == "xinetd_chroot"
+        or (
+            profile.capabilities.requires_network_service
+            and profile.capabilities.requires_player_artifact
+            and profile.capabilities.requires_solver
+        )
+    )
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -358,7 +372,45 @@ def _checksec(path: Path) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _gadget_summary(path: Path) -> dict[str, Any]:
+def _declared_technique_text(metadata: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for key in (
+        "chosen_mechanism",
+        "primary_technique",
+        "secondary_technique",
+        "learning_objective",
+    ):
+        value = metadata.get(key)
+        if isinstance(value, str):
+            parts.append(value)
+    techniques = metadata.get("techniques")
+    if isinstance(techniques, list):
+        parts.extend(str(item) for item in techniques if item)
+    return " ".join(parts).lower()
+
+
+def _declares_gadget_dependent_technique(metadata: dict[str, Any]) -> bool:
+    text = _declared_technique_text(metadata)
+    return any(
+        token in text
+        for token in (
+            "rop",
+            "ret2",
+            "return oriented",
+            "srop",
+            "orw",
+            "syscall",
+            "gadget",
+        )
+    )
+
+
+def _gadget_summary(path: Path, *, metadata: dict[str, Any]) -> dict[str, Any]:
+    if not _declares_gadget_dependent_technique(metadata):
+        return {
+            "status": "not_applicable",
+            "reason": "metadata does not declare a gadget-dependent technique",
+        }
     try:
         result = subprocess.run(
             ["ROPgadget", "--binary", str(path), "--only", "ret,pop|syscall"],

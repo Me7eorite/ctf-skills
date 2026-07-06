@@ -10,8 +10,10 @@ from pathlib import Path
 from typing import Any
 
 from core.jsonio import read_json, write_json
+from domain.generation_profile import generation_profile
 from domain.pwn_artifact_evidence import PwnArtifactEvidenceError, ensure_pwn_solver_evidence
 from domain.validation_repair_policy import (
+    MECHANIC_ARTIFACT_HYGIENE,
     MECHANIC_ARTIFACT_METADATA,
     MECHANIC_CHALLENGE_YML,
     MECHANIC_COMPOSE_VALIDATE_WRAPPER,
@@ -132,6 +134,8 @@ def auto_repair_challenge(
         actions.extend(_repair_challenge_yml(challenge_dir, metadata))
     if can_run(MECHANIC_DOCUMENT_PAIR):
         actions.extend(_repair_document_pair(challenge_dir))
+    if can_run(MECHANIC_ARTIFACT_HYGIENE):
+        actions.extend(_repair_artifact_hygiene(challenge_dir, metadata))
     if can_run(MECHANIC_SOURCE_EVIDENCE):
         actions.extend(_repair_source_evidence(challenge_dir, metadata))
     if can_run(MECHANIC_ARTIFACT_METADATA):
@@ -161,7 +165,7 @@ def auto_repair_challenge(
 
 
 def _repair_pwn_solver_evidence(challenge_dir: Path, metadata: dict[str, Any]) -> list[str]:
-    if metadata.get("category") != "pwn":
+    if not _pwn_artifact_capable(metadata):
         return []
     try:
         actions = list(ensure_pwn_solver_evidence(challenge_dir))
@@ -171,6 +175,47 @@ def _repair_pwn_solver_evidence(challenge_dir: Path, metadata: dict[str, Any]) -
     if isinstance(refreshed, dict):
         metadata.clear()
         metadata.update(refreshed)
+    return actions
+
+
+def _repair_artifact_hygiene(challenge_dir: Path, metadata: dict[str, Any]) -> list[str]:
+    actions: list[str] = []
+    allow_deploy_flag = bool(metadata.get("allow_deploy_flag_file"))
+    for path in sorted(challenge_dir.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+        if path.is_symlink() or path == challenge_dir:
+            continue
+        try:
+            rel = path.relative_to(challenge_dir).as_posix()
+        except ValueError:
+            continue
+        name = path.name
+        remove = False
+        if path.is_dir():
+            remove = name == "__pycache__" or rel in {
+                "output",
+                "output/challenges",
+                "deploy/output",
+                "deploy/output/challenges",
+                "attachments/output",
+                "attachments/output/challenges",
+            }
+        elif path.is_file():
+            lower = name.lower()
+            remove = (
+                lower.endswith(".pyc")
+                or name.startswith("debug_")
+                or name == "test_behavior.py"
+                or lower.endswith((".bak", ".backup", ".orig", ".tmp"))
+                or lower in {"backup", "backup.py", "exp.py.bak"}
+                or (rel.startswith("deploy/") and "flag" in lower and not allow_deploy_flag)
+            )
+        if not remove:
+            continue
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+        actions.append(f"removed artifact hygiene residue: {rel}")
     return actions
 
 
@@ -585,7 +630,7 @@ def _replace_raw_docker_compose_commands(text: str) -> str:
 def _repair_pwn_validate_readiness_probe(
     challenge_dir: Path, metadata: dict[str, Any]
 ) -> list[str]:
-    if metadata.get("category") != "pwn":
+    if not _pwn_launcher_capable(metadata):
         return []
     validate = challenge_dir / "validate.sh"
     if not validate.is_file():
@@ -701,7 +746,8 @@ def _replace_port_only_nc_probe(text: str) -> str:
 
 
 def _repair_validate_solver_capture(challenge_dir: Path, metadata: dict[str, Any]) -> list[str]:
-    if metadata.get("category") not in {"web", "pwn"}:
+    capabilities = generation_profile(str(metadata.get("category") or ""), metadata=metadata).capabilities
+    if not capabilities.requires_network_service:
         return []
     validate = challenge_dir / "validate.sh"
     if not validate.is_file():
@@ -750,7 +796,7 @@ def _repair_validate_solver_capture(challenge_dir: Path, metadata: dict[str, Any
 
 
 def _repair_pwn_xinetd_scaffold(challenge_dir: Path, metadata: dict[str, Any]) -> list[str]:
-    if metadata.get("category") != "pwn" or not _looks_like_pwn_xinetd(challenge_dir, metadata):
+    if not _pwn_launcher_capable(metadata) or not _looks_like_pwn_xinetd(challenge_dir, metadata):
         return []
     if not _PWN_XINETD_SCAFFOLD.is_dir():
         return []
@@ -827,6 +873,23 @@ def _looks_like_pwn_xinetd(challenge_dir: Path, metadata: dict[str, Any]) -> boo
             "deploy/_files/ctf.xinetd",
             "deploy/_files/etc/xinetd.d/ctf",
             "deploy/_files/etc/xinetd.d/chal",
+        )
+    )
+
+
+def _pwn_launcher_capable(metadata: dict[str, Any]) -> bool:
+    profile = generation_profile(str(metadata.get("category") or ""), metadata=metadata)
+    return metadata.get("category") == "pwn" or profile.capabilities.launcher == "xinetd_chroot"
+
+
+def _pwn_artifact_capable(metadata: dict[str, Any]) -> bool:
+    profile = generation_profile(str(metadata.get("category") or ""), metadata=metadata)
+    return bool(
+        _pwn_launcher_capable(metadata)
+        or (
+            profile.capabilities.requires_player_artifact
+            and profile.capabilities.requires_solver
+            and profile.capabilities.requires_network_service
         )
     )
 

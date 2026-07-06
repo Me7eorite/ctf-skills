@@ -22,6 +22,7 @@ from typing import Any, Mapping
 from core.clock import beijing_now_isoformat
 from core.jsonio import read_json, write_json
 from core.paths import ProjectPaths
+from domain.generation_profile import generation_profile
 from domain.pwn_debug import classify_pwn_failure_stage, run_pwn_debug
 from domain.semantic_policy import (
     semantic_contract_error_messages,
@@ -90,6 +91,15 @@ _PWN_CANARY_LITERAL_ASSIGN_RE = re.compile(
 )
 _PWN_CANARY_LITERAL_RETURN_RE = re.compile(
     r"(?im)^\s*return\s+(0x[0-9a-f_]+|\d+)\b"
+)
+_PWN_CANARY_HEX_LITERAL_RE = re.compile(
+    r"""(?i)\b(?:accepted_)?canary\b[^\n]{0,80}["']([0-9a-f]{16})["']"""
+)
+_PWN_CANARY_EMPTY_START_RE = re.compile(
+    r"""(?im)^\s*canary\s*=\s*(?:b?["']{2}|bytearray\(\))\s*$"""
+)
+_PWN_CANARY_NULL_APPEND_RE = re.compile(
+    r"""(?is)\bcanary\s*(?:\+=|=\s*canary\s*\+)\s*(?:b["']\\x00["']|bytes\(\[0\]\))"""
 )
 _PWN_CANARY_ACCEPT_RE = re.compile(
     r"(?i)\b(?:accepted_canary|candidate|canary)\b"
@@ -1455,16 +1465,6 @@ def _pwn_runtime_contract_errors(challenge_dir: Path) -> list[str]:
             "without exporting them; the inner shell sees empty host/port"
         )
 
-    exp_text = _read_text(challenge_dir / "writenup" / "exp.py")
-    if exp_text and "canary" in exp_text.lower() and _PWN_CANARY_WIDTH_FILTER_RE.search(
-        exp_text
-    ):
-        errors.append(
-            "writenup/exp.py uses canary leak filtering by 2^48; stack canaries "
-            "should be selected by stable %n$p leaks and low byte 0x00"
-        )
-    if exp_text and "canary" in exp_text.lower():
-        errors.extend(_pwn_canary_selection_errors(exp_text))
     return errors
 
 
@@ -1483,6 +1483,17 @@ def _pwn_canary_selection_errors(exp_text: str) -> list[str]:
             "like a stack/libc/PIE address or small value: "
             + ", ".join(sorted(set(bad_literals))[:5])
         )
+    if _pwn_fork_bruteforce_canary_starts_empty(exp_text):
+        errors.append(
+            "writenup/exp.py fork canary brute force starts from an empty canary "
+            "and appends the NUL byte later; amd64 canaries must start with "
+            "b\"\\x00\" and brute-force the remaining seven bytes"
+        )
+    if _pwn_empty_response_claims_success(exp_text):
+        errors.append(
+            "writenup/exp.py treats an empty final payload response as success; "
+            "the solver must require a flag token from the final response"
+        )
     if (
         _PWN_CANARY_LOW_BYTE_ONLY_RE.search(nearby)
         and not re.search(r"\b(stable|stability|same\s+index|position|exclude|address)\b", nearby, re.IGNORECASE)
@@ -1498,6 +1509,7 @@ def _pwn_canary_selection_errors(exp_text: str) -> list[str]:
 def _pwn_literal_canary_candidates(exp_text: str) -> list[str]:
     candidates: list[str] = []
     candidates.extend(match.group(1) for match in _PWN_CANARY_LITERAL_ASSIGN_RE.finditer(exp_text))
+    candidates.extend(match.group(1) for match in _PWN_CANARY_HEX_LITERAL_RE.finditer(exp_text))
     lines = exp_text.splitlines()
     for index, line in enumerate(lines):
         match = _PWN_CANARY_LITERAL_RETURN_RE.search(line)
@@ -1514,10 +1526,15 @@ def _pwn_literal_canary_candidates(exp_text: str) -> list[str]:
 
 
 def _pwn_canary_candidate_is_implausible(value: str | int) -> bool:
+    raw = str(value).replace("_", "").strip()
     try:
-        candidate = int(str(value).replace("_", ""), 0)
+        candidate = int(raw, 0)
     except ValueError:
-        return False
+        if re.fullmatch(r"[0-9a-fA-F]{16}", raw):
+            data = bytes.fromhex(raw)
+            candidate = int.from_bytes(data, "little")
+        else:
+            return False
     if candidate == 0 or candidate < 0x1000:
         return True
     # Canonical userland addresses commonly seen in generated bad solvers:
@@ -1526,6 +1543,30 @@ def _pwn_canary_candidate_is_implausible(value: str | int) -> bool:
         0x7FFF00000000 <= candidate <= 0x7FFFFFFFFFFF
         or 0x7F0000000000 <= candidate <= 0x7FFFFFFFFFFF
         or 0x550000000000 <= candidate <= 0x57FFFFFFFFFF
+    )
+
+
+def _pwn_fork_bruteforce_canary_starts_empty(exp_text: str) -> bool:
+    lower = exp_text.lower()
+    if "canary" not in lower or not any(token in lower for token in ("brute", "fork", "byte-by-byte", "byte_index")):
+        return False
+    return bool(_PWN_CANARY_EMPTY_START_RE.search(exp_text) and _PWN_CANARY_NULL_APPEND_RE.search(exp_text))
+
+
+def _pwn_empty_response_claims_success(exp_text: str) -> bool:
+    lower = exp_text.lower()
+    if "flag{" in lower:
+        return False
+    if not any(token in lower for token in ("response", "resp", "data")):
+        return False
+    return bool(
+        re.search(
+            r"\b(?:len\((?:response|resp|data)\)\s*==\s*0|"
+            r"(?:response|resp|data)\s*==\s*b?['\"]{2})",
+            exp_text,
+            re.I,
+        )
+        and re.search(r"\b(?:success|solved|repaired|print\s*\()", exp_text, re.I)
     )
 
 
@@ -1713,9 +1754,14 @@ def _file_contains_bytes(path: Path, needle: str) -> bool:
     return needle.encode("utf-8", "ignore") in data
 
 
-def _delivered_artifact_roots(challenge_dir: Path, category: str | None) -> list[Path]:
+def _delivered_artifact_roots(
+    challenge_dir: Path,
+    category: str | None,
+    metadata: Mapping[str, Any] | None = None,
+) -> list[Path]:
     roots = [challenge_dir / "attachments", challenge_dir / "dist"]
-    if category == "pwn":
+    profile = generation_profile(category, metadata=metadata or {})
+    if profile.capabilities.requires_container:
         roots.append(challenge_dir / "deploy")
     return roots
 
@@ -1866,16 +1912,27 @@ def _artifact_hygiene_errors(challenge_dir: Path, metadata: Mapping[str, Any]) -
             continue
         rel = path.relative_to(challenge_dir).as_posix()
         name = path.name
+        lower_name = name.lower()
         if name in forbidden_names:
             forbidden_relatives.append(rel)
-        elif path.is_file() and (name.endswith(".pyc") or name.startswith("debug_")):
+        elif path.is_file() and (
+            name.endswith(".pyc")
+            or name.startswith("debug_")
+            or name == "test_behavior.py"
+            or lower_name.endswith((".bak", ".backup", ".orig", ".tmp"))
+            or lower_name in {"backup", "backup.py", "exp.py.bak"}
+        ):
             forbidden_relatives.append(rel)
     for nested in ("output/challenges", "deploy/output/challenges", "attachments/output/challenges"):
         if (challenge_dir / nested).exists():
             forbidden_relatives.append(nested)
     allow_flag_file = bool(metadata.get("allow_deploy_flag_file"))
-    if not allow_flag_file and (challenge_dir / "deploy" / "_files" / "flag.txt").exists():
-        forbidden_relatives.append("deploy/_files/flag.txt")
+    if not allow_flag_file:
+        deploy = challenge_dir / "deploy"
+        if deploy.is_dir() and not deploy.is_symlink():
+            for path in deploy.rglob("*"):
+                if path.is_file() and not path.is_symlink() and "flag" in path.name.lower():
+                    forbidden_relatives.append(path.relative_to(challenge_dir).as_posix())
     if forbidden_relatives:
         rendered = ", ".join(sorted(set(forbidden_relatives))[:12])
         errors.append(
@@ -2556,7 +2613,9 @@ class ChallengeValidator:
             errors.append("metadata.build_status is not passed")
 
         category = metadata.get("category")
-        if category in {"web", "pwn"}:
+        profile = generation_profile(str(category or ""), metadata=metadata)
+        capabilities = profile.capabilities
+        if capabilities.requires_container:
             required = (
                 challenge_dir / "deploy" / "Dockerfile",
                 challenge_dir / "deploy" / "docker-compose.yml",
@@ -2590,7 +2649,7 @@ class ChallengeValidator:
                 not metadata.get("runtime") or not metadata.get("framework")
             ):
                 errors.append("Web metadata must record runtime and framework")
-            if category == "pwn":
+            if category == "pwn" or capabilities.launcher == "xinetd_chroot":
                 errors.extend(_artifact_hygiene_errors(challenge_dir, metadata))
                 errors.extend(_host_chroot_setup_errors(challenge_dir, metadata))
                 errors.extend(_pwn_dockerfile_scaffold_errors(challenge_dir))
@@ -2598,7 +2657,7 @@ class ChallengeValidator:
             errors.extend(semantic_contract_error_messages(challenge_dir, metadata))
 
         target_format = metadata.get("target_format", "elf")
-        if category in {"re", "pwn"} and target_format == "elf":
+        if (capabilities.requires_player_artifact or category in {"re", "pwn"}) and target_format == "elf":
             elf_paths = _artifact_elfs(challenge_dir, category)
             if not elf_paths:
                 errors.append("no compiled ELF artifact found in attachments/")
@@ -2701,6 +2760,7 @@ class ChallengeValidator:
         """
         errors: list[str] = []
         category = metadata.get("category")
+        capabilities = generation_profile(str(category or ""), metadata=metadata).capabilities
         flag = metadata.get("flag") or ""
         validate_text = _read_text(challenge_dir / "validate.sh")
         exp_text = _read_text(challenge_dir / "writenup" / "exp.py")
@@ -2737,13 +2797,18 @@ class ChallengeValidator:
                 "writenup/exp.py references 'docker-compose'; the exploit must "
                 "recover the flag from the target, not organizer files"
             )
+        if exp_text and _pwn_empty_response_claims_success(exp_text):
+            errors.append(
+                "writenup/exp.py treats an empty final payload response as success; "
+                "the solver must require a flag token from the final response"
+            )
         # D — destructive Docker cleanup can remove host infrastructure volumes
         if validate_text and _FORBIDDEN_DOCKER_CLEANUP_RE.search(validate_text):
             errors.append(
                 "validate.sh contains destructive Docker cleanup; it must not "
                 "remove/prune volumes or global Docker resources"
             )
-        if category in {"web", "pwn"} and validate_text and _validate_uses_compose_without_project(validate_text):
+        if capabilities.requires_container and validate_text and _validate_uses_compose_without_project(validate_text):
             errors.append(
                 "validate.sh runs docker-compose without an isolated project; concurrent "
                 "validation can cross-talk between generated deploy/ directories"

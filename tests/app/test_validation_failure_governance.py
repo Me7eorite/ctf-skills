@@ -395,6 +395,60 @@ def test_latest_failed_validation_prefers_history_over_report(tmp_path: Path) ->
     assert "missing_metadata_field" in summary["validation_failure_signature"]
 
 
+def test_report_cannot_override_validation_history_failure(tmp_path: Path) -> None:
+    paths = ProjectPaths(root=tmp_path, repository=tmp_path)
+    attempt_id = uuid4()
+    state = paths.executions / str(attempt_id) / "current" / "state"
+    state.mkdir(parents=True)
+    report = paths.executions / str(attempt_id) / "current" / "logs" / "report.json"
+    report.parent.mkdir(parents=True)
+    write_json(
+        report,
+        {
+            "execution_summary": {"total_challenges": 1, "passed": 1, "failed": 0},
+            "challenges": [
+                {
+                    "id": "pwn-0001",
+                    "solve_status": "passed",
+                    "validation_status": "repaired",
+                }
+            ],
+        },
+    )
+    write_json(
+        state / "validation-history.json",
+        [
+            {
+                "round": 11,
+                "results": [
+                    {
+                        "challenge_id": "pwn-0001",
+                        "solve_status": "failed",
+                        "validation_status": "contract_failed",
+                        "validation_error": "artifact_hygiene failed",
+                        "validation_failure_details": [
+                            {
+                                "phase": "gate",
+                                "code": "artifact_hygiene",
+                                "message": "writenup/__pycache__/exp.cpython-310.pyc",
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    )
+
+    summary = latest_failed_validation(paths, attempt_id)
+
+    assert summary is not None
+    assert summary["source"] == "validation-history"
+    assert summary["round"] == 11
+    assert summary["validation_status"] == "contract_failed"
+    assert summary["validation_failure_class"] == "contract"
+    assert "artifact_hygiene" in summary["validation_failure_signature"]
+
+
 def test_latest_failed_validation_uses_report_when_history_is_missing(tmp_path: Path) -> None:
     paths = ProjectPaths(root=tmp_path, repository=tmp_path)
     attempt_id = uuid4()

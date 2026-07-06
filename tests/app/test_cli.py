@@ -115,7 +115,7 @@ class CLIHelpAndParserTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("requires --category", result.stderr)
 
-    def test_invalid_category_and_uuid_exit_before_queue_mutation(self):
+    def test_unknown_category_does_not_reject_or_mutate_other_queue(self):
         with TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             _seed_pending_shard(tmp_path)
@@ -128,7 +128,7 @@ class CLIHelpAndParserTests(unittest.TestCase):
                 ["run", "--worker", "worker-1", "--build-attempt", "invalid"],
                 cwd=tmp_path,
             )
-            self.assertEqual(category.returncode, 2)
+            self.assertEqual(category.returncode, 0)
             self.assertEqual(invalid_uuid.returncode, 2)
             self.assertTrue(pending.exists())
 

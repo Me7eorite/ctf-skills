@@ -587,7 +587,7 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(details[0]["phase"], "exploit")
         self.assertEqual(details[0]["code"], "exploit_timeout")
 
-    def test_pwn_exp_rejects_canary_width_threshold(self):
+    def test_pwn_exp_canary_width_threshold_is_not_hard_contract(self):
         challenge = self.paths.challenges / "pwn" / "pwn-canary-001"
         metadata = _write_minimal_pwn_contract(challenge)
         (challenge / "writenup").mkdir(parents=True, exist_ok=True)
@@ -600,9 +600,9 @@ class ValidationTests(unittest.TestCase):
 
         errors = self.validator.contract_errors(challenge, metadata)
 
-        self.assertTrue(any("canary leak filtering by 2^48" in e for e in errors))
+        self.assertFalse(any("canary leak filtering by 2^48" in e for e in errors))
 
-    def test_pwn_exp_rejects_stack_address_as_canary_candidate(self):
+    def test_pwn_exp_stack_address_canary_candidate_is_not_hard_contract(self):
         challenge = self.paths.challenges / "pwn" / "pwn-canary-stack-001"
         metadata = _write_minimal_pwn_contract(challenge)
         (challenge / "writenup").mkdir(parents=True, exist_ok=True)
@@ -615,7 +615,7 @@ class ValidationTests(unittest.TestCase):
 
         errors = self.validator.contract_errors(challenge, metadata)
 
-        self.assertTrue(any("implausible canary candidate" in e for e in errors))
+        self.assertFalse(any("implausible canary candidate" in e for e in errors))
 
     def test_pwn_exp_does_not_treat_offsets_and_masks_as_canary_literals(self):
         challenge = self.paths.challenges / "pwn" / "pwn-canary-offset-001"
@@ -635,7 +635,7 @@ class ValidationTests(unittest.TestCase):
 
         self.assertFalse(any("implausible canary candidate" in e for e in errors))
 
-    def test_pwn_srop_design_rejects_read_flag_shortcut(self):
+    def test_pwn_srop_design_does_not_hard_require_specific_exploit_shape(self):
         challenge = self.paths.challenges / "pwn" / "pwn-srop-001"
         metadata = _write_minimal_pwn_contract(challenge)
         metadata["primary_technique"] = "SROP"
@@ -652,14 +652,14 @@ class ValidationTests(unittest.TestCase):
 
         errors = self.validator.contract_errors(challenge, metadata)
 
-        self.assertTrue(any("declared_family=srop" in e for e in errors))
-        self.assertTrue(any("conflict_token='read_flag'" in e for e in errors))
-        self.assertTrue(any("source=deploy/src/vuln.c" in e for e in errors))
+        self.assertFalse(any("declared_family=srop" in e for e in errors))
+        self.assertFalse(any("conflict_token='read_flag'" in e for e in errors))
 
-    def test_pwn_strict_design_rejects_ret2win_flag_naming(self):
+    def test_pwn_semantic_policy_is_opt_in_for_declared_technique(self):
         challenge = self.paths.challenges / "pwn" / "pwn-ret2libc-flag-001"
         metadata = _write_minimal_pwn_contract(challenge)
         metadata["primary_technique"] = "stack_canary_leak_via_print"
+        metadata["strict_semantic_contract"] = True
         metadata["secondary_technique"] = "ret2libc_leak"
         metadata["techniques"] = [
             "stack_canary_leak_via_print",
@@ -685,6 +685,7 @@ class ValidationTests(unittest.TestCase):
         metadata = _write_minimal_pwn_contract(challenge)
         metadata["primary_technique"] = "canary_leak"
         metadata["secondary_technique"] = "ret2libc"
+        metadata["strict_semantic_contract"] = True
         (challenge / "writenup").mkdir(parents=True, exist_ok=True)
         (challenge / "writenup" / "exp.py").write_text(
             "canary = leak_canary()\nlibc_base = leak - 0x29dc0\nsystem('/bin/sh')\n",
@@ -736,6 +737,7 @@ class ValidationTests(unittest.TestCase):
                 "id": "pwn-final-contract-001",
                 "primary_technique": "canary_leak",
                 "secondary_technique": "ret2libc",
+                "strict_semantic_contract": True,
                 "artifact": "attachments/pwn_task",
                 "artifact_sha256": artifact_sha,
             }

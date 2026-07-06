@@ -4,6 +4,7 @@ from pathlib import Path
 
 from core.jsonio import write_json
 from domain.validation_repair_policy import (
+    MECHANIC_ARTIFACT_HYGIENE,
     MECHANIC_DEPLOY_DOCKERFILE,
     MECHANIC_DOCUMENT_PAIR,
     MECHANIC_PWN_READINESS_PROBE,
@@ -29,6 +30,7 @@ def test_policy_routes_contract_to_mechanical_repairs() -> None:
     assert policy.route_type == "deterministic"
     assert policy.hermes_allowed is True
     assert MECHANIC_DOCUMENT_PAIR in policy.deterministic_mechanics
+    assert MECHANIC_ARTIFACT_HYGIENE in policy.deterministic_mechanics
 
 
 def test_policy_keeps_deferred_scaffold_and_dockerfile_out_of_contract_repairs() -> None:
@@ -41,6 +43,24 @@ def test_policy_keeps_deferred_scaffold_and_dockerfile_out_of_contract_repairs()
 
     assert MECHANIC_PWN_XINETD_SCAFFOLD not in policy.deterministic_mechanics
     assert MECHANIC_DEPLOY_DOCKERFILE not in policy.deterministic_mechanics
+
+
+def test_artifact_hygiene_repair_removes_pycache_and_pyc(tmp_path: Path) -> None:
+    challenge = tmp_path / "pwn-0001-hygiene"
+    cache = challenge / "writenup" / "__pycache__"
+    cache.mkdir(parents=True)
+    (cache / "exp.cpython-310.pyc").write_bytes(b"pyc")
+    write_json(challenge / "metadata.json", {"id": "pwn-0001", "category": "pwn"})
+
+    result = auto_repair_challenge(
+        challenge,
+        allowed_mechanics=(MECHANIC_ARTIFACT_HYGIENE,),
+    )
+
+    assert result.changed is True
+    assert not cache.exists()
+    assert not (cache / "exp.cpython-310.pyc").exists()
+    assert any("writenup/__pycache__" in action for action in result.actions)
 
 
 def test_policy_keeps_deferred_scaffold_and_dockerfile_out_of_readiness_repairs() -> None:

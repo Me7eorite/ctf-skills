@@ -203,4 +203,13 @@ def _should_emit_enclosure(category: str, include_pwn_attachments: bool) -> bool
 def _is_containerized(metadata: dict[str, Any]) -> bool:
     category = str(metadata.get("category", "")).lower()
     deployment = str(metadata.get("deployment", "")).lower()
-    return category in {"web", "pwn"} or "docker" in deployment or bool(metadata.get("docker_image"))
+    capabilities = metadata.get("capabilities")
+    requires_container = False
+    if isinstance(capabilities, dict):
+        requires_container = bool(capabilities.get("requires_container"))
+    return (
+        requires_container
+        or category in {"web", "pwn"}
+        or "docker" in deployment
+        or bool(metadata.get("docker_image"))
+    )

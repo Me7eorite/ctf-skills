@@ -4553,6 +4553,16 @@ pre {
   color: var(--accent-amber);
 }
 
+.ba-event-meta {
+  margin-top: 2px;
+  color: var(--ink-400);
+  font-size: var(--font-xs);
+}
+
+.ba-resume-source {
+  font-family: var(--font-mono-family);
+}
+
 @media (max-width: 1023px) {
   .ba-summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));

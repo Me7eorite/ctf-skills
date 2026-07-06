@@ -89,6 +89,10 @@ def render_validation_repair_prompt(
 Validation debug round {attempt} of {max_attempts}. Work only inside the existing claimed challenge
 directories under `./output/challenges`. Read `./input/shard.json` and inspect the current
 source, Docker/Compose files, built artifact metadata, `validate.sh`, and `writenup/exp.py`.
+Before choosing a repair route, read the latest validation-history context below and treat it
+as authoritative over `logs/report.json` or any Hermes self-summary. If the latest status is
+`contract_failed`, fix the contract, hygiene, or semantic blocker first; do not keep tuning an
+older timeout or solver-I/O symptom.
 
 Inherited build context:
 {context_section}
@@ -158,6 +162,10 @@ Pwn repair evidence rules:
   gadget sources match the current `metadata.artifact`, payload offsets come
   from disassembly or dynamic verification, and `writenup/exp.py` emits a flag
   candidate.
+- For Pwn, preserve the model-chosen mechanism and repair from evidence. Do not
+  treat xinetd/chroot, pwntools, ELF metadata, or debug reports as requiring any
+  fixed exploit family, helper function name, symbol table shape, or payload
+  structure.
 - Structured diagnostics include `service_ready`, `exploit_started`,
   `exploit_exit_code`, solver stdout/stderr tails, `pwn_debug_failure_stage`,
   `validation_failure_class`, and `classification_conflicts` when available.
@@ -182,8 +190,9 @@ Pwn repair evidence rules:
   is already past the first hurdle unless pwn-debug explicitly shows unstable
   leaks; focus on final control flow, stack alignment, payload layout, and flag
   read path.
-- If the declared design is SROP, ORW, ret2libc, or GOT overwrite, preserve that
-  technique. Do not replace it with `read_flag()`, `win()`, or ret2win shortcuts.
+- If metadata explicitly declares a technique, keep the repair self-consistent
+  with that declaration or explain why the metadata must be updated; do not
+  replace the challenge with a historical pwn template.
 {_VALIDATION_CONTRACT_CHECKLIST}{non_regression}
 This is a validation-debug continuation, not a broad redesign. First understand
 the inherited context above and the current files before editing. The host runner
@@ -331,29 +340,10 @@ Pwn exploit debugging acceleration:
   runs must use `timeout`, `-batch` or explicit `-ex quit`, and deterministic
   input. If a local smoke test cannot be bounded, skip it and explain why in
   `logs/report.json` instead of risking a hung worker.
-- When leaking stack canaries through `%n$p`, scan a broad bounded range and
-  identify canary-like values by stability across multiple fresh connections
-  and low byte `0x00`. Exclude NULL/small integers and obvious stack/libc/PIE
-  addresses such as `0x7fff...`, `0x7f...`, and `0x55...`; a leaked pointer
-  whose low byte is 00 is not a canary. Do not reject values merely because they
-  are greater than `2^48`; amd64 canaries commonly use the upper seven bytes
-  and will often exceed that threshold.
-- Never fall back to guessed stack addresses such as `0x7fffffffxxxx` without a
-  live leak that proves the address for the current process. Establish a
-  reliable stack/PIE/libc leak first or switch to a provably valid exploit chain.
-- For fork-per-connection canary brute force, print byte-level progress
-  diagnostics (`byte_index`, candidate byte, attempt count), set short
-  connect/recv timeouts for every attempt, fail before the validation budget is
-  exhausted with the current position, and improve the crash oracle instead of
-  blindly waiting on slow sockets.
-- For ROP/ret2libc/PIE Pwn tasks, follow a structured debug loop before
-  finishing the exploit: identify mitigations with `checksec`/`file`, compute
-  the exact overflow offset with cyclic/core/headless gdb, discover gadgets from
-  the actual ELF/libc, leak a GOT/libc or PIE pointer when needed, verify
-  computed bases are plausible and page-aligned, add an amd64 `ret` stack
-  alignment gadget when libc calls crash around `movaps`, and retest against
-  the container service path. Do not ship guessed gadget, libc, PIE, or offset
-  constants.
+- For Pwn, choose and repair the exploitation mechanism from the design and
+  evidence. Use bounded diagnostics appropriate to that mechanism, derive
+  constants from the final player artifact or live service behavior, and do not
+  ship guessed addresses, stale offsets, or a historical template payload.
 - Write `writenup/pwn_debug_report.json` for Pwn challenges when the solve path
   needed debugging or when the exploit is non-trivial. Keep it bounded and
   organizer-facing; include keys such as `checksec`, `binary`, `libc`,
@@ -394,6 +384,11 @@ Before you finish, self-check every challenge you touched with real file searche
 - For `re`, confirm `validate.sh` or `writenup/exp.py` passes/opens the artifact under
   `attachments/`.
 A repair that fixes one diagnostic by violating a different rule above still fails host validation.
+Before returning, remove repair residue such as `__pycache__/`, `*.pyc`,
+`debug_*`, `test_behavior.py`, backup/temp files, nested `output/` trees, and
+stray deploy flag files, then rerun validation. Do not claim success or
+`repaired` based on report text; the host validator and validation-history are
+the only success source.
 """
     return sanitize_prompt_text(prompt)
 
@@ -1029,7 +1024,7 @@ Host contract checklist — every rule below is host-enforced. Re-check ALL rule
 apply to each challenge's `metadata.category` before finishing; satisfy them
 simultaneously rather than trading one for another.
 
-Common (web, pwn, re):
+Common (all profiles; web, pwn, and re are defaults):
 - `metadata.json` MUST keep `id`, `title`, `difficulty`, `build_status: passed`, and `flag`.
 - `metadata.json`, `README.md`, `validate.sh`, `writenup/`, `src/`/`deploy/`,
   and `attachments/` MUST be direct children of the canonical challenge root.
@@ -1072,12 +1067,11 @@ Web / Pwn:
   The host gate rejects solvers that only declare aliases such as
   `ARTIFACT_SHA256`, or whose debug report/solver SHA was copied from
   `deploy/src/<metadata.artifact basename>` or an old build.
-- Pwn source, metadata, writeup, and `writenup/exp.py` MUST match the declared
-  primary technique. If the design says SROP/ORW/ret2libc/GOT overwrite, do not
-  add hidden `read_flag()` / `win()` / ret2win shortcuts and do not solve by
-  returning directly to such a helper unless ret2win is explicitly declared.
-  SROP writeups and solvers must actually use sigreturn/SigreturnFrame/syscall
-  evidence.
+- Pwn source, metadata, writeup, and `writenup/exp.py` SHOULD remain
+  self-consistent with the model-chosen mechanism. The host gate validates
+  solvability, anti-cheat, artifact integrity, and deployment ABI; it does not
+  require a fixed exploit family, helper function name, symbol table shape, or
+  payload structure.
 - Do not run Docker from Hermes. The host runner rebuilds the exact image named by
   `metadata.docker_image` with `docker build -t <metadata.docker_image> -f deploy/Dockerfile .`
   after deploy source, Dockerfile, binary, or runtime dependencies change.

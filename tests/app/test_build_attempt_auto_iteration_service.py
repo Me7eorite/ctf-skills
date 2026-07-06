@@ -194,6 +194,49 @@ def test_failed_attempt_with_deterministic_policy_repairs_and_revalidates(
     assert "challenge_yml" in repair_calls[0]["allowed_mechanics"]
 
 
+def test_contract_failure_routes_before_timeout_repair(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempt_id = uuid4()
+    revalidation = _FakeRevalidation([BuildAttemptRevalidationError("still contract_failed")])
+    repair = _FakeRepair(status="failed")
+    deterministic_calls: list[dict] = []
+
+    def deterministic(*args, **kwargs):
+        deterministic_calls.append(kwargs)
+        return AutoRepairResult(changed=True, actions=("removed residue",))
+
+    service = _service(
+        tmp_path,
+        revalidation=revalidation,
+        repair=repair,
+        deterministic=deterministic,
+        budget=AutoIterationBudget(max_iterations=1),
+    )
+    monkeypatch.setattr(
+        service,
+        "_load_state",
+        lambda _attempt_id: {
+            "attempt_id": str(attempt_id),
+            "status": "running",
+            "iteration_count": 0,
+            "deterministic_count": 0,
+            "hermes_count": 1,
+            "retry_count": 0,
+            "same_no_progress_count": 0,
+            "events": [],
+        },
+    )
+    _patch_common(monkeypatch, service, attempt_id, [_contract_failure()])
+
+    result = service.iterate_attempt(attempt_id)
+
+    assert result.status in {"blocked", "exhausted"}
+    assert deterministic_calls
+    assert repair.calls == []
+
+
 def test_deterministic_failure_can_continue_to_hermes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -202,7 +245,22 @@ def test_deterministic_failure_can_continue_to_hermes(
     revalidation = _FakeRevalidation([BuildAttemptRevalidationError("still failed")])
     repair = _FakeRepair(status="succeeded")
     service = _service(tmp_path, revalidation=revalidation, repair=repair)
-    _patch_common(monkeypatch, service, attempt_id, [_contract_failure(), _solver_failure(), _solver_failure()])
+    _patch_common(monkeypatch, service, attempt_id, [_contract_failure()])
+    failure_sequence = [
+        _contract_failure(),
+        _contract_failure(),
+        _solver_failure(),
+        _solver_failure(),
+        None,
+    ]
+    failure_calls = {"count": 0}
+
+    def latest_failure(_attempt_id: UUID) -> dict | None:
+        index = min(failure_calls["count"], len(failure_sequence) - 1)
+        failure_calls["count"] += 1
+        return failure_sequence[index]
+
+    monkeypatch.setattr(service, "_latest_failure", latest_failure)
 
     statuses = {"current": "failed"}
 
@@ -223,6 +281,36 @@ def test_deterministic_failure_can_continue_to_hermes(
     assert result.status == "succeeded"
     assert result.selected_route == "hermes"
     assert revalidation.calls == [attempt_id]
+    assert repair.calls == [attempt_id]
+
+
+def test_hermes_success_is_blocked_when_validation_history_still_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempt_id = uuid4()
+    repair = _FakeRepair(status="succeeded")
+    service = _service(tmp_path, repair=repair)
+    _patch_common(monkeypatch, service, attempt_id, [_solver_failure(), _solver_failure(), _contract_failure()])
+
+    statuses = {"current": "failed"}
+
+    def snapshot(_attempt_id: UUID) -> _AttemptSnapshot:
+        return _snapshot(attempt_id, status=statuses["current"])
+
+    original_repair = repair.repair
+
+    def repair_and_claim_success(_attempt_id: UUID) -> BuildAttemptRepairResult:
+        statuses["current"] = "succeeded"
+        return original_repair(_attempt_id)
+
+    monkeypatch.setattr(service, "_attempt_snapshot", snapshot)
+    monkeypatch.setattr(repair, "repair", repair_and_claim_success)
+
+    result = service.iterate_attempt(attempt_id)
+
+    assert result.status == "blocked"
+    assert result.reason == "validation_history_failure_after_hermes_repair"
     assert repair.calls == [attempt_id]
 
 

@@ -623,6 +623,12 @@ Workflow:
 2. solve: make the smallest file changes needed to fix the failure.
 3. verify: do not claim success yourself; host-side validation will run after you exit.
 
+Authority:
+- The latest validation-history failure below is authoritative over logs/report.json,
+  repair summaries, or Hermes self-narration. If it says contract_failed, repair
+  the contract/hygiene/semantic blocker first; do not keep tuning an older
+  timeout or solver-I/O symptom.
+
 Failure summary:
 {context.get("failure_summary") or "(none)"}
 
@@ -746,13 +752,17 @@ Rules:
   the remote `CHAL_HOST`/`CHAL_PORT` path.
 - `deploy/src/` may be read to understand the bug and protocol, but it is not
   evidence for offsets, gadgets, symbols, libc bases, checksec, or report SHAs.
-- For canary leaks, scan a broad bounded `%n$p` range, keep candidates stable
-  across multiple fresh connections, require low byte `0x00`, and do not filter
-  by a `2^48` threshold. For stack leaks, never fallback to guessed
-  `0x7fffffffxxxx` addresses without a live leak. For fork canary brute force,
-  print byte-level progress and use short per-attempt timeouts.
+- Repair the model-chosen Pwn mechanism from evidence. The xinetd/chroot
+  deployment contract does not imply canary brute force, ret2libc, SROP, ORW,
+  GOT overwrite, ret2win, fixed symbols, helper function names, or payload
+  layout. Use technique-appropriate bounded diagnostics and require the final
+  solver output to contain a flag token.
 - Do not call `./bin/progress` or `$WORKSPACE_ROOT/bin/progress`; this repair
   service records repair progress outside Hermes.
+- Before returning, remove repair residue such as __pycache__/, *.pyc, debug_*,
+  test_behavior.py, backup/temp files, nested output/ trees, and stray deploy
+  flag files. Do not claim success based on a report; validator revalidation is
+  the only pass condition.
 
 Terminal tool usage:
 - The terminal may start in `/`, the workspace root, or a prior challenge root.

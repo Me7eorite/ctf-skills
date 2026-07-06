@@ -6,8 +6,6 @@ import math
 import time
 from typing import Any, Mapping
 
-from core.queue import SUPPORTED_CATEGORIES
-
 VALIDATION_REPAIR_TIMEOUT_CAP = 600
 GLOBAL_DEADLINE_PHASE = "global_deadline_exceeded"
 
@@ -120,8 +118,6 @@ def shard_timeout_policy(payload: Mapping[str, Any]) -> int:
     if len(categories) != 1:
         raise ValueError("all shard challenges must use one category")
     category = next(iter(categories))
-    if category not in SUPPORTED_CATEGORIES:
-        raise ValueError(f"unsupported challenge category: {category!r}")
     if category == "re":
         return 1800
     if category == "web":

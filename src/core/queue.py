@@ -15,7 +15,8 @@ from uuid import UUID
 from core.jsonio import read_json, read_jsonl, write_json
 from core.paths import ProjectPaths
 
-# 当前支持的题目类别。只有这三种类别的题目会被自动分组到分片中。
+# Default generation profiles. Other category codes may enter the queue when
+# they come from the database/request payload.
 SUPPORTED_CATEGORIES = {"web", "pwn", "re"}
 
 
@@ -45,7 +46,7 @@ def split_challenges(
     """将题目列表按类别拆分为分片。
 
     拆分规则:
-      1. 按 category 字段分组（只处理 SUPPORTED_CATEGORIES 中的类别）
+      1. 按 category 字段分组
       2. 每组内按 id 排序
       3. 每 size 个题目切一片
       4. 分片文件名格式: {类别}-{起始id}-{结束id}.json
@@ -65,11 +66,11 @@ def split_challenges(
     if size < 1:
         raise ValueError("shard size must be at least 1")
 
-    # 第一步：按支持的类别分组
+    # 第一步：按类别分组。web/pwn/re are default profiles, not a hard gate.
     grouped: dict[str, list[dict]] = defaultdict(list)
     for row in rows:
         category = row.get("category")
-        if category in SUPPORTED_CATEGORIES:
+        if isinstance(category, str) and category:
             grouped[category].append(row)
 
     # 确保输出目录存在
@@ -83,9 +84,10 @@ def split_challenges(
         for index in range(0, len(rows), size):
             chunk = rows[index : index + size]
             category = chunk[0]["category"]
-            # 从 id 中提取序号部分（如 "web-0001" → "0001"）
-            start = chunk[0]["id"].split("-", 1)[1]
-            end = chunk[-1]["id"].split("-", 1)[1]
+            # 从 id 中提取序号部分（如 "web-0001" → "0001"），无法提取时
+            # 使用原 id 的安全化片段。
+            start = _id_suffix(chunk[0]["id"])
+            end = _id_suffix(chunk[-1]["id"])
             path = output / f"{category}-{start}-{end}.json"
             # 如果不允许覆盖且文件已存在，则报错
             if path.exists() and not overwrite:
@@ -97,6 +99,13 @@ def split_challenges(
         write_json(path, {"challenges": chunk})
 
     return [path for path, _ in planned]
+
+
+def _id_suffix(value: Any) -> str:
+    text = str(value)
+    suffix = text.split("-", 1)[1] if "-" in text else text
+    cleaned = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in suffix)
+    return cleaned or "item"
 
 
 class ShardQueue:
@@ -311,10 +320,6 @@ def _claim_filters(
     category: str | None,
     build_attempt_id: UUID | str | None,
 ) -> UUID | None:
-    if category is not None and category not in SUPPORTED_CATEGORIES:
-        raise ValueError(
-            f"unsupported category {category!r}; allowed: {sorted(SUPPORTED_CATEGORIES)}"
-        )
     if build_attempt_id is None:
         return None
     try:

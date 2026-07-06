@@ -172,7 +172,8 @@ class BuildAttemptAutoIterationService:
             )
 
         snapshot = self._attempt_snapshot(attempt_id)
-        skip_reason = self._skip_reason(snapshot)
+        initial_failure = self._latest_failure(attempt_id) if snapshot is not None else None
+        skip_reason = self._skip_reason(snapshot, initial_failure)
         if skip_reason is not None:
             self._record_state_event(
                 attempt_id,
@@ -205,7 +206,8 @@ class BuildAttemptAutoIterationService:
 
         while int(state.get("iteration_count") or 0) < self.budget.max_iterations:
             snapshot = self._attempt_snapshot(attempt_id)
-            skip_reason = self._skip_reason(snapshot)
+            failure = self._latest_failure(attempt_id) if snapshot is not None else None
+            skip_reason = self._skip_reason(snapshot, failure)
             if skip_reason is not None:
                 return AutoIterationAttemptResult(
                     attempt_id=attempt_id,
@@ -213,7 +215,6 @@ class BuildAttemptAutoIterationService:
                     iteration_count=int(state.get("iteration_count") or 0),
                     reason=skip_reason,
                 )
-            failure = self._latest_failure(attempt_id)
             if not failure:
                 return self._block(attempt_id, state, snapshot, "missing_validation_failure")
             policy = policy_for_validation_failure(failure, operator_triggered=False)
@@ -261,7 +262,12 @@ class BuildAttemptAutoIterationService:
             elif route == "hermes":
                 action_result = self._hermes_round(attempt_id)
                 snapshot_after_hermes = self._attempt_snapshot(attempt_id)
-                if snapshot_after_hermes is not None and snapshot_after_hermes.status == "succeeded":
+                authoritative_failure = self._latest_failure(attempt_id)
+                if (
+                    snapshot_after_hermes is not None
+                    and snapshot_after_hermes.status == "succeeded"
+                    and not authoritative_failure
+                ):
                     state = self._after_action(
                         attempt_id,
                         state,
@@ -279,7 +285,12 @@ class BuildAttemptAutoIterationService:
                         iteration_count=int(state.get("iteration_count") or 0),
                         selected_route=route,
                         reason="repair_passed",
-                )
+                    )
+                if authoritative_failure:
+                    action_result = (
+                        f"{action_result}; validation_history_failed: "
+                        f"{_failure_signature(authoritative_failure) or authoritative_failure.get('validation_status')}"
+                    )
             elif route == "retry":
                 try:
                     next_attempt_id = self._retry_round(attempt_id, policy)
@@ -373,8 +384,10 @@ class BuildAttemptAutoIterationService:
             state["hermes_count"] = int(state.get("hermes_count") or 0) + 1
 
         next_snapshot = self._attempt_snapshot(attempt_id)
-        next_status = next_snapshot.status if next_snapshot is not None else "missing"
         after_failure = self._latest_failure(attempt_id)
+        next_status = next_snapshot.status if next_snapshot is not None else "missing"
+        if after_failure is not None and next_status == "succeeded":
+            next_status = "failed"
         after_result = _failure_result(after_failure or {})
         after_file = self._challenge_fingerprint(next_snapshot or snapshot, after_failure or failure)
         repeated = (
@@ -390,7 +403,15 @@ class BuildAttemptAutoIterationService:
         state["same_no_progress_count"] = (
             int(state.get("same_no_progress_count") or 0) + 1 if no_progress else 0
         )
-        if route == "hermes" and no_progress:
+        if (
+            route == "hermes"
+            and after_failure is not None
+            and next_snapshot is not None
+            and next_snapshot.status == "succeeded"
+        ):
+            state["status"] = "blocked"
+            state["blocked_reason"] = "validation_history_failure_after_hermes_repair"
+        elif route == "hermes" and no_progress:
             state["status"] = "blocked"
             state["blocked_reason"] = "no_progress_after_hermes_repair"
         elif int(state.get("same_no_progress_count") or 0) >= 2:
@@ -631,12 +652,17 @@ class BuildAttemptAutoIterationService:
             )
 
     @staticmethod
-    def _skip_reason(snapshot: _AttemptSnapshot | None) -> str | None:
+    def _skip_reason(
+        snapshot: _AttemptSnapshot | None,
+        authoritative_failure: Mapping[str, Any] | None = None,
+    ) -> str | None:
         if snapshot is None:
             return "attempt_missing"
         if snapshot.status == "succeeded":
-            return "attempt_succeeded"
+            return None if authoritative_failure else "attempt_succeeded"
         if snapshot.status != "failed":
+            if snapshot.status == "lost" and authoritative_failure:
+                return None
             return f"attempt_status_{snapshot.status}"
         if not snapshot.is_latest:
             return "not_latest_attempt"

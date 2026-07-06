@@ -20,7 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from core.build_timeout import shard_timeout_policy
 from core.clock import beijing_isoformat
 from core.jsonio import read_json
-from core.queue import SUPPORTED_CATEGORIES
+from core.state import EXECUTION_STAGES
 from domain.build_attempts import BuildAttempt, BuildAttemptListItem, BuildAttemptStatus
 from domain.output_consistency import validate_workspace_success_state
 from domain.validation_failure_governance import latest_failed_validation, summarize_validation_entry
@@ -163,11 +163,6 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
                 status_code=HTTPStatus.BAD_REQUEST,
                 detail=(f"unknown status {status!r}; allowed: {list(BuildAttemptStatus)}"),
             )
-        if category is not None and category not in SUPPORTED_CATEGORIES:
-            raise HTTPException(
-                status_code=HTTPStatus.BAD_REQUEST,
-                detail=f"unknown category {category!r}; allowed: {sorted(SUPPORTED_CATEGORIES)}",
-            )
         task_uuid = _parse_optional_uuid(design_task_id, "design_task_id")
         request_uuid = _parse_optional_uuid(
             generation_request_id,
@@ -255,6 +250,11 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
                 _project_paths(app),
                 attempt,
             )
+            resume_progress = _resume_progress_summary(
+                session,
+                _project_paths(app),
+                attempt,
+            )
             executions = ExecutionsRepository(session).list_for_attempt(attempt.id)
 
         event_payloads = [_progress_event_dict(row) for row in events]
@@ -276,6 +276,8 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
             for row in siblings
         ]
         body["progress_events"] = event_payloads
+        if resume_progress is not None:
+            body["resume_progress"] = resume_progress
         body["executions"] = [_execution_dict(row) for row in executions]
         body["repair_runs"] = _repair_runs(_project_paths(app), attempt.id)
         body["auto_iteration"] = _auto_iteration_summary(_project_paths(app), attempt.id)
@@ -296,10 +298,10 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
                 detail="request body must be a JSON object",
             )
         category = payload.get("category")
-        if category not in SUPPORTED_CATEGORIES:
+        if not isinstance(category, str) or not category.strip():
             raise HTTPException(
                 status_code=HTTPStatus.BAD_REQUEST,
-                detail=(f"unknown category {category!r}; allowed: {sorted(SUPPORTED_CATEGORIES)}"),
+                detail="category must be a non-empty string",
             )
         _require_build_profiles(app, [category])
 
@@ -517,11 +519,6 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
                 detail="request body must be a JSON object",
             )
         category = payload.get("category")
-        if category is not None and category not in SUPPORTED_CATEGORIES:
-            raise HTTPException(
-                status_code=HTTPStatus.BAD_REQUEST,
-                detail=(f"unknown category {category!r}; allowed: {sorted(SUPPORTED_CATEGORIES)}"),
-            )
         request_uuid = _parse_optional_uuid(
             payload.get("generation_request_id"),
             "generation_request_id",
@@ -1658,6 +1655,10 @@ def _attempt_dict(
             payload["solve_status"] = "failed"
             payload.update(validation_fields)
             payload.update(_current_blocker_fields(validation_fields))
+            if attempt.status == "lost":
+                payload["status_class"] = "lost_after_validation_failure"
+                payload["lost_after_validation_failure"] = True
+            payload["failure_summary"] = _validation_failure_summary_text(validation_fields)
         root_fields = _root_validation_failure_fields(paths, attempt.id)
         if root_fields:
             payload["root_failure"] = root_fields
@@ -1874,7 +1875,7 @@ def _apply_resume_progress_fallbacks(
 
 
 def _progress_events_for_attempt(session, paths, attempt: BuildAttempt) -> list[ProgressEvent]:
-    shards = _progress_shard_candidates_for_attempt(paths, attempt)
+    shards = _progress_event_shard_candidates_for_attempt(paths, attempt)
     if not shards:
         shards = [attempt.shard_basename]
     events = session.scalars(
@@ -1893,6 +1894,15 @@ def _progress_events_for_attempt(session, paths, attempt: BuildAttempt) -> list[
     return deduped
 
 
+def _progress_event_shard_candidates_for_attempt(paths, attempt: BuildAttempt) -> list[str]:
+    candidates: list[str] = []
+    _append_progress_shard_candidate(candidates, attempt.shard_basename)
+    manifest_original = _current_manifest_original_shard(paths, attempt)
+    if manifest_original is not None:
+        _append_progress_shard_candidate(candidates, manifest_original)
+    return candidates
+
+
 def _progress_shard_candidates_for_attempt(paths, attempt: BuildAttempt) -> list[str]:
     candidates: list[str] = []
     _append_progress_shard_candidate(candidates, attempt.shard_basename)
@@ -1903,6 +1913,45 @@ def _progress_shard_candidates_for_attempt(paths, attempt: BuildAttempt) -> list
     if source_shard is not None:
         _append_progress_shard_candidate(candidates, source_shard)
     return candidates
+
+
+def _resume_progress_summary(session, paths, attempt: BuildAttempt) -> dict[str, Any] | None:
+    source_shard = _resume_source_shard_for_attempt(paths, attempt)
+    if source_shard is None:
+        return None
+    snapshots = session.scalars(
+        sa.select(ProgressSnapshot)
+        .where(ProgressSnapshot.shard == source_shard)
+        .order_by(ProgressSnapshot.percent.desc(), ProgressSnapshot.updated_at.desc())
+    ).all()
+    best = snapshots[0] if snapshots else None
+    passed_events = session.scalars(
+        sa.select(ProgressEvent)
+        .where(
+            ProgressEvent.shard == source_shard,
+            ProgressEvent.stage.in_(EXECUTION_STAGES),
+            ProgressEvent.status == "passed",
+        )
+        .order_by(ProgressEvent.id.asc())
+    ).all()
+    carried_stages: list[str] = []
+    for event in passed_events:
+        if event.stage not in carried_stages:
+            carried_stages.append(event.stage)
+    summary: dict[str, Any] = {
+        "source_shard": source_shard,
+        "carried_stages": carried_stages,
+    }
+    if best is not None:
+        summary.update(
+            {
+                "source_stage": best.stage,
+                "source_status": best.status,
+                "source_percent": best.percent,
+                "source_message": best.message,
+            }
+        )
+    return summary
 
 
 def _append_progress_shard_candidate(candidates: list[str], shard: str | None) -> None:
@@ -2064,6 +2113,19 @@ def _current_blocker_fields(validation_fields: dict[str, Any]) -> dict[str, Any]
         if policy.failure_class == "solver"
         else policy.route_type,
     }
+
+
+def _validation_failure_summary_text(validation_fields: dict[str, Any]) -> str:
+    status = str(validation_fields.get("validation_status") or "failed")
+    error = str(validation_fields.get("validation_error") or "").strip()
+    if error:
+        return f"{status}: {error}"[:2000]
+    details = validation_fields.get("validation_failure_details")
+    if isinstance(details, list):
+        for detail in details:
+            if isinstance(detail, dict) and detail.get("message"):
+                return f"{status}: {detail['message']}"[:2000]
+    return status
 
 
 def _root_validation_failure_fields(paths, attempt_id: UUID) -> dict[str, Any]:

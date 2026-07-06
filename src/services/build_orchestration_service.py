@@ -21,6 +21,7 @@ from core.state import EXECUTION_STAGES
 from domain import challenge_designs as design_dto
 from domain import design_tasks as task_dto
 from domain.design.difficulty_review import DifficultyReviewResult
+from domain.generation_profile import generation_profile
 from domain.validation_failure_governance import latest_failed_validation, summarize_validation_entry
 from persistence.models import build_attempts as build_model
 from persistence.models import design_tasks as task_model
@@ -109,6 +110,19 @@ MATRIX_FIELDS: dict[str, tuple[str, ...]] = {
         "learning_objective",
     ),
 }
+GENERIC_MATRIX_FIELDS: tuple[str, ...] = (
+    "id",
+    "title",
+    "category",
+    "difficulty",
+    "points",
+    "template",
+    "deployment",
+    "port",
+    "primary_technique",
+    "learning_objective",
+    "capabilities",
+)
 
 
 class BuildOrchestrationError(ValueError):
@@ -299,9 +313,7 @@ class BuildOrchestrationService:
         """Render one attributed shard without filesystem or database effects."""
         challenge = _design_challenge(latest_design.payload)
         matrix_values = _matrix_values(design_task, challenge)
-        fields = MATRIX_FIELDS.get(design_task.category)
-        if fields is None:
-            raise BuildOrchestrationError(f"unsupported challenge category {design_task.category!r}")
+        fields = MATRIX_FIELDS.get(design_task.category, GENERIC_MATRIX_FIELDS)
         rendered_challenge = {field: matrix_values[field] for field in fields}
         rendered_challenge["design"] = dict(latest_design.payload)
         payload: dict[str, Any] = {
@@ -429,11 +441,6 @@ class BuildOrchestrationService:
                 source_shard = submission.resume_from_shard_basename
                 if source_shard is None:
                     continue
-                _copy_progress_events(
-                    session,
-                    source_shard=source_shard,
-                    target_shard=submission.shard_basename,
-                )
                 _copy_progress_snapshots(
                     session,
                     source_shard=source_shard,
@@ -807,6 +814,7 @@ def _matrix_values(
     plan = challenge.get("implementation_plan")
     plan = plan if isinstance(plan, Mapping) else {}
     constraints = task.constraints
+    profile = generation_profile(task.category)
 
     def value(name: str, default: Any) -> Any:
         return challenge.get(name, plan.get(name, constraints.get(name, default)))
@@ -848,6 +856,13 @@ def _matrix_values(
         "primary_technique": task.primary_technique,
         "learning_objective": task.learning_objective,
         "distinctness": value("distinctness", task.scenario or task.primary_technique),
+        "capabilities": {
+            "requires_container": profile.capabilities.requires_container,
+            "requires_network_service": profile.capabilities.requires_network_service,
+            "requires_solver": profile.capabilities.requires_solver,
+            "requires_player_artifact": profile.capabilities.requires_player_artifact,
+            "launcher": profile.capabilities.launcher,
+        },
     }
 
 
@@ -908,36 +923,6 @@ def _copy_progress_snapshots(
                 percent=row.percent,
                 message=row.message,
                 updated_at=now,
-            )
-        )
-
-
-def _copy_progress_events(
-    session: Session,
-    *,
-    source_shard: str,
-    target_shard: str,
-) -> None:
-    if source_shard == target_shard:
-        return
-    session.execute(sa.delete(ProgressEvent).where(ProgressEvent.shard == target_shard))
-    rows = session.scalars(
-        sa.select(ProgressEvent)
-        .where(ProgressEvent.shard == source_shard)
-        .order_by(ProgressEvent.id.asc())
-    ).all()
-    for row in rows:
-        if not _copyable_resume_progress(row.stage, row.status):
-            continue
-        session.add(
-            ProgressEvent(
-                shard=target_shard,
-                challenge_id=row.challenge_id,
-                worker=row.worker,
-                stage=row.stage,
-                status=row.status,
-                percent=row.percent,
-                message=row.message,
             )
         )
 

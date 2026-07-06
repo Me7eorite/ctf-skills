@@ -80,6 +80,12 @@ def test_plan_returns_enrichment_for_hard_with_valid_json(tmp_path: Path):
                         "writable key path, signs a forged admin token, then "
                         "replays it to the admin endpoint."
                     ),
+                    "chosen_mechanism": "kid path traversal to attacker-controlled signing key",
+                    "semantic_fingerprint": "jwt-kid-path-key-confusion-admin-replay",
+                    "diversity_rationale": (
+                        "This uses key material routing and token replay rather "
+                        "than a SQL or template injection web flow."
+                    ),
                     "scenario_seed": (
                         "Internal customer-support note portal with a kid-based "
                         "rotating JWT signing scheme."
@@ -103,6 +109,9 @@ def test_plan_returns_enrichment_for_hard_with_valid_json(tmp_path: Path):
     assert len(out.considered_techniques) == 3
     assert out.scenario_seed.startswith("Internal")
     assert "writable key path" in out.chain_outline
+    assert out.chosen_mechanism.startswith("kid path")
+    assert out.semantic_fingerprint == "jwt-kid-path-key-confusion-admin-replay"
+    assert "token replay" in out.diversity_rationale
     assert out.novelty_seed is None
     # The template MUST have been formatted with every placeholder once.
     assert "category=web difficulty=hard topic=JWT" in captured["prompt"]
@@ -122,6 +131,12 @@ def test_plan_rejects_expert_response_without_substantive_novelty(tmp_path: Path
                     "chain_outline": (
                         "Player triggers algorithm confusion across two "
                         "verifiers and forges a token."
+                    ),
+                    "chosen_mechanism": "dual-verifier parser differential",
+                    "semantic_fingerprint": "jws-parser-differential-forgery",
+                    "diversity_rationale": (
+                        "The flow depends on inconsistent verifier behavior "
+                        "instead of a static weak-key shortcut."
                     ),
                     "scenario_seed": (
                         "Internal monitoring stack with two JWS libraries "
@@ -178,6 +193,9 @@ def test_safe_parse_extracts_object_after_prose():
     stdout = (
         "Thinking out loud about the topic flag{ignored}\n"
         '{"considered_techniques": ["a", "b", "c"], "chain_outline": "...", '
+        '"chosen_mechanism": "model chosen", '
+        '"semantic_fingerprint": "chosen-flow", '
+        '"diversity_rationale": "model explains why this differs", '
         '"scenario_seed": "..."}\n'
     )
     parsed = _safe_parse(stdout)

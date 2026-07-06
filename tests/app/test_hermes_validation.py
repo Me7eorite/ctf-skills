@@ -12,6 +12,7 @@ from typing import Any
 
 from core.paths import ProjectPaths
 from domain.resume import ChallengeResumePlan
+from domain.semantic_policy import semantic_contract_error_messages
 from domain.validation import ChallengeValidator
 from domain.validation_failure_governance import annotate_validation_result
 from hermes.prompt import render_validation_repair_prompt
@@ -129,6 +130,25 @@ def _make_gate_passing_web_challenge(paths: _Paths, challenge_id: str) -> Path:
         encoding="utf-8",
     )
     return challenge
+
+
+def _pwn_contract_errors_for_exp(tmp_path: Path, exp_text: str) -> list[str]:
+    challenge = tmp_path / "pwn-0001-canary"
+    (challenge / "writenup").mkdir(parents=True)
+    (challenge / "writenup" / "exp.py").write_text(exp_text, encoding="utf-8")
+    validator = ChallengeValidator(ProjectPaths(root=tmp_path, repository=tmp_path))
+    return validator.contract_errors(
+        challenge,
+        {
+            "id": "pwn-0001",
+            "title": "Canary",
+            "difficulty": "medium",
+            "build_status": "passed",
+            "flag": "flag{demo}",
+            "category": "pwn",
+            "primary_technique": "stack_canary_fork_brute_force",
+        },
+    )
 
 
 def test_contract_errors_are_recorded_as_validation_error(tmp_path: Path) -> None:
@@ -436,6 +456,99 @@ def test_validation_repair_prompt_explains_semantic_contract_failure() -> None:
     assert "Do not silence the validator" in prompt
 
 
+def test_stack_canary_fork_bruteforce_does_not_require_leak(tmp_path: Path) -> None:
+    challenge = tmp_path / "pwn-fork-canary"
+    (challenge / "writenup").mkdir(parents=True)
+    (challenge / "writenup" / "exp.py").write_text(
+        "canary = b'\\x00'\n"
+        "for byte_index in range(1, 8):\n"
+        "    for candidate in range(256):\n"
+        "        # fork child crash/no-crash oracle\n"
+        "        pass\n"
+        "print('flag{demo}')\n",
+        encoding="utf-8",
+    )
+    metadata = {
+        "category": "pwn",
+        "primary_technique": "stack_canary_fork_brute_force",
+        "strict_semantic_contract": True,
+    }
+
+    errors = semantic_contract_error_messages(challenge, metadata)
+
+    assert not any("term:leak" in error for error in errors)
+    assert not any("semantic_required_evidence_missing" in error for error in errors)
+
+
+def test_stack_canary_fork_bruteforce_rejects_ret2win_terms(tmp_path: Path) -> None:
+    challenge = tmp_path / "pwn-fork-canary"
+    (challenge / "writenup").mkdir(parents=True)
+    (challenge / "writenup" / "exp.py").write_text(
+        "canary = b'\\x00'\n"
+        "for byte_index in range(1, 8):\n"
+        "    for candidate in range(256):\n"
+        "        pass  # fork child crash/no-crash oracle\n"
+        "def win():\n"
+        "    pass\n"
+        "payload += p64(0x401000)\n"
+        "print('flag{demo}')\n",
+        encoding="utf-8",
+    )
+    metadata = {
+        "category": "pwn",
+        "primary_technique": "stack_canary_fork_brute_force",
+        "strict_semantic_contract": True,
+    }
+
+    errors = semantic_contract_error_messages(challenge, metadata)
+
+    assert any("declared_family=stack_canary_fork_bruteforce" in error for error in errors)
+    assert any("conflict_token=" in error and "win" in error for error in errors)
+
+
+def test_pwn_solver_canary_candidate_shape_is_advisory_not_contract(tmp_path: Path) -> None:
+    errors = _pwn_contract_errors_for_exp(
+        tmp_path,
+        "canary = b''\n"
+        "for byte_index in range(7):\n"
+        "    pass  # fork crash/no-crash oracle\n"
+        "canary += b'\\x00'\n"
+        "accepted_canary = '0001000000000000'\n"
+        "print('flag{demo}')\n",
+    )
+
+    assert not any("starts from an empty canary" in error for error in errors)
+    assert not any("implausible canary candidate" in error for error in errors)
+
+
+def test_pwn_solver_requires_flag_not_empty_response(tmp_path: Path) -> None:
+    errors = _pwn_contract_errors_for_exp(
+        tmp_path,
+        "canary = b'\\x00'\n"
+        "for byte_index in range(1, 8):\n"
+        "    pass  # fork crash/no-crash oracle\n"
+        "response = b''\n"
+        "if len(response) == 0:\n"
+        "    print('success repaired')\n",
+    )
+
+    assert any("empty final payload response" in error for error in errors)
+
+
+def test_pwn_solver_accepts_null_prefixed_fork_canary_order(tmp_path: Path) -> None:
+    errors = _pwn_contract_errors_for_exp(
+        tmp_path,
+        "canary = b'\\x00'\n"
+        "for byte_index in range(1, 8):\n"
+        "    for candidate in range(256):\n"
+        "        pass  # fork child crash/no-crash oracle\n"
+        "print('flag{demo}')\n",
+    )
+
+    assert not any("starts from an empty canary" in error for error in errors)
+    assert not any("implausible canary candidate" in error for error in errors)
+
+
 def test_validation_debug_prompt_includes_inherited_context() -> None:
     prompt = render_validation_repair_prompt(
         attempt=1,
@@ -511,7 +624,7 @@ def test_validation_debug_context_includes_final_pwn_artifact_evidence(
     assert evidence["pwn-0001"]["metadata_artifact_sha256"] == artifact_sha
     assert evidence["pwn-0001"]["symbols"]["win"] == "0x40149d"
     assert evidence["pwn-0001"]["checksec"] == {}
-    assert evidence["pwn-0001"]["gadgets"]["status"] == "unavailable"
+    assert evidence["pwn-0001"]["gadgets"]["status"] == "not_applicable"
     assert "FINAL SOLVER EVIDENCE SOURCE" in evidence["pwn-0001"]["instruction"]
     assert "Use only ./attachments/vuln for exp.py and pwn_debug_report.json." in evidence["pwn-0001"]["instruction"]
     assert "Do not use deploy/src binaries" in evidence["pwn-0001"]["instruction"]

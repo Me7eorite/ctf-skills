@@ -43,6 +43,9 @@ _REQUIRED_PLANNER_KEYS: tuple[str, ...] = (
     "considered_techniques",
     "chain_outline",
     "scenario_seed",
+    "chosen_mechanism",
+    "semantic_fingerprint",
+    "diversity_rationale",
 )
 
 
@@ -54,6 +57,9 @@ class PlannerEnrichment:
     chain_outline: str
     scenario_seed: str
     novelty_seed: str | None
+    chosen_mechanism: str
+    semantic_fingerprint: str
+    diversity_rationale: str
     raw_response: str
 
 
@@ -165,6 +171,9 @@ class HermesPlannerService:
             chain_outline=enrichment["chain_outline"],
             scenario_seed=enrichment["scenario_seed"],
             novelty_seed=enrichment["novelty_seed"],
+            chosen_mechanism=enrichment["chosen_mechanism"],
+            semantic_fingerprint=enrichment["semantic_fingerprint"],
+            diversity_rationale=enrichment["diversity_rationale"],
             raw_response=result.stdout,
         )
 
@@ -242,6 +251,18 @@ def _validate_planner_payload(
     if not isinstance(scenario, str) or len(scenario.strip()) < 30:
         raise ValueError("scenario_seed must be a substantive string")
 
+    chosen = payload["chosen_mechanism"]
+    if not isinstance(chosen, str) or len(chosen.strip()) < 3:
+        raise ValueError("chosen_mechanism must be a non-empty string")
+
+    fingerprint = payload["semantic_fingerprint"]
+    if not isinstance(fingerprint, str) or len(fingerprint.strip()) < 10:
+        raise ValueError("semantic_fingerprint must be a substantive string")
+
+    rationale = payload["diversity_rationale"]
+    if not isinstance(rationale, str) or len(rationale.strip()) < 20:
+        raise ValueError("diversity_rationale must explain the model choice")
+
     novelty = payload.get("novelty_seed")
     if difficulty == "expert":
         if not isinstance(novelty, str) or len(novelty.strip()) < 40:
@@ -256,4 +277,7 @@ def _validate_planner_payload(
         "chain_outline": chain.strip(),
         "scenario_seed": scenario.strip(),
         "novelty_seed": (novelty.strip() if isinstance(novelty, str) else None),
+        "chosen_mechanism": chosen.strip(),
+        "semantic_fingerprint": fingerprint.strip(),
+        "diversity_rationale": rationale.strip(),
     }

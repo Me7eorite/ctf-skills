@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from core.jsonio import read_json, write_json
+from domain.generation_profile import generation_profile
 from domain.pwn_artifact_evidence import PwnArtifactEvidenceError, ensure_pwn_solver_evidence
 from hermes.build_publisher import WorkspaceValidationSet
 from hermes.workspace import ExecutionWorkspace
@@ -93,7 +94,8 @@ class HostBuilder:
         for challenge_id, challenge_dir in validation_set.candidates.items():
             metadata = _read_metadata(challenge_dir)
             category = metadata.get("category")
-            if category not in {"web", "pwn"}:
+            capabilities = generation_profile(str(category or ""), metadata=metadata).capabilities
+            if not capabilities.requires_container:
                 results.append(
                     HostBuildResult(
                         challenge_id=challenge_id,
@@ -135,7 +137,8 @@ class HostBuilder:
                 f"{challenge_id}: deploy/docker-compose.yml missing",
                 challenge_id=challenge_id,
             )
-        if metadata.get("category") == "pwn":
+        capabilities = generation_profile(str(metadata.get("category") or ""), metadata=metadata).capabilities
+        if metadata.get("category") == "pwn" or capabilities.launcher == "xinetd_chroot":
             _prepare_pwn_image(challenge_id, challenge_dir, workspace_id, metadata, compose)
             _normalize_pwn_dockerfile_packages(dockerfile)
         _reject_unsafe_build_files(challenge_id, dockerfile=dockerfile, compose=compose)
@@ -214,7 +217,7 @@ class HostBuilder:
             )
         image_id = _inspect_image_id(image, timeout=min(10.0, float(self.timeout_seconds)))
         pwn_artifact_sha_changed = False
-        if metadata.get("category") == "pwn":
+        if metadata.get("category") == "pwn" or capabilities.launcher == "xinetd_chroot":
             pwn_artifact_sha_changed = _sync_pwn_runtime_artifact(
                 challenge_id,
                 challenge_dir,
@@ -234,7 +237,7 @@ class HostBuilder:
             prune_warning=prune_warning,
             pwn_artifact_sha_changed=pwn_artifact_sha_changed,
         )
-        if metadata.get("category") == "pwn":
+        if metadata.get("category") == "pwn" or capabilities.launcher == "xinetd_chroot":
             try:
                 ensure_pwn_solver_evidence(challenge_dir)
             except PwnArtifactEvidenceError:
@@ -260,8 +263,11 @@ class NoopHostBuilder:
         results: list[HostBuildResult] = []
         for challenge_id, challenge_dir in validation_set.candidates.items():
             metadata = _read_metadata(challenge_dir)
-            if metadata.get("category") in {"web", "pwn"}:
-                if metadata.get("category") == "pwn":
+            capabilities = generation_profile(
+                str(metadata.get("category") or ""), metadata=metadata
+            ).capabilities
+            if capabilities.requires_container:
+                if metadata.get("category") == "pwn" or capabilities.launcher == "xinetd_chroot":
                     compose = _safe_child(challenge_dir, "deploy/docker-compose.yml")
                     _prepare_pwn_image(challenge_id, challenge_dir, workspace.workspace_id, metadata, compose)
                 image = _metadata_image(challenge_id, metadata)
@@ -278,7 +284,7 @@ class NoopHostBuilder:
                     log_path=None,
                     prune_warning=None,
                 )
-                if metadata.get("category") == "pwn":
+                if metadata.get("category") == "pwn" or capabilities.launcher == "xinetd_chroot":
                     try:
                         ensure_pwn_solver_evidence(challenge_dir)
                     except PwnArtifactEvidenceError:

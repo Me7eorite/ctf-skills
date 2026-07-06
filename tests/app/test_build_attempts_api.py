@@ -809,6 +809,65 @@ def test_failed_attempt_validation_history_overrides_agent_pending_report(
     assert detail["validation_failure_source"] == "validation-history"
 
 
+def test_lost_attempt_with_validation_failure_is_classified_by_failure(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory, category="pwn")
+    with transaction(factory=session_factory) as session:
+        repo = BuildAttemptsRepository(session)
+        attempt = repo.create_attempt(task_id, f"{uuid4()}.json")
+        repo.update_to_terminal(attempt.id, status="lost", error="worker disappeared")
+
+    state_dir = (
+        client.app.state.project_paths.executions
+        / str(attempt.id)
+        / "current"
+        / "state"
+    )
+    state_dir.mkdir(parents=True)
+    write_json(
+        state_dir / "validation-history.json",
+        [
+            {
+                "round": 11,
+                "results": [
+                    {
+                        "challenge_id": "pwn-0001",
+                        "solve_status": "failed",
+                        "validation_status": "contract_failed",
+                        "validation_error": "artifact_hygiene failed",
+                        "validation_failure_details": [
+                            {
+                                "phase": "gate",
+                                "code": "artifact_hygiene",
+                                "message": "writenup/__pycache__/exp.cpython-310.pyc",
+                                "path": "writenup/__pycache__",
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    )
+
+    list_response = client.get("/api/build-attempts")
+    assert list_response.status_code == 200
+    [row] = list_response.json()
+    assert row["status"] == "lost"
+    assert row["status_class"] == "lost_after_validation_failure"
+    assert row["validation_failure_class"] == "contract"
+    assert row["validation_failure_details"][0]["code"] == "artifact_hygiene"
+    assert row["failure_summary"].startswith("contract_failed: artifact_hygiene failed")
+
+    detail_response = client.get(f"/api/build-attempts/{attempt.id}")
+    assert detail_response.status_code == 200
+    detail = detail_response.json()
+    assert detail["status"] == "lost"
+    assert detail["status_class"] == "lost_after_validation_failure"
+    assert detail["validation_failure_source"] == "validation-history"
+
+
 def test_non_validation_failure_does_not_expose_validation_failure_class(
     client: TestClient,
     session_factory: SessionFactory,
@@ -1130,9 +1189,15 @@ def test_validation_errors_return_400(client: TestClient):
     assert client.post("/api/design-tasks/not-a-uuid/build").status_code == 400
     assert client.post("/api/design-tasks/build", json={"design_task_ids": ["nope"]}).status_code == 400
     assert client.get("/api/build-attempts?status=bogus").status_code == 400
-    assert client.get("/api/build-attempts?category=crypto").status_code == 400
     assert client.get("/api/build-attempts?limit=zero").status_code == 400
     assert client.get("/api/build-attempts?design_task_id=nope").status_code == 400
+
+
+def test_unknown_category_filter_is_not_hard_rejected(client: TestClient):
+    response = client.get("/api/build-attempts?category=crypto")
+
+    assert response.status_code == 200
+    assert response.json() == []
 
 
 def test_category_worker_starts_first_eligible_db_attempt(
@@ -1339,16 +1404,12 @@ def test_retry_sequential_lane_pool_retries_failed_attempts_before_start(
             .where(ProgressEvent.shard.in_([row.shard_basename for row in rows]))
             .order_by(ProgressEvent.shard)
         ).all()
-        assert [item.message for item in retry_events] == [
-            "historical build passed",
-            "historical build passed",
-            "historical build passed",
-        ]
+        assert retry_events == []
     for retry_id in retry_ids:
         assert (client.app.state.project_paths.shards / "pending" / f"{retry_id}.json").is_file()
 
 
-def test_retry_resume_detail_and_list_fallback_to_source_progress(
+def test_retry_resume_detail_summarizes_source_progress_without_mixing_events(
     client: TestClient,
     session_factory: SessionFactory,
 ):
@@ -1423,9 +1484,18 @@ def test_retry_resume_detail_and_list_fallback_to_source_progress(
     row = next(item for item in list_response.json() if item["id"] == str(retry.id))
     assert row["percent"] == 64
     assert detail_response.status_code == 200
-    messages = [event["message"] for event in detail_response.json()["progress_events"]]
-    assert "source validation running" in messages
+    payload = detail_response.json()
+    messages = [event["message"] for event in payload["progress_events"]]
+    assert "source validation running" not in messages
     assert "Worker claimed 1 challenge(s)" in messages
+    assert payload["resume_progress"] == {
+        "source_shard": source.shard_basename,
+        "carried_stages": [],
+        "source_stage": "validate",
+        "source_status": "running",
+        "source_percent": 64,
+        "source_message": "validation running",
+    }
 
 
 def test_running_attempt_progress_falls_back_to_current_manifest_shard(

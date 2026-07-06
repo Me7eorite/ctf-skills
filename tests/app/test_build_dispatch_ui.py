@@ -95,7 +95,8 @@ def test_detail_poll_supports_append_only_event_updates():
     source = BUILD_ATTEMPTS_JS.read_text(encoding="utf-8")
 
     assert "function patchDetailEvents(nextDetail)" in source
-    assert 'insertAdjacentHTML("beforeend"' in source
+    assert "insertAdjacentHTML(" in source
+    assert '"beforeend"' in source
     assert "#ba-progress-event-count" in source
 
 

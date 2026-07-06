@@ -9,7 +9,7 @@ yet share the same entrypoint -> mechanism -> flag-access *shape*.
 This module is pure/deterministic so it can run offline (no DB, no Docker):
 
 - ``challenge_fingerprint`` reduces a design to its collapse-relevant shape.
-- ``compute_batch_collapse`` reports the distribution of mechanisms / techniques
+- ``compute_batch_collapse`` reports semantic fingerprints / techniques
   / shapes across a batch and flags collapse when any single value dominates.
 """
 
@@ -39,15 +39,17 @@ def _asset_flow_shape(challenge: Mapping[str, Any]) -> list[str]:
     return shape
 
 
-def _core_mechanism(challenge: Mapping[str, Any]) -> str:
+def _semantic_fingerprint_value(challenge: Mapping[str, Any]) -> str:
     flags = challenge.get("diversity_flags")
     if isinstance(flags, Mapping):
-        value = flags.get("core_mechanism")
+        for key in ("semantic_fingerprint", "chosen_mechanism", "core_mechanism"):
+            value = flags.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip().lower()
+    for key in ("semantic_fingerprint", "chosen_mechanism", "core_mechanism"):
+        value = challenge.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip().lower()
-    value = challenge.get("core_mechanism")
-    if isinstance(value, str) and value.strip():
-        return value.strip().lower()
     return "unknown"
 
 
@@ -61,15 +63,15 @@ def _primary_technique(challenge: Mapping[str, Any]) -> str:
 def challenge_fingerprint(challenge: Mapping[str, Any]) -> str:
     """Stable short fingerprint of a design's collapse-relevant shape.
 
-    Two challenges with the same category, difficulty, primary technique, core
-    mechanism, and asset-flow shape hash to the same fingerprint even if their
-    labels differ — which is exactly the duplication the batch should avoid.
+    Two challenges with the same category, difficulty, primary technique,
+    semantic fingerprint, and asset-flow shape hash to the same fingerprint
+    even if their labels differ.
     """
     parts = [
         str(challenge.get("category") or "").lower(),
         str(challenge.get("difficulty") or "").lower(),
         _primary_technique(challenge),
-        _core_mechanism(challenge),
+        _semantic_fingerprint_value(challenge),
         ">".join(_asset_flow_shape(challenge)),
     ]
     digest = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
@@ -104,14 +106,14 @@ def compute_batch_collapse(
     but still return the raw distributions.
     """
     total = len(challenges)
-    mechanisms: Counter[str] = Counter()
+    semantic_fingerprints: Counter[str] = Counter()
     techniques: Counter[str] = Counter()
     shapes: Counter[str] = Counter()
     fingerprints: Counter[str] = Counter()
     fp_to_ids: dict[str, list[str]] = {}
 
     for ch in challenges:
-        mechanisms[_core_mechanism(ch)] += 1
+        semantic_fingerprints[_semantic_fingerprint_value(ch)] += 1
         techniques[_primary_technique(ch)] += 1
         # Only non-trivial (multi-stage) flows participate in shape collapse:
         # a direct observe->flag flow is legitimate for easy tasks and must not
@@ -126,7 +128,7 @@ def compute_batch_collapse(
     duplicate_groups = [ids for fp, ids in fp_to_ids.items() if len(ids) > 1]
 
     shaped_total = sum(shapes.values())
-    mech = _share_report(mechanisms, total, threshold)
+    semantic = _share_report(semantic_fingerprints, total, threshold)
     tech = _share_report(techniques, total, threshold)
     shape = _share_report(shapes, shaped_total, threshold)
 
@@ -134,7 +136,7 @@ def compute_batch_collapse(
     # Shape collapse only when enough tasks actually declare a flow to judge.
     shape_collapsed = shape["collapsed"] and shaped_total >= MIN_BATCH_FOR_STATS
     collapsed = (not small) and (
-        mech["collapsed"]
+        semantic["collapsed"]
         or tech["collapsed"]
         or shape_collapsed
         or bool(duplicate_groups)
@@ -142,10 +144,10 @@ def compute_batch_collapse(
 
     reasons: list[str] = []
     if not small:
-        if mech["collapsed"]:
+        if semantic["collapsed"]:
             reasons.append(
-                f"core_mechanism collapse: {mech['dominant']!r} is "
-                f"{int(mech['dominant_share'] * 100)}% of the batch"
+                f"semantic_fingerprint collapse: {semantic['dominant']!r} is "
+                f"{int(semantic['dominant_share'] * 100)}% of the batch"
             )
         if tech["collapsed"]:
             reasons.append(
@@ -164,7 +166,8 @@ def compute_batch_collapse(
         "total": total,
         "too_small_to_judge": small,
         "collapsed": collapsed,
-        "mechanism": mech,
+        "semantic_fingerprint": semantic,
+        "mechanism": semantic,
         "technique": tech,
         "asset_flow_shape": shape,
         "duplicate_groups": duplicate_groups,

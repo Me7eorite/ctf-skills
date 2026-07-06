@@ -499,7 +499,7 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--loop", action="store_true")
     run.add_argument("--dry-run", action="store_true")
     run.add_argument("--max-shards", type=int, default=0)
-    run.add_argument("--category", choices=sorted(SUPPORTED_CATEGORIES))
+    run.add_argument("--category")
     run.add_argument("--build-attempt", type=UUID)
     run.add_argument(
         "--build-attempt-sequence",

@@ -18,7 +18,6 @@ from typing import Any, Mapping
 
 from core.jsonio import read_json, write_json
 from core.paths import ProjectPaths
-from core.queue import SUPPORTED_CATEGORIES
 
 _LOGGER = logging.getLogger(__name__)
 _MANUAL_PREFIX = "manual-"
@@ -42,9 +41,10 @@ _CATEGORY_SCAFFOLDS = {
 }
 # 中文注释：`_CHALLENGE_NAMESPACE` 只用来识别"这个目录名属于挑战命名空间"，
 # 比之前 ^(web|pwn|re)-\d+ 宽松，能覆盖真实 design-task 生成的
-# web-<hex8>-<NNNN>-<slug> 形态。具体哪一个 id 是已认领的，由 `_match_claimed_id`
+# web-<hex8>-<NNNN>-<slug> / crypto-0001-lattice 形态。具体哪一个 id 是已认领的，由 `_match_claimed_id`
 # 拿 shard payload 里的 ids 集合做精确匹配，不再依赖 regex 的格式假设。
-_CHALLENGE_NAMESPACE = re.compile(r"^(web|pwn|re)-[a-zA-Z0-9][a-zA-Z0-9_-]*$")
+_CHALLENGE_NAMESPACE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*-[a-zA-Z0-9][a-zA-Z0-9_-]*$")
+_DEFAULT_CHALLENGE_PREFIXES = frozenset({"web", "pwn", "re"})
 
 
 def _match_claimed_id(name: str, claimed_ids: set[str]) -> str | None:
@@ -58,6 +58,13 @@ def _match_claimed_id(name: str, claimed_ids: set[str]) -> str | None:
         if name == cid or name.startswith(f"{cid}-"):
             return cid
     return None
+
+
+def _challenge_prefix(name: str) -> str | None:
+    prefix, sep, _rest = name.partition("-")
+    if not sep or not prefix:
+        return None
+    return prefix.lower()
 
 
 class WorkspacePreflightError(ValueError):
@@ -553,8 +560,8 @@ def _validate_challenges(challenges: Any) -> tuple[str, set[str]]:
             raise WorkspacePreflightError("every shard challenge must be an object")
         category = challenge.get("category")
         challenge_id = challenge.get("id")
-        if category not in SUPPORTED_CATEGORIES:
-            raise WorkspacePreflightError(f"unsupported challenge category: {category!r}")
+        if not isinstance(category, str) or not category.strip():
+            raise WorkspacePreflightError("every shard challenge must have a string category")
         if not isinstance(challenge_id, str) or not challenge_id:
             raise WorkspacePreflightError("every shard challenge must have a string id")
         categories.add(category)
@@ -597,6 +604,11 @@ def _verify_output_writable(output: Path) -> None:
 
 
 def _reject_unrelated_artifacts(root: Path, challenge_ids: set[str]) -> None:
+    guarded_prefixes = {
+        prefix
+        for cid in challenge_ids
+        if (prefix := _challenge_prefix(cid)) is not None
+    } | _DEFAULT_CHALLENGE_PREFIXES
     for current, directories, files in os.walk(root, followlinks=False):
         for name in [*directories, *files]:
             entry = Path(current) / name
@@ -605,6 +617,9 @@ def _reject_unrelated_artifacts(root: Path, challenge_ids: set[str]) -> None:
                 names.append(entry.resolve(strict=False).name)
             for candidate in names:
                 if not _CHALLENGE_NAMESPACE.match(candidate):
+                    continue
+                prefix = _challenge_prefix(candidate)
+                if prefix not in guarded_prefixes:
                     continue
                 if _match_claimed_id(candidate, challenge_ids) is None:
                     raise WorkspacePreflightError(f"workspace contains unrelated challenge artifact: {candidate}")
