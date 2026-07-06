@@ -417,12 +417,23 @@ def _sync_pwn_runtime_artifact(
     artifact_path = _safe_child(challenge_dir, artifact)
     runtime_path = _pwn_runtime_binary_path(challenge_dir, artifact_path.name)
     container_id = _docker_create_for_copy(challenge_id, image, timeout=timeout)
+    started = _docker_start_for_copy(container_id, challenge_id=challenge_id, timeout=timeout)
+    if not started:
+        _docker_rm_container(container_id, timeout=min(10.0, timeout))
+        return False
     try:
         _docker_cp_from_container(
             challenge_id,
             container_id,
             runtime_path,
             artifact_path,
+            timeout=timeout,
+        )
+        _mirror_runtime_artifact_to_deploy_src(
+            challenge_id,
+            container_id,
+            runtime_path,
+            challenge_dir / "deploy" / "src" / artifact_path.name,
             timeout=timeout,
         )
     finally:
@@ -529,7 +540,47 @@ def _docker_cp_from_container(
                 f"Expected runtime ELF at {runtime_path}; align Dockerfile, "
                 "xinetd server_args, and metadata.artifact."
             ),
+    )
+
+
+def _docker_start_for_copy(container_id: str, *, challenge_id: str, timeout: float) -> bool:
+    try:
+        result = subprocess.run(
+            ["docker", "start", container_id],
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
         )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return False
+    if result.returncode != 0:
+        return False
+    return True
+
+
+def _mirror_runtime_artifact_to_deploy_src(
+    challenge_id: str,
+    container_id: str,
+    runtime_path: str,
+    deploy_runtime_path: Path,
+    *,
+    timeout: float,
+) -> None:
+    """Best-effort mirror of the runtime ELF into deploy/src for inspection only."""
+    command = ["docker", "cp", f"{container_id}:{runtime_path}", str(deploy_runtime_path)]
+    try:
+        result = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return
+    if result.returncode != 0 or not deploy_runtime_path.is_file():
+        return
 
 
 def _docker_rm_container(container_id: str, *, timeout: float) -> None:

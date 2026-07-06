@@ -212,6 +212,36 @@ class RenderPromptTests(unittest.TestCase):
         self.assertIn(r"missing terminator \x00 in asm", rendered)
         self.assertNotIn(r"\u0000", rendered)
 
+    def test_validation_repair_prompt_prefers_evidence_over_port_checks(self):
+        rendered = render_validation_repair_prompt(
+            attempt=2,
+            max_attempts=3,
+            validation_results=[
+                {
+                    "challenge_id": "pwn-0001",
+                    "solve_status": "failed",
+                    "local_solve_status": "passed",
+                    "remote_solve_status": "failed",
+                    "validation_status": "nonzero_exit",
+                    "validation_error": "EOFError after banner token",
+                    "validation_returncode": 1,
+                    "validation_command": "./validate.sh",
+                    "validation_final_flag_candidate": "flag{candidate}",
+                    "pwn_failure_stage": "readiness",
+                }
+            ],
+        )
+
+        self.assertIn("one-shot validation contract", rendered)
+        self.assertIn("application banner/menu/token", rendered)
+        self.assertIn("port-open evidence", rendered)
+        self.assertIn("solve_status + validation_status", rendered)
+        self.assertIn("docker logs", rendered)
+        self.assertIn("chroot --spec=1000:1000 is wrong", rendered)
+        self.assertIn("local_solve_status", rendered)
+        self.assertIn("remote_solve_status", rendered)
+        self.assertIn("final flag candidate", rendered)
+
     def test_retry_section_appears_when_context_is_present(self):
         with TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

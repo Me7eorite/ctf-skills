@@ -43,6 +43,9 @@ def render_validation_repair_prompt(
                 key: result[key]
                 for key in (
                     "challenge_id",
+                    "solve_status",
+                    "local_solve_status",
+                    "remote_solve_status",
                     "validation_status",
                     "validation_error",
                     "validation_returncode",
@@ -93,6 +96,21 @@ Before choosing a repair route, read the latest validation-history context below
 as authoritative over `logs/report.json` or any Hermes self-summary. If the latest status is
 `contract_failed`, fix the contract, hygiene, or semantic blocker first; do not keep tuning an
 older timeout or solver-I/O symptom.
+
+Validation contract:
+- `validate.sh` is a one-shot validation contract, not a long-running service. It should
+  bring up the challenge, wait for readiness, run the solver, and tear the container down
+  again. Container destruction after validation is expected, not a defect.
+- Readiness for Pwn means the application banner/menu/token is visible on a fresh connection.
+  `nc -z` only proves the port is open; it does not prove the service is ready.
+- `local_solve_status` and `remote_solve_status` are state fields, not truth sources. The
+  real evidence is `solve_status`, `validation_status`, `validation_command`,
+  `validation_returncode`, and the final flag candidate
+  (`validation_final_flag_candidate`).
+- `docker logs`, `docker exec`, `ps`, `ss`, `netstat`, and direct
+  `chroot --userspec=1000:1000 /home/ctf ./<binary>` are debugging tools, not the
+  validation truth source. If you see `chroot --spec=1000:1000`, that is wrong;
+  use `--userspec=1000:1000`.
 
 Inherited build context:
 {context_section}
@@ -448,15 +466,40 @@ def _render_governed_repair_context(
         first_failure = _summarize_round(debug_context.get("first_validation_failure"))
         history_tail = debug_context.get("validation_history_tail") or []
         pwn_debug_results = debug_context.get("pwn_debug_results") or {}
+    validation_contract = {
+        "one_shot": True,
+        "service_lifecycle": "bring up -> wait ready -> run solver -> tear down",
+        "ready_definition": "Pwn readiness requires an application banner/menu/token, not just port-open evidence",
+        "true_sources": [
+            "solve_status",
+            "validation_status",
+            "validation_command",
+            "validation_returncode",
+            "validation_final_flag_candidate",
+        ],
+        "debug_tools_not_truth_sources": [
+            "docker logs",
+            "docker exec",
+            "ps",
+            "ss",
+            "netstat",
+            "chroot --userspec=1000:1000 /home/ctf ./<binary>",
+        ],
+        "bad_chroot_flag": "chroot --spec=1000:1000 is wrong; use --userspec=1000:1000",
+    }
     payload = {
         "root_validation_failure": first_failure or _summarize_diagnostic(current),
         "current_blocker": _summarize_diagnostic(current),
         "classification_conflicts": current.get("classification_conflicts") or [],
+        "validation_contract": validation_contract,
         "evidence_bundle": {
             "validate_stdout_tail": current.get("validation_stdout_tail") or "(unavailable)",
             "validate_stderr_tail": current.get("validation_stderr_tail") or "(unavailable)",
             "solver_stdout_tail": current.get("solver_stdout_tail") or "(unavailable)",
             "solver_stderr_tail": current.get("solver_stderr_tail") or "(unavailable)",
+            "solve_status": current.get("solve_status") or "(unavailable)",
+            "local_solve_status": current.get("local_solve_status") or "(unavailable)",
+            "remote_solve_status": current.get("remote_solve_status") or "(unavailable)",
             "pwn_debug_tcp_probe": {
                 "status": current.get("pwn_debug_tcp_probe_status") or "(unavailable)",
                 "matched_token": current.get("pwn_debug_tcp_probe_matched_token") or "(unavailable)",
@@ -542,6 +585,15 @@ def _render_repair_plan(diagnostics: Sequence[Mapping[str, object]]) -> str:
                 failure_kind=failure_kind,
                 failure_hint=failure_hint,
                 failed_step=failed_step,
+                pwn_failure_stage=str(item.get("pwn_failure_stage") or "").strip(),
+                pwn_debug_failure_stage=str(
+                    item.get("pwn_debug_failure_stage") or ""
+                ).strip(),
+                validation_command=str(item.get("validation_command") or "").strip(),
+                validation_returncode=item.get("validation_returncode"),
+                validation_final_flag_candidate=str(
+                    item.get("validation_final_flag_candidate") or ""
+                ).strip(),
                 failure_details=failure_details if isinstance(failure_details, list) else [],
             )
         )
@@ -557,6 +609,11 @@ def _repair_steps_for_status(
     failure_kind: str,
     failure_hint: str,
     failed_step: str,
+    pwn_failure_stage: str,
+    pwn_debug_failure_stage: str,
+    validation_command: str,
+    validation_returncode: object,
+    validation_final_flag_candidate: str,
     failure_details: Sequence[object] = (),
 ) -> list[str]:
     lower_error = error.lower()
@@ -759,6 +816,18 @@ def _repair_steps_for_status(
             )
         elif "permission denied" in lower_output:
             hint = "Fix executable bits, ownership, or container user permissions for the artifact and scripts."
+        elif pwn_failure_stage == "readiness" or pwn_debug_failure_stage == "readiness":
+            hint = (
+                "Service readiness failed. Inspect docker logs first, then docker exec, ps, ss, "
+                "and netstat; verify the app banner/menu/token on a fresh connection instead of "
+                "treating port-open evidence as ready."
+            )
+        elif validation_final_flag_candidate:
+            hint = (
+                "A final flag candidate already appeared, so later EOF, BrokenPipe, or missing-flag "
+                "failures are solver/protocol work unless managed pwn-debug evidence shows the service "
+                "became unavailable."
+            )
         return [
             "Root cause: `validate.sh` exited non-zero.",
             hint,
@@ -766,6 +835,10 @@ def _repair_steps_for_status(
                 "For Pwn, write or update `writenup/pwn_debug_report.json` with "
                 "checksec, offset/leak/base/gadget evidence, local-vs-container "
                 "results, and the final failing stage before editing blindly."
+            ),
+            (
+                "Remember that `validate.sh` is a one-shot contract, not a persistent "
+                "service. Validate may bring containers down after a successful run."
             ),
             "Keep validation offline-capable and deterministic; rerun `validate.sh` after each fix.",
         ]
@@ -890,11 +963,12 @@ def _pwn_repair_steps_from_failure_details(
     if "pwn_prompt_eof" in codes:
         steps.append(
             "Fix service readiness and menu synchronization: wait for the real "
-            "banner/menu prompt on a fresh connection, then align recv/send calls."
+            "banner/menu/token on a fresh connection, then align recv/send calls."
         )
         steps.append(
             "If validate.sh is involved, print bounded diagnostics for service ready state, "
-            "the first banner line, the last recv position, and the failing phase before exit."
+            "the first banner line, the last recv position, the failing phase, and the "
+            "source of truth before exit."
         )
     if "pwn_solver_prompt_desync" in codes:
         steps.append(
@@ -953,6 +1027,18 @@ def _pwn_repair_steps_from_failure_details(
             "The service was reachable but the final exploit did not recover a flag. "
             "Recheck prompt synchronization, payload layout, leak math, and the final "
             "`flag{...}` extraction path instead of relaxing validation."
+        )
+    if validation_final_flag_candidate:
+        steps.append(
+            "A flag candidate is already present in the evidence. If the target later "
+            "returns EOF, BrokenPipe, or no final flag, keep the problem in solver/protocol "
+            "space unless pwn-debug clearly proves the service is unavailable."
+        )
+    if pwn_failure_stage == "readiness":
+        steps.append(
+            "When `pwn_failure_stage == readiness`, repair service protocol, host/port, "
+            "banner/menu probing, and logs first. Do not retreat to startup arguments or "
+            "exploit constants unless the service cannot be reached at all."
         )
     if "pwn_exploit_model_unproven" in codes:
         steps.append(
@@ -1033,6 +1119,9 @@ Common (all profiles; web, pwn, and re are defaults):
 - `validate.sh` and `writenup/exp.py` MUST NOT contain the literal `metadata.flag` value.
 - `writenup/exp.py` MUST NOT read the flag from organizer files (`metadata.json`,
   `challenge.yml`, `docker-compose*`); it recovers the flag at runtime.
+- `local_solve_status` and `remote_solve_status` are state fields, not truth sources;
+  the truth source is `solve_status + validation_status + validation_command +
+  validation_returncode + validation_final_flag_candidate`.
 - `deploy/src/*.c` may be read to understand the bug, protocol, or menu flow,
   but it is never authoritative for offsets, gadgets, symbols, libc bases,
   checksec, or the SHA used by `writenup/exp.py`.
@@ -1047,6 +1136,9 @@ Web / Pwn:
   MUST read `FLAG`.
 - The exploit recovers the flag from the live service via `CHAL_HOST`/`CHAL_PORT`,
   never from the compose file that injects it.
+- Default validation must stay service-bound and reproducible. Keep local
+  `process()` / smoke branches for debugging, but do not let them become the
+  published success path.
 - `validate.sh` MUST isolate Docker Compose state for concurrent validation:
   derive a stable project from the challenge root, export `COMPOSE_PROJECT_NAME`,
   and run all `up` / `ps` / `logs` / `down` operations through
@@ -1089,6 +1181,9 @@ Web / Pwn:
   isolated-project `docker-compose ps`, recent `docker-compose logs --no-color --tail=120`,
   compose project name, service/container state, first banner or last probe output,
   and solver stdout/stderr tails. The host runner forwards those tails into repair prompts.
+- For Pwn, `docker logs`, `docker exec`, `ps`, `ss`, `netstat`, and direct
+  `chroot --userspec=1000:1000 /home/ctf ./<binary>` are debugging aids, not
+  truth sources.
 - Web additionally requires `metadata.runtime` and `metadata.framework`.
 
 Pwn container launcher:
@@ -1113,6 +1208,7 @@ Pwn container launcher:
   `/usr/sbin/chroot`; it should run the vulnerable binary with
   `server_args = --userspec=1000:1000 /home/ctf ./<binary>` by default,
   matching the fixed `ctf` user/group created in the image.
+- `chroot --spec=1000:1000` is wrong; use `--userspec=1000:1000`.
 - Build `/home/ctf` as the chroot root with the vulnerable binary, required
   runtime libraries, minimal `/dev/null`, `zero`, `random`, `urandom`, and only
   helper binaries needed by the intended exploit. This construction is

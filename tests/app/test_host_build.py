@@ -385,6 +385,90 @@ def test_host_builder_syncs_named_pwn_runtime_elf_and_refreshes_solver_evidence(
     assert f'BINARY_SHA256 = "{artifact_sha}"' in exp_text
 
 
+def test_host_builder_mirrors_pwn_runtime_elf_to_deploy_src_but_keeps_attachment_truth(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    challenge = _pwn_challenge_with_artifact(workspace)
+    (challenge / "writenup").mkdir()
+    (challenge / "writenup" / "exp.py").write_text("print('flag{demo}')\n", encoding="utf-8")
+    metadata = read_json(challenge / "metadata.json")
+    metadata.update(
+        {
+            "solve_status": "failed",
+            "validation_status": "nonzero_exit",
+            "validation_failure_class": "service-readiness",
+            "validation_elapsed": 1.23,
+        }
+    )
+    (challenge / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    validation_set = WorkspaceValidationSet(
+        candidates={"pwn-0001": challenge},
+        output_manifest_hash="sha256:before",
+    )
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[:3] == ["docker", "image", "inspect"]:
+            return subprocess.CompletedProcess(command, 0, stdout="sha256:image\n", stderr="")
+        if command[:2] == ["docker", "create"]:
+            return subprocess.CompletedProcess(command, 0, stdout="container123\n", stderr="")
+        if command[:2] == ["docker", "cp"]:
+            Path(command[3]).write_bytes(b"runtime-elf")
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if command[:2] == ["docker", "rm"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if command[:3] == ["docker", "image", "prune"]:
+            return subprocess.CompletedProcess(command, 0, stdout="Total reclaimed space: 0B\n", stderr="")
+        if command[:2] == ["readelf", "-sW"] or command[:1] == ["checksec"]:
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
+        assert kwargs["cwd"] == challenge
+        return subprocess.CompletedProcess(command, 0, stdout="built\n", stderr="")
+
+    with patch("hermes.host_build.subprocess.run", side_effect=fake_run):
+        HostBuilder().build_workspace(workspace, validation_set)
+
+    assert (challenge / "attachments" / "vuln").read_bytes() == b"runtime-elf"
+    assert (challenge / "deploy" / "src" / "vuln").read_bytes() == b"runtime-elf"
+    artifact_sha = hashlib.sha256(b"runtime-elf").hexdigest()
+    metadata = read_json(challenge / "metadata.json")
+    assert metadata["artifact_sha256"] == artifact_sha
+    assert ["docker", "cp", "container123:/home/ctf/vuln", str(challenge / "attachments" / "vuln")] in calls
+    assert ["docker", "cp", "container123:/home/ctf/vuln", str(challenge / "deploy" / "src" / "vuln")] in calls
+
+
+def test_host_builder_skips_pwn_sync_when_container_start_fails(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    challenge = _pwn_challenge_with_artifact(workspace)
+    (challenge / "deploy" / "src" / "vuln").unlink(missing_ok=True)
+    validation_set = WorkspaceValidationSet(
+        candidates={"pwn-0001": challenge},
+        output_manifest_hash="sha256:before",
+    )
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[:3] == ["docker", "image", "inspect"]:
+            return subprocess.CompletedProcess(command, 0, stdout="sha256:image\n", stderr="")
+        if command[:2] == ["docker", "create"]:
+            return subprocess.CompletedProcess(command, 0, stdout="container123\n", stderr="")
+        if command[:2] == ["docker", "start"]:
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="start failed\n")
+        if command[:3] == ["docker", "image", "prune"]:
+            return subprocess.CompletedProcess(command, 0, stdout="Total reclaimed space: 0B\n", stderr="")
+        assert kwargs["cwd"] == challenge
+        return subprocess.CompletedProcess(command, 0, stdout="built\n", stderr="")
+
+    with patch("hermes.host_build.subprocess.run", side_effect=fake_run):
+        HostBuilder().build_workspace(workspace, validation_set)
+
+    assert ["docker", "start", "container123"] in calls
+    assert not (challenge / "attachments" / "vuln").exists()
+    assert not (challenge / "deploy" / "src" / "vuln").exists()
+
+
 def test_host_builder_uses_short_pwn_slug_for_workspace_image(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path, workspace_id="09c5542e-attempt")
     challenge = _pwn_challenge(workspace, name="pwn-09c5542e-0008-canary")
