@@ -6,13 +6,14 @@ In production mode the packer SHALL include a challenge only when all of the
 following are true:
 
 - existing build metadata indicates a passed build;
-- the corpus membership's immutable BuildAttempt has an ArtifactObservation
-  with `status = passed`, or `status = inconclusive` plus a valid allowed
-  observation review;
+- the corpus membership's immutable BuildAttempt has an effectively accepted
+  ArtifactObservation (`status = passed`, or `status = inconclusive` plus a
+  valid allowed observation review);
 - the challenge belongs to the explicitly requested corpus-admission batch;
-- its member decision is `passed`, or `review_required` with a valid recorded
-  corpus approval;
-- the aggregate batch decision is `passed`;
+- its member decision is effectively accepted (`passed`, or `review_required`
+  with a valid recorded corpus approval);
+- the aggregate batch decision is `passed` after accounting for allowed member
+  reviews;
 - no non-overrideable corpus rule failed.
 
 Observation review and corpus review are independent. Passing one SHALL NOT
@@ -27,7 +28,8 @@ a production bundle.
 
 The packer MAY expose explicit `shadow` and `trial` modes. Such outputs SHALL be
 marked non-production in their summary/inventory and SHALL not overwrite the
-default production bundle without an explicit output path.
+default production bundle without an explicit output path. Shadow/trial packing
+SHALL NOT satisfy or publish through the production release gate.
 
 #### Scenario: Individually passed duplicate is excluded
 

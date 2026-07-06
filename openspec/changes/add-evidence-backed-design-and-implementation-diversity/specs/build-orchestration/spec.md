@@ -2,11 +2,16 @@
 
 ### Requirement: Build admission requires committed evidence and a passing design
 
-Build submission SHALL require the latest ChallengeDesign to have
-`quality_gate_passed = true`, one live committed DesignEvidence row, a
-committed matching reservation, and a category-valid build contract. Failure
-SHALL return a machine-readable reason and SHALL create no BuildAttempt,
-staged shard, counter increment, or parent status change.
+For governed `trial` and `production` builds, Build submission SHALL require
+the latest ChallengeDesign to have `quality_gate_passed = true`, one live
+committed DesignEvidence row, a committed matching reservation, and a
+category-valid build contract. New production submissions SHALL always be
+governed. Historical designs without evidence MAY be rebuilt only through an
+explicit `legacy_trial` mode that is recorded as non-production and cannot pass
+production corpus admission.
+
+Failure SHALL return a machine-readable reason and SHALL create no
+BuildAttempt, staged shard, counter increment, or parent status change.
 
 Governed fields SHALL come from the committed contract. The renderer SHALL NOT
 default missing governed language/runtime, artifact format, interaction,
@@ -16,9 +21,16 @@ control structure, solve action, or flag-concealment fields.
 
 - **GIVEN** an otherwise eligible designed task whose latest design has
   `quality_gate_passed = false`
-- **WHEN** Build submission is requested
+- **WHEN** governed trial or production Build submission is requested
 - **THEN** it fails with `design_quality_gate_failed`
 - **AND** no filesystem or database build work is created
+
+#### Scenario: Legacy trial cannot become production evidence
+
+- **GIVEN** a historical design without committed DesignEvidence
+- **WHEN** the operator submits it through explicit `legacy_trial` rebuild mode
+- **THEN** the build is marked non-production
+- **AND** the resulting attempt cannot satisfy production corpus admission
 
 #### Scenario: Missing governed field does not fall back
 
@@ -61,8 +73,12 @@ reference-solve checks remain mandatory.
 Host validation SHALL run the contract's closed host-owned acceptance and
 negative-test harnesses, compare required governed fields with observed facts,
 and verify required asset-flow stages using declared stage checks. Design input
-cannot select arbitrary executables or shell commands. Metadata alone is not
-proof. A required observed field that is unknown SHALL produce an
+cannot select arbitrary executables or shell commands. The harness registry
+SHALL be host-owned and closed: each `test_kind` declares allowed fields,
+assertions, artifact references, and fixture references. Contract validation
+SHALL reject unknown harness kinds, unknown assertions, undeclared
+artifact/fixture IDs, absolute paths, traversal, argv, and shell strings.
+Metadata alone is not proof. A required observed field that is unknown SHALL produce an
 ArtifactObservation with `status = inconclusive` and cannot be treated as an
 accepted build result without a separate allowed observation review whose policy
 scope permits build success.

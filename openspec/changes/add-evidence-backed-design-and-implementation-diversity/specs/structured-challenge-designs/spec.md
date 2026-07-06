@@ -45,6 +45,15 @@ Design may reference only declared artifacts/fixtures and closed assertions; it
 SHALL NOT provide an executable name, arbitrary argv, shell string, or path
 outside the challenge contract.
 
+The harness vocabulary SHALL be defined in host code and rendered into prompts
+from the same source. Initial harness kinds SHALL include only
+`artifact_direct_run`, `fixture_assertion`, `solver_with_fixture`,
+`solver_without_fixture`, and category-permitted `random_flag_rebuild`.
+Each harness kind SHALL define its accepted fields and assertions. Artifact and
+fixture references SHALL be symbolic IDs declared in the build contract, not
+paths. Unknown harness kinds, assertions, undeclared references, path traversal,
+argv, or shell strings SHALL fail contract validation.
+
 Every entry in `required_asset_flow` SHALL contain a stable `stage_id`, a
 verification harness proving the stage's declared output/capability exists, and
 a dependency harness proving the downstream solve fails when that
@@ -54,7 +63,9 @@ ChallengeDesign insertion, DesignEvidence insertion, and reservation
 `reserved -> committed` SHALL happen in one transaction. A conflicting ledger
 advance SHALL fail with `stale_design_ledger`.
 Evidence SHALL be versioned with `unique(design_task_id, evidence_version)` and
-a partial unique constraint allowing at most one non-superseded row.
+a partial unique constraint allowing at most one row with
+`superseded_at IS NULL` per task. Supersession SHALL store
+`superseded_at`, `superseded_by_evidence_id`, and `supersession_reason`.
 
 #### Scenario: Invented evidence is rejected
 
@@ -133,13 +144,13 @@ existing plan-review checkpoint before it can transition `draft -> queued`.
 The quality gate SHALL continue to be recorded without blocking persistence of
 a structurally valid Design, preserving the operator's ability to inspect the
 failed Design. However, `quality_gate_passed = false` SHALL make that Design
-ineligible for Build submission. A later valid Design revision is required
-before construction can start.
+ineligible for governed trial or production Build submission. A later valid
+Design revision is required before governed construction can start.
 
 #### Scenario: Failing quality gate persists but cannot build
 
 - **WHEN** a Design passes structural validation but fails the quality gate
 - **THEN** ChallengeDesign and its evidence are persisted for inspection with
   `quality_gate_passed = false`
-- **AND** a Build submission is rejected with
+- **AND** a governed trial or production Build submission is rejected with
   `design_quality_gate_failed`

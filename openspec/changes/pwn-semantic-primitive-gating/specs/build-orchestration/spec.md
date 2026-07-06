@@ -1,4 +1,4 @@
-﻿## ADDED Requirements
+## ADDED Requirements
 
 ### Requirement: Governed pwn validation verifies primitive realization
 For governed pwn BuildAttempts carrying a pwn primitive contract, host validation SHALL run semantic primitive audit after implementation artifacts exist and before marking validation passed. The audit SHALL inspect declared source paths, final player artifacts, binary metadata, solver/debug evidence, and primitive-library disqualifiers. It SHALL write its machine-readable findings into the existing validation result/history surface, preserve `contract_errors` / `validation_contract_errors` compatibility for callers that still consume string diagnostics, and add structured entries to validation failure details when available.
@@ -10,12 +10,19 @@ For governed pwn BuildAttempts carrying a pwn primitive contract, host validatio
 - **THEN** validation fails with `pwn_primitive_disqualified`
 - **AND** the BuildAttempt cannot become succeeded from flag-match or metadata evidence alone
 
+#### Scenario: Challenge escape is not accepted as primitive realization
+- **GIVEN** a governed pwn BuildAttempt declares a memory-corruption primitive
+- **AND** Build produces only a fixed secret check, plaintext flag path, or debug backdoor
+- **WHEN** host validation runs
+- **THEN** validation fails with `pwn_challenge_escape`
+- **AND** the diagnostic identifies the challenge-type escape class
+
 #### Scenario: Declared primitive is not realized
 - **GIVEN** a governed pwn BuildAttempt declares a memory-corruption primitive
-- **AND** Build produces only a fixed secret check, plaintext flag path, debug backdoor, or non-equivalent challenge type
+- **AND** Build produces a non-equivalent challenge type that is not a fixed secret check, plaintext flag path, or debug backdoor
 - **WHEN** host validation runs
 - **THEN** validation fails with `pwn_primitive_not_realized`
-- **AND** the diagnostic identifies the challenge-type escape when available
+- **AND** the diagnostic identifies the observed non-equivalent challenge type when available
 
 #### Scenario: Realized primitive can pass validation
 - **GIVEN** a governed pwn BuildAttempt declares a stack-overflow primitive

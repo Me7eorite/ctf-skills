@@ -116,6 +116,7 @@ back to its source ResearchRun.
 - `id`, `design_task_id`, `generation_request_id`, `reservation_version`;
 - `profile jsonb`;
 - `profile_signature` (canonical SHA-256);
+- `occupancy_scope` (nullable text; for example category/request/history scope);
 - `exclusive_signature_key` (nullable text derived from policy);
 - `state in {reserved, committed, released}`;
 - `taxonomy_version`, `policy_version`, `ledger_version`;
@@ -126,8 +127,10 @@ The database enforces:
 - `unique(design_task_id, reservation_version)`;
 - at most one `state in {reserved, committed}` reservation per DesignTask via a
   partial unique index;
-- active rows with non-null `exclusive_signature_key` are unique within the
-  policy-defined occupancy scope;
+- active rows with non-null `exclusive_signature_key` are unique by
+  `(policy_version, occupancy_scope, exclusive_signature_key)`; policy code
+  computes both `occupancy_scope` and key from normalized profile dimensions,
+  so the database never has to interpret JSON policy at constraint time;
 - `design_tasks.current_reservation_id` references the current version.
 
 The allocator reads:
@@ -142,11 +145,12 @@ and combination uniqueness. Reservation creation for one request occurs under
 the existing parent-request lock. Cross-request allocation additionally locks a
 category-scoped `design_profile_ledgers` row, increments its monotonic
 `ledger_version`, and writes all request reservations or none. Hard-exclusive
-signature occupancy is represented by the policy-derived
-`exclusive_signature_key` and protected by a partial unique index over active
-rows. Non-exclusive profiles store NULL. Conflicts retry from a fresh ledger
-snapshot. This supports parallel Design workers and parallel requests without
-allowing both to reserve the same hard-exclusive space.
+signature occupancy is represented by the policy-derived `occupancy_scope` plus
+`exclusive_signature_key` and protected by the scoped partial unique index over
+active rows. Non-exclusive profiles store NULL for both scoped fields.
+Conflicts retry from a fresh ledger snapshot. This supports parallel Design
+workers and parallel requests without allowing both to reserve the same
+hard-exclusive space.
 
 No profile candidate is silently relaxed across a hard constraint. If no
 candidate satisfies hard uniqueness/compatibility, planning returns
@@ -221,10 +225,11 @@ that version. Non-conflicting ledger advancement is allowed.
 - `evidence jsonb`;
 - `build_contract jsonb`;
 - `ledger_version`;
-- timestamps and optional supersession metadata.
+- timestamps plus `superseded_at`, `superseded_by_evidence_id`, and
+  `supersession_reason`.
 
 The database enforces `unique(design_task_id, evidence_version)` plus a partial
-unique index allowing at most one non-superseded evidence row.
+unique index allowing at most one row with `superseded_at IS NULL` per task.
 `design_tasks.current_design_evidence_id` references the current version.
 
 A valid evidence object must:
@@ -306,7 +311,23 @@ attempt from moving a revised draft back to `built`.
 ```
 
 Design does not provide executable names or shell commands. Each test is a
-declarative invocation of a closed host-owned harness, for example:
+declarative invocation of a closed host-owned harness. The harness registry is
+defined in host code and rendered into Design/Build prompts from the same
+source. Initial harness kinds are limited to:
+
+- `artifact_direct_run`;
+- `fixture_assertion`;
+- `solver_with_fixture`;
+- `solver_without_fixture`;
+- `random_flag_rebuild` where the category policy explicitly permits it.
+
+Each harness schema declares the allowed assertion names and the fields it
+accepts. Fixture and artifact references are identifiers declared in the
+build contract, not paths. Category policies may add baseline required
+harnesses, but unknown harness kinds, assertions, fixture IDs, or artifact IDs
+are contract validation failures.
+
+For example:
 
 ```json
 {
@@ -319,9 +340,8 @@ declarative invocation of a closed host-owned harness, for example:
 ```
 
 The host maps `test_kind`, fixture references, and closed assertions to fixed
-implementations. Unknown test kinds, arbitrary executables, shell strings, path
-traversal, or undeclared fixture references are invalid. Category policy
-defines mandatory baseline harnesses.
+implementations. Arbitrary executables, shell strings, path traversal, or
+undeclared references are invalid.
 
 Every required asset-flow stage has a stable `stage_id`, one verification
 harness proving its declared output/capability exists, and one dependency
@@ -344,6 +364,17 @@ evidence. It does not substitute C/ELF/XOR or redesign the challenge.
 
 ### D6 - Quality and evidence are hard build admission gates
 
+Governance mode is evaluated before Build admission:
+
+- `shadow` may record governance data beside the legacy path and may produce
+  explicit non-production reports/bundles, but legacy builds remain
+  non-production and cannot satisfy production corpus admission;
+- `trial` and `production` treat a task with a committed DesignEvidence row as
+  governed and apply the gates below;
+- new production submissions are always governed and cannot use a legacy
+  exemption.
+
+For a governed `trial` or `production` build,
 `BuildOrchestrationService` accepts a new build only when:
 
 - task status is otherwise eligible;
@@ -358,10 +389,10 @@ The full contract and evidence ID are embedded in the attributed shard.
 Governed matrix values have no generic defaults. Missing governed values cause
 `build_contract_incomplete`.
 
-Historical designs without evidence remain readable and revalidatable, but a
-new production build/rebuild requires explicit migration into a reviewed
-contract or an operator-only `legacy_trial` mode that can never pass the
-production corpus gate.
+Historical designs without evidence remain readable and revalidatable. They may
+be rebuilt only through an explicit operator-only `legacy_trial` mode that is
+recorded as non-production and can never pass the production corpus gate, or by
+first migrating the design into a reviewed governed contract.
 
 ### D7 - Host observation, not metadata, establishes implementation truth
 
@@ -374,13 +405,13 @@ production corpus gate.
 - `negative_test_results jsonb`;
 - `fingerprints jsonb`;
 - `status in {passed, failed, inconclusive}`;
-- timestamps.
+- `is_current boolean`, `superseded_at`, and timestamps.
 
 The database enforces `unique(build_attempt_id, observation_version)` and a
-partial unique constraint allowing at most one current observation per
+partial unique constraint allowing at most one `is_current = true` observation per
 BuildAttempt. Revalidation inserts a new observation version and marks the
-previous current observation superseded; it does not mutate historical check
-results in place.
+previous current observation `is_current = false` with `superseded_at`; it does
+not mutate historical check results in place.
 
 The host extracts category-appropriate facts:
 
@@ -472,10 +503,12 @@ evidence, never the only reason to declare semantic identity. The service
 stores matched challenge IDs and scores so an operator can review concrete
 pairs.
 
-Production publication requires corpus result `passed`. `review_required`
-requires an explicit operator decision with actor, reason, and timestamp.
-Overrides cannot bypass exact combined-signature duplicates or failed
-validation.
+Production publication requires an effectively accepted corpus decision:
+`passed`, or `review_required` with an explicit allowed corpus review decision
+recording actor, reason, and timestamp. Review approval does not rewrite the
+stored member decision; the aggregator records the provenance and may treat the
+member as effectively accepted. Overrides cannot bypass exact combined-signature
+duplicates or failed validation.
 
 Corpus persistence is explicit:
 
@@ -495,14 +528,17 @@ a new batch membership version. The pack command names one corpus batch
 explicitly; there is no implicit "current batch".
 
 The existing delivery packer is the production publication boundary. In
-production mode it selects only challenges whose BuildAttempt has a passing
-ArtifactObservation, or an inconclusive observation with an allowed observation
-review, and whose explicitly selected member decision is passed (or has an
-allowed corpus review). The aggregate batch decision must also be passed.
+production mode it selects only challenges whose BuildAttempt has an effectively
+accepted ArtifactObservation (`passed`, or `inconclusive` with an allowed
+observation review), and whose explicitly selected member decision is
+effectively accepted (`passed`, or `review_required` with an allowed corpus
+review). The aggregate batch decision must be `passed` after accounting for
+allowed member reviews.
 Observation review and corpus review are independent records. Selection by
 `metadata.build_status` alone is no longer sufficient.
 Shadow/trial packing remains available only through explicit mode flags and
-records that the output is non-production.
+records that the output is non-production; those modes cannot overwrite or
+satisfy the production release gate.
 
 Operational deletion of a published challenge may remove mutable task/build
 rows and files according to resource-deletion policy, but SHALL retain a

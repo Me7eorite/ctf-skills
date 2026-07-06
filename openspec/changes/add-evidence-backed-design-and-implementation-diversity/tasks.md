@@ -2,48 +2,53 @@
 
 - [ ] 1.1 Fix current lint violations in touched research/design modules and add
       the focused Ruff command to CI.
-- [ ] 1.2 Make `quality_gate_passed = false` a hard
-      `BuildOrchestrationService` admission failure with code
-      `design_quality_gate_failed`; persistence of the Design remains allowed.
-- [ ] 1.3 Add tests proving a failed quality gate cannot emit a staged/pending
-      shard or create a build attempt.
+- [ ] 1.2 Make `quality_gate_passed = false` a hard governed
+      `BuildOrchestrationService` admission failure for trial/production builds
+      with code `design_quality_gate_failed`; persistence of the Design remains
+      allowed.
+- [ ] 1.3 Add tests proving a failed quality gate cannot emit a governed
+      staged/pending shard or create a governed build attempt.
 
-## 2. Research designable-mechanism readiness
+## 2. Profile vocabulary and allocator
 
-- [ ] 2.1 Change research readiness counting to use only
-      `kind in {technique, variant}` as primary designable evidence.
-- [ ] 2.2 Make DesignTask primary allocation consume only designable findings;
-      keep scenario/prerequisite findings as supporting evidence.
-- [ ] 2.3 Persist/report when `RESEARCH_DIVERSITY_SOFT_PASS_BELOW_BY` was used
-      as `research_runs.trial_only`; do not duplicate the marker on the request.
-- [ ] 2.4 Tests: many distinct scenarios cannot satisfy an under-supported
-      design pool; repeated sub-technique findings can still pass when they
-      support distinct solve/implementation profiles.
-
-## 3. Profile vocabulary and allocator
-
-- [ ] 3.1 Add pure domain types/validators for semantic, solve,
+- [ ] 2.1 Add pure domain types/validators for semantic, solve,
       implementation, and presentation profiles with closed per-category
       vocabularies.
-- [ ] 3.2 Add `profile_taxonomy.py` as the vocabulary authority and tests that
+- [ ] 2.2 Add `profile_taxonomy.py` as the vocabulary authority and tests that
       policy values cannot reference unknown vocabulary entries.
-- [ ] 3.3 Add versioned profile policy to `generation-profiles.json`, including
+- [ ] 2.3 Add versioned profile policy to `generation-profiles.json`, including
       quota ratios, cooldowns, compatible language/format/runtime combinations,
       and hard-forbidden combined signatures.
-- [ ] 3.4 Implement deterministic canonical profile signatures.
-- [ ] 3.5 Implement deterministic batch/history-aware profile allocation with
+- [ ] 2.4 Implement deterministic canonical profile signatures.
+- [ ] 2.5 Implement deterministic batch/history-aware profile allocation with
       stable tie-breaking and `design_diversity_exhausted` diagnostics.
-- [ ] 3.6 Distinguish hard occupancy (active/live/published) from advisory
+- [ ] 2.6 Distinguish hard occupancy (active/live/published) from advisory
       history (superseded/rejected/design_unbuildable).
-- [ ] 3.7 Tests: quotas, compatibility, exact-signature rejection,
+- [ ] 2.7 Expose a pure profile-capacity check that research readiness can call
+      without persisting reservations.
+- [ ] 2.8 Tests: quotas, compatibility, exact-signature rejection,
       deterministic repeats, and no silent C/ELF fallback.
+
+## 3. Research designable-mechanism readiness
+
+- [ ] 3.1 Change research readiness counting to use only
+      `kind in {technique, variant}` as primary designable evidence and the
+      profile-capacity check from section 2.
+- [ ] 3.2 Make DesignTask primary allocation consume only designable findings;
+      keep scenario/prerequisite findings as supporting evidence.
+- [ ] 3.3 Persist/report when `RESEARCH_DIVERSITY_SOFT_PASS_BELOW_BY` was used
+      as `research_runs.trial_only`; do not duplicate the marker on the request.
+- [ ] 3.4 Tests: many distinct scenarios cannot satisfy an under-supported
+      design pool; repeated sub-technique findings can still pass when they
+      support distinct solve/implementation profiles.
 
 ## 4. Reservation persistence and concurrency
 
 - [ ] 4.1 Add `design_profile_reservations` model, DTO, repository, Alembic
       migration, `reservation_version`, active partial unique index, and
-      policy-derived nullable `exclusive_signature_key` with its partial unique
-      index, plus `reserved|committed|released` checks.
+      policy-derived nullable `occupancy_scope` and `exclusive_signature_key`
+      with a partial unique index over active scoped keys, plus
+      `reserved|committed|released` checks.
 - [ ] 4.2 Add nullable reservation reference/exposure on DesignTask.
 - [ ] 4.3 Allocate all request reservations atomically under the existing
       parent-request lock during generation/regeneration.
@@ -60,13 +65,14 @@
       historical profiles, quota usage, forbidden signatures, and version.
 - [ ] 5.2 Extend Design prompt/schema with reservation, ledger context,
       evidence, distinctness claim, compared challenge IDs, and build contract.
-- [ ] 5.3 Add `design_evidence` model/DTO/repository/migration with supersession
-      support, `evidence_version`, and one-live-row partial unique constraint.
+- [ ] 5.3 Add `design_evidence` model/DTO/repository/migration with
+      `superseded_at`, `superseded_by_evidence_id`, `supersession_reason`,
+      `evidence_version`, and one-unsuperseded-row partial unique constraint.
 - [ ] 5.4 Validate evidence finding IDs against the task ResearchRun and compare
       IDs against the supplied ledger snapshot.
 - [ ] 5.5 Validate exact profile equality with the reservation and validate the
-      structured build contract, closed harness vocabulary, and per-stage asset
-      verification/dependency harnesses.
+      structured build contract, declared artifact/fixture IDs, closed harness
+      registry, and per-stage asset verification/dependency harnesses.
 - [ ] 5.6 Commit ChallengeDesign, DesignEvidence, and reservation transition in
       one transaction; reject stale conflicting ledger versions.
 - [ ] 5.7 Tests for forged finding IDs, invented compared IDs, profile drift,
@@ -97,8 +103,9 @@
 
 ## 7. Artifact observation and contract validation
 
-- [ ] 7.1 Add `artifact_observations` model/DTO/repository/migration and
-      required/observed/check result API representation.
+- [ ] 7.1 Add `artifact_observations` model/DTO/repository/migration with
+      `is_current`/`superseded_at` versioning and required/observed/check result
+      API representation.
 - [ ] 7.2 Add category observation plugins for actual format, architecture,
       language/toolchain evidence, imports/APIs, interaction, solver behavior,
       and flag exposure.

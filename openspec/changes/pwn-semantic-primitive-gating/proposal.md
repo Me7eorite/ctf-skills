@@ -1,8 +1,10 @@
-﻿## Why
+## Why
 
 Current pwn challenge generation can still let a declared exploit path drift away from the actual implementation. A design may intend stack overflow or ret2win, while the built source only contains bounded input or a fixed secret check, causing downstream repair to hallucinate offsets and exploits that the binary cannot support.
 
 This change makes pwn exploitability a contract that Design declares and Build/host validation proves against real source and binary evidence. The system fails closed when the built artifact does not realize the declared pwn primitive.
+
+This change depends on the governed DesignEvidence/build-contract and ArtifactObservation model introduced by `add-evidence-backed-design-and-implementation-diversity`; if that change is not available, this change must first provide the minimal equivalent binding fields before implementation.
 
 ## What Changes
 
@@ -13,6 +15,7 @@ This change makes pwn exploitability a contract that Design declares and Build/h
 - Keep exploit offsets and final solver facts derived from artifact evidence, not from LLM design text.
 - Bind release eligibility to the existing built artifact, primitive contract hash, artifact manifest hash, and host validation observation rather than adding a separate release rebuild.
 - Preserve existing validation result/history and contract-error compatibility while adding structured semantic-audit diagnostics for operators, repair, and revalidation.
+- Treat unsupported primitive ids as review/triage inputs only; manual review can accept inconclusive supported-primitive evidence, but it cannot convert unsupported, disqualified, non-realized, challenge-escape, or stale evidence into a governed pass.
 
 ## Capabilities
 

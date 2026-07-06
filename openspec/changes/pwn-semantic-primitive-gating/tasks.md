@@ -1,8 +1,9 @@
-﻿## 1. Primitive contract model
+## 1. Primitive contract model
 
 - [ ] 1.1 Define the versioned primitive library schema with `primitive_id`, `primitive_version`, `requires[]`, `disqualifiers[]`, field-level `evidence_schema`, `offset_policy`, `difficulty_controls`, and `diagnostic_precedence`.
 - [ ] 1.2 Add first-version primitive definitions for `stack_overflow_ret2win_basic`, `format_string_controlled_printf_basic`, and `stack_overflow_with_leak_ret2libc` only, with ret2win requiring a concrete host-locatable control-flow target or bound dynamic control-flow observation.
-- [ ] 1.3 Add negative safe-pattern and challenge-escape cases, including bounded reads, fixed secret checks, plaintext flag exposure, debug/backdoor paths, and stronger-than-declared primitive supersets.
+- [ ] 1.3 Add negative safe-pattern and challenge-escape cases, including bounded reads, fixed secret checks, plaintext flag exposure, and debug/backdoor paths.
+- [ ] 1.3a Add stronger-than-declared primitive superset handling: explicit primitive-level allow/disqualify rules when defined, otherwise `pwn_primitive_inconclusive` with difficulty-policy review details.
 - [ ] 1.4 Add diagnostic codes for `pwn_primitive_not_realized`, `pwn_primitive_disqualified`, `pwn_primitive_evidence_missing`, `pwn_primitive_unsupported`, `pwn_challenge_escape`, `pwn_primitive_inconclusive`, and stale-artifact evidence diagnostics.
 - [ ] 1.5 Define deterministic diagnostic precedence: unsupported id, primitive-specific disqualifier hit, challenge escape, missing required evidence, non-equivalent primitive realization, inconclusive evidence, then generic not-realized fallback.
 
@@ -36,5 +37,6 @@
 - [ ] 4.7 Add tests proving fixed secret checks, plaintext flag exposure, debug/backdoor paths, and solver reads from organizer files produce `pwn_challenge_escape` and cannot satisfy memory-corruption primitive contracts.
 - [ ] 4.8 Add tests proving governed inconclusive evidence fails closed unless an explicit manual review observation is bound to the same BuildAttempt, DesignEvidence/build-contract version, primitive contract hash, and artifact manifest hash.
 - [ ] 4.8a Add tests proving manual review cannot override unsupported, disqualified, not-realized, challenge-escape, or stale-artifact evidence observations.
+- [ ] 4.8b Add tests proving unsupported primitives may be triaged but cannot become a governed pass without a new supported primitive definition and new primitive contract.
 - [ ] 4.9 Add release tests proving packaging rejects stale validation evidence and never recompiles or relinks governed pwn binaries.
 - [ ] 4.10 Add regression tests for positive unsafe `read` overflow evidence, negative `fgets(sizeof(buf))` evidence, format-string sink argument control, ret2libc missing libc/base/gadget/offset evidence, and LLM/design-text offsets being ignored.

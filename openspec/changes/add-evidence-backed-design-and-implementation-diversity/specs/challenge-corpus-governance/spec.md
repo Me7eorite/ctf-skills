@@ -77,10 +77,12 @@ Default review thresholds:
 - an inconclusive ArtifactObservation with an allowed observation review.
 
 Thresholds and quotas MAY be configured per category. Production publication
-requires `passed`, or an explicit operator approval for `review_required`.
-Corpus approval SHALL record actor, reason, and timestamp. Observation review
-and corpus review SHALL be separate records. Exact combined-profile duplicates,
-failed observations, and hard profile mismatches SHALL not be overrideable.
+requires an effectively accepted corpus decision: `passed`, or
+`review_required` with an explicit operator approval. Corpus approval SHALL
+record actor, reason, and timestamp and SHALL NOT rewrite the stored
+`review_required` decision. Observation review and corpus review SHALL be
+separate records. Exact combined-profile duplicates, failed observations, and
+hard profile mismatches SHALL not be overrideable.
 
 An inconclusive ArtifactObservation without an allowed observation review SHALL
 block corpus admission.
@@ -111,7 +113,9 @@ computing the aggregate pass.
 
 Corpus governance SHALL support `shadow`, `trial`, and `production` modes.
 
-- `shadow`: records decisions but does not block build or publication.
+- `shadow`: records decisions but does not block build or explicit
+  non-production trial/shadow outputs; it cannot satisfy or publish through the
+  production release gate.
 - `trial`: blocks failed validation and exact duplicates, while other review
   findings require operator acknowledgment.
 - `production`: enforces every configured block and review rule.

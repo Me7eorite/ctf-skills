@@ -22,9 +22,13 @@ All reservations for one request SHALL be written atomically under the
 parent-request lock. Cross-request allocation SHALL additionally serialize on
 a category-scoped Design Profile Ledger row with a monotonic `ledger_version`.
 Hard-exclusive active signatures SHALL use a policy-derived nullable
-`exclusive_signature_key`: exclusive active rows store a scoped key covered by
-a partial unique index, while non-exclusive rows store NULL. A conflict SHALL
-retry allocation from a fresh ledger snapshot.
+`occupancy_scope` plus `exclusive_signature_key`: exclusive active rows store
+both values and are covered by a partial unique index over
+`(policy_version, occupancy_scope, exclusive_signature_key)`, while
+non-exclusive rows store NULL for both. Policy code SHALL compute the scope and
+key from normalized profile dimensions; the database constraint SHALL NOT
+interpret JSON policy. A conflict SHALL retry allocation from a fresh ledger
+snapshot.
 
 Reservations SHALL be versioned with
 `unique(design_task_id, reservation_version)` and a partial unique constraint
@@ -55,7 +59,7 @@ action, or concealment mechanism with a generic default.
 - **GIVEN** two generation requests concurrently allocate the last available
   hard-exclusive signature in one category
 - **WHEN** both transactions attempt reservation
-- **THEN** the category ledger/uniqueness barrier allows at most one to commit
+- **THEN** the category ledger and scoped unique key allow at most one to commit
 - **AND** the loser retries from the incremented ledger version or fails with
   `design_diversity_exhausted`
 

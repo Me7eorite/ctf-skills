@@ -1,4 +1,4 @@
-﻿## ADDED Requirements
+## ADDED Requirements
 
 ### Requirement: Pwn Design declares a primitive contract
 For `category = pwn`, structured Design SHALL declare a pwn primitive contract as part of the validated design/build-contract payload. The contract SHALL include `primitive_id`, `primitive_version`, `intended_implementation_features`, `evidence_requirements`, `offset_policy`, and `difficulty_controls`. The Design stage SHALL NOT claim that generated source, compiled binary evidence, debugger output, offsets, gadgets, libc bases, or runtime proof has already been observed.
@@ -20,7 +20,8 @@ The primitive contract SHALL describe implementation intent and validation requi
 #### Scenario: Unsupported primitive is not silently accepted
 - **WHEN** a pwn Design output declares a primitive id outside the current versioned primitive library
 - **THEN** the Design attempt fails with a machine-readable unsupported-primitive diagnostic or routes to explicit review
-- **AND** the contract cannot be treated as governed automation until a supported primitive definition or review observation exists
+- **AND** the contract cannot be treated as governed automation until a supported primitive definition and new primitive contract exist
+- **AND** review may triage the unsupported primitive but MUST NOT mark that unsupported contract as a governed pass
 
 ### Requirement: Pwn primitive contract preserves existing design shape
 The pwn primitive contract SHALL extend the existing structured design and build-contract model without replacing the required challenge JSON fields. Existing required fields such as `id`, `title`, `category`, `difficulty`, `points`, `deployment`, `primary_technique`, `learning_objective`, `prompt`, `artifacts`, `flag_location`, `validation`, and `hints` SHALL remain required.

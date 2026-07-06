@@ -61,9 +61,10 @@ not for unattended expansion toward hundreds of challenges.
   semantic, solve, implementation, source, solver, and intended-path
   fingerprints. Exact governed-profile duplicates are blocked; configurable
   similarity thresholds produce review-required or blocking outcomes.
-- **Modify `delivery-bundle`** so production packing requires a passing
-  ArtifactObservation and corpus-admission decision; passed metadata alone is
-  insufficient. Shadow/trial bundles are explicit and marked non-production.
+- **Modify `delivery-bundle`** so production packing requires an effectively
+  accepted ArtifactObservation and an effectively accepted corpus-admission
+  decision; passed metadata alone is insufficient. Shadow/trial bundles are
+  explicit and marked non-production.
 - **Add dashboard/API visibility** for reservations, design evidence, contract
   checks, observed profiles, and corpus-gate findings. The UI displays
   authoritative server results and does not recompute fingerprints or policy.
@@ -84,9 +85,14 @@ earlier advisory-only diversity behavior for new production work:
   production gates over reservations, evidence, observations, and corpus
   decisions.
 
-Implementation should land behind shadow/trial/production modes. Shadow mode
-may coexist with advisory diversity; production mode uses this change's hard
-admission and release gates.
+Implementation should land behind explicit `shadow`, `trial`, and `production`
+modes. `shadow` mode records reservations, evidence, observations, and corpus
+findings where possible, but it must not make legacy builds production-eligible,
+must not publish production releases, and must mark all outputs non-production.
+`trial` mode enforces governed Design and Build admission for trial batches
+while keeping release manual and non-production. `production` mode uses this
+change's hard admission, observation, corpus, and release gates. New governed
+production submissions cannot fall back to the legacy build path.
 
 ## Capabilities
 

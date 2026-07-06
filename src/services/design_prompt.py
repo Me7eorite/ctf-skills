@@ -609,7 +609,8 @@ def _render_design_task(task: DesignTask) -> str:
         [
             "- chosen_mechanism: MUST be declared by the design model, not pre-assigned by code.",
             "- semantic_fingerprint: MUST summarize the final mechanism/asset flow in one stable phrase.",
-            "- diversity_rationale: MUST explain why this design differs from sibling tasks without relying on a forced template.",
+            "- diversity_rationale: MUST explain why this design differs from "
+            "sibling tasks without relying on a forced template.",
         ]
     )
     return "\n".join(lines)

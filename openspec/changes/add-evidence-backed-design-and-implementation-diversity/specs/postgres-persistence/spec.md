@@ -20,6 +20,15 @@ mutating audit-significant results in place. Current/live rows SHALL be
 identified by explicit state or current-reference fields plus database
 constraints.
 
+`design_profile_reservations` SHALL include nullable `occupancy_scope` and
+`exclusive_signature_key` columns. Active exclusive reservations SHALL be unique
+by `(policy_version, occupancy_scope, exclusive_signature_key)` through a
+partial unique index where both scoped fields are non-null and state is active.
+
+`design_evidence` SHALL store supersession fields
+`superseded_at`, `superseded_by_evidence_id`, and `supersession_reason`, and
+SHALL enforce at most one unsuperseded row per DesignTask.
+
 #### Scenario: Historical task loads without governance rows
 
 - **GIVEN** a pre-change design task has no reservation, evidence, observation,
@@ -33,11 +42,11 @@ constraints.
 
 The persistence layer SHALL store ArtifactObservations as versions per
 BuildAttempt. It SHALL enforce `unique(build_attempt_id, observation_version)`
-and at most one current observation per BuildAttempt.
+and at most one `is_current = true` observation per BuildAttempt.
 
 Revalidation SHALL insert a new observation version and mark the prior current
-observation superseded. It SHALL NOT overwrite prior observed profile,
-contract-check, negative-test, or fingerprint results.
+observation `is_current = false` with `superseded_at`. It SHALL NOT overwrite
+prior observed profile, contract-check, negative-test, or fingerprint results.
 
 #### Scenario: Revalidation creates a new observation version
 
@@ -62,4 +71,3 @@ The marker SHALL not be duplicated on GenerationRequest.
 - **AND** R has `trial_only = true`
 - **WHEN** production corpus admission evaluates the candidate
 - **THEN** it can block the candidate because its source research was trial-only
-
