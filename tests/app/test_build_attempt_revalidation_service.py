@@ -16,7 +16,7 @@ import sqlalchemy as sa
 from sqlalchemy import create_engine
 
 import services.build_attempt_revalidation_service as revalidation_module
-from core.jsonio import write_json
+from core.jsonio import read_json, write_json
 from core.paths import ProjectPaths
 from persistence.models import build_attempts as build_model
 from persistence.models import challenge_designs as design_model
@@ -25,7 +25,9 @@ from persistence.models import executions as exec_model
 from persistence.models import research as research_model
 from persistence.models.progress import ProgressEvent, ProgressSnapshot
 from persistence.repositories import (
+    ArtifactObservationRepository,
     BuildAttemptsRepository,
+    DesignEvidenceRepository,
     ExecutionsRepository,
     PostgresProgressStore,
 )
@@ -127,6 +129,7 @@ def clean_database(session_factory: SessionFactory):
     with session_factory() as session:
         session.execute(sa.delete(ProgressSnapshot))
         session.execute(sa.delete(ProgressEvent))
+        session.execute(sa.delete(design_model.DesignEvidence))
         session.execute(sa.delete(build_model.BuildAttempt))
         session.execute(sa.delete(design_model.ChallengeDesign))
         session.execute(sa.delete(design_model.DesignAttempt))
@@ -209,6 +212,60 @@ def test_revalidate_repairs_failed_attempt_without_creating_sibling(
 
     assert not (paths.shards / "failed" / basename).exists()
     assert (paths.shards / "done" / basename).exists()
+
+
+def test_governed_revalidation_persists_failed_observation(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    paths = ProjectPaths(root=tmp_path, repository=tmp_path)
+    paths.initialize()
+    task_id, attempt_id, basename, challenge_id = _seed_failed_attempt(session_factory)
+    _write_failed_shard(paths, task_id, attempt_id, basename, challenge_id)
+    _write_web_challenge(paths, challenge_id)
+    metadata_path = paths.challenges / "web" / f"{challenge_id}-demo" / "metadata.json"
+    metadata = read_json(metadata_path)
+    metadata.update(
+        {
+            "solve_status": "passed",
+            "validation_status": "passed",
+            "validation_final_flag_candidate": "flag{demo}",
+            "publishable": True,
+            "language": "python",
+            "runtime": "flask",
+            "target_format": "container",
+            "interaction": "http_form",
+            "flag_concealment": "database_record",
+            "direct_run_reveals_flag": True,
+            "contract_harness_results": {
+                "recover-password-verification": "passed",
+                "recover-password-dependency": "passed",
+            },
+        }
+    )
+    write_json(metadata_path, metadata)
+    _bind_governed_evidence(session_factory, task_id, attempt_id)
+    service = BuildAttemptRevalidationService(
+        paths=paths,
+        progress=PostgresProgressStore(session_factory),
+        session_factory=session_factory,
+        validator=_PassingValidator(),  # type: ignore[arg-type]
+        image_exists=lambda _image: True,
+    )
+
+    with pytest.raises(BuildAttemptRevalidationError, match="unintended_solution_succeeded"):
+        service.revalidate(attempt_id)
+
+    with session_factory() as session:
+        row = session.get(build_model.BuildAttempt, attempt_id)
+        assert row.status == "failed"
+        assert row.artifact_status == "present"
+        assert "unintended_solution_succeeded" in row.error
+        observation = ArtifactObservationRepository(session).latest_current_for_attempt(attempt_id)
+        assert observation is not None
+        assert observation.status == "failed"
+        assert observation.contract_checks["status_reason"] == "unintended_solution_succeeded"
+        assert session.get(task_model.DesignTask, task_id).status == "build_failed"
 
 
 def test_revalidate_downgrades_inconsistent_success_and_revalidates(
@@ -837,6 +894,103 @@ def _write_web_challenge(paths: ProjectPaths, challenge_id: str, *, root: Path |
     (challenge / "writenup" / "wp.md").write_text(body, encoding="utf-8")
     (challenge / "README.md").write_text(body, encoding="utf-8")
     return challenge
+
+
+def _bind_governed_evidence(
+    session_factory: SessionFactory,
+    task_id: UUID,
+    attempt_id: UUID,
+) -> UUID:
+    profile = _governed_profile()
+    with transaction(factory=session_factory) as session:
+        task = session.get(task_model.DesignTask, task_id)
+        design_attempt = design_model.DesignAttempt(
+            id=uuid4(),
+            design_task_id=task_id,
+            attempt=1,
+            status="completed",
+            claim_token=uuid4(),
+            finished_at=datetime.now(timezone.utc),
+            profile_name_used="default",
+        )
+        design = design_model.ChallengeDesign(
+            id=uuid4(),
+            design_task_id=task_id,
+            design_attempt_id=design_attempt.id,
+            payload={"challenges": [{"id": task.challenge_id, "category": "web"}]},
+            summary="governed",
+            flag_format="flag{...}",
+            validation_notes="passed",
+            quality_gate_passed=True,
+            status="draft",
+        )
+        session.add_all([design_attempt, design])
+        session.flush()
+        evidence = DesignEvidenceRepository(session).create_live(
+            design_task_id=task_id,
+            challenge_design_id=design.id,
+            research_finding_ids=[],
+            profile=profile,
+            profile_signature="test-profile",
+            distinctness_claim="Distinct solve and implementation profile.",
+            compared_challenge_ids=[],
+            evidence={"claims": ["claim"]},
+            build_contract=_build_contract(profile),
+            ledger_version=1,
+        )
+        row = session.get(build_model.BuildAttempt, attempt_id)
+        row.design_evidence_id = evidence.id
+        row.contract_sha256 = "contract-current"
+        task.current_design_evidence_id = evidence.id
+        return evidence.id
+
+
+def _governed_profile() -> dict[str, object]:
+    return {
+        "implementation": {
+            "artifact_format": "container",
+            "language": "python",
+            "runtime": "flask",
+            "interaction": "http_form",
+            "flag_concealment": "database_record",
+        }
+    }
+
+
+def _build_contract(profile: dict[str, object]) -> dict[str, object]:
+    return {
+        "required_profile": profile,
+        "required_player_actions": ["payload_injection"],
+        "required_components": ["web-service"],
+        "required_asset_flow": [
+            {
+                "stage_id": "recover-password",
+                "produced_asset_or_capability": "admin password",
+                "verification_harness": {
+                    "id": "recover-password-verification",
+                    "test_kind": "fixture_assertion",
+                    "fixture_ref": "admin-password",
+                    "assertion": "non_empty",
+                },
+                "dependency_harness": {
+                    "id": "recover-password-dependency",
+                    "test_kind": "solver_without_fixture",
+                    "fixture_ref": "admin-password",
+                    "assertion": "must_fail",
+                },
+            }
+        ],
+        "forbidden_shortcuts": [
+            {
+                "id": "direct-run",
+                "test_kind": "artifact_direct_run",
+                "artifact_ref": "primary",
+                "assertion": "stdout_not_contains_flag",
+            }
+        ],
+        "acceptance_tests": [],
+        "allowed_implementation_freedom": [],
+    }
 
 
 def _write_pwn_challenge_with_missing_exp_sha(

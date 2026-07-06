@@ -132,9 +132,9 @@
 
 ## 8. Corpus governance
 
-- [ ] 8.1 Add the corpus fingerprint schema and canonical generators for
+- [x] 8.1 Add the corpus fingerprint schema and canonical generators for
       semantic/solve/implementation/combined/source/solver/path fingerprints.
-- [ ] 8.2 Add `corpus_batches`, immutable batch memberships,
+- [x] 8.2 Add `corpus_batches`, immutable batch memberships,
       `corpus_decisions`, `corpus_matches`, `observation_review_decisions`, and
       `corpus_review_decisions`, plus append-only `corpus_history_entries`.
 - [ ] 8.3 Implement indexed candidate shortlisting and exact similarity

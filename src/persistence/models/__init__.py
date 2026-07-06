@@ -9,6 +9,15 @@ from persistence.models.challenge_designs import (
     DesignDifficultyReview,
     DesignEvidence,
 )
+from persistence.models.challenge_corpus import (
+    CorpusBatch,
+    CorpusBatchMember,
+    CorpusDecision,
+    CorpusHistoryEntry,
+    CorpusMatch,
+    CorpusReviewDecision,
+    ObservationReviewDecision,
+)
 from persistence.models.design_profile_reservations import (
     DesignProfileLedger,
     DesignProfileReservation,
@@ -39,6 +48,12 @@ __all__ = [
     "BuildFeedbackSnapshot",
     "ChallengeCategory",
     "ChallengeDesign",
+    "CorpusBatch",
+    "CorpusBatchMember",
+    "CorpusDecision",
+    "CorpusHistoryEntry",
+    "CorpusMatch",
+    "CorpusReviewDecision",
     "DesignDifficultyReview",
     "DesignEvidence",
     "DesignAttempt",
@@ -49,6 +64,7 @@ __all__ = [
     "GenerationRequest",
     "HermesProfileBinding",
     "ProgressEvent",
+    "ObservationReviewDecision",
     "RevalidationEvent",
     "ProgressSnapshot",
     "ResearchFinding",
