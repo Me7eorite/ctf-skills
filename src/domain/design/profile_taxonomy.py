@@ -1,0 +1,900 @@
+"""Governed design profile vocabulary, policy, signatures, and allocation.
+
+This module is deliberately pure domain code. It does not reserve database
+rows, read historical tables, or mutate DesignTask state; later orchestration
+layers can call it to validate policy, compute signatures, and ask whether a
+batch has enough profile capacity.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from collections import Counter
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from enum import StrEnum
+from functools import lru_cache
+from typing import Any, Literal
+
+from core.jsonio import read_json
+from core.paths import ProjectPaths
+
+ProfileAxis = Literal["semantic", "solve", "implementation", "presentation"]
+PROFILE_AXES: tuple[ProfileAxis, ...] = (
+    "semantic",
+    "solve",
+    "implementation",
+    "presentation",
+)
+
+
+class ProfileTaxonomyError(ValueError):
+    """Raised when a profile or policy references unknown governed values."""
+
+
+class DesignDiversityExhausted(ValueError):
+    """Raised when no deterministic profile candidate satisfies hard policy."""
+
+    def __init__(self, diagnostics: Mapping[str, Any]) -> None:
+        super().__init__("design_diversity_exhausted")
+        self.code = "design_diversity_exhausted"
+        self.diagnostics = dict(diagnostics)
+
+
+class ProfileOccupancyState(StrEnum):
+    RESERVED = "reserved"
+    COMMITTED = "committed"
+    LIVE = "live"
+    PUBLISHED = "published"
+    SUPERSEDED = "superseded"
+    REJECTED = "rejected"
+    DESIGN_UNBUILDABLE = "design_unbuildable"
+    RELEASED = "released"
+
+
+HARD_OCCUPANCY_STATES: frozenset[str] = frozenset(
+    {
+        ProfileOccupancyState.RESERVED,
+        ProfileOccupancyState.COMMITTED,
+        ProfileOccupancyState.LIVE,
+        ProfileOccupancyState.PUBLISHED,
+    }
+)
+ADVISORY_HISTORY_STATES: frozenset[str] = frozenset(
+    {
+        ProfileOccupancyState.SUPERSEDED,
+        ProfileOccupancyState.REJECTED,
+        ProfileOccupancyState.DESIGN_UNBUILDABLE,
+        ProfileOccupancyState.RELEASED,
+    }
+)
+
+
+@dataclass(frozen=True)
+class AxisSchema:
+    fields: Mapping[str, tuple[str, ...]]
+
+
+@dataclass(frozen=True)
+class CategoryProfileTaxonomy:
+    category: str
+    semantic: AxisSchema
+    solve: AxisSchema
+    implementation: AxisSchema
+    presentation: AxisSchema
+
+    def axis(self, name: ProfileAxis) -> AxisSchema:
+        return getattr(self, name)
+
+
+@dataclass(frozen=True)
+class GovernedProfile:
+    semantic: Mapping[str, str]
+    solve: Mapping[str, str]
+    implementation: Mapping[str, str]
+    presentation: Mapping[str, str]
+
+    def as_mapping(self) -> dict[str, dict[str, str]]:
+        return {
+            "semantic": dict(self.semantic),
+            "solve": dict(self.solve),
+            "implementation": dict(self.implementation),
+            "presentation": dict(self.presentation),
+        }
+
+
+@dataclass(frozen=True)
+class ProfileSignatures:
+    semantic_signature: str
+    solve_signature: str
+    implementation_signature: str
+    presentation_signature: str
+    combined_profile_signature: str
+    exact_signature: str
+
+    def as_mapping(self) -> dict[str, str]:
+        return {
+            "semantic_signature": self.semantic_signature,
+            "solve_signature": self.solve_signature,
+            "implementation_signature": self.implementation_signature,
+            "presentation_signature": self.presentation_signature,
+            "combined_profile_signature": self.combined_profile_signature,
+            "exact_signature": self.exact_signature,
+        }
+
+
+@dataclass(frozen=True)
+class ProfileCandidate:
+    profile: GovernedProfile
+    signatures: ProfileSignatures
+    occupancy_scope: str | None
+    exclusive_signature_key: str | None
+
+
+@dataclass(frozen=True)
+class ProfileOccupancy:
+    profile: GovernedProfile
+    state: str
+    source_id: str | None = None
+
+    @property
+    def consumes_hard_capacity(self) -> bool:
+        return self.state in HARD_OCCUPANCY_STATES
+
+    @property
+    def is_advisory_history(self) -> bool:
+        return self.state in ADVISORY_HISTORY_STATES
+
+
+@dataclass(frozen=True)
+class ProfileCapacityResult:
+    can_allocate: bool
+    requested_count: int
+    available_count: int
+    allocations: tuple[ProfileCandidate, ...]
+    diagnostics: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class ProfilePolicy:
+    category: str
+    version: int
+    quota_ratios: Mapping[str, float]
+    cooldowns: Mapping[str, int]
+    compatibility: Mapping[str, tuple[Mapping[str, str], ...]]
+    hard_forbidden_combined_signatures: frozenset[str]
+    hard_exclusive_signature: tuple[str, ...]
+
+
+WEB_TAXONOMY = CategoryProfileTaxonomy(
+    category="web",
+    semantic=AxisSchema(
+        {
+            "family": (
+                "auth",
+                "injection",
+                "server_side",
+                "client_side",
+                "upload",
+                "node_api",
+            ),
+            "sub_technique": (
+                "jwt",
+                "idor",
+                "sqli",
+                "ssti",
+                "ssrf",
+                "deserialization",
+                "upload_parse",
+                "prototype_pollution",
+            ),
+        }
+    ),
+    solve=AxisSchema(
+        {
+            "analysis_mode": ("blackbox", "source_audit", "hybrid"),
+            "required_action": (
+                "state_manipulation",
+                "payload_injection",
+                "credential_forgery",
+                "internal_service_reach",
+                "file_upload_bypass",
+            ),
+            "chain_shape": (
+                "single-request-exploit",
+                "auth-bypass-read",
+                "inject-exfiltrate",
+                "upload-trigger-read",
+                "ssrf-pivot-recover",
+            ),
+            "required_tool_class": ("browser", "http_client", "proxy", "sql_client"),
+        }
+    ),
+    implementation=AxisSchema(
+        {
+            "artifact_format": ("container",),
+            "language": ("python", "node", "php", "java", "go", "rust"),
+            "runtime": (
+                "flask",
+                "fastapi",
+                "express",
+                "fastify",
+                "plain_php",
+                "spring_boot",
+                "gin",
+                "axum",
+            ),
+            "interaction": ("http_form", "json_api", "file_upload", "admin_bot"),
+            "control_structure": (
+                "route_handler",
+                "middleware_chain",
+                "background_worker",
+                "template_render",
+            ),
+            "flag_concealment": (
+                "database_record",
+                "signed_token",
+                "server_side_file",
+                "derived_secret",
+            ),
+        }
+    ),
+    presentation=AxisSchema(
+        {
+            "scenario_type": (
+                "admin_portal",
+                "reporting_app",
+                "ticket_queue",
+                "artifact_review",
+            ),
+            "input_model": ("web_form", "rest_api", "uploaded_file", "browser_workflow"),
+        }
+    ),
+)
+
+PWN_TAXONOMY = CategoryProfileTaxonomy(
+    category="pwn",
+    semantic=AxisSchema(
+        {
+            "family": ("stack", "format_string", "heap", "integer_oob", "sandbox"),
+            "sub_technique": (
+                "ret2libc",
+                "ret2win",
+                "format_string_got",
+                "heap_uaf_tcache",
+                "integer_oob",
+                "seccomp_orw",
+            ),
+        }
+    ),
+    solve=AxisSchema(
+        {
+            "analysis_mode": ("static", "dynamic", "hybrid"),
+            "required_action": (
+                "leak_address",
+                "control_return",
+                "write_what_where",
+                "heap_groom",
+                "syscall_orw",
+            ),
+            "chain_shape": (
+                "leak-rop-shell",
+                "overwrite-hook-win",
+                "heap-overlap-edit",
+                "orw-chain",
+            ),
+            "required_tool_class": ("debugger", "exploit_script", "rop_tool"),
+        }
+    ),
+    implementation=AxisSchema(
+        {
+            "artifact_format": ("elf",),
+            "language": ("c", "cpp", "rust", "go", "asm"),
+            "runtime": ("xinetd_chroot", "stdio_process"),
+            "interaction": ("tcp_service", "stdin_stdout", "file_input"),
+            "control_structure": ("menu_loop", "parser_state_machine", "callback_table"),
+            "flag_concealment": ("privileged_file", "runtime_generated", "post_exploit_read"),
+        }
+    ),
+    presentation=AxisSchema(
+        {
+            "scenario_type": ("training_service", "legacy_daemon", "sandbox_runner"),
+            "input_model": ("line_protocol", "binary_blob", "menu_commands"),
+        }
+    ),
+)
+
+RE_TAXONOMY = CategoryProfileTaxonomy(
+    category="re",
+    semantic=AxisSchema(
+        {
+            "family": ("crackme", "vm_bytecode", "runtime", "language", "platform"),
+            "sub_technique": (
+                "xor_transform",
+                "sbox_substitution",
+                "bytecode_vm",
+                "anti_debug",
+                "packed_binary",
+                "wasm_lift",
+                "language_bytecode",
+            ),
+        }
+    ),
+    solve=AxisSchema(
+        {
+            "analysis_mode": ("static", "dynamic", "symbolic", "hybrid"),
+            "required_action": (
+                "derive_key",
+                "lift_vm",
+                "runtime_hook",
+                "patch_branch",
+                "symbolic_solve",
+            ),
+            "chain_shape": (
+                "inspect-derive-submit",
+                "trace-hook-recover",
+                "lift-bytecode-solve",
+                "patch-run-recover",
+            ),
+            "required_tool_class": ("disassembler", "debugger", "decompiler", "symbolic_executor"),
+        }
+    ),
+    implementation=AxisSchema(
+        {
+            "artifact_format": ("elf", "wasm", "jar"),
+            "language": ("c", "cpp", "rust", "go", "java", "kotlin"),
+            "runtime": ("linux_amd64", "wasm_runtime", "jvm"),
+            "interaction": ("argv", "stdin_stdout", "file_input", "gui_state"),
+            "control_structure": (
+                "linear_checks",
+                "callback_graph",
+                "bytecode_interpreter",
+                "state_machine",
+            ),
+            "flag_concealment": (
+                "runtime_derived_key",
+                "table_substitution",
+                "symbolic_constraints",
+                "packed_section",
+            ),
+        }
+    ),
+    presentation=AxisSchema(
+        {
+            "scenario_type": ("crackme", "malware_triage", "firmware_tool", "game_asset"),
+            "input_model": ("license_key", "captured_sample", "config_file", "asset_bundle"),
+        }
+    ),
+)
+
+CATEGORY_PROFILE_TAXONOMIES: Mapping[str, CategoryProfileTaxonomy] = {
+    "web": WEB_TAXONOMY,
+    "pwn": PWN_TAXONOMY,
+    "re": RE_TAXONOMY,
+}
+
+_DEFAULT_POLICY_VERSION = 1
+_DEFAULT_QUOTA_RATIOS: Mapping[str, float] = {
+    "solve.required_action": 0.30,
+    "implementation.flag_concealment": 0.20,
+    "implementation.language": 0.40,
+    "implementation.artifact_format": 0.60,
+}
+_DEFAULT_COOLDOWNS: Mapping[str, int] = {"presentation.scenario_type": 1}
+_DEFAULT_HARD_EXCLUSIVE_SIGNATURE = (
+    "semantic.family",
+    "semantic.sub_technique",
+    "solve.analysis_mode",
+    "solve.required_action",
+    "solve.chain_shape",
+    "solve.required_tool_class",
+    "implementation.artifact_format",
+    "implementation.language",
+    "implementation.runtime",
+    "implementation.interaction",
+    "implementation.control_structure",
+    "implementation.flag_concealment",
+)
+
+
+def taxonomy_for_category(category: str) -> CategoryProfileTaxonomy:
+    try:
+        return CATEGORY_PROFILE_TAXONOMIES[category]
+    except KeyError as exc:
+        raise ProfileTaxonomyError(f"unknown profile category {category!r}") from exc
+
+
+def load_profile_policy(
+    category: str,
+    *,
+    paths: ProjectPaths | None = None,
+    raw_profile: Mapping[str, Any] | None = None,
+) -> ProfilePolicy:
+    raw = raw_profile if raw_profile is not None else _category_profile_raw(category, paths)
+    raw_policy = raw.get("profile_policy") if isinstance(raw, Mapping) else None
+    if not isinstance(raw_policy, Mapping):
+        raw_policy = {}
+    policy = ProfilePolicy(
+        category=category,
+        version=_positive_int(raw_policy.get("version"), _DEFAULT_POLICY_VERSION),
+        quota_ratios=_quota_ratios(raw_policy.get("quota_ratios")),
+        cooldowns=_cooldowns(raw_policy.get("cooldowns")),
+        compatibility=_compatibility(raw_policy.get("compatibility")),
+        hard_forbidden_combined_signatures=frozenset(
+            str(item)
+            for item in raw_policy.get("hard_forbidden_combined_signatures", ())
+            if isinstance(item, str) and item.strip()
+        ),
+        hard_exclusive_signature=tuple(
+            str(item)
+            for item in raw_policy.get("hard_exclusive_signature", _DEFAULT_HARD_EXCLUSIVE_SIGNATURE)
+            if isinstance(item, str) and item.strip()
+        ),
+    )
+    validate_profile_policy(taxonomy_for_category(category), policy)
+    return policy
+
+
+def validate_profile_policy(
+    taxonomy: CategoryProfileTaxonomy,
+    policy: ProfilePolicy,
+) -> None:
+    for path in (*policy.quota_ratios.keys(), *policy.cooldowns.keys(), *policy.hard_exclusive_signature):
+        _field_values(taxonomy, path)
+    for group_name, rows in policy.compatibility.items():
+        if not rows:
+            raise ProfileTaxonomyError(f"compatibility group {group_name!r} must not be empty")
+        for row in rows:
+            for path, value in row.items():
+                values = _field_values(taxonomy, path)
+                if value not in values:
+                    raise ProfileTaxonomyError(
+                        f"policy compatibility references unknown value {value!r} for {path}"
+                    )
+
+
+def validate_profile(
+    taxonomy: CategoryProfileTaxonomy,
+    profile: GovernedProfile | Mapping[str, Any],
+) -> GovernedProfile:
+    payload = profile.as_mapping() if isinstance(profile, GovernedProfile) else profile
+    axes: dict[str, dict[str, str]] = {}
+    for axis_name in PROFILE_AXES:
+        raw_axis = payload.get(axis_name)
+        if not isinstance(raw_axis, Mapping):
+            raise ProfileTaxonomyError(f"profile axis {axis_name!r} must be an object")
+        schema = taxonomy.axis(axis_name)
+        axis_values: dict[str, str] = {}
+        missing = sorted(set(schema.fields) - set(raw_axis))
+        if missing:
+            raise ProfileTaxonomyError(f"profile axis {axis_name!r} missing fields {missing}")
+        unknown = sorted(set(raw_axis) - set(schema.fields))
+        if unknown:
+            raise ProfileTaxonomyError(f"profile axis {axis_name!r} has unknown fields {unknown}")
+        for field, allowed in schema.fields.items():
+            value = raw_axis.get(field)
+            if not isinstance(value, str) or value not in allowed:
+                raise ProfileTaxonomyError(
+                    f"profile {axis_name}.{field}={value!r} is not in closed vocabulary"
+                )
+            axis_values[field] = value
+        axes[axis_name] = axis_values
+    return GovernedProfile(
+        semantic=axes["semantic"],
+        solve=axes["solve"],
+        implementation=axes["implementation"],
+        presentation=axes["presentation"],
+    )
+
+
+def canonical_profile_signatures(
+    profile: GovernedProfile | Mapping[str, Any],
+    *,
+    category: str,
+    policy_version: int,
+) -> ProfileSignatures:
+    normalized = validate_profile(taxonomy_for_category(category), profile)
+    payload = normalized.as_mapping()
+    semantic = _digest({"category": category, "policy_version": policy_version, "semantic": payload["semantic"]})
+    solve = _digest({"category": category, "policy_version": policy_version, "solve": payload["solve"]})
+    implementation = _digest(
+        {
+            "category": category,
+            "policy_version": policy_version,
+            "implementation": payload["implementation"],
+        }
+    )
+    presentation = _digest(
+        {"category": category, "policy_version": policy_version, "presentation": payload["presentation"]}
+    )
+    combined = _digest(
+        {
+            "category": category,
+            "policy_version": policy_version,
+            "semantic": payload["semantic"],
+            "solve": payload["solve"],
+            "implementation": payload["implementation"],
+        }
+    )
+    exact = _digest({"category": category, "policy_version": policy_version, "profile": payload})
+    return ProfileSignatures(
+        semantic_signature=semantic,
+        solve_signature=solve,
+        implementation_signature=implementation,
+        presentation_signature=presentation,
+        combined_profile_signature=combined,
+        exact_signature=exact,
+    )
+
+
+def allocate_profile_batch(
+    *,
+    category: str,
+    target_count: int,
+    semantic_assignments: Sequence[Mapping[str, str]],
+    policy: ProfilePolicy | None = None,
+    existing: Sequence[ProfileOccupancy] = (),
+) -> tuple[ProfileCandidate, ...]:
+    result = profile_capacity_check(
+        category=category,
+        target_count=target_count,
+        semantic_assignments=semantic_assignments,
+        policy=policy,
+        existing=existing,
+    )
+    if not result.can_allocate:
+        raise DesignDiversityExhausted(result.diagnostics)
+    return result.allocations
+
+
+def profile_capacity_check(
+    *,
+    category: str,
+    target_count: int,
+    semantic_assignments: Sequence[Mapping[str, str]],
+    policy: ProfilePolicy | None = None,
+    existing: Sequence[ProfileOccupancy] = (),
+) -> ProfileCapacityResult:
+    if target_count <= 0:
+        raise ProfileTaxonomyError("target_count must be positive")
+    if not semantic_assignments:
+        raise ProfileTaxonomyError("semantic_assignments must not be empty")
+    active_policy = policy or load_profile_policy(category)
+    taxonomy = taxonomy_for_category(category)
+    validate_profile_policy(taxonomy, active_policy)
+    hard_existing = [item for item in existing if item.consumes_hard_capacity]
+    advisory_existing = [item for item in existing if item.is_advisory_history]
+    allocations: list[ProfileCandidate] = []
+    exhausted: Counter[str] = Counter()
+
+    for index in range(target_count):
+        semantic = dict(semantic_assignments[index % len(semantic_assignments)])
+        _validate_axis_values(taxonomy, "semantic", semantic)
+        candidate = _first_eligible_candidate(
+            category=category,
+            taxonomy=taxonomy,
+            policy=active_policy,
+            semantic=semantic,
+            planned=allocations,
+            hard_existing=hard_existing,
+            target_count=target_count,
+        )
+        if candidate is None:
+            exhausted["candidate_space"] += 1
+            diagnostics = {
+                "code": "design_diversity_exhausted",
+                "category": category,
+                "target_count": target_count,
+                "allocated_count": len(allocations),
+                "available_count": len(allocations),
+                "exhausted_dimensions": sorted(exhausted),
+                "hard_occupancy_count": len(hard_existing),
+                "advisory_history_count": len(advisory_existing),
+            }
+            return ProfileCapacityResult(
+                can_allocate=False,
+                requested_count=target_count,
+                available_count=len(allocations),
+                allocations=tuple(allocations),
+                diagnostics=diagnostics,
+            )
+        allocations.append(candidate)
+
+    diagnostics = {
+        "code": None,
+        "category": category,
+        "target_count": target_count,
+        "allocated_count": len(allocations),
+        "hard_occupancy_count": len(hard_existing),
+        "advisory_history_count": len(advisory_existing),
+    }
+    return ProfileCapacityResult(
+        can_allocate=True,
+        requested_count=target_count,
+        available_count=len(allocations),
+        allocations=tuple(allocations),
+        diagnostics=diagnostics,
+    )
+
+
+def profile_occupancy_from_mapping(
+    profile: Mapping[str, Any],
+    *,
+    category: str,
+    state: str,
+    source_id: str | None = None,
+) -> ProfileOccupancy:
+    return ProfileOccupancy(
+        profile=validate_profile(taxonomy_for_category(category), profile),
+        state=state,
+        source_id=source_id,
+    )
+
+
+def _first_eligible_candidate(
+    *,
+    category: str,
+    taxonomy: CategoryProfileTaxonomy,
+    policy: ProfilePolicy,
+    semantic: Mapping[str, str],
+    planned: Sequence[ProfileCandidate],
+    hard_existing: Sequence[ProfileOccupancy],
+    target_count: int,
+) -> ProfileCandidate | None:
+    existing_signatures = {
+        canonical_profile_signatures(
+            item.profile,
+            category=category,
+            policy_version=policy.version,
+        ).combined_profile_signature
+        for item in hard_existing
+    }
+    planned_signatures = {item.signatures.combined_profile_signature for item in planned}
+    existing_exact_keys = {
+        _exclusive_key(item.profile, policy.hard_exclusive_signature)
+        for item in hard_existing
+    }
+    planned_exact_keys = {
+        item.exclusive_signature_key for item in planned if item.exclusive_signature_key
+    }
+
+    solve_rows = _axis_product(category, "solve")
+    implementation_rows = _compatible_implementation_rows(taxonomy, policy)
+    presentation_rows = _axis_product(category, "presentation")
+    fallback_candidate: ProfileCandidate | None = None
+
+    for solve in solve_rows:
+        for implementation in implementation_rows:
+            for presentation in presentation_rows:
+                profile = GovernedProfile(
+                    semantic=dict(semantic),
+                    solve=solve,
+                    implementation=implementation,
+                    presentation=presentation,
+                )
+                signatures = canonical_profile_signatures(
+                    profile,
+                    category=category,
+                    policy_version=policy.version,
+                )
+                if signatures.combined_profile_signature in policy.hard_forbidden_combined_signatures:
+                    continue
+                if signatures.combined_profile_signature in existing_signatures | planned_signatures:
+                    continue
+                exclusive_key = _exclusive_key(profile, policy.hard_exclusive_signature)
+                if exclusive_key in existing_exact_keys | planned_exact_keys:
+                    continue
+                if _quota_exceeded(
+                    profile=profile,
+                    policy=policy,
+                    planned=planned,
+                    hard_existing=hard_existing,
+                    target_count=target_count,
+                ):
+                    continue
+                candidate = ProfileCandidate(
+                    profile=profile,
+                    signatures=signatures,
+                    occupancy_scope=category,
+                    exclusive_signature_key=exclusive_key,
+                )
+                if not _cooldown_conflicts(candidate.profile, policy, planned):
+                    return candidate
+                if fallback_candidate is None:
+                    fallback_candidate = candidate
+    return fallback_candidate
+
+
+def _cooldown_conflicts(
+    profile: GovernedProfile,
+    policy: ProfilePolicy,
+    planned: Sequence[ProfileCandidate],
+) -> bool:
+    for path, window in policy.cooldowns.items():
+        if window <= 0:
+            continue
+        recent = planned[-window:]
+        value = _profile_value(profile, path)
+        if any(_profile_value(item.profile, path) == value for item in recent):
+            return True
+    return False
+
+
+def _quota_exceeded(
+    *,
+    profile: GovernedProfile,
+    policy: ProfilePolicy,
+    planned: Sequence[ProfileCandidate],
+    hard_existing: Sequence[ProfileOccupancy],
+    target_count: int,
+) -> bool:
+    for path, ratio in policy.quota_ratios.items():
+        cap = max(1, _ceil(target_count * ratio))
+        value = _profile_value(profile, path)
+        count = sum(1 for item in planned if _profile_value(item.profile, path) == value)
+        count += sum(1 for item in hard_existing if _profile_value(item.profile, path) == value)
+        if count + 1 > cap:
+            return True
+    return False
+
+
+def _compatible_implementation_rows(
+    taxonomy: CategoryProfileTaxonomy,
+    policy: ProfilePolicy,
+) -> tuple[dict[str, str], ...]:
+    rows = policy.compatibility.get("implementation")
+    all_rows = _axis_product(taxonomy.category, "implementation")
+    if not rows:
+        return all_rows
+    compatible: list[dict[str, str]] = []
+    for implementation in all_rows:
+        for row in rows:
+            if all(
+                implementation.get(field.removeprefix("implementation.")) == value
+                for field, value in row.items()
+            ):
+                compatible.append(implementation)
+                break
+    return tuple(compatible)
+
+
+@lru_cache(maxsize=None)
+def _axis_product(category: str, axis_name: ProfileAxis) -> tuple[dict[str, str], ...]:
+    axis = taxonomy_for_category(category).axis(axis_name)
+    items = list(axis.fields.items())
+    rows: list[dict[str, str]] = [{}]
+    for field, values in items:
+        rows = [dict(row, **{field: value}) for row in rows for value in values]
+    return tuple(rows)
+
+
+def _validate_axis_values(
+    taxonomy: CategoryProfileTaxonomy,
+    axis_name: ProfileAxis,
+    payload: Mapping[str, str],
+) -> None:
+    validate_profile(
+        taxonomy,
+        {
+            "semantic": payload if axis_name == "semantic" else _first_axis_value(taxonomy.semantic),
+            "solve": payload if axis_name == "solve" else _first_axis_value(taxonomy.solve),
+            "implementation": payload
+            if axis_name == "implementation"
+            else _first_axis_value(taxonomy.implementation),
+            "presentation": payload if axis_name == "presentation" else _first_axis_value(taxonomy.presentation),
+        },
+    )
+
+
+def _first_axis_value(axis: AxisSchema) -> dict[str, str]:
+    return {field: values[0] for field, values in axis.fields.items()}
+
+
+def _profile_value(profile: GovernedProfile, path: str) -> str:
+    axis, field = _split_path(path)
+    return str(getattr(profile, axis)[field])
+
+
+def _field_values(taxonomy: CategoryProfileTaxonomy, path: str) -> tuple[str, ...]:
+    axis, field = _split_path(path)
+    schema = taxonomy.axis(axis)
+    try:
+        return schema.fields[field]
+    except KeyError as exc:
+        raise ProfileTaxonomyError(f"unknown profile field path {path!r}") from exc
+
+
+def _split_path(path: str) -> tuple[ProfileAxis, str]:
+    parts = path.split(".", 1)
+    if len(parts) != 2 or parts[0] not in PROFILE_AXES or not parts[1]:
+        raise ProfileTaxonomyError(f"invalid profile field path {path!r}")
+    return parts[0], parts[1]  # type: ignore[return-value]
+
+
+def _exclusive_key(profile: GovernedProfile, paths: Sequence[str]) -> str:
+    payload = {path: _profile_value(profile, path) for path in paths}
+    return _digest(payload)
+
+
+def _digest(payload: Mapping[str, Any]) -> str:
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _category_profile_raw(category: str, paths: ProjectPaths | None) -> Mapping[str, Any]:
+    resolved = paths or ProjectPaths.discover()
+    payload = read_json(resolved.generation_profile, {})
+    if not isinstance(payload, Mapping):
+        return {}
+    profiles = payload.get("profiles")
+    if isinstance(profiles, Mapping) and isinstance(profiles.get(category), Mapping):
+        return profiles[category]
+    categories = payload.get("categories")
+    if isinstance(categories, Mapping) and isinstance(categories.get(category), Mapping):
+        return categories[category]
+    return {}
+
+
+def _quota_ratios(raw: Any) -> Mapping[str, float]:
+    values = dict(_DEFAULT_QUOTA_RATIOS)
+    if isinstance(raw, Mapping):
+        for key, value in raw.items():
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                continue
+            if 0.0 < parsed <= 1.0:
+                values[str(key)] = parsed
+    return values
+
+
+def _cooldowns(raw: Any) -> Mapping[str, int]:
+    values = dict(_DEFAULT_COOLDOWNS)
+    if isinstance(raw, Mapping):
+        for key, value in raw.items():
+            parsed = _nonnegative_int(value, -1)
+            if parsed >= 0:
+                values[str(key)] = parsed
+    return values
+
+
+def _compatibility(raw: Any) -> Mapping[str, tuple[Mapping[str, str], ...]]:
+    if not isinstance(raw, Mapping):
+        return {}
+    result: dict[str, tuple[Mapping[str, str], ...]] = {}
+    for group, rows in raw.items():
+        if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes, bytearray)):
+            continue
+        cleaned: list[Mapping[str, str]] = []
+        for row in rows:
+            if isinstance(row, Mapping):
+                cleaned.append({str(key): str(value) for key, value in row.items()})
+        if cleaned:
+            result[str(group)] = tuple(cleaned)
+    return result
+
+
+def _positive_int(value: Any, default: int) -> int:
+    if isinstance(value, bool):
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _nonnegative_int(value: Any, default: int) -> int:
+    if isinstance(value, bool):
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed >= 0 else default
+
+
+def _ceil(value: float) -> int:
+    parsed = int(value)
+    return parsed if parsed == value else parsed + 1

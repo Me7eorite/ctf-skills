@@ -1,32 +1,32 @@
 ## 1. Baseline correctness and admission
 
-- [ ] 1.1 Fix current lint violations in touched research/design modules and add
+- [x] 1.1 Fix current lint violations in touched research/design modules and add
       the focused Ruff command to CI.
-- [ ] 1.2 Make `quality_gate_passed = false` a hard governed
+- [x] 1.2 Make `quality_gate_passed = false` a hard governed
       `BuildOrchestrationService` admission failure for trial/production builds
       with code `design_quality_gate_failed`; persistence of the Design remains
       allowed.
-- [ ] 1.3 Add tests proving a failed quality gate cannot emit a governed
+- [x] 1.3 Add tests proving a failed quality gate cannot emit a governed
       staged/pending shard or create a governed build attempt.
 
 ## 2. Profile vocabulary and allocator
 
-- [ ] 2.1 Add pure domain types/validators for semantic, solve,
+- [x] 2.1 Add pure domain types/validators for semantic, solve,
       implementation, and presentation profiles with closed per-category
       vocabularies.
-- [ ] 2.2 Add `profile_taxonomy.py` as the vocabulary authority and tests that
+- [x] 2.2 Add `profile_taxonomy.py` as the vocabulary authority and tests that
       policy values cannot reference unknown vocabulary entries.
-- [ ] 2.3 Add versioned profile policy to `generation-profiles.json`, including
+- [x] 2.3 Add versioned profile policy to `generation-profiles.json`, including
       quota ratios, cooldowns, compatible language/format/runtime combinations,
       and hard-forbidden combined signatures.
-- [ ] 2.4 Implement deterministic canonical profile signatures.
-- [ ] 2.5 Implement deterministic batch/history-aware profile allocation with
+- [x] 2.4 Implement deterministic canonical profile signatures.
+- [x] 2.5 Implement deterministic batch/history-aware profile allocation with
       stable tie-breaking and `design_diversity_exhausted` diagnostics.
-- [ ] 2.6 Distinguish hard occupancy (active/live/published) from advisory
+- [x] 2.6 Distinguish hard occupancy (active/live/published) from advisory
       history (superseded/rejected/design_unbuildable).
-- [ ] 2.7 Expose a pure profile-capacity check that research readiness can call
+- [x] 2.7 Expose a pure profile-capacity check that research readiness can call
       without persisting reservations.
-- [ ] 2.8 Tests: quotas, compatibility, exact-signature rejection,
+- [x] 2.8 Tests: quotas, compatibility, exact-signature rejection,
       deterministic repeats, and no silent C/ELF fallback.
 
 ## 3. Research designable-mechanism readiness

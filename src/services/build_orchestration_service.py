@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -38,6 +39,15 @@ from persistence.session import SessionFactory, transaction
 from services.design_difficulty_validator import DesignDifficultyValidator
 
 LOG = logging.getLogger(__name__)
+BUILD_GOVERNANCE_MODE_ENV = "BUILD_GOVERNANCE_MODE"
+BUILD_GOVERNANCE_MODES: tuple[str, ...] = (
+    "legacy",
+    "legacy_trial",
+    "shadow",
+    "trial",
+    "production",
+)
+GOVERNED_BUILD_ADMISSION_MODES = frozenset({"trial", "production"})
 STAGING_ORPHAN_GRACE_SECONDS = 60 * 60
 RE_LANGUAGE_DEFAULTS: dict[str, dict[str, str]] = {
     "c": {"compiler": "gcc", "target_format": "elf"},
@@ -164,9 +174,13 @@ class BuildOrchestrationService:
         *,
         paths: ProjectPaths | None = None,
         session_factory: SessionFactory | None = None,
+        governance_mode: str | None = None,
     ) -> None:
         self.paths = paths or ProjectPaths.discover()
         self.session_factory = session_factory or SessionFactory()
+        self.governance_mode = _normalize_governance_mode(
+            governance_mode if governance_mode is not None else os.environ.get(BUILD_GOVERNANCE_MODE_ENV)
+        )
 
     def submit_batch(self, design_task_ids: Sequence[UUID]) -> list[UUID]:
         """Validate, stage, commit, then best-effort publish a task batch."""
@@ -480,6 +494,7 @@ class BuildOrchestrationService:
                 design = design_repo.latest_design(task_id)
                 if design is None:
                     raise BuildOrchestrationError(f"design task {task_id} has no validated draft design")
+                self._validate_design_quality_for_submit(design)
                 difficulty_review = DesignDifficultyValidator().review(
                     design_task=task,
                     challenge_design=design,
@@ -676,6 +691,16 @@ class BuildOrchestrationService:
             raise BuildOrchestrationError("only the latest build attempt can be retried")
         return latest.shard_basename
 
+    def _validate_design_quality_for_submit(self, design: design_dto.ChallengeDesign) -> None:
+        if self.governance_mode not in GOVERNED_BUILD_ADMISSION_MODES:
+            return
+        if design.quality_gate_passed:
+            return
+        raise BuildOrchestrationError(
+            f"design task {design.design_task_id} failed design quality gate",
+            code="design_quality_gate_failed",
+        )
+
     def _write_staged_payload(self, submission: _PreparedSubmission) -> Path:
         destination = self.paths.build_attempt_staging / f"{submission.attempt_id}.json"
         temporary = destination.with_suffix(destination.suffix + ".tmp")
@@ -805,6 +830,17 @@ def _read_retry_diagnostics(paths: ProjectPaths, attempt_id: UUID) -> dict[str, 
     if latest_failure:
         diagnostics["latest_failure"] = latest_failure
     return diagnostics
+
+
+def _normalize_governance_mode(raw: str | None) -> str:
+    value = (raw or "shadow").strip().lower()
+    if value not in BUILD_GOVERNANCE_MODES:
+        allowed = ", ".join(BUILD_GOVERNANCE_MODES)
+        raise BuildOrchestrationError(
+            f"unsupported build governance mode {raw!r}; expected one of: {allowed}",
+            code="unsupported_governance_mode",
+        )
+    return value
 
 
 def _matrix_values(

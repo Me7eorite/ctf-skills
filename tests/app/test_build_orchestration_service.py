@@ -129,6 +129,7 @@ def _seed_designed_task(
     task_no: int = 1,
     difficulty: str = "easy",
     design_payload: dict | None = None,
+    quality_gate_passed: bool = True,
 ) -> UUID:
     with session_factory() as session:
         request = research_model.GenerationRequest(
@@ -181,7 +182,7 @@ def _seed_designed_task(
             summary="validated design",
             flag_format="flag{...}",
             validation_notes="passed",
-            quality_gate_passed=True,
+            quality_gate_passed=quality_gate_passed,
             status="draft",
         )
         session.add_all([request, run, task, design_attempt, design])
@@ -192,10 +193,13 @@ def _seed_designed_task(
 def _service(
     tmp_path: Path,
     session_factory: SessionFactory,
+    *,
+    governance_mode: str | None = None,
 ) -> BuildOrchestrationService:
     return BuildOrchestrationService(
         paths=ProjectPaths(root=tmp_path, repository=tmp_path),
         session_factory=session_factory,
+        governance_mode=governance_mode,
     )
 
 
@@ -303,6 +307,51 @@ def test_prebuild_difficulty_review_blocks_failed_medium_design(
         assert review.actual_difficulty == "below_claimed"
         assert review.required_revision
     assert not list((service.paths.shards / "pending").glob("*.json"))
+
+
+@pytest.mark.parametrize("governance_mode", ["trial", "production"])
+def test_governed_submit_blocks_failed_design_quality_without_build_work(
+    governance_mode: str,
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory, quality_gate_passed=False)
+    service = _service(tmp_path, session_factory, governance_mode=governance_mode)
+
+    with pytest.raises(BuildOrchestrationError) as excinfo:
+        service.submit_single(task_id)
+
+    assert excinfo.value.code == "design_quality_gate_failed"
+    assert "design quality gate" in str(excinfo.value)
+    with session_factory() as session:
+        assert BuildAttemptsRepository(session).list_for_design_task(task_id) == []
+        task = session.get(task_model.DesignTask, task_id)
+        assert task is not None and task.status == "designed"
+        draft = session.scalar(
+            sa.select(design_model.ChallengeDesign).where(
+                design_model.ChallengeDesign.design_task_id == task_id,
+                design_model.ChallengeDesign.status == "draft",
+            )
+        )
+        assert draft is not None
+        assert draft.quality_gate_passed is False
+    assert not service.paths.build_attempt_staging.exists()
+    assert not list((service.paths.shards / "pending").glob("*.json"))
+
+
+def test_shadow_submit_keeps_failed_design_quality_non_blocking(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory, quality_gate_passed=False)
+    service = _service(tmp_path, session_factory, governance_mode="shadow")
+
+    attempt_id = service.submit_single(task_id)
+
+    with session_factory() as session:
+        assert BuildAttemptsRepository(session).get(attempt_id) is not None
+        assert session.get(task_model.DesignTask, task_id).status == "building"
+    assert list((service.paths.shards / "pending").glob("*.json"))
 
 
 @pytest.mark.parametrize("category", ["web", "pwn", "re"])

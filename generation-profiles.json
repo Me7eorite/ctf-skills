@@ -21,6 +21,45 @@
       ],
       "technique_quota": 1,
       "cooldown_window": 1,
+      "profile_policy": {
+        "version": 1,
+        "quota_ratios": {
+          "solve.required_action": 0.3,
+          "implementation.flag_concealment": 0.2,
+          "implementation.language": 0.4,
+          "implementation.artifact_format": 0.6
+        },
+        "cooldowns": {
+          "presentation.scenario_type": 1
+        },
+        "hard_exclusive_signature": [
+          "semantic.family",
+          "semantic.sub_technique",
+          "solve.analysis_mode",
+          "solve.required_action",
+          "solve.chain_shape",
+          "solve.required_tool_class",
+          "implementation.artifact_format",
+          "implementation.language",
+          "implementation.runtime",
+          "implementation.interaction",
+          "implementation.control_structure",
+          "implementation.flag_concealment"
+        ],
+        "hard_forbidden_combined_signatures": [],
+        "compatibility": {
+          "implementation": [
+            {"implementation.language": "python", "implementation.runtime": "flask", "implementation.artifact_format": "container"},
+            {"implementation.language": "python", "implementation.runtime": "fastapi", "implementation.artifact_format": "container"},
+            {"implementation.language": "node", "implementation.runtime": "express", "implementation.artifact_format": "container"},
+            {"implementation.language": "node", "implementation.runtime": "fastify", "implementation.artifact_format": "container"},
+            {"implementation.language": "php", "implementation.runtime": "plain_php", "implementation.artifact_format": "container"},
+            {"implementation.language": "java", "implementation.runtime": "spring_boot", "implementation.artifact_format": "container"},
+            {"implementation.language": "go", "implementation.runtime": "gin", "implementation.artifact_format": "container"},
+            {"implementation.language": "rust", "implementation.runtime": "axum", "implementation.artifact_format": "container"}
+          ]
+        }
+      },
       "policy": [
         "A shard should use at least two runtimes when it contains three or more Web challenges.",
         "Do not select Python when the matrix row names another runtime.",
@@ -49,6 +88,42 @@
       "architectures": ["x86_64"],
       "technique_quota": 1,
       "cooldown_window": 1,
+      "profile_policy": {
+        "version": 1,
+        "quota_ratios": {
+          "solve.required_action": 0.3,
+          "implementation.flag_concealment": 0.2,
+          "implementation.language": 0.4,
+          "implementation.artifact_format": 0.6
+        },
+        "cooldowns": {
+          "presentation.scenario_type": 1
+        },
+        "hard_exclusive_signature": [
+          "semantic.family",
+          "semantic.sub_technique",
+          "solve.analysis_mode",
+          "solve.required_action",
+          "solve.chain_shape",
+          "solve.required_tool_class",
+          "implementation.artifact_format",
+          "implementation.language",
+          "implementation.runtime",
+          "implementation.interaction",
+          "implementation.control_structure",
+          "implementation.flag_concealment"
+        ],
+        "hard_forbidden_combined_signatures": [],
+        "compatibility": {
+          "implementation": [
+            {"implementation.language": "c", "implementation.runtime": "xinetd_chroot", "implementation.artifact_format": "elf"},
+            {"implementation.language": "cpp", "implementation.runtime": "xinetd_chroot", "implementation.artifact_format": "elf"},
+            {"implementation.language": "rust", "implementation.runtime": "xinetd_chroot", "implementation.artifact_format": "elf"},
+            {"implementation.language": "go", "implementation.runtime": "xinetd_chroot", "implementation.artifact_format": "elf"},
+            {"implementation.language": "asm", "implementation.runtime": "stdio_process", "implementation.artifact_format": "elf"}
+          ]
+        }
+      },
       "policy": [
         "Record PIE, NX, RELRO, canary, and stripped status.",
         "Compile the distributed ELF during generation.",
@@ -82,6 +157,44 @@
       },
       "technique_quota": 1,
       "cooldown_window": 1,
+      "profile_policy": {
+        "version": 1,
+        "quota_ratios": {
+          "solve.required_action": 0.3,
+          "implementation.flag_concealment": 0.2,
+          "implementation.language": 0.4,
+          "implementation.artifact_format": 0.6
+        },
+        "cooldowns": {
+          "presentation.scenario_type": 1
+        },
+        "hard_exclusive_signature": [
+          "semantic.family",
+          "semantic.sub_technique",
+          "solve.analysis_mode",
+          "solve.required_action",
+          "solve.chain_shape",
+          "solve.required_tool_class",
+          "implementation.artifact_format",
+          "implementation.language",
+          "implementation.runtime",
+          "implementation.interaction",
+          "implementation.control_structure",
+          "implementation.flag_concealment"
+        ],
+        "hard_forbidden_combined_signatures": [],
+        "compatibility": {
+          "implementation": [
+            {"implementation.language": "c", "implementation.runtime": "linux_amd64", "implementation.artifact_format": "elf"},
+            {"implementation.language": "cpp", "implementation.runtime": "linux_amd64", "implementation.artifact_format": "elf"},
+            {"implementation.language": "rust", "implementation.runtime": "linux_amd64", "implementation.artifact_format": "elf"},
+            {"implementation.language": "go", "implementation.runtime": "linux_amd64", "implementation.artifact_format": "elf"},
+            {"implementation.language": "rust", "implementation.runtime": "wasm_runtime", "implementation.artifact_format": "wasm"},
+            {"implementation.language": "java", "implementation.runtime": "jvm", "implementation.artifact_format": "jar"},
+            {"implementation.language": "kotlin", "implementation.runtime": "jvm", "implementation.artifact_format": "jar"}
+          ]
+        }
+      },
       "policy": [
         "Unless the matrix explicitly requests another format, compile a Linux amd64 ELF.",
         "Source code alone or a README placeholder in attachments/ is not a deliverable.",
