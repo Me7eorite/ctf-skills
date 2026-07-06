@@ -95,6 +95,11 @@ def test_invoke_research_agent_forwards_capture_arguments(monkeypatch, tmp_path)
     assert captured_call_map["log_path"] == log_path
     assert captured_call_map["cwd"] == tmp_path
     assert captured_call_map["timeout"] == 30
+    expected_home = tmp_path / "work" / "research" / "hermes-sessions" / "research" / "hermes-home"
+    assert captured_call_map["environment"]["HERMES_HOME"] == str(expected_home)
+    assert captured_call_map["environment"]["CTF_SKILLS_HERMES_SESSION_HOME"] == str(
+        expected_home
+    )
 
 
 def test_subprocess_env_excludes_database_url_and_passwords(monkeypatch, tmp_path):

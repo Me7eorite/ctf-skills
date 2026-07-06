@@ -57,17 +57,22 @@ def invoke_research_agent(
     # 中文注释：组装 Hermes Research Agent 的命令和环境，再委托通用捕获执行器运行。
     hermes_arguments = hermes_process.inject_profile_argument(profile_name)
     environment_map = _build_research_env(paths)
-    if (
-        hermes_process.project_hermes_home_is_configured(paths.hermes_home)
-        and not environment_map.get("HERMES_HOME")
-    ):
-        environment_map["HERMES_HOME"] = str(paths.hermes_home)
-    if hermes_process.apply_legacy_custom_provider(paths.hermes_home, environment_map):
-        hermes_process.remove_conflicting_custom_pool(paths.hermes_home)
+    template_home = hermes_process.resolve_template_hermes_home(
+        paths.hermes_home,
+        environment_map,
+    )
+    if hermes_process.apply_legacy_custom_provider(template_home, environment_map):
+        hermes_process.remove_conflicting_custom_pool(template_home)
         query_flag_index = (
             hermes_arguments.index("-q") if "-q" in hermes_arguments else len(hermes_arguments)
         )
         hermes_arguments[query_flag_index:query_flag_index] = ["--provider", "custom"]
+    hermes_process.configure_isolated_hermes_home(
+        environment_map,
+        source_home=template_home,
+        session_root=paths.work / "research" / "hermes-sessions" / log_path.stem,
+        profile_name=profile_name,
+    )
 
     return invoke_capture(
         prompt,

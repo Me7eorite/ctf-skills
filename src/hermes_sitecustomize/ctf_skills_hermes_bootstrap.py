@@ -123,6 +123,7 @@ def _ctf_env_snapshot() -> dict[str, str]:
         "CTF_SKILLS_EXECUTION_ID",
         "CTF_SKILLS_HERMES_DOCKER_LABEL",
         "CTF_SKILLS_HERMES_TASK_ID",
+        "CTF_SKILLS_HERMES_SESSION_HOME",
         "CTF_SKILLS_HOST_WORKSPACE",
         "CTF_SKILLS_CONTAINER_WORKSPACE",
     ):

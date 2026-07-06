@@ -60,6 +60,10 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         self.paths = ProjectPaths(root=root, repository=root)
         self.paths.initialize()
         self.paths.generation_profile.write_text("{}\n", encoding="utf-8")
+        for profile_name in ("cf-web", "cf-pwn"):
+            profile_dir = self.paths.hermes_home / "profiles" / profile_name
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            (profile_dir / ".env").write_text("", encoding="utf-8")
         self.paths.design_skill.parent.mkdir(parents=True, exist_ok=True)
         self.paths.design_skill.write_text("# Design\n", encoding="utf-8")
         self.paths.design_references.mkdir(parents=True, exist_ok=True)
@@ -1138,6 +1142,15 @@ class ExecutionWorkspaceTests(unittest.TestCase):
         self.assertEqual(captured["arguments"][:4], ["hermes", "-p", "cf-web", "chat"])
         self.assertEqual(captured["cwd"], workspace.root)
         self.assertNotEqual(captured["cwd"], self.paths.root)
+        env = captured["env"]
+        self.assertEqual(env["HERMES_HOME"], str(workspace.hermes_session_root / "hermes-home"))
+        self.assertEqual(
+            env["CTF_SKILLS_HERMES_SESSION_HOME"],
+            str(workspace.hermes_session_root / "hermes-home"),
+        )
+        self.assertTrue(
+            (workspace.hermes_session_root / "hermes-home" / "profiles" / "cf-web").is_dir()
+        )
 
     def test_publisher_accepts_real_design_task_challenge_id_format(self) -> None:
         """Regression: design_task ids are `<cat>-<hex8>-<NNNN>` (+optional slug).

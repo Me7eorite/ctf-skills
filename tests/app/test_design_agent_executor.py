@@ -19,6 +19,7 @@ def test_invoke_design_agent_forwards_skill_prompt_profile_and_log(
     monkeypatch,
     tmp_path,
 ):
+    monkeypatch.delenv("HERMES_HOME", raising=False)
     captured_call_map = {}
 
     def fake_invoke_capture(prompt_text, **keyword_args):
@@ -59,6 +60,7 @@ def test_invoke_design_agent_forwards_skill_prompt_profile_and_log(
     assert captured_call_map["log_path"] == log_path
     assert captured_call_map["cwd"] == tmp_path
     assert captured_call_map["timeout"] == 45
+    assert "HERMES_HOME" not in captured_call_map["environment"]
 
 
 def test_invoke_design_agent_uses_supplied_cwd(
@@ -93,6 +95,12 @@ def test_invoke_design_agent_uses_supplied_cwd(
     )
 
     assert captured_call_map["cwd"] == workspace
+    assert captured_call_map["environment"]["HERMES_HOME"] == str(
+        workspace / "hermes-home"
+    )
+    assert captured_call_map["environment"]["CTF_SKILLS_HERMES_SESSION_HOME"] == str(
+        workspace / "hermes-home"
+    )
 
 
 def test_executor_returns_stdout_exit_code_and_duration(tmp_path):

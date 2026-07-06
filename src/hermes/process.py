@@ -39,12 +39,78 @@ _CTF_HERMES_EXECUTION_ENV = "CTF_SKILLS_EXECUTION_ID"
 _CTF_HERMES_TASK_ENV = "CTF_SKILLS_HERMES_TASK_ID"
 _CTF_HERMES_HOST_WORKSPACE_ENV = "CTF_SKILLS_HOST_WORKSPACE"
 _CTF_HERMES_CONTAINER_WORKSPACE_ENV = "CTF_SKILLS_CONTAINER_WORKSPACE"
+_CTF_HERMES_HOME_ENV = "CTF_SKILLS_HERMES_SESSION_HOME"
 _CTF_HERMES_BOOTSTRAP_DIR = Path(__file__).resolve().parents[1] / "hermes_sitecustomize"
 # The probe starts a full Hermes CLI process. On server-side custom providers,
 # plugin loading plus model metadata probing can take over a minute before the
 # first terminal/file tool call is made, so keep this comfortably above that
 # startup cost while still failing much earlier than a normal worker timeout.
 TERMINAL_WORKSPACE_PROBE_TIMEOUT = 240
+_HERMES_HOME_CONFIG_FILES = (
+    "config.yaml",
+    ".env",
+    "auth.json",
+    "SOUL.md",
+)
+_HERMES_PROFILE_STATE_NAMES = frozenset(
+    {
+        "audio_cache",
+        "backups",
+        "cache",
+        "checkpoints",
+        "cron",
+        "gateway.pid",
+        "gateway_state.json",
+        "image_cache",
+        "logs",
+        "memories",
+        "pairing",
+        "plans",
+        "processes.json",
+        "sessions",
+        "state-snapshots",
+        "state.db",
+        "state.db-shm",
+        "state.db-wal",
+        "workspace",
+    }
+)
+_HERMES_ROOT_STATE_NAMES = frozenset(
+    {
+        ".hermes_history",
+        ".skills_prompt_snapshot.json",
+        ".update_check",
+        "audio_cache",
+        "auth.lock",
+        "backups",
+        "bootstrap-cache",
+        "cache",
+        "checkpoints",
+        "context_length_cache.yaml",
+        "cron",
+        "gateway.pid",
+        "gateway_state.json",
+        "image_cache",
+        "interrupt_debug.log",
+        "logs",
+        "memories",
+        "models_dev_cache.json",
+        "ollama_cloud_models_cache.json",
+        "pairing",
+        "pastes",
+        "plans",
+        "processes.json",
+        "projects.db",
+        "provider_models_cache.json",
+        "sandboxes",
+        "sessions",
+        "state-snapshots",
+        "state.db",
+        "state.db-shm",
+        "state.db-wal",
+        "workspace",
+    }
+)
 
 
 class TerminalWorkspaceVisibilityError(RuntimeError):
@@ -195,6 +261,126 @@ def inject_profile_argument(profile_name: str) -> list[str]:
         profile_name,
         *base_arguments[chat_index:],
     ]
+
+
+def resolve_template_hermes_home(
+    project_hermes_home: Path,
+    environment: Mapping[str, str] | None = None,
+) -> Path:
+    """Return the Hermes home to use as a read-only config template."""
+    env = os.environ if environment is None else environment
+    raw_home = env.get("HERMES_HOME", "").strip()
+    if raw_home:
+        return Path(raw_home).expanduser()
+    if project_hermes_home_is_configured(project_hermes_home):
+        return project_hermes_home
+    return Path.home() / ".hermes"
+
+
+def configure_isolated_hermes_home(
+    environment: dict[str, str],
+    *,
+    source_home: Path,
+    session_root: Path,
+    profile_name: str,
+) -> Path:
+    """Materialize a per-run Hermes home and point the invocation at it.
+
+    Hermes currently creates fresh CLI sessions implicitly and stores them under
+    ``HERMES_HOME``/profile state. Challenge Factory still reuses category
+    profile names for model/tool configuration, so this helper copies only
+    reusable configuration into a workspace-local home and leaves session
+    history, memory, logs, checkpoints, and SQLite state behind.
+    """
+    isolated_home = session_root / "hermes-home"
+    materialize_isolated_hermes_home(
+        isolated_home,
+        source_home=source_home,
+        profile_name=profile_name,
+    )
+    environment["HERMES_HOME"] = str(isolated_home)
+    environment[_CTF_HERMES_HOME_ENV] = str(isolated_home)
+    return isolated_home
+
+
+def materialize_isolated_hermes_home(
+    target_home: Path,
+    *,
+    source_home: Path,
+    profile_name: str,
+) -> Path:
+    """Create/update a Hermes home that is isolated from shared profile state."""
+    target_home.mkdir(parents=True, exist_ok=True)
+    _copy_hermes_root_config(source_home, target_home)
+    _materialize_isolated_profile(source_home, target_home, profile_name)
+    for directory in ("sessions", "logs", "memories", "checkpoints", "cache"):
+        (target_home / directory).mkdir(exist_ok=True)
+    return target_home
+
+
+def _copy_hermes_root_config(source_home: Path, target_home: Path) -> None:
+    for filename in _HERMES_HOME_CONFIG_FILES:
+        _copy_if_regular_file(source_home / filename, target_home / filename)
+
+
+def _materialize_isolated_profile(
+    source_home: Path,
+    target_home: Path,
+    profile_name: str,
+) -> None:
+    target_profile = target_home / "profiles" / profile_name
+    target_profile.mkdir(parents=True, exist_ok=True)
+    source_profile = source_home / "profiles" / profile_name
+    if source_profile.is_dir():
+        for child in source_profile.iterdir():
+            if child.name in _HERMES_PROFILE_STATE_NAMES:
+                continue
+            _copy_hermes_config_entry(child, target_profile / child.name)
+    elif profile_name == "default":
+        for child in source_home.iterdir() if source_home.is_dir() else ():
+            if child.name in _HERMES_ROOT_STATE_NAMES or child.name == "profiles":
+                continue
+            _copy_hermes_config_entry(child, target_profile / child.name)
+    for directory in ("sessions", "logs", "memories"):
+        (target_profile / directory).mkdir(exist_ok=True)
+
+
+def _copy_hermes_config_entry(source: Path, target: Path) -> None:
+    if source.is_symlink():
+        return
+    if source.is_file():
+        _copy_if_regular_file(source, target)
+        return
+    if not source.is_dir():
+        return
+    if target.exists() and not target.is_dir():
+        target.unlink()
+    shutil.copytree(
+        source,
+        target,
+        dirs_exist_ok=True,
+        ignore=_ignore_hermes_state_entries,
+    )
+
+
+def _ignore_hermes_state_entries(_directory: str, names: list[str]) -> list[str]:
+    ignored: list[str] = []
+    for name in names:
+        if (
+            name in _HERMES_PROFILE_STATE_NAMES
+            or name in _HERMES_ROOT_STATE_NAMES
+            or name == "__pycache__"
+            or name.endswith((".pyc", ".pyo", ".sock", ".tmp"))
+        ):
+            ignored.append(name)
+    return ignored
+
+
+def _copy_if_regular_file(source: Path, target: Path) -> None:
+    if not source.is_file() or source.is_symlink():
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, target)
 
 
 def apply_legacy_custom_provider(
@@ -1044,6 +1230,7 @@ _INVOKE_LOGGED_ENV_KEYS = (
     _CTF_HERMES_EXECUTION_ENV,
     _CTF_HERMES_TASK_ENV,
     _CTF_HERMES_LABEL_ENV,
+    _CTF_HERMES_HOME_ENV,
     _CTF_HERMES_HOST_WORKSPACE_ENV,
     _CTF_HERMES_CONTAINER_WORKSPACE_ENV,
 )
@@ -1192,6 +1379,7 @@ _LOGGED_ENV_KEYS = (
     _CTF_HERMES_EXECUTION_ENV,
     _CTF_HERMES_TASK_ENV,
     _CTF_HERMES_LABEL_ENV,
+    _CTF_HERMES_HOME_ENV,
     _CTF_HERMES_HOST_WORKSPACE_ENV,
     _CTF_HERMES_CONTAINER_WORKSPACE_ENV,
 )

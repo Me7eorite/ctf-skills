@@ -323,6 +323,25 @@ def test_auto_repair_makes_validate_sh_compose_compatible(tmp_path: Path) -> Non
     assert second.changed is False
 
 
+def test_auto_repair_preserves_validate_sh_executable_bit(tmp_path: Path) -> None:
+    challenge_dir = tmp_path / "challenge"
+    challenge_dir.mkdir()
+    _write_metadata(challenge_dir, category="pwn")
+    validate = challenge_dir / "validate.sh"
+    validate.write_text(
+        "#!/bin/bash\n"
+        "set -e\n"
+        "docker compose up -d\n",
+        encoding="utf-8",
+    )
+    validate.chmod(0o644)
+
+    result = auto_repair_challenge(challenge_dir)
+
+    assert result.changed is True
+    assert validate.stat().st_mode & 0o111
+
+
 def test_auto_repair_repairs_legacy_recursive_compose_helper(tmp_path: Path) -> None:
     challenge_dir = tmp_path / "challenge"
     challenge_dir.mkdir()

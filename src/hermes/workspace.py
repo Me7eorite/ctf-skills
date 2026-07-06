@@ -127,6 +127,10 @@ class ExecutionWorkspace:
     def state(self) -> Path:
         return self.active / "state"
 
+    @property
+    def hermes_session_root(self) -> Path:
+        return self.active / ".hermes-session"
+
 
 def derive_workspace_id(payload: Mapping[str, Any]) -> str:
     """Use the attributed build attempt UUID, otherwise create a manual id."""

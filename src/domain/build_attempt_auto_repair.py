@@ -103,6 +103,14 @@ PY
 """
 
 
+def _write_validate_sh(path: Path, text: str) -> None:
+    path.write_text(text, encoding="utf-8")
+    try:
+        path.chmod(0o755)
+    except OSError:
+        pass
+
+
 @dataclass(frozen=True)
 class AutoRepairResult:
     changed: bool
@@ -439,11 +447,11 @@ def _repair_validate_wrapper(challenge_dir: Path, metadata: dict[str, Any]) -> l
         text = ""
     if validate.is_file() and not any(token in text for token in ("metadata.json", "challenge.yml")):
         return []
-    validate.write_text(
+    _write_validate_sh(
+        validate,
         "#!/bin/sh\n"
         "set -eu\n"
         f"python3 writenup/exp.py ./{artifact} | grep -Eo 'flag\\{{[^}}]+\\}}' | tail -n 1\n",
-        encoding="utf-8",
     )
     return ["rewrote validate.sh to check solver flag output without organizer files"]
 
@@ -467,7 +475,7 @@ def _repair_compose_validate_wrapper(challenge_dir: Path, metadata: dict[str, An
     text = _isolate_compose_project(text)
     if text == original:
         return []
-    validate.write_text(text, encoding="utf-8")
+    _write_validate_sh(validate, text)
     return ["normalized validate.sh docker-compose usage with an isolated compose project"]
 
 
@@ -495,7 +503,7 @@ def _repair_validate_workspace_paths(challenge_dir: Path, metadata: dict[str, An
     text = _replace_absolute_challenge_root_find(text, challenge_id)
     if text == original:
         return []
-    validate.write_text(text, encoding="utf-8")
+    _write_validate_sh(validate, text)
     return ["rewrote validate.sh hardcoded execution path to script-relative challenge root"]
 
 
@@ -647,7 +655,7 @@ def _repair_pwn_validate_readiness_probe(
         repaired = _ensure_pwn_readiness_probe_function(repaired)
     if repaired == text:
         return []
-    validate.write_text(repaired, encoding="utf-8")
+    _write_validate_sh(validate, repaired)
     return ["fixed pwn validate.sh readiness probe to read an application prompt"]
 
 
@@ -791,7 +799,7 @@ def _repair_validate_solver_capture(challenge_dir: Path, metadata: dict[str, Any
     repaired = repaired.replace("trap cleanup EXIT ERR", "trap cleanup EXIT")
     if repaired == text:
         return []
-    validate.write_text(repaired, encoding="utf-8")
+    _write_validate_sh(validate, repaired)
     return ["made validate.sh preserve solver diagnostics when exp.py exits non-zero"]
 
 

@@ -34,28 +34,41 @@ def invoke_design_agent(
 
     # 准备环境变量：设置 HERMES_HOME（如果尚未设置）
     environment_map = os.environ.copy()
-    if (
-        hermes_process.project_hermes_home_is_configured(paths.hermes_home)
-        and not environment_map.get("HERMES_HOME")
-    ):
-        environment_map["HERMES_HOME"] = str(paths.hermes_home)
+    template_home = hermes_process.resolve_template_hermes_home(
+        paths.hermes_home,
+        environment_map,
+    )
 
     # 处理旧版 custom provider 兼容逻辑
-    if hermes_process.apply_legacy_custom_provider(paths.hermes_home, environment_map):
+    if hermes_process.apply_legacy_custom_provider(template_home, environment_map):
         # 删除冲突的 custom pool 配置
-        hermes_process.remove_conflicting_custom_pool(paths.hermes_home)
+        hermes_process.remove_conflicting_custom_pool(template_home)
         # 在 -q 标志前插入 --provider custom
         query_flag_index = (
             hermes_arguments.index("-q") if "-q" in hermes_arguments else len(hermes_arguments)
         )
         hermes_arguments[query_flag_index:query_flag_index] = ["--provider", "custom"]
 
+    invoke_cwd = cwd or paths.root
+    if cwd is not None:
+        hermes_process.configure_isolated_hermes_home(
+            environment_map,
+            source_home=template_home,
+            session_root=invoke_cwd,
+            profile_name=profile_name,
+        )
+    elif (
+        hermes_process.project_hermes_home_is_configured(paths.hermes_home)
+        and not environment_map.get("HERMES_HOME")
+    ):
+        environment_map["HERMES_HOME"] = str(paths.hermes_home)
+
     # 委托通用捕获执行器运行
     return invoke_capture(
         prompt,
         arguments=hermes_arguments,
         log_path=log_path,
-        cwd=cwd or paths.root,
+        cwd=invoke_cwd,
         environment=environment_map,
         timeout=timeout,
     )

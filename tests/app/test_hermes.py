@@ -288,6 +288,10 @@ class HermesRunnerTests(unittest.TestCase):
             encoding="utf-8",
         )
         self.paths.generation_profile.write_text("{}\n", encoding="utf-8")
+        for profile_name in ("cf-web", "cf-pwn"):
+            profile_dir = self.paths.hermes_home / "profiles" / profile_name
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            (profile_dir / ".env").write_text("", encoding="utf-8")
         self.paths.design_skill.parent.mkdir(parents=True, exist_ok=True)
         self.paths.design_skill.write_text("# Design\n", encoding="utf-8")
         self.paths.design_references.mkdir(parents=True, exist_ok=True)
@@ -513,6 +517,14 @@ class HermesRunnerTests(unittest.TestCase):
             captured["environment"]["CTF_SKILLS_HERMES_TASK_ID"],
             "ctf-build-attempt",
         )
+        self.assertEqual(
+            captured["environment"]["HERMES_HOME"],
+            str(active / ".hermes-session" / "hermes-home"),
+        )
+        self.assertEqual(
+            captured["environment"]["CTF_SKILLS_HERMES_SESSION_HOME"],
+            str(active / ".hermes-session" / "hermes-home"),
+        )
         docker_env = json.loads(captured["environment"]["TERMINAL_DOCKER_ENV"])
         self.assertEqual(docker_env["CTF_SKILLS_EXECUTION_ID"], "attempt")
         self.assertEqual(docker_env["CTF_SKILLS_HERMES_TASK_ID"], "ctf-build-attempt")
@@ -582,6 +594,7 @@ class HermesRunnerTests(unittest.TestCase):
                 )
 
         labels = set()
+        homes = set()
         for index, (prompt, kwargs) in enumerate(captures):
             current = attempt_ids[index]
             others = set(attempt_ids) - {current}
@@ -600,10 +613,18 @@ class HermesRunnerTests(unittest.TestCase):
                 kwargs["environment"]["CTF_SKILLS_HERMES_TASK_ID"],
                 f"ctf-build-{current}",
             )
+            home = kwargs["environment"]["HERMES_HOME"]
+            self.assertIn(f"/work/executions/{current}/current/.hermes-session/hermes-home", home)
+            self.assertEqual(
+                kwargs["environment"]["CTF_SKILLS_HERMES_SESSION_HOME"],
+                home,
+            )
+            homes.add(home)
             label = kwargs["environment"]["CTF_SKILLS_HERMES_DOCKER_LABEL"]
             self.assertIn(current, label)
             labels.add(label)
         self.assertEqual(len(labels), 3)
+        self.assertEqual(len(homes), 3)
 
     def test_invoke_flushes_header_before_blocking_run(self):
         log = self.paths.logs / "live.log"

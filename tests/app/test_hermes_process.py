@@ -36,7 +36,9 @@ from hermes.process import (
     hermes_profile_health,
     invoke,
     invoke_capture,
+    materialize_isolated_hermes_home,
     project_hermes_home_is_configured,
+    resolve_template_hermes_home,
     sanitize_prompt_text,
     verify_terminal_workspace_visibility,
 )
@@ -270,6 +272,64 @@ class ProjectHermesHomeTests(unittest.TestCase):
             (hermes_home / "profiles" / "cf-re").mkdir(parents=True)
 
             self.assertTrue(project_hermes_home_is_configured(hermes_home))
+
+    def test_resolve_template_home_prefers_explicit_env(self):
+        with tempfile.TemporaryDirectory() as temp:
+            project_home = Path(temp) / "project" / ".hermes"
+            explicit_home = Path(temp) / "explicit" / ".hermes"
+
+            resolved = resolve_template_hermes_home(
+                project_home,
+                {"HERMES_HOME": str(explicit_home)},
+            )
+
+        self.assertEqual(resolved, explicit_home)
+
+    def test_isolated_home_copies_config_without_profile_state(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source_home = root / "source" / ".hermes"
+            source_profile = source_home / "profiles" / "cf-web"
+            (source_profile / "skills" / "ctf").mkdir(parents=True)
+            (source_profile / "sessions").mkdir()
+            (source_profile / "logs").mkdir()
+            (source_profile / "memories").mkdir()
+            (source_home / "sessions").mkdir(parents=True)
+            (source_home / "logs").mkdir()
+            (source_home / "config.yaml").write_text("model:\n  default: test\n", encoding="utf-8")
+            (source_home / "auth.json").write_text('{"credential_pool":{}}\n', encoding="utf-8")
+            (source_home / "state.db").write_text("shared-state", encoding="utf-8")
+            (source_profile / ".env").write_text("OPENAI_API_KEY=test\n", encoding="utf-8")
+            (source_profile / "skills" / "ctf" / "SKILL.md").write_text("# CTF\n", encoding="utf-8")
+            (source_profile / "sessions" / "old.json").write_text("old", encoding="utf-8")
+            (source_profile / "logs" / "agent.log").write_text("old log", encoding="utf-8")
+            (source_profile / "memories" / "MEMORY.md").write_text("old memory", encoding="utf-8")
+
+            isolated = materialize_isolated_hermes_home(
+                root / "workspace" / "state" / "hermes-home",
+                source_home=source_home,
+                profile_name="cf-web",
+            )
+
+            self.assertEqual(
+                (isolated / "config.yaml").read_text(encoding="utf-8"),
+                "model:\n  default: test\n",
+            )
+            self.assertTrue((isolated / "auth.json").is_file())
+            self.assertTrue((isolated / "profiles" / "cf-web" / ".env").is_file())
+            self.assertTrue(
+                (isolated / "profiles" / "cf-web" / "skills" / "ctf" / "SKILL.md").is_file()
+            )
+            self.assertFalse((isolated / "state.db").exists())
+            self.assertFalse(
+                (isolated / "profiles" / "cf-web" / "sessions" / "old.json").exists()
+            )
+            self.assertFalse(
+                (isolated / "profiles" / "cf-web" / "logs" / "agent.log").exists()
+            )
+            self.assertFalse(
+                (isolated / "profiles" / "cf-web" / "memories" / "MEMORY.md").exists()
+            )
 
     def test_effective_terminal_backend_prefers_terminal_env(self):
         with tempfile.TemporaryDirectory() as temp:

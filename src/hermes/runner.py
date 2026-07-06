@@ -2460,21 +2460,36 @@ class HermesRunner:
             else self._hermes_arguments()
         )
         environment = os.environ.copy()
-        if (
-            hermes_process.project_hermes_home_is_configured(self.paths.hermes_home)
-            and not environment.get("HERMES_HOME")
-        ):
-            environment["HERMES_HOME"] = str(self.paths.hermes_home)
-        if self._apply_legacy_custom_provider(environment):
-            self._remove_conflicting_custom_pool()
+        template_home = hermes_process.resolve_template_hermes_home(
+            self.paths.hermes_home,
+            environment,
+        )
+        if self._apply_legacy_custom_provider(environment, hermes_home=template_home):
+            self._remove_conflicting_custom_pool(hermes_home=template_home)
             query_index = arguments.index("-q") if "-q" in arguments else len(arguments)
             arguments[query_index:query_index] = ["--provider", "custom"]
 
         cwd = workspace.active if workspace is not None else self.paths.root
+        isolated_hermes_home = False
+        if workspace is not None and profile_name is not None:
+            session_root = getattr(workspace, "hermes_session_root", cwd / ".hermes-session")
+            hermes_process.configure_isolated_hermes_home(
+                environment,
+                source_home=template_home,
+                session_root=session_root,
+                profile_name=profile_name,
+            )
+            isolated_hermes_home = True
+        elif (
+            hermes_process.project_hermes_home_is_configured(self.paths.hermes_home)
+            and not environment.get("HERMES_HOME")
+        ):
+            environment["HERMES_HOME"] = str(self.paths.hermes_home)
         terminal_backend = hermes_process.effective_terminal_backend(
             self.paths.hermes_home,
             environment,
             profile_name=profile_name,
+            allow_cli_fallback=not isolated_hermes_home,
         )
         hermes_process.configure_terminal_workspace(
             environment,
@@ -2508,11 +2523,21 @@ class HermesRunner:
             ),
         )
 
-    def _apply_legacy_custom_provider(self, environment: dict[str, str]) -> bool:
-        return hermes_process.apply_legacy_custom_provider(self.paths.hermes_home, environment)
+    def _apply_legacy_custom_provider(
+        self,
+        environment: dict[str, str],
+        *,
+        hermes_home: Path | None = None,
+    ) -> bool:
+        return hermes_process.apply_legacy_custom_provider(
+            hermes_home or self.paths.hermes_home,
+            environment,
+        )
 
-    def _remove_conflicting_custom_pool(self) -> bool:
-        return hermes_process.remove_conflicting_custom_pool(self.paths.hermes_home)
+    def _remove_conflicting_custom_pool(self, *, hermes_home: Path | None = None) -> bool:
+        return hermes_process.remove_conflicting_custom_pool(
+            hermes_home or self.paths.hermes_home
+        )
 
     def _profile_agent_log_path(
         self,
