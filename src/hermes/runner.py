@@ -1050,7 +1050,7 @@ class HermesRunner:
         self._progress.record_batch(carry_forward_events)
 
         # 步骤 6: 全跳捷径 —— 所有题目都已完成，不需要调 Hermes
-        if plan.all_challenges_fully_skipped:
+        if plan.all_challenges_fully_skipped and not _shard_has_governed_evidence(payload):
             return self._shortcircuit_all_skipped(shard, original_shard_name, worker, report, challenge_ids)
 
         # 步骤 7: 写入每个题目的第一个待处理阶段 pending 事件
@@ -2900,3 +2900,15 @@ def _resume_source_shard_name(shard: Path, current_original_name: str) -> str:
     if source.name != value or source.suffix != ".json" or not source.stem:
         raise ValueError("resume_from_shard_basename must be a safe .json basename")
     return value
+
+
+def _shard_has_governed_evidence(payload: Mapping[str, Any]) -> bool:
+    if isinstance(payload.get("design_evidence_id"), str):
+        return True
+    challenges = payload.get("challenges")
+    if not isinstance(challenges, list):
+        return False
+    return any(
+        isinstance(item, Mapping) and isinstance(item.get("design_evidence_id"), str)
+        for item in challenges
+    )

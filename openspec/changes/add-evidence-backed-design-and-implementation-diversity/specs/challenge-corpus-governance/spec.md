@@ -63,8 +63,9 @@ The corpus gate SHALL return exactly one decision:
 Default hard blocks:
 
 - identical combined governed profile in batch or history, except for an
-  explicit same-task revision lineage that is already represented by the
-  current DesignTask's live superseded/effective-evidence chain;
+  explicit same-task revision lineage whose current candidate and prior
+  version share the same DesignTask lineage identifier and superseded/live
+  evidence chain;
 - repeated sub-technique only when solve and implementation signatures also
   match in one production batch;
 - source token Jaccard at or above `0.65`;
@@ -79,12 +80,12 @@ Default review thresholds:
 - an inconclusive ArtifactObservation with an allowed observation review.
 
 Thresholds and quotas MAY be configured per category. Production publication
-requires an effectively accepted corpus decision: `passed`, or
-`review_required` with an explicit operator approval. Corpus approval SHALL
-record actor, reason, and timestamp and SHALL NOT rewrite the stored
-`review_required` decision. Observation review and corpus review SHALL be
-separate records. Exact combined-profile duplicates, failed observations, and
-hard profile mismatches SHALL not be overrideable.
+requires a corpus-accepted decision: `passed`, or `review_required` with an
+explicit operator approval. Corpus approval SHALL record actor, reason, and
+timestamp and SHALL NOT rewrite the stored `review_required` decision.
+Observation review and corpus review SHALL be separate records. Exact
+combined-profile duplicates outside the same-task revision lineage, failed
+observations, and hard profile mismatches SHALL not be overrideable.
 
 An inconclusive ArtifactObservation without an allowed observation review SHALL
 block corpus admission.
@@ -93,8 +94,8 @@ The service SHALL compute both a decision for each member and one aggregate
 batch decision. A production batch is eligible only when every member is
 passed/allowed-reviewed and the aggregate decision is `passed`. An allowed
 member review does not rewrite the original `review_required` decision; the
-aggregator treats it as effectively accepted and records that provenance when
-computing the aggregate pass.
+aggregator treats it as corpus-accepted for publication and records that
+provenance when computing the aggregate pass.
 
 #### Scenario: Exact governed duplicate is blocked
 

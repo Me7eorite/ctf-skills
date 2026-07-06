@@ -34,6 +34,7 @@ class BuildAttempt:
     started_at: datetime | None
     finished_at: datetime | None
     design_evidence_id: UUID | None = field(default=None, kw_only=True)
+    artifact_observation_id: UUID | None = field(default=None, kw_only=True)
     contract_sha256: str | None = field(default=None, kw_only=True)
 
 

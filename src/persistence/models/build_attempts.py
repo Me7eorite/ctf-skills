@@ -96,6 +96,7 @@ class BuildAttempt(Base):
         sa.Uuid(),
         sa.ForeignKey("design_evidence.id", ondelete="SET NULL"),
     )
+    artifact_observation_id: Mapped[UUID | None] = mapped_column(sa.Uuid())
     contract_sha256: Mapped[str | None] = mapped_column(sa.Text())
     current_execution_id: Mapped[UUID | None] = mapped_column(sa.Uuid())
     latest_execution_id: Mapped[UUID | None] = mapped_column(sa.Uuid())

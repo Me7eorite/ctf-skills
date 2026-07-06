@@ -30,6 +30,7 @@ from persistence.models import design_tasks as task_model
 from persistence.models import executions as exec_model
 from persistence.models.progress import ProgressEvent, ProgressSnapshot
 from persistence.repositories import (
+    ArtifactObservationRepository,
     BuildAttemptsRepository,
     ExecutionsRepository,
 )
@@ -250,6 +251,9 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
                 _project_paths(app),
                 attempt,
             )
+            artifact_observation = ArtifactObservationRepository(
+                session
+            ).latest_current_for_attempt(attempt.id)
             resume_progress = _resume_progress_summary(
                 session,
                 _project_paths(app),
@@ -271,6 +275,8 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
             body["difficulty"] = task.difficulty
         body.update(_timeout_metadata_for_attempt(_project_paths(app), attempt.id))
         body.update(_execution_summary_from_rows(executions))
+        if artifact_observation is not None:
+            body["artifact_observation"] = _artifact_observation_dict(artifact_observation)
         body["sibling_attempts"] = [
             _attempt_dict(row, paths=_project_paths(app))
             for row in siblings
@@ -1035,6 +1041,29 @@ async def _json_object(request: Request) -> dict[str, Any]:
             detail="request body must be a JSON object",
         )
     return payload
+
+
+def _artifact_observation_dict(observation) -> dict[str, Any]:
+    return {
+        "id": str(observation.id),
+        "build_attempt_id": str(observation.build_attempt_id),
+        "observation_version": observation.observation_version,
+        "design_evidence_id": (
+            str(observation.design_evidence_id)
+            if observation.design_evidence_id is not None
+            else None
+        ),
+        "contract_sha256": observation.contract_sha256,
+        "artifact_manifest_sha256": observation.artifact_manifest_sha256,
+        "observed_profile": observation.observed_profile,
+        "contract_checks": observation.contract_checks,
+        "negative_test_results": observation.negative_test_results,
+        "fingerprints": observation.fingerprints,
+        "status": observation.status,
+        "is_current": observation.is_current,
+        "created_at": _isofmt(observation.created_at),
+        "superseded_at": _isofmt(observation.superseded_at),
+    }
 
 
 def _parse_build_attempt_ids(payload: dict[str, Any]) -> list[UUID]:

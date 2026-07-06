@@ -111,23 +111,23 @@
 
 ## 7. Artifact observation and contract validation
 
-- [ ] 7.1 Add `artifact_observations` model/DTO/repository/migration with
+- [x] 7.1 Add `artifact_observations` model/DTO/repository/migration with
       `is_current`/`superseded_at` versioning and required/observed/check result
       API representation.
-- [ ] 7.2 Add category observation plugins for actual format, architecture,
+- [x] 7.2 Add category observation plugins for actual format, architecture,
       language/toolchain evidence, imports/APIs, interaction, solver behavior,
       and flag exposure.
-- [ ] 7.3 Implement closed host-owned negative-test harnesses with declarative
+- [x] 7.3 Implement closed host-owned negative-test harnesses with declarative
       fixture/assertion references, bounded timeout/output, challenge-local cwd,
       and no arbitrary executable/shell input.
-- [ ] 7.4 Compare observed and required profiles and emit closed failure codes.
-- [ ] 7.5 Add required asset-flow validation hooks and random-flag rebuild
+- [x] 7.4 Compare observed and required profiles and emit closed failure codes.
+- [x] 7.5 Add required asset-flow validation hooks and random-flag rebuild
       support where category contracts permit it.
-- [ ] 7.6 Integrate observation before successful build reconciliation and into
+- [x] 7.6 Integrate observation before successful build reconciliation and into
       existing per-attempt revalidation.
-- [ ] 7.7 Bind observation reuse to BuildAttempt, DesignEvidence, contract hash,
+- [x] 7.7 Bind observation reuse to BuildAttempt, DesignEvidence, contract hash,
       and artifact-manifest hash; invalidate stale resume/all-skipped evidence.
-- [ ] 7.8 Tests for mismatch, unknown observation, successful shortcut,
+- [x] 7.8 Tests for mismatch, unknown observation, successful shortcut,
       non-required asset flow, hardcoded solver, and passing contract.
 
 ## 8. Corpus governance

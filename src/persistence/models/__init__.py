@@ -2,6 +2,7 @@
 
 from persistence.models.base import Base
 from persistence.models.build_attempts import BuildAttempt
+from persistence.models.artifact_observations import ArtifactObservation
 from persistence.models.challenge_designs import (
     ChallengeDesign,
     DesignAttempt,
@@ -34,6 +35,7 @@ __all__ = [
     "AgentRole",
     "Base",
     "BuildAttempt",
+    "ArtifactObservation",
     "BuildFeedbackSnapshot",
     "ChallengeCategory",
     "ChallengeDesign",

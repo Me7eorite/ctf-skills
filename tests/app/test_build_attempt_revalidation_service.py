@@ -672,6 +672,7 @@ def test_database_failure_after_shard_move_restores_failed_queue(
         session_factory
     )
     _write_failed_shard(paths, task_id, attempt_id, basename, challenge_id)
+    _write_web_challenge(paths, challenge_id, root=paths.root / "work" / "challenges")
     real_transaction = revalidation_module.transaction
 
     @contextmanager

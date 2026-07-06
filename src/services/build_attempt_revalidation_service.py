@@ -28,8 +28,13 @@ from hermes.validation import record_per_challenge_complete, run_validation
 from persistence.models import build_attempts as build_model
 from persistence.models import design_tasks as task_model
 from persistence.models import executions as exec_model
-from persistence.repositories import BuildAttemptsRepository
+from persistence.repositories import (
+    ArtifactObservationRepository,
+    BuildAttemptsRepository,
+    DesignEvidenceRepository,
+)
 from persistence.session import SessionFactory, transaction
+from services.artifact_observation_governance import build_artifact_observation_payload
 
 REVALIDATION_WORKER = "dashboard-revalidate"
 
@@ -487,6 +492,7 @@ class BuildAttemptRevalidationService:
     ) -> None:
         now = datetime.now(timezone.utc)
         moved = False
+        observation_error: str | None = None
         try:
             with transaction(factory=self.session_factory) as session:
                 current = session.get(build_model.BuildAttempt, attempt_id)
@@ -514,16 +520,35 @@ class BuildAttemptRevalidationService:
                 )
                 self._move_failed_shard_to_done(shard_basename)
                 moved = True
-                row.status = "succeeded"
-                row.worker = row.worker or self.worker
-                row.started_at = row.started_at or now
-                row.finished_at = now
-                row.resulting_challenge_dir = challenge_dir
-                row.artifact_status = "present"
-                row.error = None
-                if task is not None:
-                    task.status = "built"
-                    task.updated_at = now
+                observation = self._record_artifact_observation(
+                    session,
+                    row,
+                    challenge_dir=challenge_dir,
+                )
+                if row.design_evidence_id is not None and observation.status != "passed":
+                    observation_error = (
+                        "artifact observation "
+                        f"{observation.status}: "
+                        f"{observation.contract_checks.get('status_reason') or 'not accepted'}"
+                    )
+                    row.error = observation_error
+                    row.finished_at = now
+                    row.resulting_challenge_dir = challenge_dir
+                    row.artifact_status = "present"
+                    if task is not None:
+                        task.status = "build_failed"
+                        task.updated_at = now
+                else:
+                    row.status = "succeeded"
+                    row.worker = row.worker or self.worker
+                    row.started_at = row.started_at or now
+                    row.finished_at = now
+                    row.resulting_challenge_dir = challenge_dir
+                    row.artifact_status = "present"
+                    row.error = None
+                    if task is not None:
+                        task.status = "built"
+                        task.updated_at = now
         except Exception as exc:
             if moved:
                 try:
@@ -533,6 +558,53 @@ class BuildAttemptRevalidationService:
                         f"database update failed and shard restore failed: {restore_exc}"
                     ) from exc
             raise
+        if observation_error is not None:
+            if moved:
+                try:
+                    self._restore_done_shard_to_failed(shard_basename)
+                except Exception as restore_exc:
+                    raise BuildAttemptRevalidationError(
+                        f"artifact observation failed and shard restore failed: {restore_exc}"
+                    ) from restore_exc
+            raise BuildAttemptRevalidationError(observation_error)
+
+    def _record_artifact_observation(
+        self,
+        session,
+        row: build_model.BuildAttempt,
+        *,
+        challenge_dir: str,
+    ):
+        evidence = (
+            DesignEvidenceRepository(session).get(row.design_evidence_id)
+            if row.design_evidence_id is not None
+            else None
+        )
+        payload = build_artifact_observation_payload(
+            self.paths.root / challenge_dir,
+            build_attempt_id=row.id,
+            design_evidence_id=row.design_evidence_id,
+            contract_sha256=row.contract_sha256,
+            required_profile=evidence.profile if evidence is not None else None,
+            build_contract=evidence.build_contract if evidence is not None else None,
+        )
+        repo = ArtifactObservationRepository(session)
+        current = repo.latest_current_for_attempt(row.id)
+        if current is not None:
+            repo.supersede_current(row.id)
+        observation = repo.create_current(
+            build_attempt_id=row.id,
+            design_evidence_id=row.design_evidence_id,
+            contract_sha256=row.contract_sha256 or "",
+            artifact_manifest_sha256=payload["artifact_manifest_sha256"],
+            observed_profile=payload["observed_profile"],
+            contract_checks=payload["contract_checks"],
+            negative_test_results=payload["negative_test_results"],
+            fingerprints=payload["fingerprints"],
+            status=payload["status"],
+        )
+        row.artifact_observation_id = observation.id
+        return observation
 
 
 def _challenge_ids(payload: Mapping[str, Any]) -> list[str]:

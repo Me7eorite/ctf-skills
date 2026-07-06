@@ -32,6 +32,7 @@ class BuildAttemptsRepository:
         attempt_id: UUID | None = None,
         idempotency_key: str | None = None,
         design_evidence_id: UUID | None = None,
+        artifact_observation_id: UUID | None = None,
         contract_sha256: str | None = None,
     ) -> dto.BuildAttempt:
         if not shard_basename:
@@ -60,6 +61,7 @@ class BuildAttemptsRepository:
             shard_basename=shard_basename,
             idempotency_key=idempotency_key,
             design_evidence_id=design_evidence_id,
+            artifact_observation_id=artifact_observation_id,
             contract_sha256=contract_sha256,
         )
         self.session.add(row)
@@ -370,6 +372,7 @@ def _attempt(row: model.BuildAttempt) -> dto.BuildAttempt:
         error=row.error,
         idempotency_key=row.idempotency_key,
         design_evidence_id=row.design_evidence_id,
+        artifact_observation_id=row.artifact_observation_id,
         contract_sha256=row.contract_sha256,
         created_at=row.created_at,
         started_at=row.started_at,

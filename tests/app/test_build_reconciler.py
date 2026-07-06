@@ -22,10 +22,13 @@ from persistence.models import design_tasks as task_model
 from persistence.models import executions as exec_model
 from persistence.models import research as research_model
 from persistence.models.progress import ProgressEvent, ProgressSnapshot
-from persistence.repositories import BuildAttemptsRepository
-from persistence.repositories import ExecutionsRepository
-from persistence.repositories import DesignEvidenceRepository
-from persistence.repositories import DesignProfileReservationRepository
+from persistence.repositories import (
+    ArtifactObservationRepository,
+    BuildAttemptsRepository,
+    DesignEvidenceRepository,
+    DesignProfileReservationRepository,
+    ExecutionsRepository,
+)
 from persistence.session import SessionFactory, transaction
 from services.build_reconciler import (
     DEFAULT_POLL_INTERVAL_SECONDS,
@@ -186,8 +189,32 @@ def _seed_governed_attempt(session_factory: SessionFactory) -> tuple[UUID, UUID,
         "required_profile": profile,
         "required_player_actions": ["payload_injection"],
         "required_components": ["web-service"],
-        "required_asset_flow": [],
-        "forbidden_shortcuts": [],
+        "required_asset_flow": [
+            {
+                "stage_id": "recover-password",
+                "produced_asset_or_capability": "admin password",
+                "verification_harness": {
+                    "id": "recover-password-verification",
+                    "test_kind": "fixture_assertion",
+                    "fixture_ref": "admin-password",
+                    "assertion": "non_empty",
+                },
+                "dependency_harness": {
+                    "id": "recover-password-dependency",
+                    "test_kind": "solver_without_fixture",
+                    "fixture_ref": "admin-password",
+                    "assertion": "must_fail",
+                },
+            }
+        ],
+        "forbidden_shortcuts": [
+            {
+                "id": "direct-run",
+                "test_kind": "artifact_direct_run",
+                "artifact_ref": "primary",
+                "assertion": "stdout_not_contains_flag",
+            }
+        ],
         "acceptance_tests": [],
         "allowed_implementation_freedom": ["file_names"],
     }
@@ -239,7 +266,10 @@ def _seed_governed_attempt(session_factory: SessionFactory) -> tuple[UUID, UUID,
             id=uuid4(),
             design_task_id=task.id,
             design_attempt_id=design_attempt.id,
-            payload={"event": {"flag_format": "flag{...}"}, "challenges": [{"id": task.challenge_id, "category": "web"}]},
+            payload={
+                "event": {"flag_format": "flag{...}"},
+                "challenges": [{"id": task.challenge_id, "category": "web"}],
+            },
             summary="validated design",
             flag_format="flag{...}",
             validation_notes="passed",
@@ -618,7 +648,24 @@ def test_old_success_cannot_overwrite_revised_draft(
     )
     write_json(
         (reconciler.paths.challenges / "web" / f"{_challenge_id(session_factory, task_id)}-demo" / "metadata.json"),
-        {"id": _challenge_id(session_factory, task_id), "solve_status": "passed"},
+        {
+            "id": _challenge_id(session_factory, task_id),
+            "category": "web",
+            "solve_status": "passed",
+            "validation_status": "passed",
+            "validation_final_flag_candidate": "flag{demo}",
+            "publishable": True,
+            "language": "python",
+            "runtime": "flask",
+            "target_format": "container",
+            "interaction": "http_form",
+            "flag_concealment": "database_record",
+            "contract_harness_results": {
+                "direct-run": "passed",
+                "recover-password-verification": "passed",
+                "recover-password-dependency": "passed",
+            },
+        },
     )
 
     reconciler.tick_once_sync()
@@ -631,6 +678,61 @@ def test_old_success_cannot_overwrite_revised_draft(
         attempt_row = session.get(build_model.BuildAttempt, attempt.id)
         assert attempt_row is not None
         assert attempt_row.status == "succeeded"
+
+
+def test_governed_success_requires_accepted_artifact_observation(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    task_id, evidence_id, _reservation_id = _seed_governed_attempt(session_factory)
+    reconciler = _reconciler(tmp_path, session_factory)
+    with session_factory() as session:
+        attempt = BuildAttemptsRepository(session).create_attempt(
+            task_id,
+            f"{uuid4()}.json",
+            design_evidence_id=evidence_id,
+            contract_sha256="contract-current",
+        )
+        session.get(task_model.DesignTask, task_id).status = "building"
+        session.commit()
+    challenge_id = _challenge_id(session_factory, task_id)
+    write_json(
+        reconciler.paths.shards / "done" / attempt.shard_basename,
+        _payload(task_id, attempt.id, challenge_id),
+    )
+    write_json(
+        reconciler.paths.challenges / "web" / f"{challenge_id}-demo" / "metadata.json",
+        {
+            "id": challenge_id,
+            "category": "web",
+            "solve_status": "passed",
+            "validation_status": "passed",
+            "validation_final_flag_candidate": "flag{demo}",
+            "publishable": True,
+            "language": "python",
+            "runtime": "flask",
+            "target_format": "container",
+            "interaction": "http_form",
+            "flag_concealment": "database_record",
+            "direct_run_reveals_flag": True,
+            "contract_harness_results": {
+                "recover-password-verification": "passed",
+                "recover-password-dependency": "passed",
+            },
+        },
+    )
+
+    reconciler.tick_once_sync()
+
+    with session_factory() as session:
+        attempt_row = session.get(build_model.BuildAttempt, attempt.id)
+        assert attempt_row.status == "failed"
+        assert "artifact observation failed" in attempt_row.error
+        observation = ArtifactObservationRepository(session).latest_current_for_attempt(attempt.id)
+        assert observation is not None
+        assert observation.status == "failed"
+        assert observation.contract_checks["status_reason"] == "unintended_solution_succeeded"
+        assert session.get(task_model.DesignTask, task_id).status == "build_failed"
 
 
 @pytest.mark.parametrize(

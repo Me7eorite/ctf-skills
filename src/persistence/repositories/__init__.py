@@ -1,5 +1,9 @@
 """Public repository exports."""
 
+from persistence.repositories.artifact_observations import (
+    ArtifactObservationPersistenceError,
+    ArtifactObservationRepository,
+)
 from persistence.repositories.build_attempts import (
     BuildAttemptPersistenceError,
     BuildAttemptsRepository,
@@ -28,6 +32,8 @@ from persistence.repositories.research import ResearchRepository
 __all__ = [
     "ChallengeDesignPersistenceError",
     "ChallengeDesignRepository",
+    "ArtifactObservationPersistenceError",
+    "ArtifactObservationRepository",
     "DesignProfileReservationPersistenceError",
     "DesignProfileReservationRepository",
     "BuildAttemptPersistenceError",

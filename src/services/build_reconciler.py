@@ -21,8 +21,13 @@ from persistence.models import build_attempts as build_model
 from persistence.models import design_tasks as task_model
 from persistence.models import executions as exec_model
 from persistence.models.progress import ProgressEvent
-from persistence.repositories import ExecutionsRepository
+from persistence.repositories import (
+    ArtifactObservationRepository,
+    DesignEvidenceRepository,
+    ExecutionsRepository,
+)
 from persistence.session import SessionFactory, transaction
+from services.artifact_observation_governance import build_artifact_observation_payload
 from services.build_orchestration_service import BuildOrchestrationService
 
 LOG = logging.getLogger(__name__)
@@ -588,6 +593,21 @@ class BuildReconciler:
         artifact_status: str | None = None,
         error: str | None = None,
     ) -> None:
+        observation_status: str | None = None
+        if status == "succeeded" and resulting_challenge_dir is not None:
+            observation = self._record_artifact_observation(
+                session,
+                row,
+                resulting_challenge_dir=resulting_challenge_dir,
+            )
+            observation_status = observation.status
+            if row.design_evidence_id is not None and observation.status != "passed":
+                status = "failed"
+                error = (
+                    "artifact observation "
+                    f"{observation.status}: "
+                    f"{observation.contract_checks.get('status_reason') or 'not accepted'}"
+                )
         row.status = status
         row.worker = worker or row.worker
         row.started_at = row.started_at or started_at or now
@@ -596,6 +616,8 @@ class BuildReconciler:
         if artifact_status is not None:
             row.artifact_status = artifact_status
         row.error = error
+        if observation_status is not None and status == "failed":
+            row.artifact_status = artifact_status or "present"
         task = session.get(task_model.DesignTask, row.design_task_id)
         if task is not None:
             if self._matches_current_design_evidence(session, row):
@@ -603,6 +625,45 @@ class BuildReconciler:
             elif task.status == "building" and status in {"failed", "lost"}:
                 task.status = "build_failed"
             task.updated_at = now
+
+    def _record_artifact_observation(
+        self,
+        session: Session,
+        row: build_model.BuildAttempt,
+        *,
+        resulting_challenge_dir: str,
+    ):
+        challenge_dir = self.paths.root / resulting_challenge_dir
+        evidence = (
+            DesignEvidenceRepository(session).get(row.design_evidence_id)
+            if row.design_evidence_id is not None
+            else None
+        )
+        payload = build_artifact_observation_payload(
+            challenge_dir,
+            build_attempt_id=row.id,
+            design_evidence_id=row.design_evidence_id,
+            contract_sha256=row.contract_sha256,
+            required_profile=evidence.profile if evidence is not None else None,
+            build_contract=evidence.build_contract if evidence is not None else None,
+        )
+        observation_repo = ArtifactObservationRepository(session)
+        observation = observation_repo.latest_current_for_attempt(row.id)
+        if observation is not None:
+            observation_repo.supersede_current(row.id)
+        created = observation_repo.create_current(
+            build_attempt_id=row.id,
+            design_evidence_id=row.design_evidence_id,
+            contract_sha256=row.contract_sha256 or "",
+            artifact_manifest_sha256=payload["artifact_manifest_sha256"],
+            observed_profile=payload["observed_profile"],
+            contract_checks=payload["contract_checks"],
+            negative_test_results=payload["negative_test_results"],
+            fingerprints=payload["fingerprints"],
+            status=payload["status"],
+        )
+        row.artifact_observation_id = created.id
+        return created
 
 
 def _claim_path(shard: Path) -> Path:

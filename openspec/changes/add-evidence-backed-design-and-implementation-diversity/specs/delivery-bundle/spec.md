@@ -10,14 +10,16 @@ following are true:
   ArtifactObservation (`status = passed`, or `status = inconclusive` plus a
   valid allowed observation review);
 - the challenge belongs to the explicitly requested corpus-admission batch;
-- its member decision is effectively accepted (`passed`, or `review_required`
+- its member decision is corpus-accepted (`passed`, or `review_required`
   with a valid recorded corpus approval);
 - the aggregate batch decision is `passed` after accounting for allowed member
   reviews;
 - no non-overrideable corpus rule failed.
 
 Observation review and corpus review are independent. Passing one SHALL NOT
-implicitly approve the other.
+implicitly approve the other. In this spec, the validation layer uses
+ArtifactObservation acceptance, while the corpus layer uses corpus-accepted
+member decisions.
 
 Production packing SHALL require an explicit `corpus_batch_id` argument and
 database access to resolve immutable membership/decision records. It SHALL not

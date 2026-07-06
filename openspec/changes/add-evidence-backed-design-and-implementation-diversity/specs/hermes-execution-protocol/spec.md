@@ -8,19 +8,21 @@ design, implement, build, and document prerequisites, then invoke host-owned
 validation unless a resume carry-forward is valid under this requirement.
 
 For a governed BuildAttempt, host-owned validation SHALL be contract-aware and
-SHALL produce an ArtifactObservation bound to the exact BuildAttempt,
-DesignEvidence, canonical contract hash, and artifact-manifest hash before the
-runner writes a successful `validate/*` or `complete/*` terminal event. Existing
-artifact, reference-solve, and flag checks remain mandatory.
+SHALL produce a validation-layer ArtifactObservation bound to the exact
+BuildAttempt, DesignEvidence, canonical contract hash, and artifact-manifest
+hash before the runner writes a successful `validate/*` or `complete/*`
+terminal event. Existing artifact, reference-solve, and flag checks remain
+mandatory.
 
-An observation is effectively accepted only when:
+For the validation layer, an observation is effectively accepted only when:
 
 - its status is `passed`; or
 - its status is `inconclusive` and an allowed observation review decision exists
   for that exact observation.
 
 An observation with `failed`, stale binding/hash, or no allowed review for
-`inconclusive` SHALL produce validation failure.
+`inconclusive` SHALL produce validation failure. Validation-layer acceptance
+does not authorize corpus publication by itself.
 
 Carry-forward `validate/passed` remains available for legacy challenges. For a
 governed BuildAttempt it is allowed only when the prior effectively accepted

@@ -1,0 +1,73 @@
+{
+  "id": "pwn-09c5542e-0049",
+  "title": "PieNoPie",
+  "category": "pwn",
+  "difficulty": "medium",
+  "points": 200,
+  "template": "pwn-designed",
+  "deployment": "docker",
+  "language": "c",
+  "compiler": "gcc",
+  "target_format": "elf",
+  "architecture": "x86_64",
+  "port": 9049,
+  "mitigations": {
+    "pie": false,
+    "canary": true,
+    "nx": true,
+    "relro": "partial"
+  },
+  "primary_technique": "stack_canary_leak_via_print",
+  "secondary_technique": "stack_buffer_overflow_with_canary_bypass",
+  "learning_objective": "Learn to leak stack canary from uninitialized memory and combine with buffer overflow when PIE is disabled.",
+  "runtime": null,
+  "framework": null,
+  "build_command": "docker build --label ctf-factory.managed=true --label ctf-factory.workspace_id=69bdbdf9-6c55-485c-8318-8f7a8b02d124 --label ctf-factory.challenge_id=pwn-09c5542e-0049 --label ctf-factory.category=pwn -t pwn-69bdbd-pienopie:latest -f deploy/Dockerfile .",
+  "docker_image": "pwn-69bdbd-pienopie:latest",
+  "artifact": "attachments/report_viewer",
+  "artifact_sha256": "757b39fdb4cdca6d1bd7e8a21d51eb8f9d2593b91dea1e497f54b41240d73fcb",
+  "build_status": "passed",
+  "flag": "flag{pienopie_canary_leak_overflow_69bdbd}",
+  "win_address": "0x401236",
+  "canary_offset": 136,
+  "overflow_offset": 152,
+  "hints": [
+    "The binary has no PIE but does have a canary — you know where everything is, but you need to know WHAT to write.",
+    "The report viewer prints buffer content before checking bounds — what happens if the buffer wasn't properly initialized?",
+    "Find the offset to canary and return address, then construct your payload: [padding][canary][more padding][win address]. The win function is named maintenance_mode in the binary."
+  ],
+  "validation_notes": "Reference solve uses pwntools: (1) trigger uninitialized print to leak canary at offset 136-143, (2) construct payload with 136 bytes padding + canary + 8 bytes RBP + win address, (3) overflow and receive flag.",
+  "unintended_solutions": [
+    "Direct overflow without canary leak — blocked by stack canary",
+    "Format string leak — blocked by no format string vulnerability",
+    "Brute-force canary — blocked by canary changes per connection"
+  ],
+  "host_build_command": [
+    "docker",
+    "build",
+    "--label",
+    "ctf-factory.managed=true",
+    "--label",
+    "ctf-factory.workspace_id=69bdbdf9-6c55-485c-8318-8f7a8b02d124",
+    "--label",
+    "ctf-factory.challenge_id=pwn-09c5542e-0049",
+    "--label",
+    "ctf-factory.category=pwn",
+    "-t",
+    "pwn-69bdbd-pienopie:latest",
+    "-f",
+    "deploy/Dockerfile",
+    "."
+  ],
+  "docker_image_id": "sha256:87c3899d7cd83abac91dfb4c8cf9f5698c6ca47c8b78a3d8b957d1826a2108ab",
+  "host_build_log": "logs/host-build/pwn-09c5542e-0049.docker-build.log",
+  "solve_status": "failed",
+  "repaired": false,
+  "publishable": false,
+  "validation_command": [
+    "bash",
+    "/root/ctf-skills/work/executions/69bdbdf9-6c55-485c-8318-8f7a8b02d124/current/output/challenges/pwn/pwn-09c5542e-0049-pienopie/validate.sh"
+  ],
+  "pwn_debug_result_path": "/root/ctf-skills/work/executions/69bdbdf9-6c55-485c-8318-8f7a8b02d124/current/output/challenges/pwn/pwn-09c5542e-0049-pienopie/logs/pwn-debug-result.json",
+  "pwn_debug_result_sha256": "4c84da1c3fea957a45996b7be285d8e69fad19dc1035783ac4db9c59fdc24cd0"
+}

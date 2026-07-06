@@ -22,7 +22,11 @@ from persistence.models import design_tasks as task_model
 from persistence.models import executions as exec_model
 from persistence.models import research as research_model
 from persistence.models.progress import ProgressEvent, ProgressSnapshot
-from persistence.repositories import BuildAttemptsRepository, ExecutionsRepository
+from persistence.repositories import (
+    ArtifactObservationRepository,
+    BuildAttemptsRepository,
+    ExecutionsRepository,
+)
 from persistence.session import SessionFactory, transaction
 from web import build_attempts_endpoints
 from web.dashboard import DashboardService
@@ -442,6 +446,17 @@ def test_detail_exposes_siblings_and_progress_events(
         first = repo.create_attempt(task_id, f"{uuid4()}.json")
         repo.update_to_terminal(first.id, status="failed", error="failed")
         second = repo.create_attempt(task_id, f"{uuid4()}.json")
+        ArtifactObservationRepository(session).create_current(
+            build_attempt_id=first.id,
+            design_evidence_id=None,
+            contract_sha256="contract-a",
+            artifact_manifest_sha256="artifact-a",
+            observed_profile={"language": "python"},
+            contract_checks={"status_reason": None},
+            negative_test_results={"direct_run": "not_run"},
+            fingerprints={"challenge_id": "web-0001"},
+            status="passed",
+        )
         session.add_all(
             [
                 ProgressEvent(
@@ -473,6 +488,9 @@ def test_detail_exposes_siblings_and_progress_events(
     assert payload["sibling_attempts"][1]["id"] == str(second.id)
     assert payload["task_no"] == 1
     assert payload["title"] == "Task 1"
+    assert payload["artifact_observation"]["status"] == "passed"
+    assert payload["artifact_observation"]["observed_profile"]["language"] == "python"
+    assert payload["artifact_observation"]["contract_sha256"] == "contract-a"
     assert any(event["message"].startswith("carry-forward:") for event in payload["progress_events"])
 
 
