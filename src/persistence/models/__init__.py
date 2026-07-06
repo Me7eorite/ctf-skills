@@ -7,6 +7,10 @@ from persistence.models.challenge_designs import (
     DesignAttempt,
     DesignDifficultyReview,
 )
+from persistence.models.design_profile_reservations import (
+    DesignProfileLedger,
+    DesignProfileReservation,
+)
 from persistence.models.design_tasks import DesignTask
 from persistence.models.executions import (
     BuildFeedbackSnapshot,
@@ -34,6 +38,8 @@ __all__ = [
     "ChallengeDesign",
     "DesignDifficultyReview",
     "DesignAttempt",
+    "DesignProfileLedger",
+    "DesignProfileReservation",
     "DesignTask",
     "Execution",
     "GenerationRequest",

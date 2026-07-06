@@ -49,7 +49,8 @@
       policy-derived nullable `occupancy_scope` and `exclusive_signature_key`
       with a partial unique index over active scoped keys, plus
       `reserved|committed|released` checks.
-- [ ] 4.2 Add nullable reservation reference/exposure on DesignTask.
+- [ ] 4.2 Add nullable current-reservation reference/exposure on DesignTask
+      (`current_reservation_id`).
 - [ ] 4.3 Allocate all request reservations atomically under the existing
       parent-request lock during generation/regeneration.
 - [ ] 4.4 Add category-scoped `design_profile_ledgers`, monotonic

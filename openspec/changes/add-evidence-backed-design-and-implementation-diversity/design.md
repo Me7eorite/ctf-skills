@@ -131,7 +131,7 @@ The database enforces:
   `(policy_version, occupancy_scope, exclusive_signature_key)`; policy code
   computes both `occupancy_scope` and key from normalized profile dimensions,
   so the database never has to interpret JSON policy at constraint time;
-- `design_tasks.current_reservation_id` references the current version.
+- `design_tasks.current_reservation_id` references the current reservation row.
 
 The allocator reads:
 
@@ -185,9 +185,10 @@ Every reservation stores `policy_version`; canonical signatures include both
 normalized profile content and policy version. A policy edit cannot reinterpret
 an existing reservation. `ledger_version` is the category ledger row's
 monotonic integer, incremented once per committed allocation/release
-transaction. A ledger advance conflicts with Design completion only when it
-changes occupancy relevant to the reservation's hard-exclusive signature or
-quota dimensions; unrelated advances do not force retries.
+transaction, not once per individual reservation row. A ledger advance conflicts
+with Design completion only when it changes occupancy relevant to the
+reservation's hard-exclusive signature or quota dimensions; unrelated advances
+do not force retries.
 
 ### D3 - Ledger context is bounded and authoritative
 

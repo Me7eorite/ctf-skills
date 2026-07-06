@@ -97,6 +97,10 @@ class DesignTask(Base):
         server_default=sa.text("'[]'::jsonb"),
     )
     diversity_flags: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    current_reservation_id: Mapped[UUID | None] = mapped_column(
+        sa.Uuid(),
+        sa.ForeignKey("design_profile_reservations.id", ondelete="SET NULL"),
+    )
     plan_reviewed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     next_build_attempt_no: Mapped[int] = mapped_column(
         sa.Integer(),

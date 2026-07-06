@@ -247,6 +247,20 @@ class DesignTaskRepository:
         self.session.refresh(row)
         return _design_task(row)
 
+    def set_current_reservation(
+        self,
+        task_id: UUID,
+        reservation_id: UUID | None,
+    ) -> dto.DesignTask:
+        row = self.session.get(model.DesignTask, task_id)
+        if row is None:
+            raise DesignTaskValidationError(f"design task {task_id} does not exist")
+        row.current_reservation_id = reservation_id
+        row.updated_at = _utcnow()
+        self.session.flush()
+        self.session.refresh(row)
+        return _design_task(row)
+
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -273,6 +287,7 @@ def _design_task(row: model.DesignTask) -> dto.DesignTask:
         diversity_flags=(
             dict(row.diversity_flags) if row.diversity_flags is not None else None
         ),
+        current_reservation_id=row.current_reservation_id,
         status=row.status,
         created_at=row.created_at,
         updated_at=row.updated_at,

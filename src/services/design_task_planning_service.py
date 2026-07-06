@@ -34,7 +34,12 @@ from domain import design_tasks as dto
 from domain import research as research_dto
 from domain.generation_profile import category_profile_config
 from domain.design.technique_taxonomy import resolve_family, resolve_sub_technique
-from domain.design.profile_taxonomy import taxonomy_for_category
+from domain.design.profile_taxonomy import (
+    allocate_profile_batch,
+    canonical_profile_signatures,
+    load_profile_policy,
+    taxonomy_for_category,
+)
 from domain.design_task_validators import DesignTaskValidationError
 from domain.research_validators import (
     _quality_ratio,
@@ -42,7 +47,11 @@ from domain.research_validators import (
 )
 from domain.design.profile_taxonomy import profile_capacity_check
 from persistence.models import design_tasks as design_model
-from persistence.repositories import DesignTaskRepository, ResearchRepository
+from persistence.repositories import (
+    DesignProfileReservationRepository,
+    DesignTaskRepository,
+    ResearchRepository,
+)
 from persistence.session import SessionFactory, transaction
 from services.design_planner_hermes import HermesPlannerService, PlannerEnrichment
 
@@ -135,7 +144,7 @@ class DesignTaskPlanningService:
                 allowed_finding_ids={f.id for f in findings},
                 research_run_id=latest.id,
             )
-            return design_repo.replace_draft_or_archived_tasks(
+            design_repo.replace_draft_or_archived_tasks(
                 generation_request_id=request.id,
                 research_run_id=latest.id,
                 parent_category=request.category,
@@ -143,6 +152,13 @@ class DesignTaskPlanningService:
                 difficulty_distribution=request.difficulty_distribution,
                 candidates=candidates,
             )
+            self._allocate_reservations(
+                session=session,
+                generation_request=request,
+                tasks=design_repo.list_design_tasks(request.id),
+                candidates=candidates,
+            )
+            return design_repo.list_design_tasks(request.id)
 
     def approve_plan(self, request_id: UUID) -> list[dto.DesignTask]:
         """Stamp all current draft tasks as reviewed under the parent request lock."""
@@ -276,12 +292,75 @@ class DesignTaskPlanningService:
                 avoid_techniques=sibling_subtechniques,
                 hermes_planner=self.hermes_planner,
             )
+            reservation_repo = DesignProfileReservationRepository(session)
+            if current.current_reservation_id is not None:
+                reservation_repo.release_reservation(current.current_reservation_id)
             _apply_candidate_to_row(current, candidate)
             current.plan_reviewed_at = None
             current.updated_at = _utcnow()
             session.flush()
             session.refresh(current)
+            self._allocate_reservations(
+                session=session,
+                generation_request=request,
+                tasks=[current],
+                candidates=[candidate],
+            )
             return {"outcome": outcome, "task": _row_to_dto(current)}
+
+    def _allocate_reservations(
+        self,
+        *,
+        session,
+        generation_request: research_dto.GenerationRequest,
+        tasks: Sequence[design_model.DesignTask],
+        candidates: Sequence[Mapping[str, Any]],
+    ) -> None:
+        reservation_repo = DesignProfileReservationRepository(session)
+        policy = load_profile_policy(generation_request.category)
+        existing = reservation_repo.list_active_occupancies(generation_request.category)
+        ledger = reservation_repo.lock_ledger(
+            generation_request.category,
+            policy_version=policy.version,
+        )
+        ledger.ledger_version += 1
+        ledger.updated_at = _utcnow()
+        ordered = sorted(
+            zip(tasks, candidates, strict=True),
+            key=lambda item: item[0].task_no,
+        )
+        allocations = allocate_profile_batch(
+            category=generation_request.category,
+            target_count=len(ordered),
+            semantic_assignments=[
+                {
+                    "family": str(candidate["diversity_flags"]["family"]),
+                    "sub_technique": str(candidate["diversity_flags"]["sub_technique"]),
+                }
+                for _task, candidate in ordered
+            ],
+            policy=policy,
+            existing=existing,
+        )
+
+        for (task, candidate), allocation in zip(ordered, allocations, strict=True):
+            signatures = canonical_profile_signatures(
+                allocation.profile,
+                category=generation_request.category,
+                policy_version=policy.version,
+            )
+            reservation = reservation_repo.reserve_task(
+                design_task_id=task.id,
+                generation_request_id=generation_request.id,
+                profile=allocation.profile.as_mapping(),
+                profile_signature=signatures.combined_profile_signature,
+                occupancy_scope=allocation.occupancy_scope,
+                exclusive_signature_key=allocation.exclusive_signature_key,
+                taxonomy_version=1,
+                policy_version=policy.version,
+                ledger_version=ledger.ledger_version,
+            )
+            reservation_repo.set_current_reservation(task.id, reservation.id)
 
 
 def validate_finding_provenance(
@@ -599,6 +678,7 @@ def _row_to_dto(row: design_model.DesignTask) -> dto.DesignTask:
         created_at=row.created_at,
         updated_at=row.updated_at,
         diversity_flags=(dict(row.diversity_flags) if row.diversity_flags is not None else None),
+        current_reservation_id=row.current_reservation_id,
         plan_reviewed_at=row.plan_reviewed_at,
     )
 
