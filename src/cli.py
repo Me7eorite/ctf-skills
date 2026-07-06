@@ -598,6 +598,21 @@ def parser() -> argparse.ArgumentParser:
     web.add_argument("--host", default="127.0.0.1")
     web.add_argument("--port", type=int, default=4173)
 
+    build_attempts = commands.add_parser("build-attempts", help="build-attempt maintenance")
+    build_attempts_sub = build_attempts.add_subparsers(
+        dest="build_attempts_command",
+        required=True,
+    )
+    auto_iterate = build_attempts_sub.add_parser(
+        "auto-iterate",
+        help="automatically repair and revalidate failed build attempts",
+    )
+    auto_iterate.add_argument("--limit", type=_positive_int, default=20)
+    mode = auto_iterate.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--once", action="store_true")
+    mode.add_argument("--loop", action="store_true")
+    auto_iterate.add_argument("--poll-seconds", type=_positive_int, default=30)
+
     _register_research_commands(commands, fetch_db_choices=needs_categories)
     _register_profile_commands(commands, fetch_db_choices=needs_roles)
     return root
@@ -1711,6 +1726,47 @@ def main() -> None:
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
+
+    if args.command == "build-attempts":
+        if args.build_attempts_command == "auto-iterate":
+            from services.build_attempt_auto_iteration_service import (
+                BuildAttemptAutoIterationService,
+            )
+
+            service = BuildAttemptAutoIterationService(
+                paths=paths,
+                progress=make_postgres_progress_store(),
+            )
+            if args.loop:
+                service.run_loop(
+                    limit=args.limit,
+                    poll_seconds=float(args.poll_seconds),
+                )
+                return
+            result = service.run_once(limit=args.limit)
+            print(
+                json.dumps(
+                    {
+                        "processed": result.processed,
+                        "outcomes": [
+                            {
+                                "attempt_id": str(item.attempt_id),
+                                "status": item.status,
+                                "iteration_count": item.iteration_count,
+                                "selected_route": item.selected_route,
+                                "reason": item.reason,
+                                "next_attempt_id": str(item.next_attempt_id)
+                                if item.next_attempt_id is not None
+                                else None,
+                            }
+                            for item in result.outcomes
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return
 
     if args.command == "progress":
         try:

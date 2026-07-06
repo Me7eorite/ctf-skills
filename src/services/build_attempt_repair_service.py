@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 from uuid import UUID, uuid4
 
 import sqlalchemy as sa
@@ -73,6 +73,7 @@ class BuildAttemptRepairService:
         progress,
         session_factory: SessionFactory | None = None,
         timeout_seconds: int | None = None,
+        use_advisory_lock: bool = True,
     ) -> None:
         self.paths = paths or ProjectPaths.discover()
         self.progress = progress
@@ -80,8 +81,15 @@ class BuildAttemptRepairService:
         self.timeout_seconds = (
             timeout_seconds if timeout_seconds is not None else _default_timeout_seconds()
         )
+        self.use_advisory_lock = use_advisory_lock
 
     def repair(self, attempt_id: UUID) -> BuildAttemptRepairResult:
+        if not getattr(self, "use_advisory_lock", False):
+            return self._repair_unlocked(attempt_id)
+        with _attempt_repair_lock(self.session_factory, attempt_id):
+            return self._repair_unlocked(attempt_id)
+
+    def _repair_unlocked(self, attempt_id: UUID) -> BuildAttemptRepairResult:
         context = self._prepare(attempt_id)
         with _category_repair_lock(self.paths, str(context.get("category") or "unknown")):
             return self._repair_prepared(attempt_id, context)
@@ -226,6 +234,7 @@ class BuildAttemptRepairService:
             progress=self.progress,
             session_factory=self.session_factory,
             worker=REPAIR_WORKER,
+            use_advisory_lock=False,
         ).revalidate(attempt_id)
 
     def _prepare(self, attempt_id: UUID) -> dict[str, Any]:
@@ -404,6 +413,21 @@ def _downgrade_inconsistent_success_to_failed(
     if task is not None:
         task.status = "build_failed"
         task.updated_at = now
+
+
+@contextmanager
+def _attempt_repair_lock(session_factory: SessionFactory, attempt_id: UUID) -> Iterator[None]:
+    key = attempt_id.int & ((1 << 63) - 1)
+    with session_factory.engine.connect() as connection:
+        acquired = connection.scalar(sa.select(sa.func.pg_try_advisory_lock(key)))
+        connection.commit()
+        if not acquired:
+            raise BuildAttemptRepairError("build attempt is already being repaired or revalidated")
+        try:
+            yield
+        finally:
+            connection.execute(sa.select(sa.func.pg_advisory_unlock(key)))
+            connection.commit()
 
 
 @contextmanager
@@ -715,6 +739,11 @@ Rules:
   aliases such as
   `ARTIFACT_SHA256`, SHAs from `deploy/src/<metadata.artifact basename>`, and old
   `pwn_debug_report.json` constants are stale.
+- Before trusting any local Pwn debug result, align the local runtime with the
+  service: use the final attachment binary plus matching `ld-*`/`ld-linux*` and
+  `libc.so*` from `attachments/` or the container. If no matching loader/libc is
+  available, treat local execution as a smoke test only; the publishable solve is
+  the remote `CHAL_HOST`/`CHAL_PORT` path.
 - `deploy/src/` may be read to understand the bug and protocol, but it is not
   evidence for offsets, gadgets, symbols, libc bases, checksec, or report SHAs.
 - For canary leaks, scan a broad bounded `%n$p` range, keep candidates stable

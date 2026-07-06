@@ -81,6 +81,7 @@ class BuildAttemptRevalidationService:
         validator: ChallengeValidator | None = None,
         image_exists: Callable[[str], bool] = default_image_exists,
         worker: str = REVALIDATION_WORKER,
+        use_advisory_lock: bool = True,
     ) -> None:
         self.paths = paths or ProjectPaths.discover()
         self.progress = progress
@@ -88,81 +89,87 @@ class BuildAttemptRevalidationService:
         self.validator = validator or ChallengeValidator(self.paths)
         self.image_exists = image_exists
         self.worker = worker
+        self.use_advisory_lock = use_advisory_lock
 
     def revalidate(self, attempt_id: UUID) -> BuildAttemptRevalidationResult:
+        if not self.use_advisory_lock:
+            return self._revalidate_unlocked(attempt_id)
         with self._advisory_lock(attempt_id):
-            attempt, challenge_ids = self._prepare(attempt_id)
-            plans = self._current_plans(attempt, challenge_ids)
-            self._ensure_pwn_solver_evidence(plans)
-            validator = _DirectoryBoundValidator(self.validator, plans)
-            try:
-                results = run_validation(
-                    state=self.progress,
-                    validator=validator,  # type: ignore[arg-type]
-                    paths=self.paths,
-                    image_exists=self.image_exists,
-                    original_shard_name=attempt.shard_basename,
-                    worker=self.worker,
-                    challenge_ids=challenge_ids,
-                    plan_by_id=plans,
-                )
-            except Exception as exc:
-                reason = f"validator_error: {type(exc).__name__}: {exc}"
-                self._mark_failed(attempt.id, reason)
-                self._record_unexpected_failure(
-                    attempt.shard_basename,
-                    challenge_ids,
-                    reason,
-                )
-                raise BuildAttemptRevalidationError(reason) from exc
+            return self._revalidate_unlocked(attempt_id)
 
-            failures = [
-                result
-                for result in results
-                if result.get("solve_status") != "passed"
-            ]
-            if failures:
-                reason = _failure_reason(failures[0])
-                self._mark_failed(attempt.id, reason)
-                record_per_challenge_complete(
-                    self.progress,
-                    attempt.shard_basename,
-                    self.worker,
-                    results,
-                )
-                raise BuildAttemptRevalidationError(reason)
-
-            challenge_dir = _relative_challenge_dir(
-                self.paths,
-                _canonicalize_challenge_directory(
-                    self.paths,
-                    challenge_ids[0],
-                    plans[challenge_ids[0]],
-                ),
+    def _revalidate_unlocked(self, attempt_id: UUID) -> BuildAttemptRevalidationResult:
+        attempt, challenge_ids = self._prepare(attempt_id)
+        plans = self._current_plans(attempt, challenge_ids)
+        self._ensure_pwn_solver_evidence(plans)
+        validator = _DirectoryBoundValidator(self.validator, plans)
+        try:
+            results = run_validation(
+                state=self.progress,
+                validator=validator,  # type: ignore[arg-type]
+                paths=self.paths,
+                image_exists=self.image_exists,
+                original_shard_name=attempt.shard_basename,
+                worker=self.worker,
+                challenge_ids=challenge_ids,
+                plan_by_id=plans,
             )
-            try:
-                self._mark_succeeded(
-                    attempt.id,
-                    shard_basename=attempt.shard_basename,
-                    challenge_dir=challenge_dir,
-                )
-            except Exception as exc:
-                reason = f"finalization_error: {type(exc).__name__}: {exc}"
-                self._record_complete_failure(
-                    attempt.shard_basename,
-                    challenge_ids,
-                    reason,
-                )
-                if isinstance(exc, BuildAttemptRevalidationError):
-                    raise
-                raise BuildAttemptRevalidationError(reason) from exc
+        except Exception as exc:
+            reason = f"validator_error: {type(exc).__name__}: {exc}"
+            self._mark_failed(attempt.id, reason)
+            self._record_unexpected_failure(
+                attempt.shard_basename,
+                challenge_ids,
+                reason,
+            )
+            raise BuildAttemptRevalidationError(reason) from exc
+
+        failures = [
+            result
+            for result in results
+            if result.get("solve_status") != "passed"
+        ]
+        if failures:
+            reason = _failure_reason(failures[0])
+            self._mark_failed(attempt.id, reason)
             record_per_challenge_complete(
                 self.progress,
                 attempt.shard_basename,
                 self.worker,
                 results,
             )
-            return BuildAttemptRevalidationResult(attempt_id=attempt.id)
+            raise BuildAttemptRevalidationError(reason)
+
+        challenge_dir = _relative_challenge_dir(
+            self.paths,
+            _canonicalize_challenge_directory(
+                self.paths,
+                challenge_ids[0],
+                plans[challenge_ids[0]],
+            ),
+        )
+        try:
+            self._mark_succeeded(
+                attempt.id,
+                shard_basename=attempt.shard_basename,
+                challenge_dir=challenge_dir,
+            )
+        except Exception as exc:
+            reason = f"finalization_error: {type(exc).__name__}: {exc}"
+            self._record_complete_failure(
+                attempt.shard_basename,
+                challenge_ids,
+                reason,
+            )
+            if isinstance(exc, BuildAttemptRevalidationError):
+                raise
+            raise BuildAttemptRevalidationError(reason) from exc
+        record_per_challenge_complete(
+            self.progress,
+            attempt.shard_basename,
+            self.worker,
+            results,
+        )
+        return BuildAttemptRevalidationResult(attempt_id=attempt.id)
 
     @contextmanager
     def _advisory_lock(self, attempt_id: UUID) -> Iterator[None]:

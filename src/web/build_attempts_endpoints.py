@@ -34,6 +34,7 @@ from persistence.repositories import (
     ExecutionsRepository,
 )
 from services import BuildOrchestrationError, BuildOrchestrationService
+from services.build_attempt_auto_iteration_service import read_auto_iteration_state
 from services.build_attempt_repair_service import (
     BuildAttemptRepairError,
     BuildAttemptRepairService,
@@ -277,6 +278,7 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
         body["progress_events"] = event_payloads
         body["executions"] = [_execution_dict(row) for row in executions]
         body["repair_runs"] = _repair_runs(_project_paths(app), attempt.id)
+        body["auto_iteration"] = _auto_iteration_summary(_project_paths(app), attempt.id)
         return JSONResponse(body)
 
     @app.post("/api/build-attempts/worker/start")
@@ -1661,6 +1663,13 @@ def _attempt_dict(
             payload["root_failure"] = root_fields
             payload.setdefault("root_failure_code", root_fields.get("code"))
             payload.setdefault("root_failure_status", root_fields.get("validation_status"))
+        auto_iteration = _auto_iteration_summary(paths, attempt.id)
+        if auto_iteration:
+            payload["auto_iteration"] = auto_iteration
+            payload["auto_iteration_status"] = auto_iteration.get("status")
+            payload["auto_iteration_count"] = auto_iteration.get("iteration_count")
+            if auto_iteration.get("blocked_reason"):
+                payload["blocked_reason"] = auto_iteration["blocked_reason"]
     if artifact_metadata and artifact_metadata.get("category") == "pwn":
         payload["evidence_status"] = (
             "stale"
@@ -2130,6 +2139,28 @@ def _repair_runs(paths, attempt_id: UUID) -> list[dict[str, Any]]:
             }
         )
     return runs
+
+
+def _auto_iteration_summary(paths, attempt_id: UUID) -> dict[str, Any]:
+    state = read_auto_iteration_state(paths, attempt_id)
+    if not state:
+        return {}
+    events = state.get("events")
+    last_event = events[-1] if isinstance(events, list) and events else {}
+    return {
+        key: value
+        for key, value in {
+            "status": state.get("status"),
+            "iteration_count": state.get("iteration_count"),
+            "deterministic_count": state.get("deterministic_count"),
+            "hermes_count": state.get("hermes_count"),
+            "retry_count": state.get("retry_count"),
+            "blocked_reason": state.get("blocked_reason"),
+            "updated_at": state.get("updated_at"),
+            "last_event": last_event if isinstance(last_event, dict) else {},
+        }.items()
+        if value not in (None, "", [])
+    }
 
 
 def _read_repair_events(path: Path) -> list[dict[str, Any]]:

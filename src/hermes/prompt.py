@@ -314,13 +314,15 @@ Pwn exploit debugging acceleration:
   that can complete the same remote menu interaction. Track whether the banner
   or menu bytes were already consumed so the exploit does not call `recvuntil`
   for the same prompt twice or blindly send after a recv timeout.
-- In local debug mode only, if the challenge ships a matching `ld`/loader
-  alongside the binary, it is acceptable to use `patchelf` to point the local
-  binary at that loader and reproduce the shipped runtime more closely. If the
-  challenge only ships `libc` without a matching loader, local reproduction may
-  use `xclibc` or an equivalent loader shim to attach the provided libc to the
-  local binary. These are debug aids only; they must not replace the default
-  remote validation path or become the source of truth for the delivered exploit.
+- Before trusting any local `process()`/gdb smoke test, align it to the same
+  runtime as the service: use the final `metadata.artifact` binary under
+  `attachments/`, prefer the shipped `ld-*`/`ld-linux*` loader and `libc.so*`
+  from `attachments/` or the container, and record those paths in the solver
+  comments or debug report. If a matching loader/libc cannot be found, mark the
+  local result as only a smoke test and continue to remote validation rather
+  than calling the challenge solved. These are debug aids only; they must not
+  replace the default remote validation path or become the source of truth for
+  the delivered exploit.
 - Every local binary, pwntools `process()`, subprocess, and gdb run must be
   bounded and non-interactive. Never run bare `./<binary>` or a menu-driven
   ELF without input in headless mode. Use patterns like

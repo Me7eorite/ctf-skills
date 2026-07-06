@@ -1285,10 +1285,10 @@ def test_retry_sequential_lane_pool_retries_failed_attempts_before_start(
                     shard=attempt.shard_basename,
                     challenge_id="",
                     worker="worker-1",
-                    stage="validate",
-                    status="running",
+                    stage="build",
+                    status="passed",
                     percent=64,
-                    message="validation running",
+                    message="build passed",
                 )
             )
             session.add(
@@ -1296,10 +1296,10 @@ def test_retry_sequential_lane_pool_retries_failed_attempts_before_start(
                     shard=attempt.shard_basename,
                     challenge_id="",
                     worker="worker-1",
-                    stage="validate",
-                    status="running",
+                    stage="build",
+                    status="passed",
                     percent=64,
-                    message="historical validation running",
+                    message="historical build passed",
                 )
             )
 
@@ -1340,9 +1340,9 @@ def test_retry_sequential_lane_pool_retries_failed_attempts_before_start(
             .order_by(ProgressEvent.shard)
         ).all()
         assert [item.message for item in retry_events] == [
-            "historical validation running",
-            "historical validation running",
-            "historical validation running",
+            "historical build passed",
+            "historical build passed",
+            "historical build passed",
         ]
     for retry_id in retry_ids:
         assert (client.app.state.project_paths.shards / "pending" / f"{retry_id}.json").is_file()

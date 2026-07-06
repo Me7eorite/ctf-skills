@@ -85,11 +85,22 @@ def merge_validation_into_report(
             target = {"id": challenge_id}
             challenges_list.append(target)
         target.setdefault("id", challenge_id)
+        prior_solve_status = target.get("solve_status")
+        if "local_solve_status" in result and result["local_solve_status"] is not None:
+            target["local_solve_status"] = result["local_solve_status"]
+        elif "local_solve_status" not in target and prior_solve_status not in (None, ""):
+            target["local_solve_status"] = prior_solve_status
+        target["remote_solve_status"] = result.get(
+            "remote_solve_status",
+            result.get("solve_status", "failed"),
+        )
         target["solve_status"] = result.get("solve_status", "failed")
         target["validation_status"] = result.get(
             "validation_status", target.get("validation_status", "")
         )
         for field in (
+            "local_solve_status",
+            "remote_solve_status",
             "validation_elapsed",
             "validation_error",
             "validation_returncode",

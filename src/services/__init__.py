@@ -1,5 +1,11 @@
 """服务层公开导出。"""
 
+from services.build_attempt_auto_iteration_service import (
+    AutoIterationAttemptResult,
+    AutoIterationBatchResult,
+    AutoIterationBudget,
+    BuildAttemptAutoIterationService,
+)
 from services.build_attempt_revalidation_service import (
     BuildAttemptRevalidationError,
     BuildAttemptRevalidationNotFoundError,
@@ -35,6 +41,10 @@ from services.resource_deletion_service import (
 )
 
 __all__ = [
+    "AutoIterationAttemptResult",
+    "AutoIterationBatchResult",
+    "AutoIterationBudget",
+    "BuildAttemptAutoIterationService",
     "BuildOrchestrationError",
     "BuildOrchestrationService",
     "BuildAttemptRevalidationError",

@@ -2791,6 +2791,11 @@ class ChallengeValidator:
         在 metadata 中写入 host validation 的真实状态。
         """
         metadata = read_json(path, {})
+        if "local_solve_status" not in metadata:
+            previous_solve_status = metadata.get("solve_status")
+            if previous_solve_status not in (None, ""):
+                metadata["local_solve_status"] = previous_solve_status
+        metadata["remote_solve_status"] = solve_status
         metadata["solve_status"] = solve_status
         metadata["validation_status"] = validation_status
         if note:

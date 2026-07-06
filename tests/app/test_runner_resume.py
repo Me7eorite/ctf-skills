@@ -999,7 +999,7 @@ class RunnerRealRunTests(unittest.TestCase):
             self.assertIn("leak=0x0", prompts[1])
             self.assertIn("EOFError", prompts[1])
 
-    def test_deterministic_validation_failure_stops_on_repeated_signature(self):
+    def test_deterministic_validation_failure_escalates_repeated_signature_to_hermes(self):
         with TemporaryDirectory() as tmp:
             paths = _Paths(root=Path(tmp))
             paths.initialize()
@@ -1031,10 +1031,17 @@ class RunnerRealRunTests(unittest.TestCase):
             outcome = runner.process_one("worker-01", dry_run=False)
 
             self.assertEqual(outcome["status"], "failed")
-            self.assertEqual(len(prompts), 1)
+            self.assertEqual(len(prompts), 2)
             self.assertTrue(
                 any(
                     event.get("message", "").startswith("validation repair stopped: repeated failure signature")
+                    for event in runner._progress._store._events
+                )
+            )
+            self.assertTrue(
+                any(
+                    "repeated deterministic failure signature; continuing with Hermes repair"
+                    in event.get("message", "")
                     for event in runner._progress._store._events
                 )
             )
@@ -1111,7 +1118,7 @@ class RunnerRealRunTests(unittest.TestCase):
             outcome = runner.process_one("worker-01", dry_run=False)
 
             self.assertEqual(outcome["status"], "failed")
-            self.assertEqual(len(prompts), 1)
+            self.assertEqual(len(prompts), 2)
             self.assertTrue(
                 any(
                     event.get("message", "").startswith("validation repair stopped: repeated failure signature")
@@ -1323,12 +1330,14 @@ class RunnerRealRunTests(unittest.TestCase):
             self.assertEqual(len(prompts), 2)
             self.assertTrue(
                 any(
-                    event.get("message", "").startswith("validation repair stopped: repeated failure signature")
+                    event.get("message", "").startswith(
+                        "validation repair stopped: no_progress_repair_blocked"
+                    )
                     for event in runner._progress._store._events
                 )
             )
 
-    def test_repeated_validation_signature_stops_after_deterministic_rerun(self):
+    def test_repeated_validation_signature_escalates_after_deterministic_rerun(self):
         with TemporaryDirectory() as tmp:
             paths = _Paths(root=Path(tmp))
             paths.initialize()
@@ -1367,7 +1376,7 @@ class RunnerRealRunTests(unittest.TestCase):
 
             self.assertEqual(outcome["status"], "failed")
             self.assertEqual(validation_calls, 2)
-            self.assertFalse(
+            self.assertTrue(
                 any(
                     event.get("message", "").startswith("validation debug: continuing Hermes")
                     for event in runner._progress._store._events

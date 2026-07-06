@@ -23,7 +23,7 @@ from persistence.models import challenge_designs as design_model
 from persistence.models import design_tasks as task_model
 from persistence.models import executions as exec_model
 from persistence.models import research as research_model
-from persistence.models.progress import ProgressEvent
+from persistence.models.progress import ProgressEvent, ProgressSnapshot
 from persistence.repositories import BuildAttemptsRepository, ExecutionsRepository
 from persistence.session import SessionFactory, transaction
 from services import BuildOrchestrationError, BuildOrchestrationService
@@ -698,6 +698,89 @@ def test_default_retry_reuses_container_and_appends_execution(
         assert claimed.iteration_no == 2
         assert claimed.claim_token == token
         assert claimed.status == "claimed"
+
+
+def test_retry_progress_carry_forward_ignores_terminal_failed_progress(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+    monkeypatch,
+):
+    monkeypatch.delenv("EXECUTION_MINTING", raising=False)
+    task = _seed_designed_task(session_factory)
+    service = _service(tmp_path, session_factory)
+
+    container_id = service.submit_single(task)
+    with transaction(factory=session_factory) as session:
+        repo = BuildAttemptsRepository(session)
+        repo.update_to_terminal(
+            container_id,
+            status="failed",
+            error="failed validation",
+        )
+        session.get(task_model.DesignTask, task).status = "build_failed"
+        source = repo.get(container_id)
+        assert source is not None
+        session.add_all(
+            [
+                ProgressEvent(
+                    shard=source.shard_basename,
+                    challenge_id="web-0001",
+                    worker="worker-1",
+                    stage="build",
+                    status="passed",
+                    percent=64,
+                    message="host image build passed",
+                ),
+                ProgressEvent(
+                    shard=source.shard_basename,
+                    challenge_id="web-0001",
+                    worker="worker-1",
+                    stage="validate",
+                    status="failed",
+                    percent=72,
+                    message="validator failed",
+                ),
+                ProgressEvent(
+                    shard=source.shard_basename,
+                    challenge_id="",
+                    worker="worker-1",
+                    stage="complete",
+                    status="failed",
+                    percent=99,
+                    message="failed",
+                ),
+                ProgressSnapshot(
+                    shard=source.shard_basename,
+                    challenge_id="web-0001",
+                    worker="worker-1",
+                    stage="complete",
+                    status="failed",
+                    percent=99,
+                    message="failed",
+                ),
+            ]
+        )
+
+    retry_id = service.retry(container_id)
+
+    assert retry_id == container_id
+    target_shard = f"{container_id}.iter-002.json"
+    with session_factory() as session:
+        events = session.scalars(
+            sa.select(ProgressEvent)
+            .where(ProgressEvent.shard == target_shard)
+            .order_by(ProgressEvent.id.asc())
+        ).all()
+        snapshots = session.scalars(
+            sa.select(ProgressSnapshot).where(ProgressSnapshot.shard == target_shard)
+        ).all()
+
+    assert [(event.stage, event.status, event.percent) for event in events] == [
+        ("build", "passed", 64)
+    ]
+    assert [(item.stage, item.status, item.percent) for item in snapshots] == [
+        ("build", "passed", 64)
+    ]
 
 
 def test_repair_reuses_container_and_carries_failure_context(

@@ -1315,6 +1315,7 @@ class HermesRunner:
             fingerprint: 1 for fingerprint in seen_failure_fingerprints
         }
         repeated_failure_stop = False
+        repeated_failure_hermes_escalated = False
 
         def stop_if_repeated_failure() -> bool:
             nonlocal repeated_failure_stop
@@ -1415,7 +1416,24 @@ class HermesRunner:
             except AttemptDeadlineExceeded:
                 return mark_deadline_failed(workspace=workspace)
             if repeated_failure_stop:
-                break
+                if (
+                    automatic_hermes_allowed(per_results)
+                    and not repeated_failure_hermes_escalated
+                ):
+                    repeated_failure_hermes_escalated = True
+                    repeated_failure_stop = False
+                    self._progress.record(
+                        shard=original_shard_name,
+                        worker=worker,
+                        stage="validate",
+                        status="running",
+                        message=(
+                            "validation repair escalated: repeated deterministic "
+                            "failure signature; continuing with Hermes repair"
+                        ),
+                    )
+                else:
+                    break
             if not any(result.get("solve_status") == "failed" for result in per_results):
                 break
             if not automatic_hermes_allowed(per_results):

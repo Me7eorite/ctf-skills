@@ -940,8 +940,50 @@ def test_validator_passed_without_flag_candidate_is_not_solve_passed(tmp_path: P
     )
 
     assert results[0]["solve_status"] == "failed"
+    assert results[0]["remote_solve_status"] == "failed"
     assert results[0]["validation_status"] == "pending_validation"
     assert "without a flag candidate" in results[0]["validation_error"]
+
+
+def test_report_preserves_local_solve_status_when_remote_validation_fails(
+    tmp_path: Path,
+) -> None:
+    from hermes.report import merge_validation_into_report
+
+    report = tmp_path / "report.json"
+    report.write_text(
+        json.dumps(
+            {
+                "challenges": [
+                    {
+                        "id": "pwn-0001",
+                        "solve_status": "passed",
+                        "validation_status": "pending",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    merge_validation_into_report(
+        report,
+        [
+            {
+                "challenge_id": "pwn-0001",
+                "solve_status": "failed",
+                "remote_solve_status": "failed",
+                "validation_status": "contract_failed",
+                "validation_error": "semantic contract failed",
+            }
+        ],
+    )
+
+    challenge = json.loads(report.read_text(encoding="utf-8"))["challenges"][0]
+    assert challenge["local_solve_status"] == "passed"
+    assert challenge["remote_solve_status"] == "failed"
+    assert challenge["solve_status"] == "failed"
+
 
 def test_report_and_metadata_do_not_pass_when_solver_output_missing(tmp_path: Path) -> None:
     from hermes.report import merge_validation_into_report

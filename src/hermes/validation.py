@@ -93,6 +93,7 @@ def run_validation(
             results.append(
                 {
                     "challenge_id": challenge_id,
+                    "remote_solve_status": "passed",
                     "solve_status": "passed",
                     "validation_status": "skipped_resume",
                 }
@@ -115,6 +116,7 @@ def run_validation(
                 annotate_validation_result(
                     {
                         "challenge_id": challenge_id,
+                        "remote_solve_status": "failed",
                         "solve_status": "failed",
                         "validation_status": gate_status,
                         "validation_error": gate_error,
@@ -168,6 +170,7 @@ def run_validation(
             results.append(
                 {
                     "challenge_id": challenge_id,
+                    "remote_solve_status": "passed",
                     "solve_status": "passed",
                     "validation_status": "passed",
                     "validation_elapsed": elapsed,
@@ -208,6 +211,7 @@ def run_validation(
             failed_result = annotate_validation_result(
                 {
                     "challenge_id": challenge_id,
+                    "remote_solve_status": "failed",
                     "solve_status": "failed",
                     "validation_status": status,
                     "validation_elapsed": elapsed,

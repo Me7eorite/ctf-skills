@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from core.execution_config import execution_minting_enabled
 from core.jsonio import read_json, write_json
 from core.paths import ProjectPaths
+from core.state import EXECUTION_STAGES
 from domain import challenge_designs as design_dto
 from domain import design_tasks as task_dto
 from domain.design.difficulty_review import DifficultyReviewResult
@@ -424,18 +425,18 @@ class BuildOrchestrationService:
         if not retry_by_task:
             return
         with transaction(factory=self.session_factory) as session:
-            for task_id, submission in retry_by_task.items():
-                source = session.get(build_model.BuildAttempt, retry_sources[task_id])
-                if source is None:
+            for submission in retry_by_task.values():
+                source_shard = submission.resume_from_shard_basename
+                if source_shard is None:
                     continue
                 _copy_progress_events(
                     session,
-                    source_shard=source.shard_basename,
+                    source_shard=source_shard,
                     target_shard=submission.shard_basename,
                 )
                 _copy_progress_snapshots(
                     session,
-                    source_shard=source.shard_basename,
+                    source_shard=source_shard,
                     target_shard=submission.shard_basename,
                 )
 
@@ -874,11 +875,29 @@ def _copy_progress_snapshots(
     session.execute(
         sa.delete(ProgressSnapshot).where(ProgressSnapshot.shard == target_shard)
     )
+    best_rows: dict[str, Any] = {}
+    event_rows = session.scalars(
+        sa.select(ProgressEvent)
+        .where(ProgressEvent.shard == source_shard)
+        .order_by(ProgressEvent.id.asc())
+    ).all()
+    for row in event_rows:
+        if not _copyable_resume_progress(row.stage, row.status):
+            continue
+        current = best_rows.get(row.challenge_id)
+        if current is None or int(row.percent or 0) >= int(current.percent or 0):
+            best_rows[row.challenge_id] = row
     now = datetime.now(timezone.utc)
-    rows = session.scalars(
+    snapshot_rows = session.scalars(
         sa.select(ProgressSnapshot).where(ProgressSnapshot.shard == source_shard)
     ).all()
-    for row in rows:
+    for row in snapshot_rows:
+        if not _copyable_resume_progress(row.stage, row.status):
+            continue
+        current = best_rows.get(row.challenge_id)
+        if current is None or int(row.percent or 0) > int(current.percent or 0):
+            best_rows[row.challenge_id] = row
+    for row in best_rows.values():
         session.add(
             ProgressSnapshot(
                 shard=target_shard,
@@ -908,6 +927,8 @@ def _copy_progress_events(
         .order_by(ProgressEvent.id.asc())
     ).all()
     for row in rows:
+        if not _copyable_resume_progress(row.stage, row.status):
+            continue
         session.add(
             ProgressEvent(
                 shard=target_shard,
@@ -919,6 +940,10 @@ def _copy_progress_events(
                 message=row.message,
             )
         )
+
+
+def _copyable_resume_progress(stage: str, status: str) -> bool:
+    return stage in EXECUTION_STAGES and status == "passed"
 
 
 def _review_error_message(result: DifficultyReviewResult) -> str:
