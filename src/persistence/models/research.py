@@ -171,6 +171,12 @@ class ResearchRun(Base):
     lease_expires_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     started_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    trial_only: Mapped[bool] = mapped_column(
+        sa.Boolean(),
+        nullable=False,
+        default=False,
+        server_default=sa.text("false"),
+    )
     last_error: Mapped[str | None] = mapped_column(sa.Text())
     hermes_log_path: Mapped[str | None] = mapped_column(sa.Text())
     profile_name_used: Mapped[str | None] = mapped_column(sa.Text())

@@ -220,15 +220,18 @@ def _preflight_scoped_research_worker(request_id: str) -> tuple[bool, int, dict[
             )
             if latest_completed is None:
                 return False, HTTPStatus.CONFLICT, {"code": "already_researched"}
-            finding_count = int(
+            designable_count = int(
                 session.scalar(
                     sa.select(sa.func.count())
                     .select_from(model.ResearchFinding)
-                    .where(model.ResearchFinding.research_run_id == latest_completed.id)
+                    .where(
+                        model.ResearchFinding.research_run_id == latest_completed.id,
+                        model.ResearchFinding.kind.in_(("technique", "variant")),
+                    )
                 )
                 or 0
             )
-            if finding_count >= minimum_research_findings(row.target_count):
+            if designable_count >= minimum_research_findings(row.target_count):
                 return False, HTTPStatus.CONFLICT, {"code": "already_researched"}
         if row.status == "failed":
             return False, HTTPStatus.CONFLICT, {"code": "final_failure_no_retry_left"}

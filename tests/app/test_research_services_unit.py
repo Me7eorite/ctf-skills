@@ -110,6 +110,34 @@ def test_parse_research_output_can_skip_quality_gate_for_supplements():
     )
 
     assert len(parsed.findings) == 1
+    assert parsed.trial_only is True
+
+
+def test_parse_research_output_marks_non_trial_only_when_designable_findings_exist():
+    stdout_text = json.dumps(
+        {
+            "sources": [
+                {
+                    "url": "https://example.com/a",
+                    "title": "A",
+                    "summary": "Summary",
+                    "content_hash": "a" * 64,
+                }
+            ],
+            "findings": [
+                {
+                    "kind": "technique",
+                    "label": "Technique",
+                    "summary": "Finding summary",
+                    "source_indices": [0],
+                }
+            ],
+        }
+    )
+
+    parsed = parse_research_output(stdout_text, target_count=1)
+
+    assert parsed.trial_only is False
 
 
 def test_parse_research_output_preserves_valid_family_and_coerces_unknown(caplog):
@@ -602,6 +630,24 @@ def test_quality_gate_diversity_soft_pass(monkeypatch, caplog):
         "research diversity gate soft-passed" in rec.message
         for rec in caplog.records
     )
+
+
+def test_quality_gate_uses_profile_capacity_for_category(monkeypatch):
+    from domain.research_validators import apply_research_quality_gate
+
+    monkeypatch.delenv("RESEARCH_QUALITY_SOFT_PASS_BELOW_BY", raising=False)
+    monkeypatch.delenv("RESEARCH_QUALITY_RATIO", raising=False)
+    payload = {
+        "sources": [{"url": "https://example.com/x", "content_hash": "a" * 64}],
+        "findings": [
+            {"kind": "technique", "label": "one", "summary": "s"},
+            {"kind": "variant", "label": "two", "summary": "s"},
+        ],
+    }
+
+    ok, error = apply_research_quality_gate(payload, 2, category="re")
+
+    assert (ok, error) == (True, None)
 
 
 class _FakeBinding:

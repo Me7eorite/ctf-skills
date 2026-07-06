@@ -115,6 +115,7 @@ class ResearchRun:
     hermes_log_path: str | None           # Hermes 执行日志路径
     profile_name_used: str | None         # 使用的 Hermes profile 名称
     created_at: datetime
+    trial_only: bool = False              # 是否由 diversity soft-pass 产出
     was_retried: bool | None = None       # 是否曾被重试
 
 

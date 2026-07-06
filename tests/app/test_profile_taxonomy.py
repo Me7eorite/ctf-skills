@@ -287,6 +287,11 @@ def test_capacity_check_reports_design_diversity_exhausted() -> None:
         )
 
 
+def test_capacity_check_requires_semantic_assignments() -> None:
+    with pytest.raises(ProfileTaxonomyError, match="semantic_assignments must not be empty"):
+        profile_capacity_check(category="re", target_count=1, semantic_assignments=[])
+
+
 def test_policy_compatibility_prevents_silent_c_elf_fallback() -> None:
     wasm_policy = ProfilePolicy(
         category="re",

@@ -26,6 +26,7 @@ LOGGER = logging.getLogger(__name__)
 class ParsedResearchOutput:
     sources: list[dict[str, Any]]
     findings: list[dict[str, Any]]
+    trial_only: bool = False
 
 
 def parse_research_output(
@@ -42,7 +43,7 @@ def parse_research_output(
     res_data = _normalize_legacy_result_shape(res_data)
     res_data = _normalize_source_content_hashes(res_data)
     if enforce_quality:
-        ok, error = apply_research_quality_gate(res_data, target_count)
+        ok, error = apply_research_quality_gate(res_data, target_count, category=category)
         if not ok:
             raise ResearchValidationError(error or "unparseable_output:quality_gate_failed")
 
@@ -65,7 +66,15 @@ def parse_research_output(
         )
         for finding_item in finding_items
     ]
-    return ParsedResearchOutput(sources=source_payloads, findings=finding_payloads)
+    return ParsedResearchOutput(
+        sources=source_payloads,
+        findings=finding_payloads,
+        trial_only=not enforce_quality,
+    )
+
+
+def parsed_output_contains_designable_findings(parsed: ParsedResearchOutput) -> bool:
+    return any(item.get("kind") in {"technique", "variant"} for item in parsed.findings)
 
 
 def _normalize_legacy_result_shape(parsed: Mapping[str, Any]) -> dict[str, Any]:

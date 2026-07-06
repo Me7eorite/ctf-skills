@@ -34,11 +34,13 @@ from domain import design_tasks as dto
 from domain import research as research_dto
 from domain.generation_profile import category_profile_config
 from domain.design.technique_taxonomy import resolve_family, resolve_sub_technique
+from domain.design.profile_taxonomy import taxonomy_for_category
 from domain.design_task_validators import DesignTaskValidationError
 from domain.research_validators import (
     _quality_ratio,
     _quality_soft_pass_slack,
 )
+from domain.design.profile_taxonomy import profile_capacity_check
 from persistence.models import design_tasks as design_model
 from persistence.repositories import DesignTaskRepository, ResearchRepository
 from persistence.session import SessionFactory, transaction
@@ -385,8 +387,25 @@ def _plan_candidates(
     category = request.category
     runtime_constraints = dict(request.runtime_constraints or {})
     profile = _diversity_profile(category, request.target_count, findings)
+    designable_findings = [
+        finding for finding in findings if finding.kind in {"technique", "variant"}
+    ]
+    support_findings = [
+        finding for finding in findings if finding.kind not in {"technique", "variant"}
+    ]
+    if not designable_findings:
+        raise DesignTaskValidationError("insufficient_designable_capacity")
+    capacity = profile_capacity_check(
+        category=category,
+        target_count=request.target_count,
+        semantic_assignments=_semantic_assignments_for_findings(category, designable_findings),
+    )
+    if not capacity.can_allocate:
+        raise DesignTaskValidationError(
+            capacity.diagnostics.get("code") or "design_diversity_exhausted"
+        )
     allocations = _allocate_primary_findings(
-        findings,
+        designable_findings,
         target_count=request.target_count,
         category=category,
         technique_quota=profile.technique_quota,
@@ -395,9 +414,14 @@ def _plan_candidates(
     for index, difficulty in enumerate(difficulty_slots):
         task_no = index + 1
         allocation = allocations[index]
-        task_findings = _findings_for_task(difficulty, findings, allocation.index)
-        primary = task_findings[0]
+        primary = designable_findings[allocation.index]
+        task_findings = _findings_for_task(
+            difficulty,
+            designable_findings,
+            allocation.index,
+        )
         secondaries = task_findings[1:]
+        evidence_findings = [primary, *secondaries, *support_findings]
         candidate: dict[str, Any] = {
             "task_no": task_no,
             "challenge_id": _challenge_id(category, request.id, task_no),
@@ -411,10 +435,10 @@ def _plan_candidates(
             ),
             "points": DEFAULT_POINTS.get(difficulty, 100),
             "port": _port_for(category, task_no),
-            "scenario": _scenario_for(category, difficulty, task_findings),
+            "scenario": _scenario_for(category, difficulty, evidence_findings),
             "constraints": dict(runtime_constraints),
-            "evidence_summary": _evidence_summary(run, request.topic, task_findings),
-            "finding_ids": [f.id for f in task_findings],
+            "evidence_summary": _evidence_summary(run, request.topic, evidence_findings),
+            "finding_ids": [f.id for f in evidence_findings],
             "diversity_flags": {
                 **dict(allocation.diversity_flags),
                 "advisory_mechanism_vocabulary": _advisory_mechanisms_for_category(category),
@@ -636,9 +660,6 @@ def _allocate_primary_findings(
         }
         for finding in findings
     ]
-    distinct_subtechniques = {item["sub_technique"] for item in metadata}
-    duplicate_unavoidable = len(distinct_subtechniques) < target_count
-
     family_counts: Counter[str] = Counter()
     used_subtechniques: set[str] = set()
     recent_families: list[str] = []
@@ -670,7 +691,7 @@ def _allocate_primary_findings(
         ]
         if unused_sub_candidates:
             chosen = unused_sub_candidates[0]
-            subtechnique_duplicate = duplicate_unavoidable
+            subtechnique_duplicate = False
         else:
             chosen = family_candidates[0]
             subtechnique_duplicate = True
@@ -700,6 +721,19 @@ def _allocate_primary_findings(
         used_subtechniques.add(sub_technique)
         recent_families.append(family)
     return allocations
+
+
+def _semantic_assignments_for_findings(
+    category: str,
+    findings: Sequence[research_dto.ResearchFinding],
+) -> list[dict[str, str]]:
+    taxonomy = taxonomy_for_category(category)
+    family = next(iter(taxonomy.semantic.fields["family"]))
+    sub_technique = next(iter(taxonomy.semantic.fields["sub_technique"]))
+    return [
+        {"family": family, "sub_technique": sub_technique}
+        for _finding in findings
+    ]
 
 
 # Per-category advisory mechanism vocabulary. These examples help the model talk

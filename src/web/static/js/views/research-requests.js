@@ -624,17 +624,20 @@ function formatShortDate(value) {
 }
 
 function renderPrimaryAction({ request, latest, qualityPassed, designTaskCount, workerRunning, available }) {
+  if (latest && (latest.status === "queued" || latest.status === "running")) {
+    if (workerRunning) {
+      return `<button class="btn btn-primary detail-open-runs"><i data-lucide="activity"></i> 查看运行状态</button>`;
+    }
+    return `<button class="btn btn-primary" id="detail-run-loop"${!available ? " disabled" : ""}><i data-lucide="rotate-cw"></i> 持续处理该需求</button>`;
+  }
+  if (request.status === "researched") {
+    return `<button class="btn btn-primary" id="detail-run-once"${workerRunning || !available ? " disabled" : ""}><i data-lucide="plus-circle"></i> 补充研究</button>`;
+  }
   if (designTaskCount > 0) {
     return `<button class="btn btn-primary design-tasks-view"><i data-lucide="workflow"></i> 查看设计任务</button>`;
   }
   if (qualityPassed) {
     return `<button class="btn btn-primary design-tasks-generate"><i data-lucide="wand-sparkles"></i> 生成设计任务</button>`;
-  }
-  if (request.status === "researched") {
-    return `<button class="btn btn-primary" id="detail-run-once"${workerRunning || !available ? " disabled" : ""}><i data-lucide="plus-circle"></i> 补充研究</button>`;
-  }
-  if (latest && (latest.status === "queued" || latest.status === "running")) {
-    return `<button class="btn btn-primary detail-open-runs"><i data-lucide="activity"></i> 查看运行状态</button>`;
   }
   if (request.status === "failed" && latest && Number(latest.attempt) >= Number(request.max_attempts)) {
     return `<button class="btn btn-secondary" disabled><i data-lucide="circle-x"></i> 已达重试上限</button>`;
@@ -761,6 +764,11 @@ function renderDesignTasksSummary(summary, request, qualityPassed, findingCount,
     : !qualityPassed
       ? `当前有 ${findingCount} 条有效结论，最低需要 ${minimumFindings} 条。`
       : "研究质量已达标，可以生成题目设计任务。";
+  const helper = request?.status === "researched"
+    ? "研究已完成，仍可继续补充研究；设计任务生成基于最新 completed research run。"
+    : total
+      ? "设计任务已生成，可进入题目设计页面查看详情。"
+      : blocker;
   return `
     <section class="card rq-section-card">
       <div class="card-header">
@@ -778,7 +786,7 @@ function renderDesignTasksSummary(summary, request, qualityPassed, findingCount,
           <span class="pill">${total}</span>
         </div>
       </div>
-      <div class="rq-section-message ${qualityPassed ? "ready" : ""}">${total ? "设计任务已生成，可进入题目设计页面查看详情。" : blocker}</div>
+      <div class="rq-section-message ${qualityPassed ? "ready" : ""}">${escapeHtml(helper)}</div>
     </section>
   `;
 }

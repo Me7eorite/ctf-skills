@@ -114,7 +114,7 @@ class ResearchJobService:
                 idempotency_key=idempotency_key,
                 request_fingerprint=fingerprint if idempotency_key else None,
             )
-            run = repo.create_run(generation_request_id=request.id, attempt=1, status="queued")
+            run = repo.create_run(generation_request_id=request.id, attempt=1, status="queued", trial_only=False)
             request_row = _get_request(session, request.id)
             request_row.status = "researching"
             request_row.updated_at = _utcnow()
@@ -300,6 +300,7 @@ class ResearchJobService:
         *,
         sources: Sequence[Mapping[str, Any]],
         findings: Sequence[Mapping[str, Any]],
+        trial_only: bool = False,
         binding_role: str,
         log_path: str | Path,
         paths: Any | None = None,
@@ -336,6 +337,7 @@ class ResearchJobService:
                 )
 
             _copy_parent_results_for_supplement(session, run)
+            run.trial_only = trial_only
             # 成功落库后更新 profile binding 的最近使用记录，并在同一事务内写 completed。
             repo.touch_binding(binding_role, last_used_at=_utcnow(), last_used_run_id=run_id)
             self._apply_run_completed(session, run, log_path)
@@ -350,6 +352,7 @@ class ResearchJobService:
         *,
         sources: Sequence[Mapping[str, Any]],
         findings: Sequence[Mapping[str, Any]],
+        trial_only: bool = False,
         binding_role: str,
         log_path: str | Path,
         paths: Any,
@@ -367,6 +370,7 @@ class ResearchJobService:
                     sources,
                     findings,
                     log_path,
+                    trial_only=trial_only,
                     binding_role=binding_role,
                 )
                 session.flush()
@@ -403,7 +407,7 @@ class ResearchJobService:
             latest_completed = _latest_completed_run(session, generation_request_id)
             if latest_completed is None:
                 raise ResearchValidationError("no_completed_research_to_supplement")
-            finding_count = _finding_count(session, latest_completed.id)
+            finding_count = _designable_finding_count(session, latest_completed.id)
             minimum = minimum_research_findings(request.target_count)
             if finding_count >= minimum:
                 raise ResearchValidationError("already_researched")
@@ -418,6 +422,7 @@ class ResearchJobService:
                 parent_run_id=latest_completed.id,
                 attempt=next_attempt,
                 status="queued",
+                trial_only=False,
             )
             session.add(run)
             session.flush()
@@ -498,6 +503,7 @@ class ResearchJobService:
         finding_payloads: Sequence[Mapping[str, Any]],
         log_path: str | Path,
         *,
+        trial_only: bool = False,
         binding_role: str | None = None,
     ) -> None:
         """Persist parsed results and mark completed; caller owns transaction and files."""
@@ -524,6 +530,7 @@ class ResearchJobService:
                 technique_family=_normalize_technique_family(finding, run.generation_request.category),
             )
         _copy_parent_results_for_supplement(session, run)
+        run.trial_only = trial_only
         if binding_role is not None:
             repo.touch_binding(binding_role, last_used_at=_utcnow(), last_used_run_id=run.id)
         self._apply_run_completed(session, run, log_path)
@@ -624,6 +631,7 @@ class ResearchJobService:
                 parent_run_id=run.id,
                 attempt=run.attempt + 1,
                 status="queued",
+                trial_only=False,
             )
             session.add(retry)
             # 还有 retry 可执行时，父 request 仍处于 researching，执行过应该就是 ing 状态
@@ -779,6 +787,20 @@ def _finding_count(session, run_id: UUID) -> int:
             sa.select(sa.func.count())
             .select_from(model.ResearchFinding)
             .where(model.ResearchFinding.research_run_id == run_id)
+        )
+        or 0
+    )
+
+
+def _designable_finding_count(session, run_id: UUID) -> int:
+    return int(
+        session.scalar(
+            sa.select(sa.func.count())
+            .select_from(model.ResearchFinding)
+            .where(
+                model.ResearchFinding.research_run_id == run_id,
+                model.ResearchFinding.kind.in_(("technique", "variant")),
+            )
         )
         or 0
     )
@@ -995,6 +1017,7 @@ def _run_dto(row: model.ResearchRun, *, was_retried: bool | None = None) -> dto.
         lease_expires_at=row.lease_expires_at,
         started_at=row.started_at,
         finished_at=row.finished_at,
+        trial_only=row.trial_only,
         last_error=row.last_error,
         hermes_log_path=row.hermes_log_path,
         profile_name_used=row.profile_name_used,

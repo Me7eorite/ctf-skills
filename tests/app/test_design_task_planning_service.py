@@ -62,14 +62,20 @@ def clean_database(session_factory: SessionFactory):
                 model.ChallengeCategory.code.not_in(["web", "pwn", "re"])
             )
         )
-        session.add(
-            model.HermesProfileBinding(
-                role="research",
-                profile_name="default",
-                description="默认绑定，operator 可改",
-                status="enabled",
+        binding = session.get(model.HermesProfileBinding, "research")
+        if binding is None:
+            session.add(
+                model.HermesProfileBinding(
+                    role="research",
+                    profile_name="default",
+                    description="默认绑定，operator 可改",
+                    status="enabled",
+                )
             )
-        )
+        else:
+            binding.profile_name = "default"
+            binding.description = "默认绑定，operator 可改"
+            binding.status = "enabled"
         session.commit()
     yield
 
@@ -527,6 +533,18 @@ def _fake_finding(label: str) -> model.ResearchFinding:
     )
 
 
+def _fake_finding_with_kind(label: str, kind: str) -> model.ResearchFinding:
+    from domain.research import ResearchFinding
+
+    return ResearchFinding(
+        id=uuid4(),
+        research_run_id=uuid4(),
+        kind=kind,
+        label=label,
+        summary=f"summary about {label}",
+    )
+
+
 def _fake_request(difficulty_distribution, *, category: str = "web"):
     from types import MappingProxyType
 
@@ -742,6 +760,22 @@ def test_plan_candidates_same_family_distinct_subtechniques_only_flags_family_qu
         "family_quota_exceeded" in c["diversity_flags"]["warnings"]
         for c in candidates
     )
+
+
+def test_plan_candidates_ignores_scenario_and_prerequisite_findings_for_primary_allocation():
+    findings = [
+        _fake_finding_with_kind("blind SQLi", "scenario"),
+        _fake_finding_with_kind("DOM XSS", "prerequisite"),
+        _fake_finding_with_kind("JWT confusion", "technique"),
+        _fake_finding_with_kind("SSRF", "variant"),
+    ]
+    request = _fake_request({"easy": 2})
+    run = _fake_run()
+
+    candidates = planning_module._plan_candidates(request, run, findings)
+
+    assert [c["primary_technique"] for c in candidates] == ["JWT confusion", "SSRF"]
+    assert [c["finding_ids"][0] for c in candidates] == [findings[2].id, findings[3].id]
 
 
 def test_plan_candidates_is_deterministic_for_diversity_flags():

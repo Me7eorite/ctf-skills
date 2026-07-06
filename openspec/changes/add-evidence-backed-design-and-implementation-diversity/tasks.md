@@ -31,14 +31,14 @@
 
 ## 3. Research designable-mechanism readiness
 
-- [ ] 3.1 Change research readiness counting to use only
+- [x] 3.1 Change research readiness counting to use only
       `kind in {technique, variant}` as primary designable evidence and the
       profile-capacity check from section 2.
-- [ ] 3.2 Make DesignTask primary allocation consume only designable findings;
+- [x] 3.2 Make DesignTask primary allocation consume only designable findings;
       keep scenario/prerequisite findings as supporting evidence.
-- [ ] 3.3 Persist/report when `RESEARCH_DIVERSITY_SOFT_PASS_BELOW_BY` was used
+- [x] 3.3 Persist/report when `RESEARCH_DIVERSITY_SOFT_PASS_BELOW_BY` was used
       as `research_runs.trial_only`; do not duplicate the marker on the request.
-- [ ] 3.4 Tests: many distinct scenarios cannot satisfy an under-supported
+- [x] 3.4 Tests: many distinct scenarios cannot satisfy an under-supported
       design pool; repeated sub-technique findings can still pass when they
       support distinct solve/implementation profiles.
 

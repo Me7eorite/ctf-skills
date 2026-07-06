@@ -306,6 +306,7 @@ class ResearchRepository:
         parent_run_id: UUID | None = None,
         attempt: int = 1,
         status: str = "queued",
+        trial_only: bool = False,
     ) -> dto.ResearchRun:
         """创建 research run 队列记录，但不提交事务。"""
         # attempt 从 1 开始，0 或负数会破坏重试链语义。
@@ -318,6 +319,7 @@ class ResearchRepository:
             parent_run_id=parent_run_id,
             attempt=attempt,
             status=status,
+            trial_only=trial_only,
         )
         self.session.add(row)
         # flush 提前触发 FK/unique/check 约束，调用方事务仍可统一回滚。
@@ -545,6 +547,7 @@ def _run(row: model.ResearchRun) -> dto.ResearchRun:
         lease_expires_at=row.lease_expires_at,
         started_at=row.started_at,
         finished_at=row.finished_at,
+        trial_only=row.trial_only,
         last_error=row.last_error,
         hermes_log_path=row.hermes_log_path,
         profile_name_used=row.profile_name_used,

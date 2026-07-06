@@ -176,6 +176,7 @@ class ResearchAgentExecutor:
                 run.claim_token,
                 sources=source_payloads,
                 findings=finding_payloads,
+                trial_only=parse_result.trial_only,
                 binding_role=RESEARCH_BINDING_ROLE,
                 log_path=log_path,
                 paths=self.paths,
@@ -375,10 +376,12 @@ class _ResearchParseResult:
         sources: list[dict[str, Any]] | None = None,
         findings: list[dict[str, Any]] | None = None,
         error: str | None = None,
+        trial_only: bool = False,
     ) -> None:
         self.sources = sources or []
         self.findings = findings or []
         self.error = error
+        self.trial_only = trial_only
 
 
 def _parse_result_payload(
@@ -433,7 +436,11 @@ def _try_parse_result_payload(
             paths=paths,
             run_id=run_id,
         )
-        return _ResearchParseResult(sources=sources, findings=findings)
+        return _ResearchParseResult(
+            sources=sources,
+            findings=findings,
+            trial_only=parsed.trial_only,
+        )
     except ResearchValidationError as exc:
         error = str(exc)
         if _is_supplementable_quality_error(error):
@@ -455,7 +462,7 @@ def _try_parse_result_payload(
                 "persisting partial research output despite quality gate failure: %s",
                 error,
             )
-            return _ResearchParseResult(sources=sources, findings=findings)
+            return _ResearchParseResult(sources=sources, findings=findings, trial_only=True)
         return _ResearchParseResult(error=error)
 
 

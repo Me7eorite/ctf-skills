@@ -20,6 +20,7 @@ from typing import Any
 from urllib.parse import urlparse
 from uuid import UUID
 
+from domain.design.profile_taxonomy import profile_capacity_check, taxonomy_for_category
 from domain.design.technique_taxonomy import resolve_sub_technique
 from domain.research import DIFFICULTY_LABELS, ResearchFindingKind
 
@@ -77,20 +78,8 @@ def _quality_soft_pass_slack() -> int:
     return value
 
 
-def minimum_research_findings(target_count: int) -> int:
-    """Return the effective findings floor after ratio and soft-pass slack."""
-    needed = max(1, math.ceil(target_count * _quality_ratio()))
-    return max(1, needed - _quality_soft_pass_slack())
-
-
 def _diversity_soft_pass_slack() -> int:
-    """How many distinct sub-techniques below ``target_count`` the gate accepts.
-
-    Mirrors ``RESEARCH_QUALITY_SOFT_PASS_BELOW_BY`` for the diversity floor:
-    set ``RESEARCH_DIVERSITY_SOFT_PASS_BELOW_BY=1`` to tolerate one duplicate
-    sub-technique with a warning instead of failing the whole run. Default
-    ``0`` is strict (every task must get a distinct sub-technique).
-    """
+    """How many distinct sub-techniques below ``target_count`` the gate accepts."""
     raw = os.environ.get("RESEARCH_DIVERSITY_SOFT_PASS_BELOW_BY", "0")
     try:
         value = int(raw)
@@ -107,6 +96,14 @@ def _diversity_soft_pass_slack() -> int:
         )
         return 0
     return value
+
+
+def minimum_research_findings(target_count: int) -> int:
+    """Return the effective findings floor after ratio and soft-pass slack."""
+    needed = max(1, math.ceil(target_count * _quality_ratio()))
+    return max(1, needed - _quality_soft_pass_slack())
+
+
 class ResearchValidationError(ValueError):
     """领域校验器拒绝输入时抛出的异常。"""
 
@@ -308,6 +305,8 @@ def _matching_object_start(text: str, end: int) -> int | None:
 def apply_research_quality_gate(
     parsed: Mapping[str, Any],
     target_count: int,
+    *,
+    category: str | None = None,
 ) -> tuple[bool, str | None]:
     sources = parsed.get("sources")
     findings = parsed.get("findings")
@@ -330,44 +329,70 @@ def apply_research_quality_gate(
             return False, f"content_hash_dup:{content_hash}"
         seen_hashes.add(content_hash)
 
+    designable_findings = _designable_findings(findings)
+    designable_got = len(designable_findings)
+    if designable_got == 0:
+        return False, "insufficient_designable_capacity"
+
     needed = max(1, math.ceil(target_count * _quality_ratio()))
     slack = _quality_soft_pass_slack()
     soft_floor = max(1, needed - slack)
-    got = len(findings)
-    if got < soft_floor:
-        return False, f"insufficient_findings:got={got},need={needed}"
-    if got < needed:
+    if designable_got < soft_floor:
+        return False, f"insufficient_findings:got={designable_got},need={needed}"
+    if designable_got < needed:
         _LOGGER.warning(
             "research quality gate soft-passed: got=%d, needed=%d, slack=%d "
             "(set RESEARCH_QUALITY_SOFT_PASS_BELOW_BY=0 to disable soft pass)",
-            got,
+            designable_got,
             needed,
             slack,
         )
 
-    # Diversity floor: require a distinct-technique floor proportional to the
-    # requested research size, not a 1:1 match with target_count. The raw pool
-    # often contains multiple descriptions of the same reverse technique, so a
-    # hard 50/50 uniqueness gate causes repeated, pointless retries on large
-    # research batches.
-    distinct = len({resolve_sub_technique(finding) for finding in findings})
-    diversity_needed = max(1, math.ceil(target_count * _quality_ratio()))
-    diversity_slack = _diversity_soft_pass_slack()
-    diversity_floor = max(1, diversity_needed - diversity_slack)
-    if distinct < diversity_floor:
-        return (
-            False,
-            f"insufficient_diversity:distinct={distinct},need={diversity_needed}",
-        )
-    if distinct < diversity_needed:
-        _LOGGER.warning(
-            "research diversity gate soft-passed: distinct=%d, needed=%d, slack=%d "
-            "(set RESEARCH_DIVERSITY_SOFT_PASS_BELOW_BY=0 to disable soft pass)",
-            distinct,
-            diversity_needed,
-            diversity_slack,
-        )
+    if category is None:
+        distinct = len({resolve_sub_technique(finding) for finding in designable_findings})
+        diversity_needed = max(1, math.ceil(target_count * _quality_ratio()))
+        diversity_slack = _diversity_soft_pass_slack()
+        diversity_floor = max(1, diversity_needed - diversity_slack)
+        if distinct < diversity_floor:
+            return (
+                False,
+                f"insufficient_diversity:distinct={distinct},need={diversity_needed}",
+            )
+        if distinct < diversity_needed:
+            _LOGGER.warning(
+                "research diversity gate soft-passed: distinct=%d, needed=%d, slack=%d "
+                "(set RESEARCH_DIVERSITY_SOFT_PASS_BELOW_BY=0 to disable soft pass)",
+                distinct,
+                diversity_needed,
+                diversity_slack,
+            )
+        return True, None
+
+    try:
+        taxonomy = taxonomy_for_category(category)
+    except Exception as exc:  # pragma: no cover - defensive boundary
+        return False, f"unknown_profile_category:{category}:{exc}"
+
+    first_semantic = {
+        field: values[0] for field, values in taxonomy.semantic.fields.items()
+    }
+    semantic_assignments = [first_semantic for _ in range(designable_got)]
+    capacity = profile_capacity_check(
+        category=category,
+        target_count=target_count,
+        semantic_assignments=semantic_assignments,
+    )
+    if not capacity.can_allocate:
+        return False, capacity.diagnostics.get("code") or "design_diversity_exhausted"
     return True, None
+
+
+def _designable_findings(findings: Sequence[Any]) -> list[Mapping[str, Any]]:
+    return [
+        finding
+        for finding in findings
+        if isinstance(finding, Mapping) and finding.get("kind") in {"technique", "variant"}
+    ]
 
 
 def validate_category(category: str | None, allowed_codes: Iterable[str]) -> None:
