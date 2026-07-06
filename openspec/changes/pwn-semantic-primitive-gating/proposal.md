@@ -1,4 +1,4 @@
-## Why
+﻿## Why
 
 Current pwn challenge generation can still let a declared exploit path drift away from the actual implementation. A design may intend stack overflow or ret2win, while the built source only contains bounded input or a fixed secret check, causing downstream repair to hallucinate offsets and exploits that the binary cannot support.
 
@@ -6,12 +6,13 @@ This change makes pwn exploitability a contract that Design declares and Build/h
 
 ## What Changes
 
-- Add a pwn primitive contract model with declared `primitive_id`, positive `requires[]`, negative `disqualifiers[]`, and evidence requirements.
+- Add a pwn primitive contract model with declared `primitive_id`, positive `requires[]`, negative `disqualifiers[]`, field-level evidence schemas, explicit diagnostic precedence, difficulty controls, and evidence requirements.
 - Extend structured pwn Design so it declares the intended primitive contract without claiming source-level proof before source exists.
 - Add host-owned semantic audit during Build validation that inspects generated source, compiled artifacts, and solver evidence after implementation.
-- Add explicit failure outcomes for non-realized pwn primitives, including `pwn_primitive_not_realized`, without forcing a non-pwn logic challenge into a pwn solve path.
+- Add explicit failure outcomes for non-realized pwn primitives, including `pwn_primitive_disqualified`, `pwn_primitive_evidence_missing`, `pwn_primitive_not_realized`, `pwn_primitive_unsupported`, `pwn_challenge_escape`, and `pwn_primitive_inconclusive`, without forcing a non-pwn logic challenge into a pwn solve path.
 - Keep exploit offsets and final solver facts derived from artifact evidence, not from LLM design text.
-- Bind release eligibility to the existing built artifact, contract hash, artifact manifest, and host validation observation rather than adding a separate release rebuild.
+- Bind release eligibility to the existing built artifact, primitive contract hash, artifact manifest hash, and host validation observation rather than adding a separate release rebuild.
+- Preserve existing validation result/history and contract-error compatibility while adding structured semantic-audit diagnostics for operators, repair, and revalidation.
 
 ## Capabilities
 
