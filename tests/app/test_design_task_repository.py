@@ -14,9 +14,14 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import IntegrityError
 
 from domain.design_task_validators import DesignTaskValidationError
+from persistence.models import design_profile_reservations as reservation_model
 from persistence.models import design_tasks as dt_model
 from persistence.models import research as model
-from persistence.repositories import DesignTaskRepository, ResearchRepository
+from persistence.repositories import (
+    DesignProfileReservationRepository,
+    DesignTaskRepository,
+    ResearchRepository,
+)
 from persistence.session import SessionFactory
 from services import ResearchJobService
 
@@ -49,6 +54,8 @@ def session_factory() -> SessionFactory:
 @pytest.fixture(autouse=True)
 def clean_database(session_factory: SessionFactory):
     with session_factory() as session:
+        session.execute(sa.delete(reservation_model.DesignProfileReservation))
+        session.execute(sa.delete(reservation_model.DesignProfileLedger))
         session.execute(sa.delete(dt_model.DesignTask))
         session.execute(sa.delete(model.ResearchFindingSource))
         session.execute(sa.delete(model.ResearchFinding))
@@ -383,4 +390,135 @@ def test_check_constraint_rejects_zero_points(session_factory: SessionFactory):
             session.flush()
     finally:
         session.rollback()
+        session.close()
+
+
+def test_design_profile_reservation_repository_round_trip(session_factory: SessionFactory):
+    request_id, run_id, finding_id = _seed_completed_run(session_factory)
+    session = session_factory()
+    try:
+        task_repo = DesignTaskRepository(session)
+        [task] = task_repo.replace_draft_or_archived_tasks(
+            generation_request_id=request_id,
+            research_run_id=run_id,
+            parent_category="web",
+            target_count=1,
+            difficulty_distribution={"easy": 1},
+            candidates=[_candidate(1, "easy", finding_id)],
+        )
+        repo = DesignProfileReservationRepository(session)
+        ledger = repo.lock_ledger("web", policy_version=1)
+        reservation = repo.reserve_task(
+            design_task_id=task.id,
+            generation_request_id=request_id,
+            profile={
+                "semantic": {"family": "injection", "sub_technique": "blind sqli"},
+                "solve": {
+                    "analysis_mode": "blackbox",
+                    "required_action": "payload_injection",
+                    "chain_shape": "single-request-exploit",
+                    "required_tool_class": "http_client",
+                },
+                "implementation": {
+                    "artifact_format": "container",
+                    "language": "python",
+                    "runtime": "flask",
+                    "interaction": "http_form",
+                    "control_structure": "route_handler",
+                    "flag_concealment": "database_record",
+                },
+                "presentation": {
+                    "scenario_type": "reporting_app",
+                    "input_model": "web_form",
+                },
+            },
+            profile_signature="sig",
+            occupancy_scope="web",
+            exclusive_signature_key=None,
+            taxonomy_version=1,
+            policy_version=ledger.policy_version,
+            ledger_version=ledger.ledger_version,
+        )
+        repo.set_current_reservation(task.id, reservation.id)
+        committed = repo.commit_reservation(reservation.id)
+        released = repo.release_reservation(committed.id)
+        session.commit()
+
+        task_row = session.get(dt_model.DesignTask, task.id)
+        reservation_row = session.get(reservation_model.DesignProfileReservation, committed.id)
+        assert task_row.current_reservation_id is None
+        assert reservation_row is not None
+        assert reservation_row.state == "released"
+        assert released.state == "released"
+    finally:
+        session.close()
+
+
+def test_release_active_for_request_clears_current_pointers(session_factory: SessionFactory):
+    request_id, run_id, finding_id = _seed_completed_run(session_factory)
+    session = session_factory()
+    try:
+        task_repo = DesignTaskRepository(session)
+        tasks = task_repo.replace_draft_or_archived_tasks(
+            generation_request_id=request_id,
+            research_run_id=run_id,
+            parent_category="web",
+            target_count=2,
+            difficulty_distribution={"easy": 1, "medium": 1},
+            candidates=[
+                _candidate(1, "easy", finding_id),
+                _candidate(2, "medium", finding_id, challenge_id="web-0002"),
+            ],
+        )
+        repo = DesignProfileReservationRepository(session)
+        ledger = repo.lock_ledger("web", policy_version=1)
+        reservations = []
+        for index, task in enumerate(tasks, start=1):
+            reservation = repo.reserve_task(
+                design_task_id=task.id,
+                generation_request_id=request_id,
+                profile={
+                    "semantic": {"family": "injection", "sub_technique": f"blind sqli {index}"},
+                    "solve": {
+                        "analysis_mode": "blackbox",
+                        "required_action": "payload_injection",
+                        "chain_shape": "single-request-exploit",
+                        "required_tool_class": "http_client",
+                    },
+                    "implementation": {
+                        "artifact_format": "container",
+                        "language": "python",
+                        "runtime": "flask",
+                        "interaction": "http_form",
+                        "control_structure": "route_handler",
+                        "flag_concealment": "database_record",
+                    },
+                    "presentation": {
+                        "scenario_type": "reporting_app",
+                        "input_model": "web_form",
+                    },
+                },
+                profile_signature=f"sig-{index}",
+                occupancy_scope="web",
+                exclusive_signature_key=f"exclusive-{index}",
+                taxonomy_version=1,
+                policy_version=ledger.policy_version,
+                ledger_version=ledger.ledger_version,
+            )
+            repo.set_current_reservation(task.id, reservation.id)
+            reservations.append(reservation)
+
+        released = repo.release_active_for_request(request_id, bump_ledger=True)
+        session.commit()
+
+        assert {item.id for item in released} == {item.id for item in reservations}
+        assert {item.state for item in released} == {"released"}
+        for task in tasks:
+            task_row = session.get(dt_model.DesignTask, task.id)
+            assert task_row.current_reservation_id is None
+        for reservation in reservations:
+            row = session.get(reservation_model.DesignProfileReservation, reservation.id)
+            assert row.state == "released"
+            assert row.released_at is not None
+    finally:
         session.close()

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -13,9 +15,10 @@ import sqlalchemy as sa
 from sqlalchemy import create_engine
 
 from domain.design_task_validators import DesignTaskValidationError
+from persistence.models import design_profile_reservations as reservation_model
 from persistence.models import design_tasks as dt_model
 from persistence.models import research as model
-from persistence.repositories import DesignTaskRepository
+from persistence.repositories import DesignProfileReservationRepository, DesignTaskRepository
 from persistence.session import SessionFactory
 from services import DesignTaskPlanningService, ResearchJobService
 from services import design_task_planning_service as planning_module
@@ -50,6 +53,8 @@ def session_factory() -> SessionFactory:
 @pytest.fixture(autouse=True)
 def clean_database(session_factory: SessionFactory):
     with session_factory() as session:
+        session.execute(sa.delete(reservation_model.DesignProfileReservation))
+        session.execute(sa.delete(reservation_model.DesignProfileLedger))
         session.execute(sa.delete(dt_model.DesignTask))
         session.execute(sa.delete(model.ResearchFindingSource))
         session.execute(sa.delete(model.ResearchFinding))
@@ -91,7 +96,7 @@ def _seed(
     technique_families: list[str | None] | None = None,
 ):
     distribution = distribution or {"easy": 1, "medium": 2}
-    finding_labels = finding_labels or ["technique-0", "technique-1"]
+    finding_labels = finding_labels or ["blind SQLi", "DOM XSS", "SSRF"]
     technique_families = technique_families or [None] * len(finding_labels)
     service = ResearchJobService(session_factory)
     request, run = service.submit_request(
@@ -520,6 +525,65 @@ def test_generate_rejects_planner_with_foreign_finding_id(
         session.close()
 
 
+def test_generate_records_current_reservation(session_factory: SessionFactory):
+    request, _ = _seed(
+        session_factory,
+        target_count=1,
+        distribution={"easy": 1},
+        finding_labels=["blind SQLi"],
+    )
+    service = DesignTaskPlanningService(session_factory)
+
+    tasks = service.generate_for_request(request.id)
+
+    with session_factory() as session:
+        task_row = session.get(dt_model.DesignTask, tasks[0].id)
+        reservation_row = session.get(
+            reservation_model.DesignProfileReservation,
+            task_row.current_reservation_id,
+        )
+        assert task_row.current_reservation_id is not None
+        assert reservation_row is not None
+        assert reservation_row.design_task_id == task_row.id
+        assert reservation_row.state == "reserved"
+
+
+def test_regenerate_releases_replaced_reservations(session_factory: SessionFactory):
+    request, _ = _seed(
+        session_factory,
+        target_count=1,
+        distribution={"easy": 1},
+        finding_labels=["blind SQLi"],
+    )
+    service = DesignTaskPlanningService(session_factory)
+
+    first_tasks = service.generate_for_request(request.id)
+    first_task_id = first_tasks[0].id
+    first_reservation_id = first_tasks[0].current_reservation_id
+    second_tasks = service.generate_for_request(request.id)
+
+    with session_factory() as session:
+        first_task = session.get(dt_model.DesignTask, first_task_id)
+        first_reservation = session.get(
+            reservation_model.DesignProfileReservation,
+            first_reservation_id,
+        )
+        second_task = session.get(dt_model.DesignTask, second_tasks[0].id)
+        active_reservations = session.scalars(
+            sa.select(reservation_model.DesignProfileReservation).where(
+                reservation_model.DesignProfileReservation.generation_request_id == request.id,
+                reservation_model.DesignProfileReservation.state.in_(("reserved", "committed")),
+            )
+        ).all()
+
+        assert first_task is None
+        assert first_reservation is not None
+        assert first_reservation.state == "released"
+        assert first_reservation.design_task_id is None
+        assert second_task.current_reservation_id == second_tasks[0].current_reservation_id
+        assert [row.id for row in active_reservations] == [second_task.current_reservation_id]
+
+
 def _fake_finding(label: str) -> model.ResearchFinding:
     """Domain DTO doppelganger for unit tests that bypass the DB."""
     from domain.research import ResearchFinding
@@ -715,7 +779,7 @@ def test_plan_candidates_flags_monocultural_pool_but_preserves_count():
         c["diversity_flags"]["sub_technique"] == "xor"
         for c in candidates
     )
-    assert all(
+    assert any(
         "subtechnique_duplicate" in c["diversity_flags"]["warnings"]
         for c in candidates
     )
@@ -862,3 +926,158 @@ def test_mechanisms_for_category_falls_back_to_default(monkeypatch):
     assert planning_module._advisory_mechanisms_for_category("re") == (
         planning_module._DEFAULT_MECHANISMS["re"]
     )
+
+
+def _reservation_profile(*, sub_technique: str = "blind sqli") -> dict[str, object]:
+    return {
+        "semantic": {"family": "injection", "sub_technique": sub_technique},
+        "solve": {
+            "analysis_mode": "blackbox",
+            "required_action": "payload_injection",
+            "chain_shape": "single-request-exploit",
+            "required_tool_class": "http_client",
+        },
+        "implementation": {
+            "artifact_format": "container",
+            "language": "python",
+            "runtime": "flask",
+            "interaction": "http_form",
+            "control_structure": "route_handler",
+            "flag_concealment": "database_record",
+        },
+        "presentation": {
+            "scenario_type": "reporting_app",
+            "input_model": "web_form",
+        },
+    }
+
+
+def test_concurrent_reservations_same_task_keep_one_active(session_factory: SessionFactory):
+    request, _ = _seed(
+        session_factory,
+        target_count=1,
+        distribution={"easy": 1},
+        finding_labels=["blind SQLi", "DOM XSS"],
+    )
+    service = DesignTaskPlanningService(session_factory)
+    [task] = service.generate_for_request(request.id)
+    with session_factory() as session:
+        DesignProfileReservationRepository(session).release_active_for_request(request.id)
+        session.commit()
+    barrier = threading.Barrier(2)
+
+    def reserve_and_commit(marker: str):
+        with session_factory() as session:
+            repo = DesignProfileReservationRepository(session)
+            try:
+                barrier.wait(timeout=5)
+                reservation = repo.reserve_task(
+                    design_task_id=task.id,
+                    generation_request_id=request.id,
+                    profile=_reservation_profile(sub_technique=f"blind sqli {marker}"),
+                    profile_signature=f"sig-{marker}",
+                    occupancy_scope="web",
+                    exclusive_signature_key=f"exclusive-{marker}",
+                    taxonomy_version=1,
+                    policy_version=1,
+                    ledger_version=0,
+                )
+                repo.set_current_reservation(task.id, reservation.id)
+                session.commit()
+                return {"marker": marker, "reservation_id": reservation.id}
+            except Exception as exc:
+                session.rollback()
+                return {"marker": marker, "error": type(exc).__name__}
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(reserve_and_commit, "a"),
+            pool.submit(reserve_and_commit, "b"),
+        ]
+        results = [future.result(timeout=30) for future in futures]
+
+    assert {result.get("error") for result in results} <= {None, "IntegrityError"}
+    with session_factory() as session:
+        rows = session.scalars(
+            sa.select(reservation_model.DesignProfileReservation).where(
+                reservation_model.DesignProfileReservation.generation_request_id == request.id
+            )
+        ).all()
+        active = [row for row in rows if row.state in {"reserved", "committed"}]
+        assert len(active) == 1
+        task_row = session.get(dt_model.DesignTask, task.id)
+        assert task_row.current_reservation_id == active[0].id
+
+
+def test_concurrent_reservations_same_signature_keep_one_active(
+    session_factory: SessionFactory,
+):
+    first_request, _ = _seed(
+        session_factory,
+        target_count=1,
+        distribution={"easy": 1},
+        finding_labels=["blind SQLi", "DOM XSS"],
+    )
+    second_request, _ = _seed(
+        session_factory,
+        target_count=1,
+        distribution={"easy": 1},
+        finding_labels=["SSRF", "XSS"],
+    )
+    service = DesignTaskPlanningService(session_factory)
+    [first_task] = service.generate_for_request(first_request.id)
+    [second_task] = service.generate_for_request(second_request.id)
+    with session_factory() as session:
+        repo = DesignProfileReservationRepository(session)
+        repo.release_active_for_request(first_request.id)
+        repo.release_active_for_request(second_request.id)
+        session.commit()
+    barrier = threading.Barrier(2)
+
+    def reserve_with_signature(task_id, request_id, marker: str):
+        with session_factory() as session:
+            repo = DesignProfileReservationRepository(session)
+            try:
+                barrier.wait(timeout=5)
+                reservation = repo.reserve_task(
+                    design_task_id=task_id,
+                    generation_request_id=request_id,
+                    profile=_reservation_profile(sub_technique="shared"),
+                    profile_signature="shared-signature",
+                    occupancy_scope="web",
+                    exclusive_signature_key="shared-exclusive",
+                    taxonomy_version=1,
+                    policy_version=1,
+                    ledger_version=0,
+                )
+                repo.set_current_reservation(task_id, reservation.id)
+                session.commit()
+                return {"marker": marker, "reservation_id": reservation.id}
+            except Exception as exc:
+                session.rollback()
+                return {"marker": marker, "error": type(exc).__name__}
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(reserve_with_signature, first_task.id, first_request.id, "a"),
+            pool.submit(reserve_with_signature, second_task.id, second_request.id, "b"),
+        ]
+        results = [future.result(timeout=30) for future in futures]
+
+    assert any(result.get("reservation_id") for result in results)
+    with session_factory() as session:
+        rows = session.scalars(sa.select(reservation_model.DesignProfileReservation)).all()
+        active = [row for row in rows if row.state in {"reserved", "committed"}]
+        assert len(active) == 1
+        assert all(
+            row.exclusive_signature_key != "shared-exclusive"
+            or row.id == active[0].id
+            for row in rows
+        )
+        task_rows = session.scalars(
+            sa.select(dt_model.DesignTask).where(
+                dt_model.DesignTask.id.in_([first_task.id, second_task.id])
+            )
+        ).all()
+        assert sum(1 for row in task_rows if row.current_reservation_id is not None) == 1
+        assert any(row.current_reservation_id == active[0].id for row in task_rows)

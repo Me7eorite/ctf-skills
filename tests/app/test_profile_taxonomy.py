@@ -287,6 +287,26 @@ def test_capacity_check_reports_design_diversity_exhausted() -> None:
         )
 
 
+def test_single_value_quota_dimension_does_not_exhaust_capacity() -> None:
+    policy = load_profile_policy("web")
+
+    result = profile_capacity_check(
+        category="web",
+        target_count=3,
+        semantic_assignments=[
+            {"family": "injection", "sub_technique": "blind sqli"},
+            {"family": "client_side", "sub_technique": "dom xss"},
+            {"family": "server_side", "sub_technique": "ssrf"},
+        ],
+        policy=policy,
+    )
+
+    assert result.can_allocate is True
+    assert {item.profile.implementation["artifact_format"] for item in result.allocations} == {
+        "container"
+    }
+
+
 def test_capacity_check_requires_semantic_assignments() -> None:
     with pytest.raises(ProfileTaxonomyError, match="semantic_assignments must not be empty"):
         profile_capacity_check(category="re", target_count=1, semantic_assignments=[])

@@ -77,9 +77,9 @@ earlier advisory-only diversity behavior for new production work:
 - `add-design-technique-diversity` remains useful for coarse research/planning
   visibility, but its soft warnings are not sufficient for production
   admission under this change.
-- `add-design-asset-flow-gate` or equivalent asset-flow schema work must land
-  first, because DesignEvidence and build contracts rely on normalized
-  `asset_flow` / `required_asset_flow` concepts.
+- This change assumes the normalized `asset_flow` / `required_asset_flow`
+  schema already exists. If it does not, that prerequisite must be completed
+  before this change can be implemented.
 - `add-challenge-pattern-library` or equivalent pattern/fingerprint work may
   feed the ledger and corpus comparison, but this change owns the hard
   production gates over reservations, evidence, observations, and corpus

@@ -392,8 +392,7 @@ Governed matrix values have no generic defaults. Missing governed values cause
 
 Historical designs without evidence remain readable and revalidatable. They may
 be rebuilt only through an explicit operator-only `legacy_trial` mode that is
-recorded as non-production and can never pass the production corpus gate, or by
-first migrating the design into a reviewed governed contract.
+recorded as non-production and can never pass the production corpus gate.
 
 ### D7 - Host observation, not metadata, establishes implementation truth
 
@@ -453,8 +452,9 @@ Runner/reconciler authority is:
   still matches every hash and is effectively accepted;
 - Reconciler may set BuildAttempt `succeeded` only when all existing
   solve/artifact conditions pass and the current attributed observation is
-  effectively accepted: either `passed`, or `inconclusive` with a valid allowed
-  observation review whose policy scope permits build success;
+  effectively accepted for the validation layer: either `passed`, or
+  `inconclusive` with a valid allowed observation review whose policy scope
+  permits build success;
 - `metadata.solve_status = passed` without accepted observation is insufficient
   for new governed builds.
 
@@ -486,7 +486,9 @@ Fingerprints:
 
 Default decisions:
 
-- identical combined governed signature: `blocked`;
+- identical combined governed signature: `blocked`, except for the same-task
+  revision lineage already represented by the task's superseded/effective
+  evidence chain;
 - same sub-technique plus same solve and implementation signatures within one
   production batch: `blocked`;
 - source token Jaccard >= 0.65: `blocked`;
@@ -509,7 +511,7 @@ Production publication requires an effectively accepted corpus decision:
 recording actor, reason, and timestamp. Review approval does not rewrite the
 stored member decision; the aggregator records the provenance and may treat the
 member as effectively accepted. Overrides cannot bypass exact combined-signature
-duplicates or failed validation.
+duplicates outside the same-task revision lineage or failed validation.
 
 Corpus persistence is explicit:
 
@@ -530,16 +532,20 @@ explicitly; there is no implicit "current batch".
 
 The existing delivery packer is the production publication boundary. In
 production mode it selects only challenges whose BuildAttempt has an effectively
-accepted ArtifactObservation (`passed`, or `inconclusive` with an allowed
-observation review), and whose explicitly selected member decision is
-effectively accepted (`passed`, or `review_required` with an allowed corpus
-review). The aggregate batch decision must be `passed` after accounting for
-allowed member reviews.
+accepted ArtifactObservation for the validation layer (`passed`, or
+`inconclusive` with an allowed observation review), and whose explicitly
+selected member decision is effectively accepted for the corpus layer
+(`passed`, or `review_required` with an allowed corpus review). The aggregate
+batch decision must be `passed` after accounting for allowed member reviews.
 Observation review and corpus review are independent records. Selection by
 `metadata.build_status` alone is no longer sufficient.
 Shadow/trial packing remains available only through explicit mode flags and
 records that the output is non-production; those modes cannot overwrite or
 satisfy the production release gate.
+
+In this change, "effectively accepted" is a layer-local term: validation-layer
+acceptance, corpus-layer acceptance, and delivery eligibility are related but
+distinct checks.
 
 Operational deletion of a published challenge may remove mutable task/build
 rows and files according to resource-deletion policy, but SHALL retain a

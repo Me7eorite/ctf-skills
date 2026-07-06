@@ -62,7 +62,9 @@ The corpus gate SHALL return exactly one decision:
 
 Default hard blocks:
 
-- identical combined governed profile in batch or history;
+- identical combined governed profile in batch or history, except for an
+  explicit same-task revision lineage that is already represented by the
+  current DesignTask's live superseded/effective-evidence chain;
 - repeated sub-technique only when solve and implementation signatures also
   match in one production batch;
 - source token Jaccard at or above `0.65`;
@@ -101,6 +103,14 @@ computing the aggregate pass.
 - **WHEN** corpus admission runs
 - **THEN** the decision is `blocked`
 - **AND** no operator override can publish it
+
+#### Scenario: Same-task revision lineage is not treated as a duplicate
+
+- **GIVEN** a candidate is a revision of the same DesignTask lineage and its
+  prior design/evidence has been superseded
+- **WHEN** corpus admission runs
+- **THEN** the prior version does not block the candidate as a duplicate
+- **AND** the candidate is still evaluated against all other corpus rules
 
 #### Scenario: Borderline source similarity requires review
 

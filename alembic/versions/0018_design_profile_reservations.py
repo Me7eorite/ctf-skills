@@ -49,12 +49,27 @@ def upgrade() -> None:
         sa.CheckConstraint("policy_version > 0", name="ck_design_profile_ledgers_policy_version_positive"),
         sa.UniqueConstraint("category", name="uq_design_profile_ledgers_category"),
     )
+    op.create_index(
+        "ix_design_profile_ledgers_category_policy_version",
+        "design_profile_ledgers",
+        ["category", "policy_version"],
+    )
 
     op.create_table(
         "design_profile_reservations",
         sa.Column("id", sa.Uuid(), primary_key=True),
-        sa.Column("design_task_id", sa.Uuid(), sa.ForeignKey("design_tasks.id", ondelete="SET NULL"), nullable=True),
-        sa.Column("generation_request_id", sa.Uuid(), sa.ForeignKey("generation_requests.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "design_task_id",
+            sa.Uuid(),
+            sa.ForeignKey("design_tasks.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
+        sa.Column(
+            "generation_request_id",
+            sa.Uuid(),
+            sa.ForeignKey("generation_requests.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
         sa.Column("reservation_version", sa.Integer(), nullable=False),
         sa.Column("profile", sa.dialects.postgresql.JSONB(), nullable=False),
         sa.Column("profile_signature", sa.Text(), nullable=False),
@@ -132,6 +147,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_index(
+        "ix_design_profile_ledgers_category_policy_version",
+        table_name="design_profile_ledgers",
+    )
     op.drop_constraint(
         "fk_design_tasks_current_reservation",
         "design_tasks",

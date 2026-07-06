@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from collections.abc import Mapping
 from uuid import UUID, uuid4
 
 import sqlalchemy as sa
@@ -11,9 +11,12 @@ from sqlalchemy.orm import Session
 
 from core.clock import utcnow as _utcnow
 from domain import design_profile_reservations as dto
-from domain.design.profile_taxonomy import ProfileOccupancy, profile_occupancy_from_mapping
+from domain.design.profile_taxonomy import (
+    ProfileOccupancy,
+    profile_occupancy_from_mapping,
+)
 from persistence.models import design_profile_reservations as model
-from persistence.models import research as research_model
+from persistence.models import design_tasks as task_model
 from persistence.models import research as research_model
 
 
@@ -30,11 +33,18 @@ class DesignProfileReservationRepository:
     def ensure_ledger(self, category: str, *, policy_version: int) -> model.DesignProfileLedger:
         self.session.execute(
             insert(model.DesignProfileLedger)
-            .values(category=category, policy_version=policy_version, ledger_version=0)
+            .values(
+                id=uuid4(),
+                category=category,
+                policy_version=policy_version,
+                ledger_version=0,
+            )
             .on_conflict_do_nothing(index_elements=["category"])
         )
         row = self.session.scalars(
-            sa.select(model.DesignProfileLedger).where(model.DesignProfileLedger.category == category)
+            sa.select(model.DesignProfileLedger)
+            .where(model.DesignProfileLedger.category == category)
+            .with_for_update()
         ).one()
         if row.policy_version != policy_version:
             row.policy_version = policy_version
@@ -88,7 +98,7 @@ class DesignProfileReservationRepository:
         *,
         design_task_id: UUID,
         generation_request_id: UUID,
-        profile: dict[str, object],
+        profile: Mapping[str, object],
         profile_signature: str,
         occupancy_scope: str | None,
         exclusive_signature_key: str | None,
@@ -127,14 +137,46 @@ class DesignProfileReservationRepository:
             raise DesignProfileReservationPersistenceError(
                 f"reservation {reservation_id} does not exist"
             )
+        self._clear_current_reservation(reservation_id)
         if row.state != "released":
-            row.state = "released"
-            row.released_at = _utcnow()
+            self._release_row(row)
             if bump_ledger:
                 row.ledger_version = self._bump_ledger(row.generation_request_id)
             self.session.flush()
         self.session.refresh(row)
         return _reservation(row)
+
+    def release_active_for_request(
+        self,
+        generation_request_id: UUID,
+        *,
+        bump_ledger: bool = False,
+    ) -> list[dto.DesignProfileReservation]:
+        rows = self.session.scalars(
+            sa.select(model.DesignProfileReservation)
+            .where(
+                model.DesignProfileReservation.generation_request_id == generation_request_id,
+                model.DesignProfileReservation.state.in_(("reserved", "committed")),
+            )
+            .order_by(model.DesignProfileReservation.created_at, model.DesignProfileReservation.id)
+            .with_for_update()
+        ).all()
+        if not rows:
+            return []
+
+        self.session.execute(
+            sa.update(task_model.DesignTask)
+            .where(task_model.DesignTask.current_reservation_id.in_([row.id for row in rows]))
+            .values(current_reservation_id=None, updated_at=_utcnow())
+        )
+        for row in rows:
+            self._release_row(row)
+        if bump_ledger:
+            ledger_version = self._bump_ledger(generation_request_id)
+            for row in rows:
+                row.ledger_version = ledger_version
+        self.session.flush()
+        return [_reservation(row) for row in rows]
 
     def commit_reservation(self, reservation_id: UUID) -> dto.DesignProfileReservation:
         row = self.session.get(model.DesignProfileReservation, reservation_id)
@@ -160,6 +202,17 @@ class DesignProfileReservationRepository:
         row.current_reservation_id = reservation_id
         row.updated_at = _utcnow()
         self.session.flush()
+
+    def _release_row(self, row: model.DesignProfileReservation) -> None:
+        row.state = "released"
+        row.released_at = _utcnow()
+
+    def _clear_current_reservation(self, reservation_id: UUID) -> None:
+        self.session.execute(
+            sa.update(task_model.DesignTask)
+            .where(task_model.DesignTask.current_reservation_id == reservation_id)
+            .values(current_reservation_id=None, updated_at=_utcnow())
+        )
 
     def _bump_ledger(self, generation_request_id: UUID) -> int:
         category = self.session.scalar(

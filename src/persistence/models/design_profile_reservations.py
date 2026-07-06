@@ -18,6 +18,7 @@ from persistence.models.research import (
     UpdatedAt,
     UuidPk,
 )
+from persistence.models.design_tasks import DesignTask
 
 
 class DesignProfileLedger(Base):
@@ -124,5 +125,9 @@ class DesignProfileReservation(Base):
     committed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     released_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
 
-    design_task: Mapped["DesignTask"] = relationship()
-    generation_request: Mapped[GenerationRequest] = relationship()
+    design_task: Mapped[DesignTask] = relationship(
+        foreign_keys=[design_task_id]
+    )
+    generation_request: Mapped[GenerationRequest] = relationship(
+        foreign_keys=[generation_request_id]
+    )

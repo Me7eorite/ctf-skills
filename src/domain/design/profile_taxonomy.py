@@ -183,8 +183,10 @@ WEB_TAXONOMY = CategoryProfileTaxonomy(
                 "jwt",
                 "idor",
                 "sqli",
+                "xss",
                 "ssti",
                 "ssrf",
+                "path_traversal",
                 "deserialization",
                 "upload_parse",
                 "prototype_pollution",
@@ -569,7 +571,10 @@ def profile_capacity_check(
     exhausted: Counter[str] = Counter()
 
     for index in range(target_count):
-        semantic = dict(semantic_assignments[index % len(semantic_assignments)])
+        semantic = normalize_semantic_assignment(
+            taxonomy,
+            semantic_assignments[index % len(semantic_assignments)],
+        )
         _validate_axis_values(taxonomy, "semantic", semantic)
         candidate = _first_eligible_candidate(
             category=category,
@@ -630,6 +635,31 @@ def profile_occupancy_from_mapping(
         state=state,
         source_id=source_id,
     )
+
+
+def normalize_semantic_assignment(
+    taxonomy: CategoryProfileTaxonomy,
+    semantic: Mapping[str, str],
+) -> dict[str, str]:
+    """Map advisory technique labels into the governed closed vocabulary."""
+
+    family = (
+        str(semantic.get("family", ""))
+        .strip()
+        .lower()
+        .replace("-", "_")
+        .replace(" ", "_")
+    )
+    if family not in taxonomy.semantic.fields["family"]:
+        family = "other" if "other" in taxonomy.semantic.fields["family"] else family
+
+    raw_sub = _normalize_semantic_value(str(semantic.get("sub_technique", "")))
+    allowed = taxonomy.semantic.fields["sub_technique"]
+    if raw_sub in allowed:
+        sub_technique = raw_sub
+    else:
+        sub_technique = _coerce_sub_technique(raw_sub, allowed)
+    return {"family": family, "sub_technique": sub_technique}
 
 
 def _first_eligible_candidate(
@@ -730,6 +760,8 @@ def _quota_exceeded(
     target_count: int,
 ) -> bool:
     for path, ratio in policy.quota_ratios.items():
+        if len(_effective_values_for_path(taxonomy_for_category(policy.category), policy, path)) <= 1:
+            continue
         cap = max(1, _ceil(target_count * ratio))
         value = _profile_value(profile, path)
         count = sum(1 for item in planned if _profile_value(item.profile, path) == value)
@@ -737,6 +769,18 @@ def _quota_exceeded(
         if count + 1 > cap:
             return True
     return False
+
+
+def _effective_values_for_path(
+    taxonomy: CategoryProfileTaxonomy,
+    policy: ProfilePolicy,
+    path: str,
+) -> frozenset[str]:
+    axis, field = _split_path(path)
+    if axis == "implementation":
+        rows = _compatible_implementation_rows(taxonomy, policy)
+        return frozenset(row[field] for row in rows if field in row)
+    return frozenset(_field_values(taxonomy, path))
 
 
 def _compatible_implementation_rows(
@@ -789,6 +833,42 @@ def _validate_axis_values(
 
 def _first_axis_value(axis: AxisSchema) -> dict[str, str]:
     return {field: values[0] for field, values in axis.fields.items()}
+
+
+def _normalize_semantic_value(value: str) -> str:
+    return " ".join(
+        value.strip().lower().replace("-", " ").replace("_", " ").split()
+    )
+
+
+def _coerce_sub_technique(value: str, allowed: Sequence[str]) -> str:
+    aliases = {
+        "blind sqli": "sqli",
+        "boolean blind sqli": "sqli",
+        "second order sqli": "sqli",
+        "sql injection": "sqli",
+        "sql inj": "sqli",
+        "dom xss": "xss",
+        "stored xss": "xss",
+        "reflected xss": "xss",
+        "prototype pollution": "prototype_pollution",
+        "path traversal": "path_traversal",
+        "use after free": "uaf",
+        "format string": "format_string",
+        "anti debug": "anti_debug",
+    }
+    alias = aliases.get(value)
+    normalized_allowed = {_normalize_semantic_value(item): item for item in allowed}
+    if alias is not None and alias in allowed:
+        return alias
+    if alias is not None and _normalize_semantic_value(alias) in normalized_allowed:
+        return normalized_allowed[_normalize_semantic_value(alias)]
+    for normalized, original in normalized_allowed.items():
+        if normalized and (normalized in value.split() or normalized in value):
+            return original
+    raise ProfileTaxonomyError(
+        f"profile semantic.sub_technique={value!r} cannot be mapped to closed vocabulary"
+    )
 
 
 def _profile_value(profile: GovernedProfile, path: str) -> str:

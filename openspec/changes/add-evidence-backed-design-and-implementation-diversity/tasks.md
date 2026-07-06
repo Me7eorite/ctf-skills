@@ -44,19 +44,19 @@
 
 ## 4. Reservation persistence and concurrency
 
-- [ ] 4.1 Add `design_profile_reservations` model, DTO, repository, Alembic
+- [x] 4.1 Add `design_profile_reservations` model, DTO, repository, Alembic
       migration, `reservation_version`, active partial unique index, and
       policy-derived nullable `occupancy_scope` and `exclusive_signature_key`
       with a partial unique index over active scoped keys, plus
       `reserved|committed|released` checks.
-- [ ] 4.2 Add nullable current-reservation reference/exposure on DesignTask
+- [x] 4.2 Add nullable current-reservation reference/exposure on DesignTask
       (`current_reservation_id`).
-- [ ] 4.3 Allocate all request reservations atomically under the existing
+- [x] 4.3 Allocate all request reservations atomically under the existing
       parent-request lock during generation/regeneration.
-- [ ] 4.4 Add category-scoped `design_profile_ledgers`, monotonic
+- [x] 4.4 Add category-scoped `design_profile_ledgers`, monotonic
       `ledger_version`, policy version binding, cross-request allocation lock,
       conflict retry, and release semantics.
-- [ ] 4.5 PostgreSQL concurrency tests: same-request and cross-request
+- [x] 4.5 PostgreSQL concurrency tests: same-request and cross-request
       allocators cannot reserve the same hard-exclusive signature; failed
       transactions leave no partial reservations.
 
