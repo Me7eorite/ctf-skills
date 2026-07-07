@@ -841,3 +841,22 @@ class DesignTaskReadEndpointTests(unittest.TestCase):
         with _app_client() as client:
             self.assertEqual(client.get(f"/api/design-tasks/{uuid4()}").status_code, 404)
             self.assertEqual(client.get("/api/design-tasks/not-a-uuid").status_code, 404)
+
+    def test_revision_endpoint_calls_service_and_returns_design_task(self):
+        task = _make_design_task(status="designed")
+        task_dict = {"id": str(task.id), "status": "draft"}
+        service = SimpleNamespace(
+            request_design_revision=lambda task_id, reason: replace(task, status="draft"),
+        )
+        with _app_client(planning_service=service, design_repo=SimpleNamespace(
+            list_design_tasks=lambda _id: [],
+            list_tasks=lambda **_kw: [],
+            summarize_for_request=lambda _id: {"total": 0, "by_status": {}},
+            get_with_history=lambda _id: (task, [], None),
+            set_design_task_status=lambda _id, _status: None,
+        )) as client:
+            resp = client.post(f"/api/design-tasks/{task.id}/revision", json={"reason": "quality"})
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        self.assertEqual(payload["reason"], "quality")
+        self.assertEqual(payload["design_task"]["status"], "draft")

@@ -239,6 +239,58 @@ class ChallengeDesignRepository:
         self.session.refresh(design)
         return _design(design)
 
+    def request_revision_from_governed_failure(
+        self,
+        *,
+        design_task_id: UUID,
+        challenge_design_id: UUID,
+        review_error: str,
+        target_status: str = "queued",
+    ) -> dto.ChallengeDesign:
+        """Supersede a governed design and route the task through the new revision path."""
+        if not review_error:
+            raise ChallengeDesignPersistenceError("review_error is required")
+        if target_status not in {"queued", "draft"}:
+            raise ChallengeDesignPersistenceError(
+                f"unsupported target_status {target_status!r}"
+            )
+        task = self._lock_design_task(design_task_id)
+        if task.status != "designed":
+            raise ChallengeDesignPersistenceError(
+                f"design task {design_task_id} is {task.status}, expected designed"
+            )
+        design = self.session.scalars(
+            sa.select(model.ChallengeDesign)
+            .where(
+                model.ChallengeDesign.id == challenge_design_id,
+                model.ChallengeDesign.design_task_id == design_task_id,
+                model.ChallengeDesign.status == "draft",
+            )
+            .with_for_update()
+        ).one_or_none()
+        if design is None:
+            raise ChallengeDesignPersistenceError(
+                f"draft challenge design {challenge_design_id} was not found"
+            )
+        attempt = self.session.scalars(
+            sa.select(model.DesignAttempt)
+            .where(model.DesignAttempt.id == design.design_attempt_id)
+            .with_for_update()
+        ).one_or_none()
+        if attempt is None:
+            raise ChallengeDesignPersistenceError(
+                f"design attempt {design.design_attempt_id} was not found"
+            )
+        now = _utcnow()
+        design.status = "superseded"
+        design.updated_at = now
+        attempt.last_error = review_error
+        task.status = target_status
+        task.updated_at = now
+        self.session.flush()
+        self.session.refresh(design)
+        return _design(design)
+
     def _lock_design_task(self, design_task_id: UUID) -> dt_model.DesignTask:
         task = self.session.scalars(
             sa.select(dt_model.DesignTask)

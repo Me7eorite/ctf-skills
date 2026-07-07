@@ -4,6 +4,7 @@ import { invalidateBuildAttempts } from "./build-attempts.js";
 import { initIcons } from "../ui/icons.js";
 import { showToast } from "../ui/toast.js";
 import { confirmDeletion } from "../ui/delete-dialog.js";
+import { confirmFormDialog } from "../ui/form-dialog.js";
 import {
   categoryLabel,
   categoryTone,
@@ -317,6 +318,44 @@ async function regenerateOneTask(taskNo) {
     showToast(designErrorMessage(err.message), true);
   } finally {
     state.flags.regeneratingTask = { ...(state.flags.regeneratingTask || {}), [taskNo]: false };
+    render(state.data);
+    initIcons();
+  }
+}
+
+async function requestRevision(taskId, title) {
+  if (!taskId) return;
+  const form = await confirmFormDialog({
+    title,
+    description: "填写修订原因后，系统会释放当前 reservation、标记旧设计失效，并把任务送回 draft。",
+    confirmLabel: "发起修订",
+    icon: "file-pen-line",
+    fields: [
+      {
+        id: "reason",
+        label: "修订原因",
+        type: "textarea",
+        rows: 4,
+        required: true,
+        placeholder: "例如：质量检查失败，需要重新约束 build contract",
+      },
+    ],
+  });
+  if (!form) return;
+  state.flags.revising = { ...(state.flags.revising || {}), [taskId]: true };
+  render(state.data);
+  initIcons();
+  try {
+    const result = await postJson(`/api/design-tasks/${taskId}/revision`, {
+      reason: form.reason,
+    });
+    showToast(`设计修订已提交 · ${shortId(result.design_task?.id)}`);
+    state.detailId = taskId;
+    await reloadDetail();
+  } catch (err) {
+    showToast(designErrorMessage(err.message), true);
+  } finally {
+    state.flags.revising = { ...(state.flags.revising || {}), [taskId]: false };
     render(state.data);
     initIcons();
   }
@@ -873,6 +912,7 @@ function renderRowActions(task) {
     return `
       <div class="btn-group design-task-actions">
         <button class="btn btn-primary btn-xs dt-open-builds"><i data-lucide="hammer"></i>${task.status === "built" ? "查看题目" : "查看构建"}</button>
+        <button class="btn btn-secondary btn-xs dt-request-revision" title="发起设计修订"><i data-lucide="file-pen-line"></i>修订</button>
         <button class="btn btn-ghost btn-xs dt-open-detail" title="查看详情"><i data-lucide="chevron-right"></i></button>
         <button class="btn btn-danger btn-xs dt-delete" title="删除">
           <i data-lucide="trash-2"></i>
@@ -931,6 +971,7 @@ function renderDetail(root) {
   const latestDesign = task.latest_design || null;
   const isDesigning = !!state.flags.designing?.[task.id];
   const isBuilding = !!state.flags.building?.[task.id];
+  const isRevising = !!state.flags.revising?.[task.id];
   root.innerHTML = `
     <div class="dt-detail-toolbar">
       <button class="btn btn-ghost dt-back" id="dt-back"><i data-lucide="arrow-left"></i>返回题目设计</button>
@@ -990,6 +1031,7 @@ function renderDetail(root) {
         <section class="card dt-related-actions">
           <div class="dt-side-title">相关操作</div>
           ${buildBadge(task)}
+          ${["designed", "build_failed", "built"].includes(task.status) ? `<button class="btn btn-secondary btn-sm dt-request-revision${isRevising ? " btn-loading" : ""}"${isRevising ? " disabled" : ""}><i data-lucide="file-pen-line"></i>发起设计修订</button>` : ""}
           <button class="btn btn-secondary btn-sm dt-open-request"><i data-lucide="search"></i>查看研究需求</button>
           <button class="btn btn-ghost btn-sm dt-archive"${(task.status === "draft" || task.status === "queued") ? "" : " disabled"}><i data-lucide="archive"></i>归档任务</button>
           <button class="btn btn-danger btn-sm dt-delete"><i data-lucide="trash-2"></i>删除任务</button>
@@ -1377,6 +1419,10 @@ export function bind() {
     }
     if (event.target.closest(".dt-design") && taskId) {
       designTaskNow(taskId);
+      return;
+    }
+    if (event.target.closest(".dt-request-revision") && taskId) {
+      requestRevision(taskId, "发起设计修订");
       return;
     }
     if (event.target.closest(".dt-build") && taskId) {

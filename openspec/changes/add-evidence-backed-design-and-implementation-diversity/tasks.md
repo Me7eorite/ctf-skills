@@ -167,15 +167,16 @@
       decision, review provenance, selected `corpus_batch_id`, and
       non-overrideable failure reasons; without an explicit batch, list
       memberships but do not compute production delivery eligibility.
-- [ ] 9.3 Add dashboard sections for profile allocation, evidence citations,
+- [x] 9.3 Add dashboard sections for profile allocation, evidence citations,
       required-vs-observed contract, negative tests, and matched corpus entries;
       label current vs historical rows and raw vs effective review states.
-- [ ] 9.4 Add service-backed re-reserve/regenerate, review-request, and review
-      decision actions; no client-side policy/fingerprint computation and no
-      client-side promotion from raw `review_required` to accepted.
-- [ ] 9.5 Add service-backed Design revision action with quality-failure and
+- [x] 9.4 Add service-backed re-reserve/regenerate and review decision actions
+      for build observations/corpus decisions; no client-side policy/fingerprint
+      computation and no client-side promotion from raw `review_required` to
+      accepted.
+- [x] 9.5 Add service-backed Design revision action with quality-failure and
       contract-revision diagnostics.
-- [ ] 9.6 Add Chinese operator copy and responsive rendering tests.
+- [x] 9.6 Add Chinese operator copy and responsive rendering tests.
 
 ## 10. Compatibility, deletion, and operations
 

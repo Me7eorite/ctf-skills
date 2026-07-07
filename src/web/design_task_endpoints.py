@@ -6,7 +6,7 @@ from http import HTTPStatus
 from typing import Any
 from uuid import UUID
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from core.clock import beijing_isoformat
@@ -160,6 +160,53 @@ def register_design_task_read_endpoints(app: FastAPI) -> None:
                 difficulty_review_summary=review_summary,
                 governance=governance,
             )
+        )
+
+    @app.post("/api/design-tasks/{task_id}/revision")
+    async def request_design_revision(task_id: str, request: Request) -> JSONResponse:
+        from services import DesignTaskPlanningService
+
+        try:
+            task_uuid = UUID(task_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND,
+                detail="design task not found",
+            ) from exc
+
+        try:
+            payload = await request.json()
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail="request body must be JSON",
+            ) from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail="request body must be a JSON object",
+            )
+        reason = str(payload.get("reason") or "").strip()
+        if not reason:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail="reason is required",
+            )
+        try:
+            task = DesignTaskPlanningService().request_design_revision(
+                task_uuid,
+                reason=reason,
+            )
+        except DesignTaskValidationError as exc:
+            raise HTTPException(
+                status_code=_design_task_error_status(exc),
+                detail=str(exc),
+            ) from exc
+        return JSONResponse(
+            {
+                "design_task": design_task_dict(task),
+                "reason": reason,
+            }
         )
 
     @app.delete("/api/design-tasks/{task_id}")

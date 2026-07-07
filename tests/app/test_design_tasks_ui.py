@@ -22,6 +22,8 @@ def test_design_task_view_uses_chinese_operator_copy() -> None:
         "研究依据",
         "最新设计方案",
         "设计记录",
+        "发起设计修订",
+        "/api/design-tasks/${taskId}/revision",
     ):
         assert label in source
     assert "Loading design tasks" not in source
@@ -75,6 +77,7 @@ def test_list_exposes_context_and_state_driven_primary_actions() -> None:
     assert "renderDetailPrimaryAction" in source
     assert "dt-bulk-bar" in source
     assert "开发者数据 · 原始 Payload" in source
+    assert "confirmFormDialog" in source
 
 
 def test_design_task_view_has_list_and_detail_refresh_actions() -> None:
@@ -129,6 +132,7 @@ def test_missing_build_profile_is_visible_and_disables_build_eligibility() -> No
     assert "item.create_command" in source
     assert 'item.reason && item.reason !== "missing_profile"' in source
     assert "item.message || \"Profile 配置未就绪\"" in source
+    assert "dt-request-revision" in source
 
 
 def test_design_task_view_exposes_governance_chain_sections() -> None:

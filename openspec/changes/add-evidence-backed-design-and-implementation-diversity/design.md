@@ -644,25 +644,27 @@ The server DTOs SHALL distinguish current governance state from history:
   families are historical.
 
 It exposes service-backed actions only: regenerate/re-reserve at planning,
-retry Design, submit Build, request corpus review, record allowed review
-decision. It never computes profiles, fingerprints, similarity, or admission
+retry Design, submit Build, and record allowed observation/corpus review
+decisions. It never computes profiles, fingerprints, similarity, or admission
 policy client-side.
 
 ## Risks / Trade-offs
 
-- **Profile vocabulary can become too rigid.** Mitigate through versioned
-  category policy and explicit `design_diversity_exhausted`, not silent
-  fallback.
-- **Observation cannot infer every semantic fact.** Unknown is surfaced as
-  `inconclusive` and may be accepted only through a separate allowed
-  observation review; metadata is never accepted as proof.
-- **Corpus comparison cost grows with 500+ challenges.** Store fingerprints and
-  shortlist by category/profile before exact Jaccard comparison.
-- **Reservation churn can reduce capacity.** Release only under parent locks
-  and retain committed/superseded evidence as historical context.
-- **Negative test execution is security-sensitive.** Use closed host-owned
-  harness kinds, bounded timeout/output, challenge-local cwd, and no arbitrary
-  executable or shell.
+- **Profile space can become over-constrained.** Keep policies versioned and
+  make exhaustion explicit via `design_diversity_exhausted`; never silently
+  relax a governed field.
+- **Observation will miss some facts.** Treat unknowns as `inconclusive` and
+  allow acceptance only through a separate observation review path; metadata
+  alone is never proof.
+- **Corpus checks can become expensive at scale.** Persist fingerprints, short
+  list by category/profile, and bound comparisons to batch plus nearest
+  history.
+- **Reservation churn can fragment capacity.** Release only under parent locks,
+  retry from a fresh ledger snapshot, and keep superseded evidence as
+  historical context.
+- **Negative-test execution is security-sensitive.** Use a closed harness
+  registry, bounded timeout/output, challenge-local cwd, and no arbitrary
+  executable, argv, or shell input.
 
 ## Migration
 

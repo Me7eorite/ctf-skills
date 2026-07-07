@@ -55,6 +55,11 @@ def test_build_attempt_actions_use_constrained_endpoints():
     assert "执行轮次" in source
     assert "renderExecutions(attempt.executions || [])" in source
     assert "result.iteration_no" in source
+    assert "ba-observation-review" in source
+    assert "ba-corpus-review" in source
+    assert "/api/build-attempts/${attemptId}/observation-review" in source
+    assert "/api/build-attempts/${attemptId}/corpus-review" in source
+    assert "confirmFormDialog" in source
     retry_source = source[source.index("async function retryAttempt") : source.index("async function repairAttempt")]
     assert "/worker/start`" not in retry_source
     assert "crypto.randomUUID()" in source

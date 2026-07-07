@@ -840,6 +840,93 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
                 _attempt_dict(attempt, paths=_project_paths(app))
             )
 
+    @app.post("/api/build-attempts/{attempt_id}/observation-review")
+    async def record_observation_review(attempt_id: str, request: Request) -> JSONResponse:
+        attempt_uuid = _parse_uuid(attempt_id, "build attempt id", not_found=True)
+        payload = await _json_object(request)
+        decision = str(payload.get("decision") or "").strip()
+        actor = str(payload.get("actor") or "").strip()
+        reason = str(payload.get("reason") or "").strip()
+        scope = str(payload.get("scope") or GOVERNANCE_REVIEW_SCOPE).strip()
+        if not decision or not actor or not reason:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail="decision, actor, and reason are required",
+            )
+        from persistence.session import transaction
+
+        with transaction() as session:
+            observation_repo = ArtifactObservationRepository(session)
+            attempt = session.get(build_model.BuildAttempt, attempt_uuid)
+            if attempt is None:
+                raise HTTPException(
+                    status_code=HTTPStatus.NOT_FOUND,
+                    detail=f"build attempt {attempt_uuid} not found",
+                )
+            observation = observation_repo.latest_current_for_attempt(attempt_uuid)
+            if observation is None:
+                raise HTTPException(
+                    status_code=HTTPStatus.CONFLICT,
+                    detail="build attempt has no current artifact observation",
+                )
+            review = CorpusRepository(session).record_observation_review(
+                artifact_observation_id=observation.id,
+                decision=decision,
+                actor=actor,
+                reason=reason,
+                scope=scope,
+            )
+        return JSONResponse({"review": review_decision_dict(review)})
+
+    @app.post("/api/build-attempts/{attempt_id}/corpus-review")
+    async def record_corpus_review(attempt_id: str, request: Request) -> JSONResponse:
+        attempt_uuid = _parse_uuid(attempt_id, "build attempt id", not_found=True)
+        payload = await _json_object(request)
+        decision = str(payload.get("decision") or "").strip()
+        actor = str(payload.get("actor") or "").strip()
+        reason = str(payload.get("reason") or "").strip()
+        scope = str(payload.get("scope") or GOVERNANCE_REVIEW_SCOPE).strip()
+        batch_id = _parse_optional_uuid(payload.get("corpus_batch_id"), "corpus_batch_id")
+        if not decision or not actor or not reason:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail="decision, actor, and reason are required",
+            )
+        if batch_id is None:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail="corpus_batch_id is required",
+            )
+        from persistence.session import transaction
+
+        with transaction() as session:
+            corpus_repo = CorpusRepository(session)
+            memberships = corpus_repo.list_members_for_build_attempt(attempt_uuid)
+            member = next((item for item in memberships if item.batch_id == batch_id), None)
+            if member is None:
+                raise HTTPException(
+                    status_code=HTTPStatus.CONFLICT,
+                    detail="build attempt is not a member of the selected corpus batch",
+                )
+            member_decision = corpus_repo.current_decision(
+                batch_id=batch_id,
+                member_id=member.id,
+                scope=CorpusDecisionScope.MEMBER.value,
+            )
+            if member_decision is None:
+                raise HTTPException(
+                    status_code=HTTPStatus.CONFLICT,
+                    detail="selected corpus batch member has no current decision",
+                )
+            review = corpus_repo.record_corpus_review(
+                corpus_decision_id=member_decision.id,
+                decision=decision,
+                actor=actor,
+                reason=reason,
+                scope=scope,
+            )
+        return JSONResponse({"review": review_decision_dict(review)})
+
     @app.delete("/api/build-attempts/{attempt_id}")
     def delete_build_attempt(
         attempt_id: str,

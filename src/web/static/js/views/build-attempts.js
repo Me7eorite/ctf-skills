@@ -3,6 +3,7 @@ import { appState } from "../state.js";
 import { initIcons } from "../ui/icons.js";
 import { showToast } from "../ui/toast.js";
 import { confirmDeletion } from "../ui/delete-dialog.js";
+import { confirmFormDialog } from "../ui/form-dialog.js";
 import {
   categoryLabel,
   dotTone,
@@ -527,6 +528,85 @@ async function repairAttempt(attemptId) {
   }
 }
 
+async function recordObservationReview(attemptId) {
+  if (!attemptId) return;
+  const form = await confirmFormDialog({
+    title: "记录观察审查",
+    description: "把当前 ArtifactObservation 的审查结果交给服务端保存，不在前端推导接受状态。",
+    confirmLabel: "提交审查",
+    icon: "badge-check",
+    fields: [
+      {
+        id: "decision",
+        label: "决策",
+        type: "select",
+        required: true,
+        value: "accepted",
+        options: [
+          { value: "accepted", label: "accepted" },
+          { value: "rejected", label: "rejected" },
+        ],
+      },
+      { id: "actor", label: "操作人", type: "text", required: true, placeholder: "operator" },
+      { id: "reason", label: "原因", type: "textarea", rows: 4, required: true, placeholder: "例如：人工确认 observed profile" },
+      { id: "scope", label: "Scope", type: "text", required: true, value: "production-publication" },
+    ],
+  });
+  if (!form) return;
+  try {
+    const result = await postJson(`/api/build-attempts/${attemptId}/observation-review`, form);
+    showToast(`观察审查已记录 · ${result.review?.decision || "ok"}`);
+    state.detail = null;
+    await ensureDetail(attemptId);
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+async function recordCorpusReview(attemptId) {
+  if (!attemptId) return;
+  const batchId = state.detail?.corpus_governance?.selected_corpus_batch_id || "";
+  const form = await confirmFormDialog({
+    title: "记录 Corpus 审查",
+    description: "把当前成员决策的审查结果交给服务端保存；前端不会把 review_required 自动当成 accepted。",
+    confirmLabel: "提交审查",
+    icon: "stamp",
+    fields: [
+      {
+        id: "corpus_batch_id",
+        label: "Corpus Batch ID",
+        type: "text",
+        required: true,
+        value: batchId,
+        placeholder: "batch uuid",
+      },
+      {
+        id: "decision",
+        label: "决策",
+        type: "select",
+        required: true,
+        value: "approved",
+        options: [
+          { value: "approved", label: "approved" },
+          { value: "rejected", label: "rejected" },
+        ],
+      },
+      { id: "actor", label: "操作人", type: "text", required: true, placeholder: "operator" },
+      { id: "reason", label: "原因", type: "textarea", rows: 4, required: true, placeholder: "例如：允许 review_required 通过" },
+      { id: "scope", label: "Scope", type: "text", required: true, value: "production-publication" },
+    ],
+  });
+  if (!form) return;
+  try {
+    const result = await postJson(`/api/build-attempts/${attemptId}/corpus-review`, form);
+    showToast(`Corpus 审查已记录 · ${result.review?.decision || "ok"}`);
+    state.detail = null;
+    await ensureDetail(attemptId);
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
 async function cleanRebuildAttempt(attemptId) {
   if (!attemptId) return;
   const confirmed = window.confirm("干净重建不会复用上次输出或进度，确定继续？");
@@ -998,6 +1078,8 @@ function renderDetail(root) {
         ${(attempt.status === "failed" || attempt.status === "lost") && buildProfileReady(attempt.category)
           ? `<button class="btn btn-secondary btn-sm ba-clean-rebuild" data-build-attempt-id="${escapeHtml(attempt.id)}"><i data-lucide="eraser"></i>干净重建</button>`
           : ""}
+        <button class="btn btn-secondary btn-sm ba-observation-review" data-build-attempt-id="${escapeHtml(attempt.id)}"><i data-lucide="badge-check"></i>记录观察审查</button>
+        <button class="btn btn-secondary btn-sm ba-corpus-review" data-build-attempt-id="${escapeHtml(attempt.id)}"><i data-lucide="stamp"></i>记录 Corpus 审查</button>
         ${["failed", "lost", "succeeded"].includes(attempt.status)
           ? `<button class="btn btn-danger btn-sm ba-delete" data-build-attempt-id="${escapeHtml(attempt.id)}">
               <i data-lucide="trash-2"></i>删除
@@ -1570,6 +1652,14 @@ export function bind() {
     }
     if (event.target.closest(".ba-revalidate") && attemptId) {
       revalidateAttempt(attemptId);
+      return;
+    }
+    if (event.target.closest(".ba-observation-review") && attemptId) {
+      recordObservationReview(attemptId);
+      return;
+    }
+    if (event.target.closest(".ba-corpus-review") && attemptId) {
+      recordCorpusReview(attemptId);
       return;
     }
     if (event.target.closest(".ba-delete") && attemptId) {

@@ -634,6 +634,99 @@ def test_detail_exposes_validation_and_corpus_governance(
     assert selected_payload["production_delivery_eligibility"]["eligible"] is True
 
 
+def test_detail_review_endpoints_record_reviews(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory)
+    with transaction(factory=session_factory) as session:
+        design_id = session.scalar(
+            sa.select(design_model.ChallengeDesign.id).where(
+                design_model.ChallengeDesign.design_task_id == task_id
+            )
+        )
+        evidence_id = uuid4()
+        session.add(
+            design_model.DesignEvidence(
+                id=evidence_id,
+                design_task_id=task_id,
+                evidence_version=1,
+                challenge_design_id=design_id,
+                research_finding_ids=[],
+                profile={"solve": {"required_action": "inspect"}},
+                profile_signature="profile-a",
+                distinctness_claim="different implementation",
+                compared_challenge_ids=[],
+                evidence={},
+                build_contract={},
+                ledger_version=1,
+            )
+        )
+        attempt = BuildAttemptsRepository(session).create_attempt(task_id, f"{uuid4()}.json")
+        row = session.get(build_model.BuildAttempt, attempt.id)
+        row.design_evidence_id = evidence_id
+        row.contract_sha256 = "contract-a"
+        observation = ArtifactObservationRepository(session).create_current(
+            build_attempt_id=attempt.id,
+            design_evidence_id=evidence_id,
+            contract_sha256="contract-a",
+            artifact_manifest_sha256="artifact-a",
+            observed_profile={"language": "python"},
+            contract_checks={"profile_compare": "unknown"},
+            negative_test_results={},
+            fingerprints={"combined": "combined-a"},
+            status="inconclusive",
+        )
+        corpus_repo = CorpusRepository(session)
+        batch = corpus_repo.create_batch(
+            mode="production",
+            category="web",
+            policy_version=1,
+            created_by="tester",
+        )
+        member = corpus_repo.add_member(
+            batch_id=batch.id,
+            build_attempt_id=attempt.id,
+            design_evidence_id=evidence_id,
+            artifact_observation_id=observation.id,
+            fingerprint_version=1,
+            fingerprints={"combined": "combined-a"},
+        )
+        corpus_repo.record_decision(
+            batch_id=batch.id,
+            member_id=member.id,
+            scope="member",
+            decision="review_required",
+            reasons=["source similarity borderline"],
+            policy_version=1,
+        )
+        session.commit()
+
+    obs_resp = client.post(
+        f"/api/build-attempts/{attempt.id}/observation-review",
+        json={
+            "decision": "accepted",
+            "actor": "tester",
+            "reason": "manual inspection",
+            "scope": "production-publication",
+        },
+    )
+    corp_resp = client.post(
+        f"/api/build-attempts/{attempt.id}/corpus-review",
+        json={
+            "corpus_batch_id": str(batch.id),
+            "decision": "approved",
+            "actor": "tester",
+            "reason": "acceptable",
+            "scope": "production-publication",
+        },
+    )
+    assert obs_resp.status_code == 200
+    assert corp_resp.status_code == 200
+    assert obs_resp.json()["review"]["decision"] == "accepted"
+    assert corp_resp.json()["review"]["decision"] == "approved"
+
+
 def test_list_and_detail_expose_latest_validation_failure_context(
     client: TestClient,
     session_factory: SessionFactory,
