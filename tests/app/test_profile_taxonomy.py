@@ -441,19 +441,35 @@ def test_unknown_pwn_family_stays_unsupported() -> None:
     assert canonical.semantic is None
 
 
+def test_pwn_family_fallback_handles_unknown_subtechnique() -> None:
+    result = profile_capacity_check(
+        category="pwn",
+        target_count=1,
+        semantic_assignments=[
+            {"family": "heap", "sub_technique": "rainbow table"}
+        ],
+    )
+
+    assert result.can_allocate is True
+    assert result.allocations[0].profile.semantic == {
+        "family": "heap",
+        "sub_technique": "heap_uaf_tcache",
+    }
+
+
 def test_unsupported_pwn_profile_is_rejected_before_random_solve_allocation() -> None:
     result = profile_capacity_check(
         category="pwn",
         target_count=1,
         semantic_assignments=[
-            {"family": "stack", "sub_technique": "rainbow table"}
+            {"family": "other", "sub_technique": "rainbow table"}
         ],
     )
 
     assert result.can_allocate is False
     assert result.diagnostics["code"] == "unsupported_pwn_profile"
     assert result.diagnostics["semantic"] == {
-        "family": "stack",
+        "family": "other",
         "sub_technique": "rainbow table",
     }
     with pytest.raises(DesignDiversityExhausted) as exc_info:
@@ -461,7 +477,7 @@ def test_unsupported_pwn_profile_is_rejected_before_random_solve_allocation() ->
             category="pwn",
             target_count=1,
             semantic_assignments=[
-                {"family": "stack", "sub_technique": "rainbow table"}
+                {"family": "other", "sub_technique": "rainbow table"}
             ],
         )
     assert exc_info.value.code == "unsupported_pwn_profile"
@@ -533,7 +549,7 @@ def test_pwn_unsupported_profile_does_not_get_recast_as_format_string() -> None:
         category="pwn",
         target_count=1,
         semantic_assignments=[
-            {"family": "integer_oob", "sub_technique": "rainbow table"}
+            {"family": "other", "sub_technique": "rainbow table"}
         ],
     )
 

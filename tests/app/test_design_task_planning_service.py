@@ -240,9 +240,7 @@ def test_pwn_heap_findings_map_to_supported_reservation_profile(
     tasks = service.generate_for_request(request.id)
 
     assert len(tasks) == 3
-    assert {task.diversity_flags["sub_technique"] for task in tasks} == {
-        "heap_uaf_tcache"
-    }
+    assert {task.diversity_flags["sub_technique"] for task in tasks} == {"heap_uaf_tcache"}
     assert all(task.current_reservation_id is not None for task in tasks)
     assert [task.primary_technique for task in tasks] == [
         "glibc heap exploitation",

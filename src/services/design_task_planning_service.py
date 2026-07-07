@@ -476,6 +476,24 @@ class DesignTaskPlanningService:
                     "sub_technique": _semantic_value(task, "sub_technique"),
                 }
             }
+            if task.category == "pwn":
+                canonicalization = canonicalize_pwn_semantic_assignment(
+                    {
+                        "family": str(candidate["diversity_flags"].get("family") or "other"),
+                        "sub_technique": str(
+                            candidate["diversity_flags"].get("sub_technique") or "unknown"
+                        ),
+                    }
+                )
+                if canonicalization.semantic is not None:
+                    candidate["diversity_flags"] = {
+                        **candidate["diversity_flags"],
+                        "family": canonicalization.semantic["family"],
+                        "sub_technique": canonicalization.semantic["sub_technique"],
+                        "raw_sub_technique": canonicalization.raw_sub_technique,
+                        "canonical_sub_technique": canonicalization.canonical_sub_technique,
+                        "canonicalization_source": canonicalization.canonicalization_source,
+                    }
             task.status = "draft"
             task.plan_reviewed_at = None
             task.current_design_evidence_id = None
@@ -733,6 +751,25 @@ def _plan_candidates(
                 ),
             },
         }
+        if category == "pwn":
+            canonicalization = canonicalize_pwn_semantic_assignment(
+                {
+                    "family": str(candidate["diversity_flags"].get("family") or "other"),
+                    "sub_technique": str(
+                        candidate["diversity_flags"].get("sub_technique") or "unknown"
+                    ),
+                }
+            )
+            if canonicalization.semantic is not None:
+                candidate["diversity_flags"].update(
+                    {
+                        "family": canonicalization.semantic["family"],
+                        "sub_technique": canonicalization.semantic["sub_technique"],
+                        "raw_sub_technique": canonicalization.raw_sub_technique,
+                        "canonical_sub_technique": canonicalization.canonical_sub_technique,
+                        "canonicalization_source": canonicalization.canonicalization_source,
+                    }
+                )
         # Phase 2 (D5=b): for hard/expert tasks the optional Hermes
         # planner can replace the template scenario with a Hermes-locked
         # technique chain. Failure is non-fatal — we keep the template
