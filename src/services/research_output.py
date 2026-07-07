@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import logging
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -38,6 +40,8 @@ def parse_research_output(
 ) -> ParsedResearchOutput:
     """Parse, normalize, and quality-gate Hermes research stdout without I/O."""
     res_data = extract_terminal_json_object(stdout_text)
+    if not _is_research_result_shape(res_data):
+        res_data = _extract_python_research_assignment(stdout_text) or res_data
     if res_data is None:
         raise ResearchValidationError("unparseable_output:no_terminal_json_object")
     res_data = _normalize_legacy_result_shape(res_data)
@@ -80,6 +84,70 @@ def parse_research_output(
 
 def parsed_output_contains_designable_findings(parsed: ParsedResearchOutput) -> bool:
     return any(item.get("kind") in {"technique", "variant"} for item in parsed.findings)
+
+
+def _is_research_result_shape(value: Any) -> bool:
+    return (
+        isinstance(value, Mapping)
+        and isinstance(value.get("sources"), list)
+        and isinstance(value.get("findings"), list)
+    )
+
+
+def _extract_python_research_assignment(stdout_text: str) -> dict[str, Any] | None:
+    sources = _extract_last_python_list_assignment(stdout_text, "sources")
+    findings = _extract_last_python_list_assignment(stdout_text, "findings")
+    if isinstance(sources, list) and isinstance(findings, list):
+        LOGGER.warning("recovered research output from Python list assignments in stdout")
+        return {"sources": sources, "findings": findings}
+    return None
+
+
+def _extract_last_python_list_assignment(stdout_text: str, name: str) -> list[Any] | None:
+    result: list[Any] | None = None
+    for match in re.finditer(rf"(?m)^\+?{re.escape(name)}\s*=\s*\[", stdout_text):
+        bracket_start = stdout_text.find("[", match.start())
+        if bracket_start < 0:
+            continue
+        bracket_end = _matching_bracket_end(stdout_text, bracket_start)
+        if bracket_end is None:
+            continue
+        try:
+            parsed = ast.literal_eval(_strip_unified_diff_prefix(stdout_text[bracket_start : bracket_end + 1]))
+        except (SyntaxError, ValueError):
+            continue
+        if isinstance(parsed, list):
+            result = parsed
+    return result
+
+
+def _strip_unified_diff_prefix(text: str) -> str:
+    return "\n".join(line[1:] if line.startswith("+") else line for line in text.splitlines())
+
+
+def _matching_bracket_end(text: str, start: int) -> int | None:
+    depth = 0
+    in_string: str | None = None
+    escaped = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == in_string:
+                in_string = None
+            continue
+        if char in ("'", '"'):
+            in_string = char
+        elif char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
 
 
 def _normalize_legacy_result_shape(parsed: Mapping[str, Any]) -> dict[str, Any]:

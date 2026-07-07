@@ -294,11 +294,13 @@ class ProjectHermesHomeTests(unittest.TestCase):
             (source_profile / "sessions").mkdir()
             (source_profile / "logs").mkdir()
             (source_profile / "memories").mkdir()
+            (source_home / "bin").mkdir(parents=True)
             (source_home / "sessions").mkdir(parents=True)
             (source_home / "logs").mkdir()
             (source_home / "config.yaml").write_text("model:\n  default: test\n", encoding="utf-8")
             (source_home / "auth.json").write_text('{"credential_pool":{}}\n', encoding="utf-8")
             (source_home / "state.db").write_text("shared-state", encoding="utf-8")
+            (source_home / "bin" / "tirith").write_text("#!/bin/sh\n", encoding="utf-8")
             (source_profile / ".env").write_text("OPENAI_API_KEY=test\n", encoding="utf-8")
             (source_profile / "skills" / "ctf" / "SKILL.md").write_text("# CTF\n", encoding="utf-8")
             (source_profile / "sessions" / "old.json").write_text("old", encoding="utf-8")
@@ -316,6 +318,7 @@ class ProjectHermesHomeTests(unittest.TestCase):
                 "model:\n  default: test\n",
             )
             self.assertTrue((isolated / "auth.json").is_file())
+            self.assertTrue((isolated / "bin" / "tirith").is_file())
             self.assertTrue((isolated / "profiles" / "cf-web" / ".env").is_file())
             self.assertTrue(
                 (isolated / "profiles" / "cf-web" / "skills" / "ctf" / "SKILL.md").is_file()

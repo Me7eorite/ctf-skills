@@ -321,6 +321,14 @@ def materialize_isolated_hermes_home(
 def _copy_hermes_root_config(source_home: Path, target_home: Path) -> None:
     for filename in _HERMES_HOME_CONFIG_FILES:
         _copy_if_regular_file(source_home / filename, target_home / filename)
+    _copy_hermes_tool_bin(source_home, target_home)
+
+
+def _copy_hermes_tool_bin(source_home: Path, target_home: Path) -> None:
+    source_bin = source_home / "bin"
+    if not source_bin.is_dir() or source_bin.is_symlink():
+        return
+    _copy_hermes_config_entry(source_bin, target_home / "bin")
 
 
 def _materialize_isolated_profile(

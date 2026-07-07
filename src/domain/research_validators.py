@@ -261,6 +261,7 @@ def _validate_runtime_constraint_value(key: str, value: Any) -> Any:
 
 def extract_terminal_json_object(stdout: str) -> dict[str, Any] | None:
     """Extract the last parseable top-level JSON object from noisy stdout."""
+    fallback: dict[str, Any] | None = None
     for end in range(len(stdout) - 1, -1, -1):
         if stdout[end] != "}":
             continue
@@ -272,8 +273,11 @@ def extract_terminal_json_object(stdout: str) -> dict[str, Any] | None:
         except json.JSONDecodeError:
             continue
         if isinstance(parsed, dict):
-            return parsed
-    return None
+            if isinstance(parsed.get("sources"), list) and isinstance(parsed.get("findings"), list):
+                return parsed
+            if fallback is None:
+                fallback = parsed
+    return fallback
 
 
 def _matching_object_start(text: str, end: int) -> int | None:

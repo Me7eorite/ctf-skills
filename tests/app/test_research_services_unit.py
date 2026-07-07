@@ -113,6 +113,39 @@ def test_parse_research_output_can_skip_quality_gate_for_supplements():
     assert parsed.trial_only is True
 
 
+def test_parse_research_output_recovers_python_assignment_diff():
+    stdout_text = """
+  ⚠ tirith security scanner enabled but not available — command scanning will use pattern matching only
+  ┊ review diff
+a//tmp/heap_research_output.py → b//tmp/heap_research_output.py
+@@ -0,0 +1,20 @@
++import json
++
++sources = [
++    {
++        "url": "https://example.com/heap",
++        "title": "Heap",
++        "summary": "Heap exploitation notes.",
++        "content_hash": "not-a-real-sha",
++    }
++]
++findings = [
++    {
++        "kind": "technique",
++        "label": "Tcache poisoning",
++        "summary": "Overwrite a tcache freelist pointer to steer malloc.",
++        "source_indices": [0],
++    }
++]
+"""
+
+    parsed = parse_research_output(stdout_text, target_count=1, category="pwn")
+
+    assert parsed.sources[0]["url"] == "https://example.com/heap"
+    assert parsed.findings[0]["label"] == "Tcache poisoning"
+    assert len(parsed.sources[0]["content_hash"]) == 64
+
+
 def test_parse_research_output_marks_non_trial_only_when_designable_findings_exist():
     stdout_text = json.dumps(
         {
@@ -559,6 +592,19 @@ def test_terminal_json_extraction_and_quality_gate_contracts(monkeypatch):
         "findings": [{"summary": "brace } in text"}],
     }
     assert extract_terminal_json_object("no object here") is None
+    noisy_research_stdout = (
+        "  ⚠ tirith security scanner enabled but not available — command scanning will use pattern matching only\n"
+        "↩ Background 3 tasks running — I'll resume when they finish. Keep chatting.\n"
+        '{"sources":[{"url":"https://example.com/source","title":"Source","summary":"Summary",'
+        '"content_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],'
+        '"findings":[{"kind":"technique","label":"Format string","summary":"Use %n for writes.",'
+        '"source_indices":[0]}]}\n'
+        '{"event":"progress","message":"still cleaning up"}\n'
+    )
+    parsed = extract_terminal_json_object(noisy_research_stdout)
+    assert parsed is not None
+    assert parsed["sources"][0]["url"] == "https://example.com/source"
+    assert parsed["findings"][0]["label"] == "Format string"
 
     valid_source = {
         "url": "https://example.com/source",
