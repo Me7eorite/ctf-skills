@@ -13,6 +13,7 @@ from domain.design.profile_taxonomy import (
     allocate_profile_batch,
     canonical_profile_signatures,
     load_profile_policy,
+    normalize_semantic_assignment,
     profile_capacity_check,
     taxonomy_for_category,
     validate_profile,
@@ -356,6 +357,41 @@ def test_profile_capacity_coerces_canary_buffer_overflow_phrase() -> None:
         "family": "stack",
         "sub_technique": "ret2libc",
     }
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("buffer overflow", "ret2libc"),
+        ("stack overflow", "ret2libc"),
+        ("canary leak", "ret2libc"),
+        ("stack canary leak", "ret2libc"),
+        ("ret2plt", "ret2libc"),
+        ("stack pivot", "ret2libc"),
+        ("one_gadget", "ret2libc"),
+        ("unlink attack", "heap_uaf_tcache"),
+        ("tcache poisoning", "heap_uaf_tcache"),
+        ("uaf", "heap_uaf_tcache"),
+        ("format string", "format_string_got"),
+    ],
+)
+def test_pwn_aliases_normalize_to_closed_vocabulary(raw: str, expected: str, caplog) -> None:
+    with caplog.at_level("WARNING"):
+        semantic = normalize_semantic_assignment(
+            taxonomy_for_category("pwn"),
+            {"family": "stack", "sub_technique": raw},
+        )
+
+    assert semantic["sub_technique"] == expected
+    assert f"normalized={expected!r}" in caplog.text
+
+
+def test_unknown_subtechnique_still_reports_closed_vocabulary_error() -> None:
+    with pytest.raises(ProfileTaxonomyError, match="cannot be mapped to closed vocabulary"):
+        normalize_semantic_assignment(
+            taxonomy_for_category("pwn"),
+            {"family": "mystery", "sub_technique": "rainbow table"},
+        )
 
 
 def test_capacity_check_requires_semantic_assignments() -> None:

@@ -23,6 +23,7 @@ from fastapi.testclient import TestClient
 from core.paths import ProjectPaths
 from domain.challenge_designs import ChallengeDesign, DesignAttempt
 from domain.design.difficulty_review import DesignDifficultyReview
+from domain.design.profile_taxonomy import DesignDiversityExhausted, ProfileTaxonomyError
 from domain.design_evidence import DesignEvidence
 from domain.design_profile_reservations import DesignProfileReservation
 from domain.design_task_validators import DesignTaskValidationError
@@ -479,6 +480,43 @@ class PlanReviewEndpointTests(unittest.TestCase):
         self.assertEqual(payload["task"]["id"], str(task.id))
         self.assertEqual(payload["task"]["diversity_flags"]["family"], "injection")
 
+    def test_regenerate_one_profile_taxonomy_error_returns_structured_400(self):
+        request_id = uuid4()
+
+        def _raise(_id, _task_no):
+            raise ProfileTaxonomyError("profile semantic.sub_technique='x' is not in closed vocabulary")
+
+        planner = SimpleNamespace(regenerate_task=_raise)
+
+        with _app_client(planning_service=planner) as client:
+            resp = client.post(
+                f"/api/research/requests/{request_id}/design-tasks/1/regenerate"
+            )
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json()["code"], "profile_taxonomy_error")
+        self.assertIn("closed vocabulary", resp.json()["message"])
+
+    def test_regenerate_all_diversity_exhausted_returns_structured_409(self):
+        request_id = uuid4()
+
+        def _raise(_id):
+            raise DesignDiversityExhausted(
+                {"code": "design_diversity_exhausted", "available_count": 0}
+            )
+
+        planner = SimpleNamespace(regenerate_plan=_raise)
+
+        with _app_client(planning_service=planner) as client:
+            resp = client.post(
+                f"/api/research/requests/{request_id}/design-tasks/regenerate"
+            )
+
+        self.assertEqual(resp.status_code, 409)
+        payload = resp.json()
+        self.assertEqual(payload["code"], "design_diversity_exhausted")
+        self.assertEqual(payload["details"]["available_count"], 0)
+
     def test_plan_endpoint_validation_conflict(self):
         request_id = uuid4()
 
@@ -865,7 +903,6 @@ class DesignTaskReadEndpointTests(unittest.TestCase):
 
     def test_revision_endpoint_calls_service_and_returns_design_task(self):
         task = _make_design_task(status="designed")
-        task_dict = {"id": str(task.id), "status": "draft"}
         service = SimpleNamespace(
             request_design_revision=lambda task_id, reason: replace(task, status="draft"),
         )

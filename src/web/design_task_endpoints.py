@@ -15,6 +15,11 @@ from domain import design_evidence as evidence_dto
 from domain import design_profile_reservations as reservation_dto
 from domain import design_tasks as design_dto
 from domain.design.difficulty_review import DesignDifficultyReview
+from domain.design.profile_taxonomy import (
+    DesignDiversityExhausted,
+    ProfileTaxonomyError,
+)
+from domain.design_task_validators import DesignTaskValidationError
 from services.design_governance import DesignGovernanceError, validate_build_contract
 
 
@@ -197,11 +202,8 @@ def register_design_task_read_endpoints(app: FastAPI) -> None:
                 task_uuid,
                 reason=reason,
             )
-        except DesignTaskValidationError as exc:
-            raise HTTPException(
-                status_code=_design_task_error_status(exc),
-                detail=str(exc),
-            ) from exc
+        except _DESIGN_TASK_DOMAIN_ERRORS as exc:
+            return _design_task_domain_error_response(exc)
         return JSONResponse(
             {
                 "design_task": design_task_dict(task),
@@ -558,3 +560,63 @@ def _project_paths(app: FastAPI):
     from core.paths import ProjectPaths
 
     return getattr(app.state, "project_paths", None) or ProjectPaths.discover()
+
+
+_DESIGN_TASK_DOMAIN_ERRORS = (
+    DesignTaskValidationError,
+    ProfileTaxonomyError,
+    DesignDiversityExhausted,
+)
+
+
+def _design_task_domain_error_response(exc: Exception) -> JSONResponse:
+    status = _design_task_error_status(exc)
+    body = _design_task_error_body(exc)
+    return JSONResponse(body, status_code=status)
+
+
+def _design_task_error_status(exc: Exception) -> HTTPStatus:
+    if isinstance(exc, DesignDiversityExhausted):
+        return HTTPStatus.CONFLICT
+    if isinstance(exc, ProfileTaxonomyError):
+        return HTTPStatus.BAD_REQUEST
+    if not isinstance(exc, DesignTaskValidationError):
+        return HTTPStatus.BAD_REQUEST
+    if getattr(exc, "code", None) == "generation_request_busy":
+        return HTTPStatus.CONFLICT
+    return HTTPStatus.NOT_FOUND if "does not exist" in str(exc) else HTTPStatus.CONFLICT
+
+
+def _design_task_error_body(exc: Exception) -> dict[str, Any]:
+    if isinstance(exc, DesignDiversityExhausted):
+        return {
+            "code": exc.code,
+            "message": str(exc),
+            "details": exc.diagnostics,
+            "detail": {
+                "code": exc.code,
+                "message": str(exc),
+                "details": exc.diagnostics,
+            },
+        }
+    if isinstance(exc, ProfileTaxonomyError):
+        return {
+            "code": "profile_taxonomy_error",
+            "message": str(exc),
+            "detail": str(exc),
+        }
+    if not isinstance(exc, DesignTaskValidationError):
+        return {
+            "code": "design_task_error",
+            "message": str(exc),
+            "detail": str(exc),
+        }
+    code = getattr(exc, "code", None)
+    if code:
+        detail = {"code": code, "message": str(exc)}
+        return {"code": code, "message": str(exc), "detail": detail}
+    return {
+        "code": "design_task_validation_error",
+        "message": str(exc),
+        "detail": str(exc),
+    }

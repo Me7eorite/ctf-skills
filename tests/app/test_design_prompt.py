@@ -203,8 +203,10 @@ def test_pwn_design_prompt_requires_xinetd_artifact(tmp_path):
     prompt = build_design_prompt(context, _task("pwn"), _request("pwn"), [], [])
 
     assert '"service_user"' in prompt
-    assert "`implementation_plan.service_user` MUST be exactly `ctf`" in prompt
-    assert "runtime (pwn/default) artifact requires service_user=ctf" in prompt
+    assert "set `implementation_plan.service_user` to exactly `ctf`" in prompt
+    assert "this field is the challenge service process user" in prompt
+    assert "Ordinary pwn tasks MUST use the xinetd/chroot service model" in prompt
+    assert "try `root` or `xinetd` as the service user" in prompt
     assert "A small multi-file project is valid" in prompt
     assert "deploy/src/src/main.c" in prompt
     assert "deploy/src/lib/menu.c" in prompt

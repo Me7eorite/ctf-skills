@@ -55,6 +55,8 @@ def parse_research_output(
         raise ResearchValidationError("research output field 'sources' must be a list")
     if not isinstance(finding_items, list):
         raise ResearchValidationError("research output field 'findings' must be a list")
+    if not source_items and not finding_items:
+        raise ResearchValidationError("research_finalize_no_evidence")
 
     source_payloads = [
         _normalize_source_payload(source_item)

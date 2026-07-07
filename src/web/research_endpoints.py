@@ -26,6 +26,10 @@ from core.paths import ProjectPaths
 from domain import challenge_designs as challenge_dto
 from domain import design_tasks as design_dto
 from domain import research as dto
+from domain.design.profile_taxonomy import (
+    DesignDiversityExhausted,
+    ProfileTaxonomyError,
+)
 from domain.design.technique_taxonomy import resolve_family
 from domain.design_task_validators import DesignTaskValidationError
 from domain.research import GenerationRequestStatus, ResearchRunStatus
@@ -1071,11 +1075,8 @@ def _register_design_task_endpoints(app: FastAPI) -> None:
 
         try:
             tasks = DesignTaskPlanningService().generate_for_request(request_uuid)
-        except DesignTaskValidationError as exc:
-            raise HTTPException(
-                status_code=_design_task_error_status(exc),
-                detail=_design_task_error_detail(exc),
-            ) from exc
+        except _DESIGN_TASK_DOMAIN_ERRORS as exc:
+            return _design_task_domain_error_response(exc)
 
         return JSONResponse(
             {
@@ -1093,8 +1094,8 @@ def _register_design_task_endpoints(app: FastAPI) -> None:
         request_uuid = _request_uuid_or_404(request_id)
         try:
             tasks = DesignTaskPlanningService().approve_plan(request_uuid)
-        except DesignTaskValidationError as exc:
-            raise HTTPException(status_code=_design_task_error_status(exc), detail=str(exc)) from exc
+        except _DESIGN_TASK_DOMAIN_ERRORS as exc:
+            return _design_task_domain_error_response(exc)
         return JSONResponse(
             {
                 "request_id": str(request_uuid),
@@ -1110,8 +1111,8 @@ def _register_design_task_endpoints(app: FastAPI) -> None:
         request_uuid = _request_uuid_or_404(request_id)
         try:
             tasks = DesignTaskPlanningService().regenerate_plan(request_uuid)
-        except DesignTaskValidationError as exc:
-            raise HTTPException(status_code=_design_task_error_status(exc), detail=str(exc)) from exc
+        except _DESIGN_TASK_DOMAIN_ERRORS as exc:
+            return _design_task_domain_error_response(exc)
         return JSONResponse(
             {
                 "request_id": str(request_uuid),
@@ -1127,8 +1128,8 @@ def _register_design_task_endpoints(app: FastAPI) -> None:
         request_uuid = _request_uuid_or_404(request_id)
         try:
             result = DesignTaskPlanningService().regenerate_task(request_uuid, task_no)
-        except DesignTaskValidationError as exc:
-            raise HTTPException(status_code=_design_task_error_status(exc), detail=str(exc)) from exc
+        except _DESIGN_TASK_DOMAIN_ERRORS as exc:
+            return _design_task_domain_error_response(exc)
         body = dict(result)
         task = body.get("task")
         if isinstance(task, design_dto.DesignTask):
@@ -1430,17 +1431,68 @@ def _request_uuid_or_404(request_id: str) -> UUID:
         ) from exc
 
 
-def _design_task_error_status(exc: DesignTaskValidationError) -> HTTPStatus:
+_DESIGN_TASK_DOMAIN_ERRORS = (
+    DesignTaskValidationError,
+    ProfileTaxonomyError,
+    DesignDiversityExhausted,
+)
+
+
+def _design_task_domain_error_response(exc: Exception) -> JSONResponse:
+    status = _design_task_error_status(exc)
+    body = _design_task_error_body(exc)
+    return JSONResponse(body, status_code=status)
+
+
+def _design_task_error_status(exc: Exception) -> HTTPStatus:
+    if isinstance(exc, DesignDiversityExhausted):
+        return HTTPStatus.CONFLICT
+    if isinstance(exc, ProfileTaxonomyError):
+        return HTTPStatus.BAD_REQUEST
+    if not isinstance(exc, DesignTaskValidationError):
+        return HTTPStatus.BAD_REQUEST
     if getattr(exc, "code", None) == "generation_request_busy":
         return HTTPStatus.CONFLICT
     return HTTPStatus.NOT_FOUND if "does not exist" in str(exc) else HTTPStatus.CONFLICT
 
 
-def _design_task_error_detail(exc: DesignTaskValidationError) -> Any:
+def _design_task_error_body(exc: Exception) -> dict[str, Any]:
+    if isinstance(exc, DesignDiversityExhausted):
+        return {
+            "code": exc.code,
+            "message": str(exc),
+            "details": exc.diagnostics,
+            "detail": {
+                "code": exc.code,
+                "message": str(exc),
+                "details": exc.diagnostics,
+            },
+        }
+    if isinstance(exc, ProfileTaxonomyError):
+        return {
+            "code": "profile_taxonomy_error",
+            "message": str(exc),
+            "detail": str(exc),
+        }
+    if not isinstance(exc, DesignTaskValidationError):
+        return {
+            "code": "design_task_error",
+            "message": str(exc),
+            "detail": str(exc),
+        }
     code = getattr(exc, "code", None)
     if code:
-        return {"code": code, "message": str(exc)}
-    return str(exc)
+        detail = {"code": code, "message": str(exc)}
+        return {"code": code, "message": str(exc), "detail": detail}
+    return {
+        "code": "design_task_validation_error",
+        "message": str(exc),
+        "detail": str(exc),
+    }
+
+
+def _design_task_error_detail(exc: DesignTaskValidationError) -> Any:
+    return _design_task_error_body(exc)
 
 
 def _project_paths(app: FastAPI):

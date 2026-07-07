@@ -146,6 +146,11 @@ a//tmp/heap_research_output.py → b//tmp/heap_research_output.py
     assert len(parsed.sources[0]["content_hash"]) == 64
 
 
+def test_parse_research_output_rejects_empty_arrays_as_no_evidence():
+    with pytest.raises(ResearchValidationError, match="research_finalize_no_evidence"):
+        parse_research_output('{"sources":[],"findings":[]}', target_count=1)
+
+
 def test_parse_research_output_prefers_top_level_object_over_last_finding():
     stdout_text = (
         "--- stdout ---\n"
@@ -466,6 +471,7 @@ def test_finalize_prompt_preserves_scope_but_forbids_new_searches():
         request,
         failure_reason="iteration_budget_exhausted:unparseable_output:no_terminal_json_object",
         stdout_text="consulted source A about TEA and source B about XOR",
+        log_text="final tool log mentions sources = [...] and findings = [...]",
     )
 
     assert "Do not perform new web searches" in prompt
@@ -476,8 +482,10 @@ def test_finalize_prompt_preserves_scope_but_forbids_new_searches():
     assert "FINALIZE-ONLY mode" in prompt
     assert "first non-whitespace character must be `{`" in prompt
     assert "Do not write markdown, prose, code fences" in prompt
-    assert "If no source can be recovered" in prompt
-    assert "{\"sources\":[],\"findings\":[]}" in prompt
+    assert "Previous log excerpt" in prompt
+    assert "final tool log mentions sources" in prompt
+    assert "research_finalize_no_evidence" in prompt
+    assert "{\"sources\":[],\"findings\":[]}" not in prompt
     assert 'a sentence such as "Let me build..."' in prompt
     assert "Do not prefix it with any words" in prompt
 

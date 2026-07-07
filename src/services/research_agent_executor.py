@@ -27,6 +27,7 @@ RESEARCH_BINDING_ROLE = "research"
 DEFAULT_PROFILE_NAME = "default"
 DEFAULT_FINALIZE_TIMEOUT_SECONDS = 180
 FINALIZE_STDOUT_MAX_CHARS = 12000
+FINALIZE_LOG_MAX_CHARS = 12000
 ITERATION_BUDGET_MARKERS = (
     "Iteration budget exhausted",
     "Reached maximum iterations",
@@ -222,6 +223,7 @@ class ResearchAgentExecutor:
             generation_request,
             failure_reason=failure_reason,
             stdout_text=primary_result.stdout,
+            log_text=_read_finalize_log_context(log_path),
         )
         LOGGER.warning(
             "research run %s primary output failed (%s); invoking finalize for %ss",
@@ -533,17 +535,21 @@ def _render_finalize_prompt(
     *,
     failure_reason: str,
     stdout_text: str,
+    log_text: str | None = None,
 ) -> str:
     stdout_excerpt = stdout_text[-FINALIZE_STDOUT_MAX_CHARS:] if stdout_text else "(empty stdout)"
+    log_excerpt = log_text[-FINALIZE_LOG_MAX_CHARS:] if log_text else "(no log context)"
     return (
         "You are in FINALIZE-ONLY mode for a CTF research run that already spent its "
         "broad-search pass.\n"
         "Do not perform new web searches, open new pages, spawn subagents, or continue exploration.\n"
         "Hard stop: do not perform new web searches, open new pages, spawn subagents, "
         "ask clarifying questions, run commands, or continue exploration.\n"
-        "Use only recoverable facts from the previous stdout excerpt below and your "
-        "current conversation context. If the excerpt contains only meta-commentary "
-        "or progress text, do not invent sources.\n\n"
+        "Use only recoverable facts from the previous stdout/log excerpts below and your "
+        "current conversation context. Treat warnings, background task status, search notes, "
+        "review diffs, Python assignments, markdown-fenced JSON, and partial summaries as "
+        "evidence only when they name concrete sources and findings. If the excerpts contain "
+        "only meta-commentary or progress text, do not invent sources.\n\n"
         "Your only task is to emit exactly one valid JSON object matching the research schema: "
         "`sources` array and `findings` array.\n"
         "Output contract (strict):\n"
@@ -563,8 +569,9 @@ def _render_finalize_prompt(
         "- If a relied-on source hash is unknown, use any stable lowercase "
         "64-character hex sha256-shaped placeholder; the host will normalize "
         "non-authoritative hashes later.\n"
-        "- If no source can be recovered from the excerpt/context, return "
-        "{\"sources\":[],\"findings\":[]} rather than prose.\n\n"
+        "- If no source or finding evidence can be recovered from the excerpts/context, "
+        "return {\"error\":\"research_finalize_no_evidence\",\"sources\":[],\"findings\":[]} "
+        "rather than prose. The host will treat that as a clear failure, not success.\n\n"
         f"Category: {request.category}\n"
         f"Topic: {request.topic}\n"
         f"Target challenge count: {request.target_count}\n"
@@ -587,8 +594,19 @@ def _render_finalize_prompt(
         "```text\n"
         f"{stdout_excerpt}\n"
         "```\n\n"
+        "Previous log excerpt:\n"
+        "```text\n"
+        f"{log_excerpt}\n"
+        "```\n\n"
         "Return the JSON object now. Do not prefix it with any words."
     )
+
+
+def _read_finalize_log_context(log_path: Path) -> str | None:
+    try:
+        return log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
 
 
 def _with_previous_failure_context(prompt: str, *, previous_error: str | None) -> str:

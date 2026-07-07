@@ -515,7 +515,10 @@ def _pwn_payload(**challenge_overrides):
 
 
 def test_validate_design_payload_accepts_c_pwn_runtime_without_app_py():
-    result = validate_design_payload(_pwn_payload(), _pwn_task())
+    payload = _pwn_payload()
+    payload["challenges"][0]["artifacts"].append("deploy/_files/ctf.xinetd")
+
+    result = validate_design_payload(payload, _pwn_task())
 
     assert result.challenge["implementation_plan"]["runtime_language"] == "c"
 
@@ -529,8 +532,10 @@ def test_validate_design_payload_accepts_cpp_pwn_source_variant_without_app_py()
             "deploy/Dockerfile",
             "deploy/docker-compose.yml",
             "src/menu_service.cpp",
+            "deploy/src/menu_service.cpp",
             "deploy/src/Makefile",
             "deploy/_files/start.sh",
+            "deploy/_files/ctf.xinetd",
             "writenup/wp.md",
             "writenup/exp.py",
         ],
@@ -560,6 +565,7 @@ def test_validate_design_payload_accepts_pwn_multifile_source_project():
             "deploy/src/include/menu.h",
             "deploy/src/Makefile",
             "deploy/_files/start.sh",
+            "deploy/_files/ctf.xinetd",
             "writenup/wp.md",
             "writenup/exp.py",
         ],
@@ -577,7 +583,7 @@ def test_validate_design_payload_accepts_pwn_multifile_source_project():
     assert "deploy/src/lib/menu.c" in result.challenge["artifacts"]
 
 
-def test_validate_design_payload_accepts_pwn_xinetd_launcher_artifact():
+def test_validate_design_payload_rejects_pwn_xinetd_root_service_user():
     payload = _pwn_payload(
         artifacts=[
             "README.md",
@@ -597,6 +603,93 @@ def test_validate_design_payload_accepts_pwn_xinetd_launcher_artifact():
             "service_user": "root",
             "runtime_language": "c",
             "runtime_profile": "xinetd",
+        },
+    )
+
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match=r"runtime \(pwn/xinetd\) artifact requires service_user=ctf",
+    ):
+        validate_design_payload(payload, _pwn_task())
+
+
+def test_validate_design_payload_rejects_pwn_xinetd_daemon_name_as_service_user():
+    payload = _pwn_payload(
+        artifacts=[
+            "README.md",
+            "metadata.json",
+            "validate.sh",
+            "deploy/Dockerfile",
+            "deploy/docker-compose.yml",
+            "deploy/src/challenge",
+            "deploy/_files/start.sh",
+            "deploy/_files/ctf.xinetd",
+            "writenup/wp.md",
+            "writenup/exp.py",
+        ],
+        implementation_plan={
+            "runtime": "ubuntu:22.04",
+            "service_model": "xinetd chroot TCP socket launcher",
+            "service_user": "xinetd",
+            "runtime_language": "c",
+            "runtime_profile": "xinetd",
+        },
+    )
+
+    with pytest.raises(
+        ChallengeDesignValidationError,
+        match=r"runtime \(pwn/xinetd\) artifact requires service_user=ctf",
+    ):
+        validate_design_payload(payload, _pwn_task())
+
+
+def test_validate_design_payload_accepts_pwn_xinetd_ctf_service_user():
+    payload = _pwn_payload(
+        artifacts=[
+            "README.md",
+            "metadata.json",
+            "validate.sh",
+            "deploy/Dockerfile",
+            "deploy/docker-compose.yml",
+            "deploy/src/challenge",
+            "deploy/_files/start.sh",
+            "deploy/_files/ctf.xinetd",
+            "writenup/wp.md",
+            "writenup/exp.py",
+        ],
+        implementation_plan={
+            "runtime": "ubuntu:22.04",
+            "service_model": "xinetd chroot TCP socket launcher",
+            "service_user": "ctf",
+            "runtime_language": "c",
+            "runtime_profile": "xinetd",
+        },
+    )
+
+    result = validate_design_payload(payload, _pwn_task())
+
+    assert result.challenge["implementation_plan"]["service_user"] == "ctf"
+
+
+def test_validate_design_payload_normalizes_plain_pwn_to_xinetd_chroot_contract():
+    payload = _pwn_payload(
+        artifacts=[
+            "README.md",
+            "metadata.json",
+            "validate.sh",
+            "deploy/Dockerfile",
+            "deploy/docker-compose.yml",
+            "deploy/src/challenge",
+            "deploy/_files/start.sh",
+            "deploy/_files/ctf.xinetd",
+            "writenup/wp.md",
+            "writenup/exp.py",
+        ],
+        implementation_plan={
+            "runtime": "ubuntu:22.04",
+            "service_model": "TCP socket challenge service",
+            "service_user": "ctf",
+            "runtime_language": "c",
         },
     )
 

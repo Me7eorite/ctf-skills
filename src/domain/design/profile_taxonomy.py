@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -19,6 +20,8 @@ from typing import Any, Literal
 
 from core.jsonio import read_json
 from core.paths import ProjectPaths
+
+LOGGER = logging.getLogger(__name__)
 
 ProfileAxis = Literal["semantic", "solve", "implementation", "presentation"]
 PROFILE_AXES: tuple[ProfileAxis, ...] = (
@@ -405,6 +408,88 @@ _DEFAULT_HARD_EXCLUSIVE_SIGNATURE = (
     "implementation.flag_concealment",
 )
 
+SUB_TECHNIQUE_ALIASES_BY_CATEGORY: Mapping[str, Mapping[str, str]] = {
+    "web": {
+        "blind sqli": "sqli",
+        "boolean blind sqli": "sqli",
+        "second order sqli": "sqli",
+        "sql injection": "sqli",
+        "sql inj": "sqli",
+        "dom xss": "xss",
+        "stored xss": "xss",
+        "reflected xss": "xss",
+        "server side template injection": "ssti",
+        "template injection": "ssti",
+        "prototype pollution": "prototype_pollution",
+        "path traversal": "path_traversal",
+        "directory traversal": "path_traversal",
+        "file upload bypass": "upload_parse",
+        "upload parser bypass": "upload_parse",
+        "insecure deserialization": "deserialization",
+    },
+    "pwn": {
+        "buffer overflow": "ret2libc",
+        "stack overflow": "ret2libc",
+        "canary leak": "ret2libc",
+        "canary leak then buffer overflow": "ret2libc",
+        "stack canary leak": "ret2libc",
+        "stack canary bypass": "ret2libc",
+        "ret2plt": "ret2libc",
+        "stack pivot": "ret2libc",
+        "one gadget": "ret2libc",
+        "one_gadget": "ret2libc",
+        "format string": "format_string_got",
+        "format string vulnerability": "format_string_got",
+        "got overwrite": "format_string_got",
+        "unlink attack": "heap_uaf_tcache",
+        "tcache poisoning": "heap_uaf_tcache",
+        "use after free": "heap_uaf_tcache",
+        "uaf": "heap_uaf_tcache",
+        "integer overflow": "integer_oob",
+        "out of bounds": "integer_oob",
+        "oob": "integer_oob",
+        "seccomp": "seccomp_orw",
+        "orw": "seccomp_orw",
+    },
+    "re": {
+        "xor": "xor_transform",
+        "xor encoding": "xor_transform",
+        "xor encryption": "xor_transform",
+        "sbox": "sbox_substitution",
+        "s box": "sbox_substitution",
+        "bytecode vm": "bytecode_vm",
+        "vm bytecode": "bytecode_vm",
+        "custom vm": "bytecode_vm",
+        "anti debug": "anti_debug",
+        "anti debugging": "anti_debug",
+        "packed": "packed_binary",
+        "packer": "packed_binary",
+        "wasm": "wasm_lift",
+        "java bytecode": "language_bytecode",
+        "python bytecode": "language_bytecode",
+    },
+}
+
+SUB_TECHNIQUE_FAMILY_DEFAULTS: Mapping[str, str] = {
+    "auth": "idor",
+    "injection": "sqli",
+    "server_side": "ssrf",
+    "client_side": "xss",
+    "upload": "upload_parse",
+    "node_api": "prototype_pollution",
+    "stack": "ret2libc",
+    "format_string": "format_string_got",
+    "heap": "heap_uaf_tcache",
+    "integer_oob": "integer_oob",
+    "sandbox": "seccomp_orw",
+    "crackme": "xor_transform",
+    "vm_bytecode": "bytecode_vm",
+    "runtime": "anti_debug",
+    "language": "language_bytecode",
+    "platform": "wasm_lift",
+    "visual_game": "xor_transform",
+}
+
 
 def taxonomy_for_category(category: str) -> CategoryProfileTaxonomy:
     try:
@@ -700,7 +785,19 @@ def normalize_semantic_assignment(
     if raw_sub in allowed:
         sub_technique = raw_sub
     else:
-        sub_technique = _coerce_sub_technique(raw_sub, allowed, family=family)
+        sub_technique = _coerce_sub_technique(
+            raw_sub,
+            allowed,
+            family=family,
+            category=taxonomy.category,
+        )
+        LOGGER.warning(
+            "normalized profile semantic.sub_technique raw=%r normalized=%r category=%s family=%s",
+            semantic.get("sub_technique", ""),
+            sub_technique,
+            taxonomy.category,
+            family,
+        )
     return {"family": family, "sub_technique": sub_technique}
 
 
@@ -954,48 +1051,11 @@ def _coerce_sub_technique(
     allowed: Sequence[str],
     *,
     family: str | None = None,
+    category: str | None = None,
 ) -> str:
-    aliases = {
-        "blind sqli": "sqli",
-        "boolean blind sqli": "sqli",
-        "second order sqli": "sqli",
-        "sql injection": "sqli",
-        "sql inj": "sqli",
-        "dom xss": "xss",
-        "stored xss": "xss",
-        "reflected xss": "xss",
-        "prototype pollution": "prototype_pollution",
-        "path traversal": "path_traversal",
-        "use after free": "heap_uaf_tcache",
-        "uaf": "heap_uaf_tcache",
-        "format string": "format_string_got",
-        "buffer overflow": "ret2libc",
-        "stack overflow": "ret2libc",
-        "canary leak": "ret2libc",
-        "canary leak then buffer overflow": "ret2libc",
-        "stack canary leak": "ret2libc",
-        "stack canary bypass": "ret2libc",
-        "anti debug": "anti_debug",
-    }
-    family_defaults = {
-        "auth": "idor",
-        "injection": "sqli",
-        "server_side": "ssrf",
-        "client_side": "xss",
-        "upload": "upload_parse",
-        "node_api": "prototype_pollution",
-        "stack": "ret2libc",
-        "format_string": "format_string_got",
-        "heap": "heap_uaf_tcache",
-        "integer_oob": "integer_oob",
-        "sandbox": "seccomp_orw",
-        "crackme": "xor_transform",
-        "vm_bytecode": "bytecode_vm",
-        "runtime": "anti_debug",
-        "language": "language_bytecode",
-        "platform": "wasm_lift",
-        "visual_game": "xor_transform",
-    }
+    aliases = dict(SUB_TECHNIQUE_ALIASES_BY_CATEGORY.get(category or "", {}))
+    for category_aliases in SUB_TECHNIQUE_ALIASES_BY_CATEGORY.values():
+        aliases.update(category_aliases)
     alias = aliases.get(value)
     normalized_allowed = {_normalize_semantic_value(item): item for item in allowed}
     if alias is not None and alias in allowed:
@@ -1005,7 +1065,7 @@ def _coerce_sub_technique(
     for normalized, original in normalized_allowed.items():
         if normalized and (normalized in value.split() or normalized in value):
             return original
-    family_default = family_defaults.get(str(family or ""))
+    family_default = SUB_TECHNIQUE_FAMILY_DEFAULTS.get(str(family or ""))
     if family_default in allowed:
         return family_default
     raise ProfileTaxonomyError(

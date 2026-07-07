@@ -97,13 +97,38 @@ _QUALIFIER_TOKENS: frozenset[str] = frozenset(
 )
 
 SUB_TECHNIQUE_ALIASES: dict[str, str] = {
+    "boolean blind sqli": "sqli",
     "cross site scripting": "xss",
+    "dom xss": "xss",
+    "reflected xss": "xss",
+    "stored xss": "xss",
     "path traversal": "path traversal",
     "prototype pollution": "prototype pollution",
+    "server side template injection": "ssti",
+    "ssti": "ssti",
     "sql inj": "sqli",
     "sql injection": "sqli",
+    "blind sqli": "sqli",
+    "second order sqli": "sqli",
+    "buffer overflow": "ret2libc",
+    "stack overflow": "ret2libc",
+    "canary leak": "ret2libc",
+    "canary leak then buffer overflow": "ret2libc",
+    "stack canary leak": "ret2libc",
+    "ret2plt": "ret2libc",
+    "stack pivot": "ret2libc",
+    "one gadget": "ret2libc",
+    "one_gadget": "ret2libc",
+    "unlink attack": "heap_uaf_tcache",
+    "tcache poisoning": "heap_uaf_tcache",
     "use after free": "uaf",
     "use after free primitive": "uaf",
+    "uaf": "uaf",
+    "format string": "format_string_got",
+    "anti debug": "anti_debug",
+    "anti debugging": "anti_debug",
+    "bytecode vm": "bytecode_vm",
+    "vm bytecode": "bytecode_vm",
 }
 
 FAMILY_KEYWORDS: dict[str, dict[str, tuple[str, ...]]] = {
@@ -332,6 +357,8 @@ def resolve_sub_technique(finding: Any) -> str:
     if not key:
         key = label
     key = SUB_TECHNIQUE_ALIASES.get(key, key)
+    if key != label:
+        LOGGER.warning("normalized sub_technique raw=%r normalized=%r", label, key)
     return key
 
 

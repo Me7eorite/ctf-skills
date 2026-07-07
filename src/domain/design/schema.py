@@ -193,7 +193,7 @@ RUNTIME_ARTIFACT_RULES: dict[str, dict[str, RuntimeArtifactRule]] = {
             required_patterns=(
                 _pattern(r"^deploy/src/(?:[A-Za-z0-9_.+/-]+)$"),
             ),
-            allowed_service_users=("root", "xinetd"),
+            required_service_user="ctf",
         ),
     },
 }
@@ -326,8 +326,10 @@ def _normalize_category_runtime(
         language = "pwn"
 
     normalized_profile = profile.strip().lower() if isinstance(profile, str) else ""
-    if normalized_profile in {"", "default", "native", "tcp", "socat"}:
+    if normalized_profile in {"", "default", "native", "binary", "tcp", "socat"}:
         profile = None
+    if normalized_profile in {"xinetd_chroot", "xinetd-chroot", "chroot"}:
+        profile = "xinetd"
 
     profile_text = " ".join(
         value.strip().lower()
@@ -344,7 +346,9 @@ def _normalize_category_runtime(
     )
     if not profile and any(token in profile_text for token in ("kernel", "qemu", "bzimage", "initramfs")):
         profile = "kernel"
-    if not profile and "xinetd" in profile_text:
+    if not profile and any(token in profile_text for token in ("xinetd", "chroot", "socket")):
+        profile = "xinetd"
+    if not profile:
         profile = "xinetd"
 
     return language, profile
