@@ -16,6 +16,7 @@ Public surface:
 """
 
 from domain.design.difficulty import RUBRIC, validate_difficulty_alignment
+from domain.design.normalizer import normalize_design_payload_for_task
 from domain.design.parser import parse_design_output
 from domain.design.quality_gate import run_quality_gate
 from domain.design.schema import (
@@ -31,6 +32,7 @@ __all__ = [
     "RUBRIC",
     "ValidatedDesignPayload",
     "parse_design_output",
+    "normalize_design_payload_for_task",
     "run_quality_gate",
     "validate_design_payload",
     "validate_difficulty_alignment",

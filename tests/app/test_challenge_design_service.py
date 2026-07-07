@@ -761,6 +761,46 @@ def test_retry_prompt_includes_previous_validation_error(
     assert first.error in executor.calls[1]["prompt_text"]
 
 
+def test_retry_prompt_includes_previous_draft_seed_path(
+    session_factory: SessionFactory,
+    tmp_path: Path,
+):
+    task_id, _ = _seed(session_factory, max_attempts=2)
+    first_payload = json.loads(_valid_stdout())
+    first_payload["challenges"][0]["techniques"] = ["DOM XSS", "CSP bypass"]
+    executor = FakeDesignExecutor(stdout=json.dumps(first_payload))
+    service = _service(tmp_path, session_factory, executor)
+
+    service.design_for_task(task_id, "alice")
+    service.design_for_task(task_id, "alice")
+
+    assert "## Previous Draft Seed" in executor.calls[1]["prompt_text"]
+    assert "./state/previous_design.json" in executor.calls[1]["prompt_text"]
+
+
+def test_successful_design_writes_snapshot_for_retry_reuse(
+    session_factory: SessionFactory,
+    tmp_path: Path,
+):
+    task_id, _ = _seed(session_factory, max_attempts=2)
+    executor = FakeDesignExecutor(stdout=_valid_stdout())
+    service = _service(tmp_path, session_factory, executor)
+
+    first = service.design_for_task(task_id, "alice")
+    snapshot = (
+        tmp_path
+        / "work"
+        / "design"
+        / "executions"
+        / str(first.attempt_id)
+        / "state"
+        / "last_design_draft.json"
+    )
+
+    assert snapshot.exists()
+    assert "\"challenges\"" in snapshot.read_text(encoding="utf-8")
+
+
 def test_retry_prompt_includes_prebuild_review_feedback_from_completed_attempt(
     session_factory: SessionFactory,
     tmp_path: Path,

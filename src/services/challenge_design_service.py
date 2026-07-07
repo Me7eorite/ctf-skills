@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +18,7 @@ from domain import design_tasks as task_dto
 from domain import research as research_dto
 from domain.challenge_design_validators import (
     ChallengeDesignValidationError,
+    normalize_design_payload_for_task,
     parse_design_output,
     run_quality_gate,
     validate_design_payload,
@@ -89,6 +91,7 @@ class _AttemptStart:
     prior_designs: Sequence[Mapping[str, Any]] = ()
     reservation: reservation_dto.DesignProfileReservation | None = None
     ledger_snapshot: DesignLedgerSnapshot | None = None
+    previous_design_seed: Mapping[str, Any] | None = None
 
 
 PromptContextLoader = Callable[[ProjectPaths], DesignPromptContext]
@@ -137,6 +140,9 @@ class ChallengeDesignService:
                 started.findings,
                 started.sources,
                 previous_error=started.previous_error,
+                previous_design_seed_path=_stage_previous_design_seed(
+                    workspace, started.previous_design_seed
+                ),
                 prior_designs=started.prior_designs,
                 reservation=(
                     _reservation_prompt_mapping(started.reservation)
@@ -185,7 +191,9 @@ class ChallengeDesignService:
             if exit_error is not None:
                 return self._fail_attempt(attempt, log_rel, exit_error, started.max_attempts)
 
-            parsed = parse_design_output(stdout)
+            parsed = _parse_design_output_with_workspace_fallback(stdout, workspace)
+            parsed = normalize_design_payload_for_task(parsed, started.design_task)
+            _write_design_snapshot(workspace, parsed)
             validated = validate_design_payload(parsed, started.design_task)
             quality_gate_passed, quality_notes = run_quality_gate(validated.payload)
             validation_notes = _validation_notes(
@@ -315,6 +323,12 @@ class ChallengeDesignService:
             prior_designs = _collect_prior_designs(
                 task_repo, design_repo, design_task
             )
+            previous_design_seed = _load_previous_design_seed(
+                self.paths,
+                design_repo=design_repo,
+                design_task_id=design_task_id,
+                latest_attempt=latest_attempt,
+            )
             reservation = None
             ledger_snapshot = None
             if design_task.current_reservation_id is not None:
@@ -347,6 +361,7 @@ class ChallengeDesignService:
                 prior_designs=prior_designs,
                 reservation=reservation,
                 ledger_snapshot=ledger_snapshot,
+                previous_design_seed=previous_design_seed,
             )
 
     def _record_ledger(
@@ -490,6 +505,113 @@ def _filter_task_findings(
         return list(findings)
     wanted = set(finding_ids)
     return [finding for finding in findings if finding.id in wanted]
+
+
+def _load_previous_design_seed(
+    paths: ProjectPaths,
+    *,
+    design_repo: ChallengeDesignRepository,
+    design_task_id: UUID,
+    latest_attempt: design_dto.DesignAttempt | None,
+) -> Mapping[str, Any] | None:
+    latest_design = design_repo.latest_design(design_task_id)
+    if latest_design is not None and latest_design.payload:
+        return dict(latest_design.payload)
+    if latest_attempt is None:
+        return None
+    snapshot_path = (
+        paths.design_executions
+        / str(latest_attempt.id)
+        / "state"
+        / "last_design_draft.json"
+    )
+    return _read_design_snapshot(snapshot_path)
+
+
+def _stage_previous_design_seed(
+    workspace: Path,
+    seed: Mapping[str, Any] | None,
+) -> str | None:
+    if seed is None:
+        return None
+    state_dir = workspace / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    path = state_dir / "previous_design.json"
+    _write_json_file(path, seed)
+    return "./state/previous_design.json"
+
+
+def _write_design_snapshot(workspace: Path, payload: Mapping[str, Any]) -> None:
+    state_dir = workspace / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    _write_json_file(state_dir / "last_design_draft.json", payload)
+
+
+def _read_design_snapshot(path: Path) -> Mapping[str, Any] | None:
+    try:
+        if not path.is_file():
+            return None
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if isinstance(loaded, dict):
+        return loaded
+    return None
+
+
+def _write_json_file(path: Path, payload: Mapping[str, Any]) -> None:
+    try:
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+    except OSError:
+        return
+
+
+def _parse_design_output_with_workspace_fallback(
+    stdout: str,
+    workspace: Path,
+) -> dict[str, Any]:
+    try:
+        return parse_design_output(stdout)
+    except ChallengeDesignValidationError as original:
+        recovered = _recover_design_output_from_workspace(workspace)
+        if recovered is not None:
+            return recovered
+        raise original
+
+
+def _recover_design_output_from_workspace(workspace: Path) -> dict[str, Any] | None:
+    if not workspace.exists():
+        return None
+    for path in _iter_workspace_output_candidates(workspace):
+        try:
+            if path.stat().st_size > 1_000_000:
+                continue
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        try:
+            return parse_design_output(text)
+        except ChallengeDesignValidationError:
+            continue
+    return None
+
+
+def _iter_workspace_output_candidates(workspace: Path) -> list[Path]:
+    suffixes = {".json", ".txt", ".md", ".out"}
+    candidates: list[Path] = []
+    try:
+        iterator = workspace.rglob("*")
+        for path in iterator:
+            if not path.is_file() or path.name.startswith("."):
+                continue
+            if path.suffix.lower() in suffixes:
+                candidates.append(path)
+    except OSError:
+        return []
+    return sorted(candidates, key=lambda path: path.relative_to(workspace).as_posix())
 
 
 def _reservation_prompt_mapping(

@@ -272,6 +272,9 @@ PWN_TAXONOMY = CategoryProfileTaxonomy(
             "sub_technique": (
                 "ret2libc",
                 "ret2win",
+                "ret2csu",
+                "ret2dlresolve",
+                "stack_pivot",
                 "format_string_got",
                 "heap_uaf_tcache",
                 "integer_oob",
@@ -435,7 +438,30 @@ SUB_TECHNIQUE_ALIASES_BY_CATEGORY: Mapping[str, Mapping[str, str]] = {
         "stack canary leak": "ret2libc",
         "stack canary bypass": "ret2libc",
         "ret2plt": "ret2libc",
-        "stack pivot": "ret2libc",
+        "ret2csu": "ret2csu",
+        "ret2csu flow": "ret2csu",
+        "ret2csu chain continuation": "ret2csu",
+        "ret2csu gadget part 1": "ret2csu",
+        "ret2csu gadget part 2": "ret2csu",
+        "ret2csu one gadget constraint": "ret2csu",
+        "ret2csu register alignment": "ret2csu",
+        "ret2csu universal gadget": "ret2csu",
+        "ret2csu with function pointer": "ret2csu",
+        "ret2dlresolve": "ret2dlresolve",
+        "ret2dlresolve fake relocation": "ret2dlresolve",
+        "ret2dlresolve index calculation": "ret2dlresolve",
+        "ret2dlresolve plt call": "ret2dlresolve",
+        "ret2dlresolve string placement": "ret2dlresolve",
+        "ret2dlresolve symbol name hash": "ret2dlresolve",
+        "ret2dlresolve with stack pivot": "ret2dlresolve",
+        "dl runtime resolve exploitation": "ret2dlresolve",
+        "fake symbol table construction": "ret2dlresolve",
+        "pwntools ret2dlresolve helper": "ret2dlresolve",
+        "relro bypass with ret2dlresolve": "ret2dlresolve",
+        "stack pivot": "stack_pivot",
+        "stack pivot with leave ret gadget": "stack_pivot",
+        "partial overwrite for pivot": "stack_pivot",
+        "pop rsp gadget usage": "stack_pivot",
         "one gadget": "ret2libc",
         "one_gadget": "ret2libc",
         "format string": "format_string_got",
@@ -567,6 +593,19 @@ def validate_profile(
             raise ProfileTaxonomyError(f"profile axis {axis_name!r} has unknown fields {unknown}")
         for field, allowed in schema.fields.items():
             value = raw_axis.get(field)
+            if axis_name == "semantic" and field == "sub_technique":
+                normalized = _coerce_sub_technique(
+                    _normalize_semantic_value(str(value or "")),
+                    allowed,
+                    family=str(raw_axis.get("family", "")),
+                    category=taxonomy.category,
+                )
+                if not normalized:
+                    raise ProfileTaxonomyError(
+                        f"profile {axis_name}.{field}={value!r} must not be empty"
+                    )
+                axis_values[field] = normalized
+                continue
             if not isinstance(value, str) or value not in allowed:
                 raise ProfileTaxonomyError(
                     f"profile {axis_name}.{field}={value!r} is not in closed vocabulary"
@@ -1058,19 +1097,23 @@ def _coerce_sub_technique(
         aliases.update(category_aliases)
     alias = aliases.get(value)
     normalized_allowed = {_normalize_semantic_value(item): item for item in allowed}
+    if value in allowed:
+        return value
+    if value in normalized_allowed:
+        return normalized_allowed[value]
     if alias is not None and alias in allowed:
         return alias
     if alias is not None and _normalize_semantic_value(alias) in normalized_allowed:
         return normalized_allowed[_normalize_semantic_value(alias)]
+    if alias is not None:
+        return alias
     for normalized, original in normalized_allowed.items():
         if normalized and (normalized in value.split() or normalized in value):
             return original
+    if value:
+        return value
     family_default = SUB_TECHNIQUE_FAMILY_DEFAULTS.get(str(family or ""))
-    if family_default in allowed:
-        return family_default
-    raise ProfileTaxonomyError(
-        f"profile semantic.sub_technique={value!r} cannot be mapped to closed vocabulary"
-    )
+    return family_default or value
 
 
 def _profile_value(profile: GovernedProfile, path: str) -> str:

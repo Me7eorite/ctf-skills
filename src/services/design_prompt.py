@@ -55,6 +55,7 @@ def build_design_prompt(
     findings: Sequence[ResearchFinding],
     sources: Sequence[ResearchSource],
     previous_error: str | None = None,
+    previous_design_seed_path: str | None = None,
     prior_designs: Sequence[Mapping[str, Any]] = (),
     reservation: Mapping[str, Any] | None = None,
     ledger_snapshot: Mapping[str, Any] | None = None,
@@ -81,6 +82,7 @@ def build_design_prompt(
         "## Research Sources",
         _render_sources(sources),
         _render_governance_context(reservation, ledger_snapshot),
+        _render_retry_seed(previous_design_seed_path),
         "## References",
         *(
             _render_reference(
@@ -615,6 +617,19 @@ def _render_retry_feedback(previous_error: str | None) -> str:
     )
 
 
+def _render_retry_seed(previous_design_seed_path: str | None) -> str:
+    if not previous_design_seed_path:
+        return ""
+    return "\n".join(
+        [
+            "## Previous Draft Seed",
+            f"A prior draft JSON has been staged at `{previous_design_seed_path}`.",
+            "Use it as the base object for this retry and change only the fields "
+            "needed to satisfy the latest error.",
+        ]
+    )
+
+
 def _render_build_budget(difficulty: str) -> str:
     """Quote the per-tier buildability caps so the agent self-constrains.
 
@@ -777,10 +792,16 @@ def _render_findings(findings: Sequence[ResearchFinding]) -> str:
     capped = list(findings[:EVIDENCE_FINDING_LIMIT])
     if not capped:
         return "- (no cited research findings)"
-    lines: list[str] = []
+    lines: list[str] = [
+        "For governed designs, `design_evidence.research_finding_ids` MUST "
+        "copy UUIDs from this list only. Do not invent, shorten, or cite "
+        "source IDs.",
+        "",
+    ]
     for index, finding in enumerate(capped, start=1):
         lines.append(
-            f"- {index}. [{finding.kind}] {finding.label}: {finding.summary}"
+            f"- {index}. id={finding.id} [{finding.kind}] "
+            f"{finding.label}: {finding.summary}"
         )
     if len(findings) > EVIDENCE_FINDING_LIMIT:
         lines.append(

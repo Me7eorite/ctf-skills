@@ -10,6 +10,7 @@ import pytest
 from domain.challenge_design_validators import (
     DEFAULT_FLAG_FORMAT,
     ChallengeDesignValidationError,
+    normalize_design_payload_for_task,
     parse_design_output,
     run_quality_gate,
     validate_design_payload,
@@ -938,6 +939,28 @@ def test_difficulty_easy_rejects_two_techniques():
         match=r"easy allows at most 1 distinct techniques",
     ):
         validate_design_payload(payload, _easy_task())
+
+
+def test_easy_normalizer_collapses_model_overbudget_techniques_and_steps():
+    payload = _easy_payload(
+        secondary_technique="CSP bypass",
+        techniques=["DOM XSS", "CSP bypass"],
+        intended_path=[
+            "Inspect the search page",
+            "Find the reflected parameter",
+            "Inject a script tag",
+            "Bypass the toy filter",
+            "Submit the flag",
+        ],
+    )
+
+    normalized = normalize_design_payload_for_task(payload, _easy_task())
+    result = validate_design_payload(normalized, _easy_task())
+
+    challenge = result.challenge
+    assert challenge["techniques"] == ["DOM XSS"]
+    assert "secondary_technique" not in challenge
+    assert len(challenge["intended_path"]) == 4
 
 
 def test_difficulty_easy_allows_omitting_unintended_solutions():

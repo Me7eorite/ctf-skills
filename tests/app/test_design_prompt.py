@@ -167,6 +167,8 @@ def test_evidence_cap_preserves_insertion_order(tmp_path):
 
     prompt = build_design_prompt(context, _task(), _request(), findings, _sources())
 
+    assert "design_evidence.research_finding_ids" in prompt
+    assert f"id={findings[0].id}" in prompt
     assert "finding-01" in prompt
     assert f"finding-{EVIDENCE_FINDING_LIMIT:02d}" in prompt
     assert f"finding-{EVIDENCE_FINDING_LIMIT + 1:02d}" not in prompt
@@ -233,6 +235,22 @@ def test_prompt_includes_previous_validation_error_on_retry(tmp_path):
     assert "## Retry Feedback" in prompt
     assert "invalid entry: 'dist/bad path'" in prompt
     assert "Re-check the complete Output Contract" in prompt
+
+
+def test_prompt_includes_previous_draft_seed_path(tmp_path):
+    context = load_design_prompt_context(_paths(tmp_path))
+
+    prompt = build_design_prompt(
+        context,
+        _task(),
+        _request(),
+        [],
+        [],
+        previous_design_seed_path="./state/previous_design.json",
+    )
+
+    assert "## Previous Draft Seed" in prompt
+    assert "./state/previous_design.json" in prompt
 
 
 def test_re_prompt_calls_out_strings_and_no_hardcoded_flag(tmp_path):

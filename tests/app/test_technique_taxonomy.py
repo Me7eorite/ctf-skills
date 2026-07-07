@@ -49,8 +49,8 @@ def test_resolve_sub_technique_collapses_xor_surface_variants():
     assert keys == {"xor"}
 
 
-def test_resolve_sub_technique_keeps_sqli_variants_distinct():
-    assert resolve_sub_technique(_finding("blind SQLi")) != resolve_sub_technique(
+def test_resolve_sub_technique_keeps_sqli_variants_folded():
+    assert resolve_sub_technique(_finding("blind SQLi")) == resolve_sub_technique(
         _finding("second-order SQLi")
     )
     assert resolve_sub_technique(_finding("blind SQLi")) != resolve_sub_technique(
@@ -65,6 +65,9 @@ def test_resolve_sub_technique_keeps_sqli_variants_distinct():
         ("xor", "rc4"),
         ("sqli", "ssti"),
         ("ret2win", "ret2libc"),
+        ("ret2csu", "ret2libc"),
+        ("ret2dlresolve", "ret2libc"),
+        ("stack pivot", "ret2libc"),
         ("tcache poisoning", "UAF"),
     ],
 )

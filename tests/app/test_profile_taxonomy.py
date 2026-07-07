@@ -321,7 +321,7 @@ def test_quota_caps_keep_low_cardinality_dimensions_allocatable() -> None:
     assert len(result.allocations) == 25
 
 
-def test_profile_capacity_coerces_freeform_subtechniques_by_family() -> None:
+def test_profile_capacity_preserves_freeform_subtechniques() -> None:
     result = profile_capacity_check(
         category="pwn",
         target_count=1,
@@ -336,7 +336,7 @@ def test_profile_capacity_coerces_freeform_subtechniques_by_family() -> None:
     assert result.can_allocate is True
     assert result.allocations[0].profile.semantic == {
         "family": "stack",
-        "sub_technique": "ret2libc",
+        "sub_technique": "64 bit stack offset determination",
     }
 
 
@@ -367,7 +367,14 @@ def test_profile_capacity_coerces_canary_buffer_overflow_phrase() -> None:
         ("canary leak", "ret2libc"),
         ("stack canary leak", "ret2libc"),
         ("ret2plt", "ret2libc"),
-        ("stack pivot", "ret2libc"),
+        ("ret2csu flow", "ret2csu"),
+        ("ret2csu gadget part 1", "ret2csu"),
+        ("ret2dlresolve", "ret2dlresolve"),
+        ("ret2dlresolve fake relocation", "ret2dlresolve"),
+        ("dl runtime resolve exploitation", "ret2dlresolve"),
+        ("stack pivot", "stack_pivot"),
+        ("stack pivot with leave ret gadget", "stack_pivot"),
+        ("partial overwrite for pivot", "stack_pivot"),
         ("one_gadget", "ret2libc"),
         ("unlink attack", "heap_uaf_tcache"),
         ("tcache poisoning", "heap_uaf_tcache"),
@@ -383,15 +390,61 @@ def test_pwn_aliases_normalize_to_closed_vocabulary(raw: str, expected: str, cap
         )
 
     assert semantic["sub_technique"] == expected
-    assert f"normalized={expected!r}" in caplog.text
+    if raw != expected:
+        assert f"normalized={expected!r}" in caplog.text
 
 
-def test_unknown_subtechnique_still_reports_closed_vocabulary_error() -> None:
-    with pytest.raises(ProfileTaxonomyError, match="cannot be mapped to closed vocabulary"):
-        normalize_semantic_assignment(
-            taxonomy_for_category("pwn"),
-            {"family": "mystery", "sub_technique": "rainbow table"},
-        )
+def test_pwn_stack_variants_keep_profile_capacity_distinct() -> None:
+    result = profile_capacity_check(
+        category="pwn",
+        target_count=6,
+        semantic_assignments=[
+            {"family": "stack", "sub_technique": "basic ret2libc"},
+            {"family": "format_string", "sub_technique": "got overwrite"},
+            {"family": "stack", "sub_technique": "ret2csu flow"},
+            {"family": "stack", "sub_technique": "ret2dlresolve"},
+            {"family": "stack", "sub_technique": "stack pivot"},
+            {"family": "stack", "sub_technique": "ret2win"},
+        ],
+    )
+
+    assert result.can_allocate is True
+    assert [item.profile.semantic["sub_technique"] for item in result.allocations] == [
+        "ret2libc",
+        "format_string_got",
+        "ret2csu",
+        "ret2dlresolve",
+        "stack_pivot",
+        "ret2win",
+    ]
+
+
+def test_unknown_subtechnique_is_preserved_as_open_semantic_key() -> None:
+    semantic = normalize_semantic_assignment(
+        taxonomy_for_category("pwn"),
+        {"family": "stack", "sub_technique": "rainbow table"},
+    )
+
+    assert semantic == {"family": "stack", "sub_technique": "rainbow table"}
+
+
+def test_capacity_check_accepts_new_subtechniques_for_any_category() -> None:
+    result = profile_capacity_check(
+        category="web",
+        target_count=3,
+        semantic_assignments=[
+            {"family": "injection", "sub_technique": "graphql alias batching"},
+            {"family": "server_side", "sub_technique": "metadata proxy smuggling"},
+            {"family": "client_side", "sub_technique": "postmessage origin confusion"},
+        ],
+    )
+
+    assert result.can_allocate is True
+    assert [item.profile.semantic["sub_technique"] for item in result.allocations] == [
+        "graphql alias batching",
+        "metadata proxy smuggling",
+        "postmessage origin confusion",
+    ]
 
 
 def test_capacity_check_requires_semantic_assignments() -> None:
