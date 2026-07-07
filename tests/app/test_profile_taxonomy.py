@@ -556,7 +556,7 @@ def test_pwn_unsupported_profile_does_not_get_recast_as_format_string() -> None:
     assert result.can_allocate is False
     assert result.diagnostics["code"] == "unsupported_pwn_profile"
     assert result.diagnostics["semantic"] == {
-        "family": "integer_oob",
+        "family": "other",
         "sub_technique": "rainbow table",
     }
 

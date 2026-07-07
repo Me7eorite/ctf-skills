@@ -997,6 +997,8 @@ class _FindingAllocation:
     index: int
     diversity_flags: dict[str, Any]
     avoid_techniques: frozenset[str]
+    raw_sub_technique: str
+    canonical_sub_technique: str
 
 
 def _allocate_primary_findings(
@@ -1014,7 +1016,8 @@ def _allocate_primary_findings(
     metadata = [
         {
             "family": resolve_family(finding, category=category),
-            "sub_technique": resolve_sub_technique(finding),
+            "raw_sub_technique": str(getattr(finding, "label", "")).strip().lower(),
+            "canonical_sub_technique": resolve_sub_technique(finding),
         }
         for finding in findings
     ]
@@ -1045,7 +1048,7 @@ def _allocate_primary_findings(
         unused_sub_candidates = [
             idx
             for idx in family_candidates
-            if metadata[idx]["sub_technique"] not in used_subtechniques
+            if metadata[idx]["canonical_sub_technique"] not in used_subtechniques
         ]
         if unused_sub_candidates:
             chosen = unused_sub_candidates[0]
@@ -1055,7 +1058,8 @@ def _allocate_primary_findings(
             subtechnique_duplicate = True
 
         family = metadata[chosen]["family"]
-        sub_technique = metadata[chosen]["sub_technique"]
+        raw_sub_technique = metadata[chosen]["raw_sub_technique"]
+        canonical_sub_technique = metadata[chosen]["canonical_sub_technique"]
         warnings: list[str] = []
         if family_quota_exceeded:
             warnings.append(DIVERSITY_WARNING_FAMILY_QUOTA)
@@ -1069,14 +1073,18 @@ def _allocate_primary_findings(
                 index=chosen,
                 diversity_flags={
                     "family": family,
-                    "sub_technique": sub_technique,
+                    "sub_technique": canonical_sub_technique,
+                    "raw_sub_technique": raw_sub_technique,
+                    "canonical_sub_technique": canonical_sub_technique,
                     "warnings": warnings,
                 },
                 avoid_techniques=frozenset(used_subtechniques),
+                raw_sub_technique=raw_sub_technique,
+                canonical_sub_technique=canonical_sub_technique,
             )
         )
         family_counts[family] += 1
-        used_subtechniques.add(sub_technique)
+        used_subtechniques.add(canonical_sub_technique)
         recent_families.append(family)
     return allocations
 
