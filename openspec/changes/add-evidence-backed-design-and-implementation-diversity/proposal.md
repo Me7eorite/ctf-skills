@@ -63,8 +63,9 @@ not for unattended expansion toward hundreds of challenges.
   similarity thresholds produce review-required or blocking outcomes.
 - **Modify `delivery-bundle`** so production packing requires an effectively
   accepted ArtifactObservation and an effectively accepted corpus-admission
-  decision; passed metadata alone is insufficient. Shadow/trial bundles are
-  explicit and marked non-production.
+  decision; existing build metadata is only a compatibility hint and passed
+  metadata alone is insufficient. Shadow/trial bundles are explicit and marked
+  non-production.
 - **Add dashboard/API visibility** for reservations, design evidence, contract
   checks, observed profiles, and corpus-gate findings. The UI displays
   authoritative server results and does not recompute fingerprints or policy.

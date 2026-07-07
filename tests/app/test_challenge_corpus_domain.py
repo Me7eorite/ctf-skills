@@ -24,6 +24,7 @@ from domain.challenge_corpus import (
     generate_corpus_fingerprints,
     observation_review_allows_acceptance,
 )
+from domain.corpus_rollout import build_rollout_evidence
 
 
 def _profile() -> dict[str, object]:
@@ -47,6 +48,23 @@ def _profile() -> dict[str, object]:
             "scenario_type": "ticket_queue",
             "input_model": "web_form",
         },
+    }
+
+
+def _trial_rollout_report(batch_id: str = "trial-1") -> dict[str, object]:
+    return {
+        "id": batch_id,
+        "mode": "trial",
+        "challenge_count": 20,
+        "difficulty_distribution": {"easy": 8, "medium": 8, "hard": 4},
+        "profile_distribution": {"python/container/payload_injection": 10, "rust/wasm/recover": 10},
+        "design_evidence_passed": 20,
+        "build_contracts_passed": 20,
+        "artifact_observations_passed": 20,
+        "aggregate_decision": "passed",
+        "member_decisions": {"passed": 18, "review_required": 2, "blocked": 0},
+        "blocked_duplicate_count": 0,
+        "false_positive_review_findings": 1,
     }
 
 
@@ -103,6 +121,46 @@ def test_generate_corpus_fingerprints_uses_profile_signatures_and_token_schema()
     assert len(payload["combined"]) == 64
     assert payload["source"]["token_count"] > 0
     assert payload["solver"]["sha256"] != payload["source"]["sha256"]
+
+
+def test_rollout_evidence_blocks_production_until_two_trial_batches_pass() -> None:
+    evidence = build_rollout_evidence(
+        shadow_report={
+            "challenge_count": 40,
+            "required_vs_observed": {"matched": 39, "mismatch": 1},
+            "member_decisions": {"passed": 34, "review_required": 6, "blocked": 0},
+        },
+        trial_reports=[
+            _trial_rollout_report("trial-1"),
+            {**_trial_rollout_report("trial-2"), "artifact_observations_passed": 19},
+        ],
+    )
+
+    assert evidence["production_mode_allowed"] is False
+    assert evidence["production_mode_action"] == "keep_disabled"
+    assert evidence["rollout_gate"]["consecutive_passed_trial_batches"] == 0
+    assert evidence["trial_batches"][1]["reasons"] == [
+        "artifact_observations_not_all_passed"
+    ]
+
+
+def test_rollout_evidence_allows_manual_production_enable_after_two_passes() -> None:
+    evidence = build_rollout_evidence(
+        shadow_report={
+            "challenge_count": 40,
+            "required_vs_observed": {"matched": 40},
+            "member_decisions": {"passed": 36, "review_required": 4, "blocked": 0},
+        },
+        trial_reports=[
+            _trial_rollout_report("trial-1"),
+            _trial_rollout_report("trial-2"),
+        ],
+    )
+
+    assert evidence["production_mode_allowed"] is True
+    assert evidence["production_mode_action"] == "manual_enable_allowed"
+    assert evidence["rollout_gate"]["next_checkpoint"] == 50
+    assert evidence["acceptance_metrics"]["pass_rate"] == 0.9
 
 
 def test_effective_acceptance_helpers_keep_review_separate_from_decision() -> None:

@@ -17,7 +17,10 @@ from core.jsonio import write_json
 from core.paths import ProjectPaths
 from core.state import InMemoryProgressStore
 from persistence.models import build_attempts as build_model
+from persistence.models import artifact_observations as observation_model
+from persistence.models import challenge_corpus as corpus_model
 from persistence.models import challenge_designs as design_model
+from persistence.models import design_profile_reservations as reservation_model
 from persistence.models import design_tasks as task_model
 from persistence.models import research as research_model
 from persistence.repositories import BuildAttemptsRepository
@@ -60,6 +63,29 @@ def session_factory() -> SessionFactory:
 def clean_db(session_factory: SessionFactory):
     with session_factory() as session:
         with session.begin():
+            session.execute(sa.delete(corpus_model.CorpusReviewDecision))
+            session.execute(sa.delete(corpus_model.ObservationReviewDecision))
+            session.execute(sa.delete(corpus_model.CorpusDecision))
+            session.execute(sa.delete(corpus_model.CorpusMatch))
+            session.execute(sa.delete(corpus_model.CorpusBatchMember))
+            session.execute(sa.delete(corpus_model.CorpusBatch))
+            session.execute(sa.delete(corpus_model.CorpusHistoryEntry))
+            session.execute(
+                sa.update(task_model.DesignTask).values(
+                    current_reservation_id=None,
+                    current_design_evidence_id=None,
+                )
+            )
+            session.execute(
+                sa.update(build_model.BuildAttempt).values(
+                    design_evidence_id=None,
+                    artifact_observation_id=None,
+                )
+            )
+            session.execute(sa.delete(observation_model.ArtifactObservation))
+            session.execute(sa.delete(design_model.DesignEvidence))
+            session.execute(sa.delete(reservation_model.DesignProfileReservation))
+            session.execute(sa.delete(reservation_model.DesignProfileLedger))
             session.execute(sa.delete(build_model.BuildAttempt))
             session.execute(sa.delete(task_model.DesignTask))
             session.execute(text("DELETE FROM research_runs"))
@@ -156,6 +182,200 @@ def test_delete_only_failed_attempt_cleans_operational_state_and_retains_artifac
         assert task.status == "designed"
         assert task.next_build_attempt_no == 3
     assert not (paths.work / "deletion-quarantine").exists()
+
+
+def test_delete_attempt_removes_mutable_governance_and_retains_history(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    paths = ProjectPaths(root=tmp_path, repository=ROOT)
+    paths.initialize()
+    task_id = _seed_task(session_factory, status="built")
+    attempt_id = uuid4()
+    design_attempt_id = uuid4()
+    design_id = uuid4()
+    evidence_id = uuid4()
+    observation_id = uuid4()
+    batch_id = uuid4()
+    member_id = uuid4()
+    decision_id = uuid4()
+    review_id = uuid4()
+    history_id = uuid4()
+    with session_factory() as session:
+        with session.begin():
+            session.add(
+                design_model.DesignAttempt(
+                    id=design_attempt_id,
+                    design_task_id=task_id,
+                    attempt=1,
+                    status="completed",
+                    claim_token=uuid4(),
+                    profile_name_used="default",
+                )
+            )
+            session.add(
+                design_model.ChallengeDesign(
+                    id=design_id,
+                    design_task_id=task_id,
+                    design_attempt_id=design_attempt_id,
+                    payload={},
+                    summary="demo",
+                    flag_format="flag{...}",
+                    validation_notes="ok",
+                    quality_gate_passed=True,
+                    status="accepted",
+                )
+            )
+            session.flush()
+            session.add(
+                design_model.DesignEvidence(
+                    id=evidence_id,
+                    design_task_id=task_id,
+                    evidence_version=1,
+                    challenge_design_id=design_id,
+                    research_finding_ids=[],
+                    profile={},
+                    profile_signature="profile",
+                    distinctness_claim="distinct",
+                    compared_challenge_ids=[],
+                    evidence={},
+                    build_contract={},
+                    ledger_version=1,
+                )
+            )
+            session.flush()
+            session.add(
+                build_model.BuildAttempt(
+                    id=attempt_id,
+                    design_task_id=task_id,
+                    attempt_no=1,
+                    status="succeeded",
+                    shard_basename=f"{attempt_id}.json",
+                    artifact_status="present",
+                    design_evidence_id=evidence_id,
+                    contract_sha256="contract",
+                )
+            )
+            session.flush()
+            session.add(
+                observation_model.ArtifactObservation(
+                    id=observation_id,
+                    build_attempt_id=attempt_id,
+                    observation_version=1,
+                    design_evidence_id=evidence_id,
+                    contract_sha256="contract",
+                    artifact_manifest_sha256="artifact",
+                    observed_profile={},
+                    contract_checks={},
+                    negative_test_results={},
+                    fingerprints={"combined": "abc"},
+                    status="passed",
+                    is_current=True,
+                )
+            )
+            session.flush()
+            session.add(
+                corpus_model.CorpusBatch(
+                    id=batch_id,
+                    mode="production",
+                    category="web",
+                    policy_version=1,
+                    status="evaluated",
+                    created_by="operator",
+                )
+            )
+            session.flush()
+            session.add(
+                corpus_model.CorpusBatchMember(
+                    id=member_id,
+                    batch_id=batch_id,
+                    build_attempt_id=attempt_id,
+                    design_evidence_id=evidence_id,
+                    artifact_observation_id=observation_id,
+                    fingerprint_version=1,
+                    fingerprints={"combined": "abc"},
+                )
+            )
+            session.flush()
+            session.add(
+                corpus_model.CorpusDecision(
+                    id=decision_id,
+                    batch_id=batch_id,
+                    member_id=member_id,
+                    scope="member",
+                    decision="review_required",
+                    reasons=["source_similarity_review"],
+                    policy_version=1,
+                    is_current=True,
+                )
+            )
+            session.flush()
+            session.add(
+                corpus_model.CorpusReviewDecision(
+                    id=review_id,
+                    corpus_decision_id=decision_id,
+                    decision="approved",
+                    actor="operator",
+                    reason="reviewed",
+                    scope="production-publication",
+                )
+            )
+            session.flush()
+            session.add(
+                corpus_model.CorpusHistoryEntry(
+                    id=history_id,
+                    challenge_id="web-0001",
+                    category="web",
+                    design_evidence_id=evidence_id,
+                    build_attempt_id=attempt_id,
+                    artifact_observation_id=observation_id,
+                    fingerprint_version=1,
+                    fingerprints={"combined": "abc"},
+                    status="published",
+                    audit_reason="published batch",
+                )
+            )
+
+    result = ResourceDeletionService(
+        paths=paths,
+        session_factory=session_factory,
+        progress=InMemoryProgressStore(),
+    ).delete_build_attempt(attempt_id)
+
+    assert result.retained_governance_history == [
+        deletion_module.ArtifactOutcome(
+            str(history_id),
+            "corpus_history:published:web-0001:decisions=1:corpus_reviews=1:observation_reviews=0",
+        )
+    ]
+    with session_factory() as session:
+        assert session.get(build_model.BuildAttempt, attempt_id) is None
+        assert session.get(observation_model.ArtifactObservation, observation_id) is None
+        assert session.get(corpus_model.CorpusBatchMember, member_id) is None
+        assert session.get(corpus_model.CorpusDecision, decision_id) is None
+        assert session.get(corpus_model.CorpusReviewDecision, review_id) is None
+        assert session.get(design_model.DesignEvidence, evidence_id) is not None
+        history = session.get(corpus_model.CorpusHistoryEntry, history_id)
+        assert history is not None
+        assert history.build_attempt_id is None
+        assert history.design_evidence_id is None
+        assert history.artifact_observation_id is None
+        assert history.audit_reason == (
+            "published batch; retained during resource deletion; "
+            "detached_decisions=1; detached_corpus_reviews=1; "
+            "detached_observation_reviews=0"
+        )
+        retained = history.fingerprints["retained_governance_history"]
+        assert retained["reason"] == "resource_deletion"
+        assert retained["detached_decisions"][0]["decision"] == "review_required"
+        assert retained["detached_decisions"][0]["reasons"] == [
+            "source_similarity_review"
+        ]
+        assert retained["detached_corpus_reviews"][0]["actor"] == "operator"
+        assert retained["detached_corpus_reviews"][0]["reason"] == "reviewed"
+        assert retained["detached_corpus_reviews"][0]["scope"] == (
+            "production-publication"
+        )
 
 
 def test_delete_attempt_rejects_active_sibling(

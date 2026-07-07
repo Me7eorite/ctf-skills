@@ -7,7 +7,7 @@ import shutil
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 import sqlalchemy as sa
@@ -17,8 +17,11 @@ from core.jsonio import read_json, write_json
 from core.paths import ProjectPaths
 from core.state import ProgressStore
 from persistence import make_postgres_progress_store
+from persistence.models import artifact_observations as observation_model
 from persistence.models import build_attempts as build_model
+from persistence.models import challenge_corpus as corpus_model
 from persistence.models import challenge_designs as design_model
+from persistence.models import design_profile_reservations as reservation_model
 from persistence.models import design_tasks as task_model
 from persistence.models import research as research_model
 from persistence.session import SessionFactory
@@ -49,6 +52,7 @@ class DeletionResult:
     retained: list[ArtifactOutcome] = field(default_factory=list)
     skipped: list[ArtifactOutcome] = field(default_factory=list)
     quarantined: list[ArtifactOutcome] = field(default_factory=list)
+    retained_governance_history: list[ArtifactOutcome] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -59,6 +63,9 @@ class DeletionResult:
             "retained": [vars(item) for item in self.retained],
             "skipped": [vars(item) for item in self.skipped],
             "quarantined": [vars(item) for item in self.quarantined],
+            "retained_governance_history": [
+                vars(item) for item in self.retained_governance_history
+            ],
             "warnings": list(self.warnings),
         }
 
@@ -74,6 +81,17 @@ class _Scope:
     design_attempt_ids: set[UUID] = field(default_factory=set)
     challenge_design_ids: set[UUID] = field(default_factory=set)
     build_attempt_ids: set[UUID] = field(default_factory=set)
+    corpus_batch_ids: set[UUID] = field(default_factory=set)
+    deletable_corpus_batch_ids: set[UUID] = field(default_factory=set)
+    corpus_batch_member_ids: set[UUID] = field(default_factory=set)
+    corpus_decision_ids: set[UUID] = field(default_factory=set)
+    corpus_match_ids: set[UUID] = field(default_factory=set)
+    corpus_review_decision_ids: set[UUID] = field(default_factory=set)
+    observation_review_decision_ids: set[UUID] = field(default_factory=set)
+    corpus_history_entry_ids: set[UUID] = field(default_factory=set)
+    design_profile_reservation_ids: set[UUID] = field(default_factory=set)
+    design_evidence_ids: set[UUID] = field(default_factory=set)
+    artifact_observation_ids: set[UUID] = field(default_factory=set)
     build_attempt_rows: list[build_model.BuildAttempt] = field(default_factory=list)
     shard_basenames: set[str] = field(default_factory=set)
     artifact_paths: set[str] = field(default_factory=set)
@@ -335,6 +353,7 @@ class ResourceDeletionService:
                 self._guard_active(session, scope)
                 self._quarantine_operational_files(scope, quarantine)
                 self._classify_artifacts(session, scope, delete_artifacts, quarantine, result)
+                self._record_retained_governance_history(session, scope, result)
                 self.progress.purge_shards(scope.shard_basenames, transaction=session)
                 self._delete_rows(session, scope)
             quarantine.purge()
@@ -358,7 +377,11 @@ class ResourceDeletionService:
         session.execute(
             sa.text(
                 "LOCK TABLE build_attempts, design_attempts, research_runs, "
-                "research_sources IN SHARE ROW EXCLUSIVE MODE"
+                "research_sources, design_profile_reservations, "
+                "design_profile_ledgers, design_evidence, artifact_observations, "
+                "corpus_batches, corpus_batch_members, corpus_decisions, corpus_matches, "
+                "corpus_review_decisions, observation_review_decisions, "
+                "corpus_history_entries IN SHARE ROW EXCLUSIVE MODE"
             )
         )
 
@@ -443,6 +466,7 @@ class ResourceDeletionService:
         scope.direct_parent_task_id = parent.id
         if row.resulting_challenge_dir:
             scope.artifact_paths.add(row.resulting_challenge_dir)
+        self._collect_governance_rows(session, scope)
         return scope
 
     def _collect_research(self, session: Session, scope: _Scope) -> None:
@@ -519,6 +543,259 @@ class ResourceDeletionService:
             scope.shard_basenames.add(build.shard_basename)
             if build.resulting_challenge_dir:
                 scope.artifact_paths.add(build.resulting_challenge_dir)
+        self._collect_governance_rows(session, scope)
+
+    def _collect_governance_rows(self, session: Session, scope: _Scope) -> None:
+        if scope.design_task_ids:
+            reservations = session.scalars(
+                sa.select(reservation_model.DesignProfileReservation)
+                .where(
+                    reservation_model.DesignProfileReservation.design_task_id.in_(
+                        scope.design_task_ids
+                    )
+                )
+                .with_for_update()
+            ).all()
+            for reservation in reservations:
+                scope.design_profile_reservation_ids.add(reservation.id)
+                if reservation.generation_request_id:
+                    scope.generation_request_ids.add(reservation.generation_request_id)
+            evidence = session.scalars(
+                sa.select(design_model.DesignEvidence)
+                .where(
+                    design_model.DesignEvidence.design_task_id.in_(scope.design_task_ids)
+                )
+                .with_for_update()
+            ).all()
+            scope.design_evidence_ids.update(row.id for row in evidence)
+        if scope.build_attempt_ids:
+            observations = session.scalars(
+                sa.select(observation_model.ArtifactObservation)
+                .where(
+                    observation_model.ArtifactObservation.build_attempt_id.in_(
+                        scope.build_attempt_ids
+                    )
+                )
+                .with_for_update()
+            ).all()
+            scope.artifact_observation_ids.update(row.id for row in observations)
+        if scope.root_type == "build_attempt":
+            batch_member_stmt = sa.select(corpus_model.CorpusBatchMember).where(
+                corpus_model.CorpusBatchMember.build_attempt_id.in_(
+                    scope.build_attempt_ids
+                )
+            )
+        elif scope.design_task_ids:
+            batch_member_stmt = (
+                sa.select(corpus_model.CorpusBatchMember)
+                .join(
+                    build_model.BuildAttempt,
+                    build_model.BuildAttempt.id
+                    == corpus_model.CorpusBatchMember.build_attempt_id,
+                )
+                .where(build_model.BuildAttempt.design_task_id.in_(scope.design_task_ids))
+            )
+        else:
+            batch_member_stmt = None
+        if batch_member_stmt is not None:
+            batch_members = session.scalars(batch_member_stmt.with_for_update()).all()
+        else:
+            batch_members = []
+        for member in batch_members:
+            scope.corpus_batch_member_ids.add(member.id)
+            scope.corpus_batch_ids.add(member.batch_id)
+            scope.artifact_observation_ids.add(member.artifact_observation_id)
+        if scope.design_task_ids:
+            scoped_evidence_ids = set(
+                session.scalars(
+                    sa.select(design_model.DesignEvidence.id).where(
+                        design_model.DesignEvidence.design_task_id.in_(
+                            scope.design_task_ids
+                        )
+                    )
+                )
+            )
+            scope.design_evidence_ids.update(scoped_evidence_ids)
+        if scope.corpus_batch_member_ids:
+            for batch_id in set(scope.corpus_batch_ids):
+                all_member_ids = set(
+                    session.scalars(
+                        sa.select(corpus_model.CorpusBatchMember.id).where(
+                            corpus_model.CorpusBatchMember.batch_id == batch_id
+                        )
+                    )
+                )
+                if all_member_ids and all_member_ids <= scope.corpus_batch_member_ids:
+                    scope.deletable_corpus_batch_ids.add(batch_id)
+            decisions = session.scalars(
+                sa.select(corpus_model.CorpusDecision)
+                .where(
+                    sa.or_(
+                        corpus_model.CorpusDecision.member_id.in_(
+                            scope.corpus_batch_member_ids
+                        ),
+                        corpus_model.CorpusDecision.batch_id.in_(
+                            scope.deletable_corpus_batch_ids
+                        ),
+                    )
+                )
+                .with_for_update()
+            ).all()
+            for decision in decisions:
+                scope.corpus_decision_ids.add(decision.id)
+            matches = session.scalars(
+                sa.select(corpus_model.CorpusMatch)
+                .where(
+                    sa.or_(
+                        corpus_model.CorpusMatch.member_id.in_(
+                            scope.corpus_batch_member_ids
+                        ),
+                        corpus_model.CorpusMatch.compared_member_id.in_(
+                            scope.corpus_batch_member_ids
+                        ),
+                        corpus_model.CorpusMatch.batch_id.in_(
+                            scope.deletable_corpus_batch_ids
+                        ),
+                    )
+                )
+                .with_for_update()
+            ).all()
+            scope.corpus_match_ids.update(match.id for match in matches)
+            corpus_reviews = session.scalars(
+                sa.select(corpus_model.CorpusReviewDecision)
+                .where(
+                    corpus_model.CorpusReviewDecision.corpus_decision_id.in_(
+                        scope.corpus_decision_ids
+                    )
+                )
+                .with_for_update()
+            ).all()
+            scope.corpus_review_decision_ids.update(review.id for review in corpus_reviews)
+        if scope.artifact_observation_ids:
+            obs_reviews = session.scalars(
+                sa.select(corpus_model.ObservationReviewDecision)
+                .where(
+                    corpus_model.ObservationReviewDecision.artifact_observation_id.in_(
+                        scope.artifact_observation_ids
+                    )
+                )
+                .with_for_update()
+            ).all()
+            scope.observation_review_decision_ids.update(review.id for review in obs_reviews)
+        if scope.artifact_observation_ids or scope.design_evidence_ids or scope.build_attempt_ids:
+            histories = session.scalars(
+                sa.select(corpus_model.CorpusHistoryEntry)
+                .where(
+                    sa.or_(
+                        corpus_model.CorpusHistoryEntry.build_attempt_id.in_(
+                            scope.build_attempt_ids
+                        ),
+                        corpus_model.CorpusHistoryEntry.artifact_observation_id.in_(
+                            scope.artifact_observation_ids
+                        ),
+                        corpus_model.CorpusHistoryEntry.design_evidence_id.in_(
+                            scope.design_evidence_ids
+                        ),
+                    )
+                )
+                .with_for_update()
+            ).all()
+            scope.corpus_history_entry_ids.update(history.id for history in histories)
+
+    def _record_retained_governance_history(
+        self,
+        session: Session,
+        scope: _Scope,
+        result: DeletionResult,
+    ) -> None:
+        if not scope.corpus_history_entry_ids:
+            return
+        rows = session.scalars(
+            sa.select(corpus_model.CorpusHistoryEntry)
+            .where(corpus_model.CorpusHistoryEntry.id.in_(scope.corpus_history_entry_ids))
+            .order_by(corpus_model.CorpusHistoryEntry.created_at, corpus_model.CorpusHistoryEntry.id)
+        ).all()
+        decisions = (
+            session.scalars(
+                sa.select(corpus_model.CorpusDecision)
+                .where(corpus_model.CorpusDecision.id.in_(scope.corpus_decision_ids))
+                .order_by(corpus_model.CorpusDecision.created_at, corpus_model.CorpusDecision.id)
+            ).all()
+            if scope.corpus_decision_ids
+            else []
+        )
+        corpus_reviews = (
+            session.scalars(
+                sa.select(corpus_model.CorpusReviewDecision)
+                .where(
+                    corpus_model.CorpusReviewDecision.id.in_(
+                        scope.corpus_review_decision_ids
+                    )
+                )
+                .order_by(
+                    corpus_model.CorpusReviewDecision.created_at,
+                    corpus_model.CorpusReviewDecision.id,
+                )
+            ).all()
+            if scope.corpus_review_decision_ids
+            else []
+        )
+        observation_reviews = (
+            session.scalars(
+                sa.select(corpus_model.ObservationReviewDecision)
+                .where(
+                    corpus_model.ObservationReviewDecision.id.in_(
+                        scope.observation_review_decision_ids
+                    )
+                )
+                .order_by(
+                    corpus_model.ObservationReviewDecision.created_at,
+                    corpus_model.ObservationReviewDecision.id,
+                )
+            ).all()
+            if scope.observation_review_decision_ids
+            else []
+        )
+        retention_note = (
+            "retained during resource deletion; "
+            f"detached_decisions={len(scope.corpus_decision_ids)}; "
+            f"detached_corpus_reviews={len(scope.corpus_review_decision_ids)}; "
+            f"detached_observation_reviews={len(scope.observation_review_decision_ids)}"
+        )
+        for row in rows:
+            fingerprints = dict(row.fingerprints or {})
+            fingerprints["retained_governance_history"] = {
+                "retained_at": datetime.now(timezone.utc).isoformat(),
+                "reason": "resource_deletion",
+                "detached_decisions": [
+                    _corpus_decision_projection(decision) for decision in decisions
+                ],
+                "detached_corpus_reviews": [
+                    _corpus_review_projection(review) for review in corpus_reviews
+                ],
+                "detached_observation_reviews": [
+                    _observation_review_projection(review)
+                    for review in observation_reviews
+                ],
+            }
+            row.fingerprints = fingerprints
+            if row.audit_reason:
+                row.audit_reason = f"{row.audit_reason}; {retention_note}"
+            else:
+                row.audit_reason = retention_note
+            result.retained_governance_history.append(
+                ArtifactOutcome(
+                    str(row.id),
+                    ":".join(
+                        [
+                            f"corpus_history:{row.status}:{row.challenge_id}",
+                            f"decisions={len(scope.corpus_decision_ids)}",
+                            f"corpus_reviews={len(scope.corpus_review_decision_ids)}",
+                            f"observation_reviews={len(scope.observation_review_decision_ids)}",
+                        ]
+                    ),
+                )
+            )
 
     def _guard_active(self, session: Session, scope: _Scope) -> None:
         if scope.research_run_ids and session.scalar(
@@ -708,10 +985,104 @@ class ResourceDeletionService:
         return values
 
     def _delete_rows(self, session: Session, scope: _Scope) -> None:
+        if scope.design_task_ids:
+            session.execute(
+                sa.update(task_model.DesignTask)
+                .where(task_model.DesignTask.id.in_(scope.design_task_ids))
+                .values(current_reservation_id=None, current_design_evidence_id=None)
+            )
+        if scope.build_attempt_ids:
+            session.execute(
+                sa.update(build_model.BuildAttempt)
+                .where(build_model.BuildAttempt.id.in_(scope.build_attempt_ids))
+                .values(artifact_observation_id=None, design_evidence_id=None)
+            )
+        if scope.design_evidence_ids:
+            session.execute(
+                sa.update(observation_model.ArtifactObservation)
+                .where(
+                    observation_model.ArtifactObservation.design_evidence_id.in_(
+                        scope.design_evidence_ids
+                    )
+                )
+                .values(design_evidence_id=None)
+            )
+        if scope.corpus_history_entry_ids:
+            session.execute(
+                sa.update(corpus_model.CorpusHistoryEntry)
+                .where(corpus_model.CorpusHistoryEntry.id.in_(scope.corpus_history_entry_ids))
+                .values(
+                    design_evidence_id=None,
+                    build_attempt_id=None,
+                    artifact_observation_id=None,
+                )
+            )
+        if scope.observation_review_decision_ids:
+            session.execute(
+                sa.delete(corpus_model.ObservationReviewDecision).where(
+                    corpus_model.ObservationReviewDecision.id.in_(
+                        scope.observation_review_decision_ids
+                    )
+                )
+            )
+        if scope.corpus_review_decision_ids:
+            session.execute(
+                sa.delete(corpus_model.CorpusReviewDecision).where(
+                    corpus_model.CorpusReviewDecision.id.in_(
+                        scope.corpus_review_decision_ids
+                    )
+                )
+            )
+        if scope.corpus_match_ids:
+            session.execute(
+                sa.delete(corpus_model.CorpusMatch).where(
+                    corpus_model.CorpusMatch.id.in_(scope.corpus_match_ids)
+                )
+            )
+        if scope.corpus_decision_ids:
+            session.execute(
+                sa.delete(corpus_model.CorpusDecision).where(
+                    corpus_model.CorpusDecision.id.in_(scope.corpus_decision_ids)
+                )
+            )
+        if scope.corpus_batch_member_ids:
+            session.execute(
+                sa.delete(corpus_model.CorpusBatchMember).where(
+                    corpus_model.CorpusBatchMember.id.in_(scope.corpus_batch_member_ids)
+                )
+            )
+        if scope.deletable_corpus_batch_ids:
+            session.execute(
+                sa.delete(corpus_model.CorpusBatch).where(
+                    corpus_model.CorpusBatch.id.in_(scope.deletable_corpus_batch_ids)
+                )
+            )
+        if scope.artifact_observation_ids:
+            session.execute(
+                sa.delete(observation_model.ArtifactObservation).where(
+                    observation_model.ArtifactObservation.id.in_(
+                        scope.artifact_observation_ids
+                    )
+                )
+            )
+        if scope.design_evidence_ids:
+            session.execute(
+                sa.delete(design_model.DesignEvidence).where(
+                    design_model.DesignEvidence.id.in_(scope.design_evidence_ids)
+                )
+            )
         if scope.challenge_design_ids:
             session.execute(
                 sa.delete(design_model.ChallengeDesign).where(
                     design_model.ChallengeDesign.id.in_(scope.challenge_design_ids)
+                )
+            )
+        if scope.design_profile_reservation_ids:
+            session.execute(
+                sa.delete(reservation_model.DesignProfileReservation).where(
+                    reservation_model.DesignProfileReservation.id.in_(
+                        scope.design_profile_reservation_ids
+                    )
                 )
             )
         if scope.root_type == "build_attempt":
@@ -777,6 +1148,46 @@ def _is_within(path: Path, root: Path) -> bool:
         return True
     except (OSError, ValueError):
         return False
+
+
+def _corpus_decision_projection(row: corpus_model.CorpusDecision) -> dict[str, Any]:
+    return {
+        "id": str(row.id),
+        "batch_id": str(row.batch_id),
+        "member_id": str(row.member_id) if row.member_id else None,
+        "scope": row.scope,
+        "decision": row.decision,
+        "reasons": list(row.reasons or []),
+        "policy_version": row.policy_version,
+        "is_current": row.is_current,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+def _corpus_review_projection(row: corpus_model.CorpusReviewDecision) -> dict[str, Any]:
+    return {
+        "id": str(row.id),
+        "corpus_decision_id": str(row.corpus_decision_id),
+        "decision": row.decision,
+        "actor": row.actor,
+        "reason": row.reason,
+        "scope": row.scope,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+def _observation_review_projection(
+    row: corpus_model.ObservationReviewDecision,
+) -> dict[str, Any]:
+    return {
+        "id": str(row.id),
+        "artifact_observation_id": str(row.artifact_observation_id),
+        "decision": row.decision,
+        "actor": row.actor,
+        "reason": row.reason,
+        "scope": row.scope,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
 
 
 def _remove_path(path: Path) -> None:

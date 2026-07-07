@@ -1123,6 +1123,88 @@ def test_report_and_metadata_do_not_pass_when_solver_output_missing(tmp_path: Pa
     assert challenge["missing_solver_output"] is True
 
 
+def test_governed_report_requires_accepted_observation(tmp_path: Path) -> None:
+    from hermes.report import merge_validation_into_report
+
+    report = tmp_path / "report.json"
+    merge_validation_into_report(
+        report,
+        [
+            {
+                "challenge_id": "web-0001",
+                "solve_status": "passed",
+                "validation_status": "passed",
+                "validation_command": ["bash", "validate.sh"],
+                "validation_returncode": 0,
+                "validation_final_flag_candidate": "flag{demo}",
+                "governed": True,
+                "artifact_observation_status": "inconclusive",
+            }
+        ],
+    )
+
+    challenge = json.loads(report.read_text(encoding="utf-8"))["challenges"][0]
+    assert challenge["solve_status"] == "failed"
+    assert challenge["validation_status"] == "missing_accepted_observation"
+    assert "ArtifactObservation" in challenge["validation_error"]
+
+
+def test_governed_report_requires_effective_observation_acceptance(
+    tmp_path: Path,
+) -> None:
+    from hermes.report import merge_validation_into_report
+
+    report = tmp_path / "report.json"
+    merge_validation_into_report(
+        report,
+        [
+            {
+                "challenge_id": "web-0001",
+                "solve_status": "passed",
+                "validation_status": "passed",
+                "validation_command": ["bash", "validate.sh"],
+                "validation_returncode": 0,
+                "validation_final_flag_candidate": "flag{demo}",
+                "governed": True,
+                "artifact_observation_status": "passed",
+            }
+        ],
+    )
+
+    challenge = json.loads(report.read_text(encoding="utf-8"))["challenges"][0]
+    assert challenge["solve_status"] == "failed"
+    assert challenge["validation_status"] == "missing_accepted_observation"
+    assert "accepted bound ArtifactObservation" in challenge["validation_error"]
+
+
+def test_governed_report_accepts_effectively_accepted_observation(
+    tmp_path: Path,
+) -> None:
+    from hermes.report import merge_validation_into_report
+
+    report = tmp_path / "report.json"
+    merge_validation_into_report(
+        report,
+        [
+            {
+                "challenge_id": "web-0001",
+                "solve_status": "passed",
+                "validation_status": "passed",
+                "validation_command": ["bash", "validate.sh"],
+                "validation_returncode": 0,
+                "validation_final_flag_candidate": "flag{demo}",
+                "governed": True,
+                "artifact_observation_status": "passed",
+                "observation_effectively_accepted": True,
+            }
+        ],
+    )
+
+    challenge = json.loads(report.read_text(encoding="utf-8"))["challenges"][0]
+    assert challenge["solve_status"] == "passed"
+    assert challenge["validation_status"] == "passed"
+
+
 def test_report_success_clears_stale_validation_failure_fields(tmp_path: Path) -> None:
     from hermes.report import merge_validation_into_report
 

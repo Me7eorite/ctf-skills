@@ -16,6 +16,11 @@ from services.build_orchestration_service import (
     BuildOrchestrationService,
 )
 from services.build_reconciler import BuildReconciler
+from services.corpus_history_import_service import (
+    CorpusHistoryImportPreview,
+    CorpusHistoryImportResult,
+    CorpusHistoryImportService,
+)
 from services.challenge_design_service import (
     ChallengeDesignConflictError,
     ChallengeDesignNotFoundError,
@@ -51,6 +56,9 @@ __all__ = [
     "BuildAttemptRevalidationNotFoundError",
     "BuildAttemptRevalidationService",
     "BuildReconciler",
+    "CorpusHistoryImportPreview",
+    "CorpusHistoryImportResult",
+    "CorpusHistoryImportService",
     "ChallengeDesignConflictError",
     "ChallengeDesignNotFoundError",
     "ChallengeDesignService",

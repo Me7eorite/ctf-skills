@@ -13,6 +13,7 @@ from domain.validation_failure_governance import annotate_validation_result
 from domain.validation_state import (
     authoritative_validation_pass,
     clear_validation_failure_fields,
+    governed_observation_pass,
 )
 
 
@@ -20,15 +21,22 @@ def _authoritative_result(result: dict[str, Any]) -> dict[str, Any]:
     """Require real validate.sh flag evidence before report-level passed."""
     if result.get("solve_status") != "passed":
         return result
-    if authoritative_validation_pass(result):
+    if authoritative_validation_pass(result) and governed_observation_pass(result):
         return result
     downgraded = dict(result)
     downgraded["solve_status"] = "failed"
-    downgraded["validation_status"] = "pending_validation"
-    downgraded["validation_error"] = (
-        "passed status ignored: missing authoritative validate.sh command, "
-        "returncode, flag candidate, or solver output"
-    )
+    if not governed_observation_pass(result):
+        downgraded["validation_status"] = "missing_accepted_observation"
+        downgraded["validation_error"] = (
+            "passed status ignored: governed build has no accepted bound "
+            "ArtifactObservation"
+        )
+    else:
+        downgraded["validation_status"] = "pending_validation"
+        downgraded["validation_error"] = (
+            "passed status ignored: missing authoritative validate.sh command, "
+            "returncode, flag candidate, or solver output"
+        )
     if result.get("missing_solver_output") is True:
         downgraded["missing_solver_output"] = True
         downgraded["validation_status"] = "validation_inconclusive"

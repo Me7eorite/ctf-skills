@@ -38,3 +38,11 @@ def authoritative_validation_pass(result: Mapping[str, Any]) -> bool:
         and result.get("missing_solver_output") is not True
         and not result.get("validation_contract_errors")
     )
+
+
+def governed_observation_pass(result: Mapping[str, Any]) -> bool:
+    """Return True when a governed result carries accepted observation evidence."""
+
+    if result.get("governed") is not True:
+        return True
+    return result.get("observation_effectively_accepted") is True

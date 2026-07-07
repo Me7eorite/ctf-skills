@@ -5,7 +5,8 @@
 In production mode the packer SHALL include a challenge only when all of the
 following are true:
 
-- existing build metadata indicates a passed build;
+- existing build metadata is compatible with a passed build, but is only a
+  compatibility hint and not a sufficient admission signal;
 - the corpus membership's immutable BuildAttempt has an effectively accepted
   ArtifactObservation (`status = passed`, or `status = inconclusive` plus a
   valid allowed observation review);

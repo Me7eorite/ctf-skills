@@ -73,6 +73,7 @@ from domain.validation_repair_policy import (
 from domain.validation_state import (
     authoritative_validation_pass,
     clear_validation_failure_fields,
+    governed_observation_pass,
 )
 from hermes import process as hermes_process
 from hermes.build_publisher import (
@@ -214,16 +215,26 @@ def _stamp_validation_results_into_outputs(
     for result in per_results:
         result = annotate_validation_result(result)
         authoritative_pass = authoritative_validation_pass(result)
-        if result.get("solve_status") == "passed" and not authoritative_pass:
+        observation_pass = governed_observation_pass(result)
+        if result.get("solve_status") == "passed" and (
+            not authoritative_pass or not observation_pass
+        ):
             result = {
                 **result,
                 "solve_status": "failed",
                 "validation_status": (
+                    "missing_accepted_observation"
+                    if not observation_pass
+                    else
                     "validation_inconclusive"
                     if result.get("missing_solver_output") is True
                     else "pending_validation"
                 ),
                 "validation_error": (
+                    "passed status ignored: governed build has no accepted "
+                    "bound ArtifactObservation"
+                    if not observation_pass
+                    else
                     "passed status ignored: missing authoritative validate.sh "
                     "command, returncode, flag candidate, or solver output"
                 ),

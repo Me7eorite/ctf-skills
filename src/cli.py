@@ -600,6 +600,43 @@ def parser() -> argparse.ArgumentParser:
     )
     pack.add_argument("--corpus-batch-id", type=UUID)
 
+    corpus = commands.add_parser("corpus", help="corpus-governance operations")
+    corpus_sub = corpus.add_subparsers(dest="corpus_command", required=True)
+    history_import = corpus_sub.add_parser(
+        "history-import",
+        help="fingerprint and optionally import a reviewed historical challenge",
+    )
+    history_import.add_argument("challenge_dir", type=Path)
+    history_import.add_argument("--challenge-id")
+    history_import.add_argument("--category")
+    history_import.add_argument(
+        "--status",
+        choices=("published", "retired"),
+        default="published",
+    )
+    history_import.add_argument("--audit-reason", default="")
+    mode = history_import.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--dry-run", action="store_true")
+    mode.add_argument("--apply", action="store_true")
+    rollout_report = corpus_sub.add_parser(
+        "rollout-report",
+        help="evaluate shadow/trial rollout evidence before production enablement",
+    )
+    rollout_report.add_argument(
+        "--shadow-report",
+        type=Path,
+        required=True,
+        help="JSON report for the current-corpus shadow run",
+    )
+    rollout_report.add_argument(
+        "--trial-report",
+        type=Path,
+        action="append",
+        default=[],
+        help="JSON report for one mixed-difficulty trial batch; repeat for each batch",
+    )
+    rollout_report.add_argument("--out", type=Path)
+
     web = commands.add_parser("serve", help="start the dashboard")
     web.add_argument("--host", default="127.0.0.1")
     web.add_argument("--port", type=int, default=4173)
@@ -1842,6 +1879,10 @@ def main() -> None:
             sys.exit(1)
         return
 
+    if args.command == "corpus":
+        _handle_corpus(args)
+        return
+
     if args.command == "serve":
         from web.server import serve
 
@@ -1854,6 +1895,76 @@ def main() -> None:
 
     if args.command == "profile":
         _handle_profile(args)
+
+
+def _handle_corpus(args: argparse.Namespace) -> None:
+    if args.corpus_command == "history-import":
+        _corpus_history_import(args)
+        return
+    if args.corpus_command == "rollout-report":
+        _corpus_rollout_report(args)
+        return
+    print(f"error: unknown corpus command {args.corpus_command!r}", file=sys.stderr)
+    sys.exit(2)
+
+
+def _corpus_history_import(args: argparse.Namespace) -> None:
+    from services import CorpusHistoryImportService
+
+    service = CorpusHistoryImportService()
+    if args.dry_run:
+        preview = service.preview(
+            args.challenge_dir,
+            challenge_id=args.challenge_id,
+            category=args.category,
+        )
+        print(json.dumps(preview.__dict__, ensure_ascii=False, indent=2, default=str))
+        return
+    try:
+        result = service.import_reviewed(
+            args.challenge_dir,
+            status=args.status,
+            audit_reason=args.audit_reason,
+            challenge_id=args.challenge_id,
+            category=args.category,
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(2)
+    print(json.dumps(result.__dict__, ensure_ascii=False, indent=2, default=str))
+
+
+def _corpus_rollout_report(args: argparse.Namespace) -> None:
+    from domain.corpus_rollout import build_rollout_evidence
+
+    if len(args.trial_report) < 2:
+        print(
+            "error: rollout-report requires at least two --trial-report files",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    try:
+        shadow_report = _load_json_file(args.shadow_report)
+        trial_reports = [_load_json_file(path) for path in args.trial_report]
+        evidence = build_rollout_evidence(
+            shadow_report=shadow_report,
+            trial_reports=trial_reports,
+        )
+    except (OSError, ValueError, TypeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(2)
+    payload = json.dumps(evidence, ensure_ascii=False, indent=2)
+    if args.out is not None:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(payload + "\n", encoding="utf-8")
+    print(payload)
+
+
+def _load_json_file(path: Path) -> dict:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path} must contain a JSON object")
+    return payload
 
 
 if __name__ == "__main__":

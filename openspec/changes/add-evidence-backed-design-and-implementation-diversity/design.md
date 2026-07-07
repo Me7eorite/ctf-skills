@@ -453,10 +453,12 @@ The host extracts category-appropriate facts:
 
 Observation plugins are category-specific and return `unknown` when a fact
 cannot be established. A governed required field observed as `unknown` is not a
-pass; the observation becomes `inconclusive`. A separate
-`observation_review_decisions` row may accept an inconclusive observation with
-actor, reason, scope, and timestamp when policy permits it. Failed observations
-and hard mismatches are never review-overrideable.
+pass; the observation becomes `inconclusive`. Raw observation status remains
+`passed|failed|inconclusive` and is never rewritten to `review_required`. A
+separate `observation_review_decisions` row may grant scope-limited effective
+acceptance for an inconclusive observation with actor, reason, scope, and
+timestamp when policy permits it. Failed observations and hard mismatches are
+never review-overrideable.
 
 The validator then:
 
@@ -645,7 +647,8 @@ The server DTOs SHALL distinguish current governance state from history:
   `review_required` is a corpus-layer decision only; validation-layer
   observation results use `passed|failed|inconclusive`, and observation review
   provenance stays in separate review records rather than the raw observation
-  status.
+  status. A reviewed observation may count as effectively accepted for
+  validation, but it remains `inconclusive` in storage.
 - "Current" means the single live row referenced by the task's current
   reservation/evidence/current observation pointers; all other rows in those
   families are historical.

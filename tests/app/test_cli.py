@@ -79,6 +79,67 @@ class CLIHelpAndParserTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("usage: challenge-factory validate", result.stdout)
 
+    def test_corpus_rollout_report_writes_evidence_json(self):
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            shadow = tmp_path / "shadow.json"
+            trial1 = tmp_path / "trial-1.json"
+            trial2 = tmp_path / "trial-2.json"
+            out = tmp_path / "rollout" / "evidence.json"
+            shadow.write_text(
+                json.dumps(
+                    {
+                        "challenge_count": 40,
+                        "required_vs_observed": {"matched": 40},
+                        "member_decisions": {
+                            "passed": 36,
+                            "review_required": 4,
+                            "blocked": 0,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            trial_payload = {
+                "mode": "trial",
+                "challenge_count": 20,
+                "difficulty_distribution": {"easy": 8, "medium": 8, "hard": 4},
+                "profile_distribution": {"python/container/payload_injection": 20},
+                "design_evidence_passed": 20,
+                "build_contracts_passed": 20,
+                "artifact_observations_passed": 20,
+                "aggregate_decision": "passed",
+                "member_decisions": {"passed": 18, "review_required": 2, "blocked": 0},
+            }
+            trial1.write_text(json.dumps({**trial_payload, "id": "trial-1"}), encoding="utf-8")
+            trial2.write_text(json.dumps({**trial_payload, "id": "trial-2"}), encoding="utf-8")
+
+            result = _run_cli(
+                [
+                    "corpus",
+                    "rollout-report",
+                    "--shadow-report",
+                    str(shadow),
+                    "--trial-report",
+                    str(trial1),
+                    "--trial-report",
+                    str(trial2),
+                    "--out",
+                    str(out),
+                ],
+                cwd=tmp_path,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            stdout_payload = json.loads(result.stdout)
+            file_payload = json.loads(out.read_text(encoding="utf-8"))
+            self.assertEqual(stdout_payload, file_payload)
+            self.assertTrue(stdout_payload["production_mode_allowed"])
+            self.assertEqual(
+                stdout_payload["production_mode_action"],
+                "manual_enable_allowed",
+            )
+
     def test_dry_run_and_loop_mutually_exclusive(self):
         with TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

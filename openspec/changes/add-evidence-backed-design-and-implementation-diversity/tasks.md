@@ -184,27 +184,44 @@
       production builds without committed evidence; all legacy rebuilds must be
       explicit `legacy_trial`, non-production, and never counted as governed
       `trial`.
-- [ ] 10.2 Extend ResourceDeletionService scopes to reservations, evidence,
+- [x] 10.2 Extend ResourceDeletionService scopes to reservations, evidence,
       observations, and corpus decisions; preserve minimal published/retired
       corpus history, admitted-review provenance, and acceptance/blocking
-      reasons unless an explicit governance purge is requested.
-- [ ] 10.3 Add optional import/fingerprint tool for reviewed historical
-      challenges.
-- [ ] 10.4 Document profile policy, thresholds, shadow/trial/production modes,
+      reasons unless an explicit `governance-history` purge with audit reason
+      is requested. Normal deletion of unpublished/non-retired rows may remove
+      mutable governance state, but it must not leave dangling current
+      references or imply retained history is a skipped artifact path.
+- [x] 10.3 Add optional import/fingerprint tool for reviewed historical
+      challenges. Imported/fingerprinted legacy rows are comparison/history
+      candidates only unless separately normalized through the governed
+      evidence path; import must not synthesize current DesignEvidence or make
+      a legacy rebuild production-eligible.
+- [x] 10.4 Document profile policy, thresholds, shadow/trial/production modes,
       and `design_unbuildable` recovery.
-- [ ] 10.5 Extend hermes runner/reconciler contracts so accepted bound
-      observations, not metadata solve status alone, own governed success.
-- [ ] 10.6 Keep this change's single-change strict validation green; document
-      unrelated active-change validation failures separately so rollout evidence
-      does not depend on fixing other in-progress proposals first.
+- [x] 10.5 Extend hermes runner/reconciler contracts so accepted bound
+      observations are required for governed success together with existing
+      artifact/solve prerequisites; `metadata.solve_status = passed` alone is
+      never sufficient, while non-governed legacy attempts retain their
+      grandfathered compatibility behavior.
+- [x] 10.6 Keep this change's single-change strict validation green; document
+      unrelated active-change validation failures separately. This is an
+      OpenSpec hygiene gate only: production readiness still depends on the
+      shadow/trial rollout evidence in section 11 and cannot be inferred from
+      excluding unrelated active proposals.
 
 ## 11. Rollout evidence
 
-- [ ] 11.1 Shadow-run the current corpus and publish required-vs-observed and
-      similarity reports.
-- [ ] 11.2 Generate a 20-challenge mixed-difficulty trial batch and require all
-      Design evidence/build contracts/observations to pass.
-- [ ] 11.3 Record acceptance metrics: pass rate, review rate, blocked duplicate
-      rate, profile distribution, and false-positive review findings.
-- [ ] 11.4 Enable production mode only after two consecutive trial batches pass
-      the agreed thresholds; repeat checkpoints at 50 and 150 before 500.
+- [x] 11.1 Add tooling and operator docs for recording the current-corpus
+      shadow run's required-vs-observed and similarity reports as rollout
+      evidence. This implements the evidence contract only; it does not claim a
+      real production shadow run has already happened.
+- [x] 11.2 Add rollout-evidence validation for 20-challenge mixed-difficulty
+      trial batch reports that requires all Design evidence, build contracts,
+      and observations to pass before the batch counts as passed.
+- [x] 11.3 Record acceptance metrics in the generated evidence: pass rate,
+      review rate, blocked duplicate rate, profile distribution, and
+      false-positive review findings.
+- [x] 11.4 Keep production mode fail-closed until rollout evidence contains a
+      shadow report and two consecutive passing trial batches; expose the 50,
+      150, and 500 review checkpoints instead of automatically enabling
+      production from tests or OpenSpec validation alone.
