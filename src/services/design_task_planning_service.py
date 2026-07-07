@@ -980,6 +980,14 @@ class _FindingAllocation:
     canonical_sub_technique: str
 
 
+@dataclass(frozen=True)
+class _FindingSemanticMetadata:
+    family: str
+    raw_sub_technique: str
+    canonical_sub_technique: str
+    canonicalization_source: str | None = None
+
+
 def _allocate_primary_findings(
     findings: Sequence[research_dto.ResearchFinding],
     *,
@@ -1003,7 +1011,7 @@ def _allocate_primary_findings(
         quota_candidates = [
             idx
             for idx in ordered_indices
-            if family_counts[metadata[idx]["family"]] < technique_quota
+            if family_counts[metadata[idx].family] < technique_quota
         ]
         family_quota_exceeded = False
         if not quota_candidates:
@@ -1013,14 +1021,14 @@ def _allocate_primary_findings(
         cooldown_candidates = [
             idx
             for idx in quota_candidates
-            if metadata[idx]["family"] not in recent_families[-cooldown_window:]
+            if metadata[idx].family not in recent_families[-cooldown_window:]
         ] if cooldown_window > 0 else quota_candidates
         family_candidates = cooldown_candidates or quota_candidates
 
         unused_sub_candidates = [
             idx
             for idx in family_candidates
-            if metadata[idx]["canonical_sub_technique"] not in used_subtechniques
+            if metadata[idx].canonical_sub_technique not in used_subtechniques
         ]
         if unused_sub_candidates:
             chosen = unused_sub_candidates[0]
@@ -1029,10 +1037,11 @@ def _allocate_primary_findings(
             chosen = family_candidates[0]
             subtechnique_duplicate = True
 
-        family = metadata[chosen]["family"]
-        raw_sub_technique = metadata[chosen]["raw_sub_technique"]
-        canonical_sub_technique = metadata[chosen]["canonical_sub_technique"]
-        canonicalization_source = metadata[chosen].get("canonicalization_source")
+        chosen_metadata = metadata[chosen]
+        family = chosen_metadata.family
+        raw_sub_technique = chosen_metadata.raw_sub_technique
+        canonical_sub_technique = chosen_metadata.canonical_sub_technique
+        canonicalization_source = chosen_metadata.canonicalization_source
         warnings: list[str] = []
         if family_quota_exceeded:
             warnings.append(DIVERSITY_WARNING_FAMILY_QUOTA)
@@ -1217,33 +1226,32 @@ def _closed_semantic_assignment(
 def _finding_semantic_metadata(
     category: str,
     finding: research_dto.ResearchFinding,
-) -> dict[str, str | None]:
+) -> _FindingSemanticMetadata:
     family = resolve_family(finding, category=category)
     raw_sub_technique = _raw_finding_label(finding)
     if category != "pwn":
         canonical_sub_technique = resolve_sub_technique(finding)
-        return {
-            "family": family,
-            "raw_sub_technique": raw_sub_technique,
-            "canonical_sub_technique": canonical_sub_technique,
-            "canonicalization_source": None,
-        }
+        return _FindingSemanticMetadata(
+            family=family,
+            raw_sub_technique=raw_sub_technique,
+            canonical_sub_technique=canonical_sub_technique,
+        )
     flags: dict[str, Any] = {}
     _pwn_semantic_for_reservation(
         family=family,
         raw_sub_technique=raw_sub_technique,
         flags=flags,
     )
-    return {
-        "family": str(flags.get("family") or family),
-        "raw_sub_technique": str(flags.get("raw_sub_technique") or raw_sub_technique),
-        "canonical_sub_technique": str(
+    return _FindingSemanticMetadata(
+        family=str(flags.get("family") or family),
+        raw_sub_technique=str(flags.get("raw_sub_technique") or raw_sub_technique),
+        canonical_sub_technique=str(
             flags.get("canonical_sub_technique")
             or flags.get("sub_technique")
             or resolve_sub_technique(finding)
         ),
-        "canonicalization_source": str(flags.get("canonicalization_source") or ""),
-    }
+        canonicalization_source=str(flags.get("canonicalization_source") or ""),
+    )
 
 
 def _raw_finding_label(finding: research_dto.ResearchFinding | Mapping[str, Any]) -> str:

@@ -864,17 +864,16 @@ def profile_capacity_check(
                     target_count=target_count,
                     allocated_count=len(allocations),
                 )
-                if unsupported is not None:
-                    diagnostics = dict(unsupported.diagnostics)
-                    diagnostics.update(canonicalization.as_mapping())
-                    return ProfileCapacityResult(
-                        can_allocate=unsupported.can_allocate,
-                        requested_count=unsupported.requested_count,
-                        available_count=unsupported.available_count,
-                        allocations=unsupported.allocations,
-                        diagnostics=diagnostics,
-                    )
-                return unsupported
+                assert unsupported is not None
+                diagnostics = dict(unsupported.diagnostics)
+                diagnostics.update(canonicalization.as_mapping())
+                return ProfileCapacityResult(
+                    can_allocate=unsupported.can_allocate,
+                    requested_count=unsupported.requested_count,
+                    available_count=unsupported.available_count,
+                    allocations=unsupported.allocations,
+                    diagnostics=diagnostics,
+                )
             semantic = canonicalization.semantic
         else:
             semantic = normalize_semantic_assignment(taxonomy, raw_semantic)
