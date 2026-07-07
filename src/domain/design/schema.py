@@ -51,6 +51,7 @@ class RuntimeArtifactRule:
     required_any_patterns: tuple[tuple[re.Pattern[str], ...], ...] = ()
     required_service_user: str | None = None
     allowed_service_users: tuple[str, ...] = ()
+    design_stage_optional_exact: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -194,6 +195,11 @@ RUNTIME_ARTIFACT_RULES: dict[str, dict[str, RuntimeArtifactRule]] = {
                 _pattern(r"^deploy/src/(?:[A-Za-z0-9_.+/-]+)$"),
             ),
             required_service_user="ctf",
+            design_stage_optional_exact=(
+                "deploy/_files/ctf.xinetd",
+                "deploy/_files/etc/xinetd.d/ctf",
+                "deploy/_files/etc/xinetd.d/chal",
+            ),
         ),
     },
 }

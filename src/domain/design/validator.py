@@ -242,8 +242,13 @@ def _enforce_runtime_artifact_rule(
             )
 
     for exact_group in rule.required_any_exact:
-        if not any(item in normalized_set for item in exact_group):
-            options = ", ".join(exact_group)
+        design_required_group = tuple(
+            item for item in exact_group if item not in rule.design_stage_optional_exact
+        )
+        if not design_required_group:
+            continue
+        if not any(item in normalized_set for item in design_required_group):
+            options = ", ".join(design_required_group)
             raise ChallengeDesignValidationError(
                 f"{label_prefix} requires at least one of: {options}"
             )
@@ -263,20 +268,9 @@ def _enforce_runtime_artifact_rule(
                 f"{label_prefix} requires files matching at least one of: {patterns}"
             )
 
-    enforced_user = rule.required_service_user
-    declared_user = (requirements.service_user or "").strip()
-    if enforced_user and declared_user.lower() != enforced_user.lower():
-        raise ChallengeDesignValidationError(
-            f"{label_prefix} requires service_user={enforced_user}"
-        )
-
-    if rule.allowed_service_users and declared_user:
-        allowed = tuple(u.lower() for u in rule.allowed_service_users)
-        if declared_user.lower() not in allowed:
-            allowed_list = ", ".join(rule.allowed_service_users)
-            raise ChallengeDesignValidationError(
-                f"{label_prefix} service_user must be one of: {allowed_list}"
-            )
+    # Service-user choices are deployment ABI details. Design validation keeps
+    # them as intent/hints, while Build and host validation enforce the final
+    # runtime user against the selected scaffold.
 
 
 def _reject_implementation_payload(challenge: Mapping[str, Any]) -> None:

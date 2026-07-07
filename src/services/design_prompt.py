@@ -283,10 +283,11 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                                 "A safe challenge-relative file path. Native "
                                 "executables and Makefiles may be extensionless. "
                             "For pwn with runtime_profile=xinetd or an "
-                            "xinetd/chroot service_model, include "
+                            "xinetd/chroot service_model, prefer listing "
                             "deploy/_files/ctf.xinetd and set the template "
                             "or implementation_plan scaffold to "
-                            "pwn/xinetd-chroot."
+                            "pwn/xinetd-chroot. Build validation/repair owns "
+                            "the final scaffold files."
                             ),
                             "pattern": (
                                 r"^(?:README\.md|metadata\.json|validate\.sh|"
@@ -350,13 +351,14 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                             "service_user": {
                                 "type": "string",
                                 "description": (
-                                    "Required for node/go/rust/java jar and pwn "
+                                    "Optional deployment intent hint. For pwn "
                                     "default/native/binary/xinetd/chroot/kernel "
-                                    "services. For pwn default/native/binary/"
-                                    "xinetd/chroot/kernel, set exactly `ctf`; "
-                                    "this field is the challenge service process "
-                                    "user, not the xinetd daemon user. PHP may use `www-data`, "
-                                    "`apache`, or `ctf`; Tomcat uses `tomcat`."
+                                    "services, prefer `ctf`; this is the challenge "
+                                    "service process user, not the xinetd daemon "
+                                    "user. Build validation enforces the final "
+                                    "runtime user for the selected scaffold. PHP "
+                                    "may use `www-data`, `apache`, or `ctf`; "
+                                    "Tomcat uses `tomcat`."
                                 ),
                             },
                             "components": {
@@ -405,37 +407,35 @@ def _render_output_contract(task: DesignTask, *, governed: bool = False) -> str:
             "`deploy/src/Main.java` or `deploy/src/src/main/java/...` plus a "
             "build file; Tomcat `deploy/src/src/main/webapp/WEB-INF/web.xml` "
             "plus a Servlet/JSP; Rust `deploy/src/Cargo.toml` plus "
-            "`deploy/src/src/main.rs` or `deploy/src/main.rs`. Declare "
-            "`implementation_plan.service_user`: Node/Go/Rust/Java jar use "
-            "`ctf`; PHP may use `www-data`, `apache`, or `ctf`; Tomcat uses "
-            "`tomcat`."
+            "`deploy/src/src/main.rs` or `deploy/src/main.rs`. If declaring "
+            "`implementation_plan.service_user`, use it as deployment intent: "
+            "Node/Go/Rust/Java jar normally use `ctf`; PHP may use `www-data`, "
+            "`apache`, or `ctf`; Tomcat uses `tomcat`."
         )
     elif task.category == "pwn":
         container_artifacts_hint = (
             "\n- For pwn, `artifacts` must additionally include "
             "`deploy/Dockerfile`, `deploy/docker-compose.yml`, "
-            "`deploy/_files/start.sh`, `deploy/_files/ctf.xinetd`, and "
-            "native binary service artifacts. "
+            "`deploy/_files/start.sh`, and native binary service artifacts. "
             "Use diverse challenge-specific names under `deploy/src/` or "
             "`src/`. A small multi-file project is valid: list every planned "
             "source/build artifact such as `deploy/src/src/main.c`, "
             "`deploy/src/lib/menu.c`, `deploy/src/include/menu.h`, "
             "`deploy/src/Makefile`, or `deploy/src/bin/challenge`; it is not "
-            "limited to a single `deploy/src/vuln.c`. Ordinary pwn tasks MUST "
+            "limited to a single `deploy/src/vuln.c`. Ordinary pwn tasks should "
             "use the xinetd/chroot service model, set "
             "`implementation_plan.runtime_profile` to `xinetd`, declare the "
-            "deployment template/scaffold as `pwn/xinetd-chroot`, and set "
-            "`implementation_plan.service_user` to exactly `ctf`. This "
-            "`service_user` is the challenge service process user inside the "
-            "chroot; xinetd itself may start as root to bind/dispatch, but "
-            "that daemon identity is not what this field records. Validation "
-            "will reject ordinary pwn designs that try `root` or `xinetd` as "
-            "the service user. `deploy/_files/ctf.xinetd` is REQUIRED in "
-            "`artifacts` or validation will reject the design with "
-            "`runtime (pwn/xinetd) artifact requires at least one of: "
-            "deploy/_files/ctf.xinetd, deploy/_files/etc/xinetd.d/ctf, "
-            "deploy/_files/etc/xinetd.d/chal`. Also declare the deployment "
-            "template/scaffold as `pwn/xinetd-chroot`, which maps to "
+            "deployment template/scaffold as `pwn/xinetd-chroot`, and prefer "
+            "`implementation_plan.service_user = ctf` when recording that hint. "
+            "This `service_user` is the intended challenge service process user "
+            "inside the chroot; xinetd itself may start as root to bind/dispatch. "
+            "Design validation does not reject `root` or `xinetd` here; Build "
+            "validation and scaffold repair enforce the final runtime user. "
+            "`deploy/_files/ctf.xinetd` is strongly recommended in `artifacts`; "
+            "if it is missing, Design may still pass when the challenge idea is "
+            "complete, while Build validation/repair will normalize the xinetd "
+            "scaffold. Also declare the deployment template/scaffold as "
+            "`pwn/xinetd-chroot`, which maps to "
             "`scaffolds/pwn/xinetd-chroot/` in the build stage. Do not include "
             "Python `deploy/src/app.py` unless the pwn service is intentionally "
             "a Python wrapper around a separate native binary."
@@ -769,9 +769,11 @@ def _render_governed_contract_rules(
             "- `build_contract.required_profile` MUST exactly match `governed_profile`.",
             "- `build_contract.required_player_actions` MUST include the "
             "reserved solve action exactly as declared in `reserved_profile`.",
-            "- `distinctness_claim` must explain both solve-axis differences "
-            "and implementation-axis differences; mentioning the reserved solve "
-            "values and implementation values is valid.",
+            "- `distinctness_claim` must contain exactly two non-empty lines: "
+            "`Solve-axis: ...` and `Implementation-axis: ...`. The solve line "
+            "must mention the reserved solve action or related solve values; "
+            "the implementation line must mention the reserved implementation "
+            "runtime/language/artifact/concealment values.",
             f"- {compared_hint}",
             "- `build_contract.required_asset_flow` must be a non-empty array "
             "of objects with unique `stage_id` values. Every stage needs "
@@ -783,7 +785,8 @@ def _render_governed_contract_rules(
             "- `build_contract.forbidden_shortcuts` and "
             "`build_contract.acceptance_tests` must be arrays of harness "
             "objects, never strings. If there is no concrete harness to add, "
-            "use `[]` rather than a string placeholder.",
+            "use `[]` rather than a string placeholder such as "
+            "`\"no direct flag read\"`.",
             "- `build_contract.required_components` and "
             "`build_contract.allowed_implementation_freedom` must be arrays "
             "of non-empty strings. Empty arrays are valid; use `[]` when "

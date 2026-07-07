@@ -366,8 +366,8 @@ def _governed_stdout(finding_id: UUID, *, profile: dict[str, object] | None = No
         "claims": ["Boolean response branching supports payload injection."],
     }
     challenge["distinctness_claim"] = (
-        "This differs from ledger siblings by using a payload-injection solve "
-        "and database-record concealment profile."
+        "Solve-axis: Uses payload_injection with the reserved blackbox solve flow.\n"
+        "Implementation-axis: Uses the reserved container implementation with database_record concealment."
     )
     challenge["compared_challenge_ids"] = []
     challenge["build_contract"] = _build_contract(governed_profile)

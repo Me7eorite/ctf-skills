@@ -1107,7 +1107,10 @@ def _commit_governed_design(session_factory: SessionFactory, task_id) -> dict[st
             research_finding_ids=[],
             profile=profile,
             profile_signature=signatures.combined_profile_signature,
-            distinctness_claim="Distinct solve and implementation profile.",
+            distinctness_claim=(
+                "Solve-axis: Uses the reserved solve action from the governed profile.\n"
+                "Implementation-axis: Uses the reserved implementation profile values."
+            ),
             compared_challenge_ids=[],
             evidence={"claims": ["research-backed claim"]},
             build_contract=_build_contract(profile),

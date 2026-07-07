@@ -244,6 +244,11 @@ def validate_design_evidence_output(
     distinctness_claim = challenge.get("distinctness_claim")
     if not isinstance(distinctness_claim, str) or not distinctness_claim.strip():
         raise DesignGovernanceError("distinctness_claim must be a non-empty string")
+    if not _distinctness_uses_template(distinctness_claim):
+        raise DesignGovernanceError(
+            "distinctness_claim must contain two sentences prefixed exactly "
+            "`Solve-axis:` and `Implementation-axis:`"
+        )
     if not _distinctness_covers_axes(distinctness_claim, profile):
         raise DesignGovernanceError(
             "distinctness_claim must explain solve and implementation differences"
@@ -539,6 +544,15 @@ def _distinctness_covers_axes(claim: str, profile: Mapping[str, Any]) -> bool:
     return solve_covered and implementation_covered
 
 
+def _distinctness_uses_template(claim: str) -> bool:
+    sentences = [line.strip() for line in claim.splitlines() if line.strip()]
+    if len(sentences) != 2:
+        return False
+    return sentences[0].startswith("Solve-axis:") and sentences[1].startswith(
+        "Implementation-axis:"
+    )
+
+
 def _claim_mentions_profile_value(claim: str, axis: Mapping[str, Any]) -> bool:
     return any(
         _claim_contains_value(claim, value)
@@ -579,10 +593,23 @@ def _list_of_mappings(
     *,
     allow_empty: bool = False,
 ) -> tuple[Mapping[str, Any], ...]:
-    if not isinstance(value, list) or (not value and not allow_empty):
+    if not isinstance(value, list):
+        raise DesignGovernanceError(
+            f"{field} must be an array. Use [] when there is no concrete "
+            "harness to declare; otherwise use harness objects, not strings."
+        )
+    if not value and not allow_empty:
         raise DesignGovernanceError(f"{field} must be a non-empty array")
+    if any(isinstance(item, str) for item in value):
+        raise DesignGovernanceError(
+            f"{field} entries must be harness objects, not strings. Use [] "
+            "instead of placeholder text such as 'no direct flag read'."
+        )
     if any(not isinstance(item, Mapping) for item in value):
-        raise DesignGovernanceError(f"{field} entries must be objects")
+        raise DesignGovernanceError(
+            f"{field} entries must be harness objects. Use [] when there is "
+            "no concrete harness to declare."
+        )
     return tuple(value)
 
 

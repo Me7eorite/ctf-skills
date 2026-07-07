@@ -168,7 +168,10 @@ def _challenge(
             "research_finding_ids": [str(finding.id)],
             "claims": ["The cited finding supports the selected mechanism."],
         },
-        "distinctness_claim": "Different solve and implementation axes.",
+        "distinctness_claim": (
+            "Solve-axis: Uses payload_injection with blackbox http_client analysis.\n"
+            "Implementation-axis: Uses python/flask container with database_record concealment."
+        ),
         "compared_challenge_ids": ["web-0000"],
         "build_contract": _contract(dict(reservation.profile)),
     }
@@ -250,9 +253,30 @@ def test_rejects_forbidden_shortcut_string_entries() -> None:
             ledger_snapshot=_snapshot(reservation),
         )
 
-    assert "build_contract.forbidden_shortcuts entries must be objects" in str(
+    assert "build_contract.forbidden_shortcuts entries must be harness objects, not strings" in str(
         exc_info.value
     )
+    assert "Use [] instead of placeholder text" in str(exc_info.value)
+
+
+def test_accepts_empty_forbidden_shortcuts_and_allowed_freedom_arrays() -> None:
+    profile = _profile()
+    reservation = _reservation(profile)
+    finding = _finding()
+    challenge = _challenge(reservation, finding)
+    challenge["build_contract"]["forbidden_shortcuts"] = []
+    challenge["build_contract"]["allowed_implementation_freedom"] = []
+
+    evidence = validate_design_evidence_output(
+        challenge=challenge,
+        design_task=_task(reservation),
+        reservation=reservation,
+        findings=[finding],
+        ledger_snapshot=_snapshot(reservation),
+    )
+
+    assert evidence["build_contract"]["forbidden_shortcuts"] == []
+    assert evidence["build_contract"]["allowed_implementation_freedom"] == []
 
 
 @pytest.mark.parametrize(
@@ -290,7 +314,7 @@ def test_rejects_distinctness_claim_without_implementation_axis() -> None:
     challenge = _challenge(reservation, finding)
     challenge["distinctness_claim"] = "Different solve path only."
 
-    with pytest.raises(DesignGovernanceError, match="solve and implementation"):
+    with pytest.raises(DesignGovernanceError, match="prefixed exactly"):
         validate_design_evidence_output(
             challenge=challenge,
             design_task=_task(reservation),
@@ -306,8 +330,8 @@ def test_distinctness_claim_can_use_profile_values_for_axes() -> None:
     finding = _finding()
     challenge = _challenge(reservation, finding)
     challenge["distinctness_claim"] = (
-        "Uses payload_injection through http_client flow with python/flask "
-        "container database_record storage instead of sibling patterns."
+        "Solve-axis: Uses payload_injection through http_client flow.\n"
+        "Implementation-axis: Uses python/flask container database_record storage instead of sibling patterns."
     )
 
     evidence = validate_design_evidence_output(

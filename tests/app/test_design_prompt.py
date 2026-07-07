@@ -205,17 +205,17 @@ def test_pwn_design_prompt_requires_xinetd_artifact(tmp_path):
     prompt = build_design_prompt(context, _task("pwn"), _request("pwn"), [], [])
 
     assert '"service_user"' in prompt
-    assert "set `implementation_plan.service_user` to exactly `ctf`" in prompt
-    assert "this field is the challenge service process user" in prompt
-    assert "Ordinary pwn tasks MUST use the xinetd/chroot service model" in prompt
-    assert "try `root` or `xinetd` as the service user" in prompt
+    assert "`implementation_plan.service_user = ctf`" in prompt
+    assert "this is the challenge service process user" in prompt
+    assert "Ordinary pwn tasks should use the xinetd/chroot service model" in prompt
+    assert "Design validation does not reject `root` or `xinetd` here" in prompt
+    assert "Build validation and scaffold repair enforce the final runtime user" in prompt
     assert "A small multi-file project is valid" in prompt
     assert "deploy/src/src/main.c" in prompt
     assert "deploy/src/lib/menu.c" in prompt
     assert "not limited to a single `deploy/src/vuln.c`" in prompt
-    assert "`deploy/_files/ctf.xinetd` is REQUIRED" in prompt
-    assert "runtime (pwn/xinetd) artifact requires at least one of" in prompt
-    assert "deploy/_files/etc/xinetd.d/ctf" in prompt
+    assert "`deploy/_files/ctf.xinetd` is strongly recommended" in prompt
+    assert "Build validation/repair will normalize the xinetd scaffold" in prompt
     assert "pwn/xinetd-chroot" in prompt
     assert "scaffolds/pwn/xinetd-chroot/" in prompt
 
@@ -508,11 +508,12 @@ def test_governed_prompt_spells_out_server_side_contract_rules(tmp_path):
     )
 
     assert "`build_contract.required_player_actions` MUST include exactly `payload_injection`" in prompt
-    assert "must explain both solve-axis differences and implementation-axis differences" in prompt
+    assert "`Solve-axis: ...` and `Implementation-axis: ...`" in prompt
     assert "web-0000, web-old" in prompt
     assert "`artifact_direct_run` -> `stdout_not_contains_flag` or `must_fail`" in prompt
     assert "Harnesses cannot contain `command`, `argv`, `shell`, `path`, `cwd`, or `executable`" in prompt
     assert "`build_contract.forbidden_shortcuts` and `build_contract.acceptance_tests` must be arrays of harness objects" in prompt
+    assert "use `[]` rather than a string placeholder" in prompt
     assert "`build_contract.required_components` and `build_contract.allowed_implementation_freedom` must be arrays of non-empty strings" in prompt
     assert "Empty arrays are valid; use `[]` when there are no entries" in prompt
     assert '"allowed_implementation_freedom"' in prompt
