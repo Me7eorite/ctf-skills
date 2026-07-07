@@ -115,6 +115,47 @@ def test_invoke_design_agent_uses_supplied_cwd(
     assert captured_call_map["environment"]["CTF_SKILLS_EXECUTION_ID"] == "attempt"
 
 
+def test_invoke_design_agent_sets_tool_cwd_when_backend_is_not_docker(
+    monkeypatch,
+    tmp_path,
+):
+    captured_call_map = {}
+
+    def fake_invoke_capture(prompt_text, **keyword_args):
+        captured_call_map["prompt_text"] = prompt_text
+        captured_call_map.update(keyword_args)
+        return HermesProcessResult(returncode=0, stdout='{"event":{},"challenges":[]}', cancelled=False)
+
+    monkeypatch.setattr(
+        hermes_process,
+        "hermes_arguments",
+        lambda: ["hermes", "chat", "-Q", "-q"],
+    )
+    monkeypatch.setattr(hermes_process, "apply_legacy_custom_provider", lambda *_args: False)
+    monkeypatch.setattr(
+        hermes_process,
+        "effective_terminal_backend",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(hermes_design, "invoke_capture", fake_invoke_capture)
+
+    project_paths = ProjectPaths(root=tmp_path, repository=tmp_path)
+    workspace = tmp_path / "work" / "design" / "executions" / "attempt"
+
+    hermes_design.invoke_design_agent(
+        "Design one challenge.",
+        profile_name="design-bot",
+        log_path=tmp_path / "attempt.log",
+        timeout=45,
+        paths=project_paths,
+        cwd=workspace,
+    )
+
+    assert captured_call_map["cwd"] == workspace
+    assert captured_call_map["environment"]["TERMINAL_CWD"] == str(workspace)
+    assert "TERMINAL_DOCKER_VOLUMES" not in captured_call_map["environment"]
+
+
 def test_executor_returns_stdout_exit_code_and_duration(tmp_path):
     captured_call_map = {}
 
