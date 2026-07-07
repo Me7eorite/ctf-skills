@@ -407,7 +407,7 @@ def resolve_sub_technique(finding: Any) -> str:
         key = label
     key = SUB_TECHNIQUE_ALIASES.get(key, key)
     if key != label:
-        LOGGER.warning("normalized sub_technique raw=%r normalized=%r", label, key)
+        LOGGER.debug("normalized sub_technique raw=%r normalized=%r", label, key)
     return key
 
 

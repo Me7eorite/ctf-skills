@@ -1096,7 +1096,7 @@ def normalize_semantic_assignment(
         )
         if canonicalization.semantic is not None:
             if canonicalization.semantic["sub_technique"] != canonicalization.raw_sub_technique:
-                LOGGER.warning(
+                LOGGER.debug(
                     "normalized profile semantic.sub_technique raw=%r normalized=%r category=%s family=%s source=%s",
                     semantic.get("sub_technique", ""),
                     canonicalization.semantic["sub_technique"],
@@ -1121,7 +1121,7 @@ def normalize_semantic_assignment(
             family=family,
             category=taxonomy.category,
         )
-        LOGGER.warning(
+        LOGGER.debug(
             "normalized profile semantic.sub_technique raw=%r normalized=%r category=%s family=%s",
             semantic.get("sub_technique", ""),
             sub_technique,

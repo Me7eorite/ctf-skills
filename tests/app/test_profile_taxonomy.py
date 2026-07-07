@@ -394,16 +394,13 @@ def test_profile_capacity_coerces_canary_buffer_overflow_phrase() -> None:
         ("format string", "format_string_got"),
     ],
 )
-def test_pwn_aliases_normalize_to_closed_vocabulary(raw: str, expected: str, caplog) -> None:
-    with caplog.at_level("WARNING"):
-        semantic = normalize_semantic_assignment(
-            taxonomy_for_category("pwn"),
-            {"family": "stack", "sub_technique": raw},
-        )
+def test_pwn_aliases_normalize_to_closed_vocabulary(raw: str, expected: str) -> None:
+    semantic = normalize_semantic_assignment(
+        taxonomy_for_category("pwn"),
+        {"family": "stack", "sub_technique": raw},
+    )
 
     assert semantic["sub_technique"] == expected
-    if raw != expected:
-        assert f"normalized={expected!r}" in caplog.text
 
 
 def test_pwn_stack_variants_keep_profile_capacity_distinct() -> None:
