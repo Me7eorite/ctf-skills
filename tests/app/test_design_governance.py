@@ -259,6 +259,34 @@ def test_rejects_forbidden_shortcut_string_entries() -> None:
     assert "Use [] instead of placeholder text" in str(exc_info.value)
 
 
+def test_rejects_unknown_harness_kind_with_actionable_message() -> None:
+    profile = _profile()
+    reservation = _reservation(profile)
+    finding = _finding()
+    challenge = _challenge(reservation, finding)
+    challenge["build_contract"]["forbidden_shortcuts"] = [
+        {
+            "test_kind": "no_direct_flag_read",
+            "assertion": "must_pass",
+        }
+    ]
+
+    with pytest.raises(DesignGovernanceError) as exc_info:
+        validate_design_evidence_output(
+            challenge=challenge,
+            design_task=_task(reservation),
+            reservation=reservation,
+            findings=[finding],
+            ledger_snapshot=_snapshot(reservation),
+        )
+
+    message = str(exc_info.value)
+    assert "unknown build contract harness kind: no_direct_flag_read" in message
+    assert "Allowed test_kind values:" in message
+    assert "artifact_direct_run" in message
+    assert "use [] when there is no concrete harness" in message
+
+
 def test_accepts_empty_forbidden_shortcuts_and_allowed_freedom_arrays() -> None:
     profile = _profile()
     reservation = _reservation(profile)
@@ -308,6 +336,30 @@ def test_rejects_allowed_implementation_freedom_bad_shapes(
 
 
 def test_rejects_distinctness_claim_without_implementation_axis() -> None:
+    profile = _profile()
+    reservation = _reservation(profile)
+    finding = _finding()
+    challenge = _challenge(reservation, finding)
+    challenge["distinctness_claim"] = (
+        "Solve-axis: Uses payload_injection through http_client flow.\n"
+        "Implementation-axis: Different from siblings."
+    )
+
+    with pytest.raises(DesignGovernanceError) as exc_info:
+        validate_design_evidence_output(
+            challenge=challenge,
+            design_task=_task(reservation),
+            reservation=reservation,
+            findings=[finding],
+            ledger_snapshot=_snapshot(reservation),
+        )
+
+    message = str(exc_info.value)
+    assert "missing axis coverage: implementation" in message
+    assert "`Implementation-axis:` to mention reserved implementation values" in message
+
+
+def test_rejects_distinctness_claim_without_two_line_template() -> None:
     profile = _profile()
     reservation = _reservation(profile)
     finding = _finding()

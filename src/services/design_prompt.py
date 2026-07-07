@@ -708,12 +708,18 @@ def _render_governance_context(
         return ""
     reserved_profile = reservation.get("reserved_profile")
     required_action = None
+    solve_values: tuple[str, ...] = ()
+    implementation_values: tuple[str, ...] = ()
     if isinstance(reserved_profile, Mapping):
         solve = reserved_profile.get("solve")
         if isinstance(solve, Mapping):
             value = solve.get("required_action")
             if isinstance(value, str) and value.strip():
                 required_action = value.strip()
+            solve_values = _axis_string_values(solve)
+        implementation = reserved_profile.get("implementation")
+        if isinstance(implementation, Mapping):
+            implementation_values = _axis_string_values(implementation)
     return "\n".join(
         [
             "## Governed Design Reservation",
@@ -723,6 +729,8 @@ def _render_governance_context(
             "",
             _render_governed_contract_rules(
                 required_action=required_action,
+                solve_values=solve_values,
+                implementation_values=implementation_values,
                 ledger_snapshot=ledger_snapshot,
             ),
             "",
@@ -744,6 +752,8 @@ def _render_governance_context(
 def _render_governed_contract_rules(
     *,
     required_action: str | None,
+    solve_values: Sequence[str] = (),
+    implementation_values: Sequence[str] = (),
     ledger_snapshot: Mapping[str, Any] | None,
 ) -> str:
     compared_ids = _ledger_compared_ids(ledger_snapshot)
@@ -761,6 +771,12 @@ def _render_governed_contract_rules(
         else "`compared_challenge_ids` MUST be [] because this ledger snapshot "
         "does not supply comparable challenge ids."
     )
+    solve_values_hint = ", ".join(solve_values) if solve_values else "the reserved solve values"
+    implementation_values_hint = (
+        ", ".join(implementation_values)
+        if implementation_values
+        else "the reserved implementation values"
+    )
     return "\n".join(
         [
             "Governance fields are validated more strictly than the JSON Schema:",
@@ -769,11 +785,11 @@ def _render_governed_contract_rules(
             "- `build_contract.required_profile` MUST exactly match `governed_profile`.",
             "- `build_contract.required_player_actions` MUST include the "
             "reserved solve action exactly as declared in `reserved_profile`.",
-            "- `distinctness_claim` must contain exactly two non-empty lines: "
-            "`Solve-axis: ...` and `Implementation-axis: ...`. The solve line "
-            "must mention the reserved solve action or related solve values; "
-            "the implementation line must mention the reserved implementation "
-            "runtime/language/artifact/concealment values.",
+            "- `distinctness_claim` MUST use this exact two-line template: "
+            "line 1 `Solve-axis: ...`; line 2 `Implementation-axis: ...`. "
+            f"The solve line must include at least one reserved solve value: "
+            f"{solve_values_hint}. The implementation line must include at "
+            f"least one reserved implementation value: {implementation_values_hint}.",
             f"- {compared_hint}",
             "- `build_contract.required_asset_flow` must be a non-empty array "
             "of objects with unique `stage_id` values. Every stage needs "
@@ -798,12 +814,22 @@ def _render_governed_contract_rules(
             "`solver_with_fixture` -> `must_pass` or `outputs_flag`; "
             "`solver_without_fixture` -> `must_fail` or `stdout_not_contains_flag`; "
             "`random_flag_rebuild` -> `outputs_new_flag` or `old_flag_rejected` "
-            "(re only).",
+            "(re only). Do not use shortcut labels such as `no_direct_flag_read`, "
+            "`no_backdoor`, or `no_metadata_read` as `test_kind`; if you cannot "
+            "express the check with one of the closed harness kinds, use `[]`.",
             "- Harness references must point at declared `artifact_ids`, "
             "`fixture_ids`, or `input_fixture` ids; if there is nothing concrete "
             "to reference, leave the field out.",
         ]
     )
+
+
+def _axis_string_values(axis: Mapping[str, Any]) -> tuple[str, ...]:
+    values = []
+    for value in axis.values():
+        if isinstance(value, str) and value.strip():
+            values.append(value.strip())
+    return tuple(dict.fromkeys(values))
 
 
 def _ledger_compared_ids(

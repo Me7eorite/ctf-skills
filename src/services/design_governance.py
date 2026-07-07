@@ -249,9 +249,14 @@ def validate_design_evidence_output(
             "distinctness_claim must contain two sentences prefixed exactly "
             "`Solve-axis:` and `Implementation-axis:`"
         )
-    if not _distinctness_covers_axes(distinctness_claim, profile):
+    missing_axes = _distinctness_missing_axes(distinctness_claim, profile)
+    if missing_axes:
         raise DesignGovernanceError(
-            "distinctness_claim must explain solve and implementation differences"
+            "distinctness_claim must explain solve and implementation differences; "
+            "missing axis coverage: "
+            + ", ".join(missing_axes)
+            + ". Use `Solve-axis:` to mention reserved solve values and "
+            "`Implementation-axis:` to mention reserved implementation values."
         )
 
     compared_ids = _string_list(
@@ -400,14 +405,25 @@ def _validate_harness(
 ) -> None:
     kind = payload.get("test_kind")
     if not isinstance(kind, str) or kind not in _HARNESS_ASSERTIONS:
-        raise DesignGovernanceError("unknown build contract harness kind")
+        allowed = ", ".join(sorted(_HARNESS_ASSERTIONS))
+        raise DesignGovernanceError(
+            "unknown build contract harness kind"
+            f"{f': {kind}' if isinstance(kind, str) and kind else ''}. "
+            f"Allowed test_kind values: {allowed}. Do not invent shortcut "
+            "names such as no_direct_flag_read as test_kind; use [] when "
+            "there is no concrete harness to declare."
+        )
     if kind == "random_flag_rebuild" and category not in {"re"}:
         raise DesignGovernanceError(
             "random_flag_rebuild is not permitted for this category"
         )
     assertion = payload.get("assertion")
     if not isinstance(assertion, str) or assertion not in _HARNESS_ASSERTIONS[kind]:
-        raise DesignGovernanceError("unknown build contract harness assertion")
+        allowed = ", ".join(sorted(_HARNESS_ASSERTIONS[kind]))
+        raise DesignGovernanceError(
+            f"unknown build contract harness assertion for {kind}. "
+            f"Allowed assertions: {allowed}."
+        )
     for forbidden in ("command", "argv", "shell", "path", "cwd", "executable"):
         if forbidden in payload:
             raise DesignGovernanceError("harnesses cannot declare executable paths or shell input")
@@ -527,7 +543,13 @@ def _profiles_conflict(left: Mapping[str, Any], right: Mapping[str, Any]) -> boo
 
 
 def _distinctness_covers_axes(claim: str, profile: Mapping[str, Any]) -> bool:
-    lowered = claim.lower()
+    return not _distinctness_missing_axes(claim, profile)
+
+
+def _distinctness_missing_axes(
+    claim: str, profile: Mapping[str, Any]
+) -> tuple[str, ...]:
+    solve_text, implementation_text = _distinctness_axis_texts(claim)
     solve = profile.get("solve") if isinstance(profile.get("solve"), Mapping) else {}
     implementation = (
         profile.get("implementation")
@@ -535,13 +557,33 @@ def _distinctness_covers_axes(claim: str, profile: Mapping[str, Any]) -> bool:
         else {}
     )
     solve_covered = any(
-        token in lowered for token in ("solve", "player", "action", "analysis")
-    ) or _claim_mentions_profile_value(lowered, solve)
+        token in solve_text for token in ("solve", "player", "action", "analysis")
+    ) or _claim_mentions_profile_value(solve_text, solve)
     implementation_covered = any(
-        token in lowered
+        token in implementation_text
         for token in ("implementation", "artifact", "runtime", "language", "concealment")
-    ) or _claim_mentions_profile_value(lowered, implementation)
-    return solve_covered and implementation_covered
+    ) or _claim_mentions_profile_value(implementation_text, implementation)
+    missing = []
+    if not solve_covered:
+        missing.append("solve")
+    if not implementation_covered:
+        missing.append("implementation")
+    return tuple(missing)
+
+
+def _distinctness_axis_texts(claim: str) -> tuple[str, str]:
+    sentences = [line.strip() for line in claim.splitlines() if line.strip()]
+    solve_prefix = "Solve-axis:"
+    implementation_prefix = "Implementation-axis:"
+    solve = claim.lower()
+    if len(sentences) >= 1 and sentences[0].startswith(solve_prefix):
+        solve = sentences[0][len(solve_prefix) :].strip().lower()
+    implementation = (
+        sentences[1][len(implementation_prefix) :].strip().lower()
+        if len(sentences) >= 2 and sentences[1].startswith(implementation_prefix)
+        else claim.lower()
+    )
+    return solve, implementation
 
 
 def _distinctness_uses_template(claim: str) -> bool:
