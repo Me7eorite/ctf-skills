@@ -68,11 +68,31 @@ def test_resolve_sub_technique_keeps_sqli_variants_folded():
         ("ret2csu", "ret2libc"),
         ("ret2dlresolve", "ret2libc"),
         ("stack pivot", "ret2libc"),
-        ("tcache poisoning", "UAF"),
     ],
 )
 def test_alias_map_conservatism_guard(left: str, right: str):
     assert resolve_sub_technique(_finding(left)) != resolve_sub_technique(_finding(right))
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "glibc heap",
+        "heap exploitation",
+        "tcache poisoning",
+        "fastbin dup",
+        "unsorted bin attack",
+        "use after free",
+        "UAF",
+    ],
+)
+def test_pwn_heap_aliases_match_governed_profile_key(label: str):
+    assert resolve_sub_technique(_finding(label)) == "heap_uaf_tcache"
+
+
+@pytest.mark.parametrize("label", ["ROP", "ROP chain", "return oriented programming"])
+def test_pwn_rop_aliases_match_governed_profile_key(label: str):
+    assert resolve_sub_technique(_finding(label)) == "ret2libc"
 
 
 def test_category_tactics_lane_list_matches_taxonomy_constants():

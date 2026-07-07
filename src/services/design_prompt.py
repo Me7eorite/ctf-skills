@@ -571,7 +571,112 @@ def _governed_output_schema() -> dict[str, Any]:
             "acceptance_tests",
             "allowed_implementation_freedom",
         ],
+        "properties": {
+            "artifact_ids": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+            },
+            "fixture_ids": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+            },
+            "required_profile": {"type": "object"},
+            "required_player_actions": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+                "minItems": 1,
+            },
+            "required_components": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+            },
+            "required_asset_flow": {
+                "type": "array",
+                "minItems": 1,
+                "items": {"$ref": "#/$defs/buildContractAssetStage"},
+            },
+            "forbidden_shortcuts": {
+                "type": "array",
+                "items": {"$ref": "#/$defs/buildContractHarness"},
+            },
+            "acceptance_tests": {
+                "type": "array",
+                "items": {"$ref": "#/$defs/buildContractHarness"},
+            },
+            "allowed_implementation_freedom": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+            },
+        },
     }
+    schema.setdefault("$defs", {}).update(
+        {
+            "buildContractHarness": {
+                "type": "object",
+                "required": ["test_kind", "assertion"],
+                "properties": {
+                    "id": {"type": "string"},
+                    "test_kind": {
+                        "enum": [
+                            "artifact_direct_run",
+                            "fixture_assertion",
+                            "solver_with_fixture",
+                            "solver_without_fixture",
+                            "random_flag_rebuild",
+                        ]
+                    },
+                    "assertion": {
+                        "enum": [
+                            "stdout_not_contains_flag",
+                            "must_fail",
+                            "non_empty",
+                            "equals",
+                            "contains",
+                            "must_pass",
+                            "outputs_flag",
+                            "outputs_new_flag",
+                            "old_flag_rejected",
+                        ]
+                    },
+                    "artifact_ref": {"type": "string"},
+                    "fixture_ref": {"type": "string"},
+                    "input_fixture": {"type": "string"},
+                },
+                "not": {
+                    "anyOf": [
+                        {"required": ["command"]},
+                        {"required": ["argv"]},
+                        {"required": ["shell"]},
+                        {"required": ["path"]},
+                        {"required": ["cwd"]},
+                        {"required": ["executable"]},
+                    ]
+                },
+            },
+            "buildContractAssetStage": {
+                "type": "object",
+                "required": [
+                    "stage_id",
+                    "produced_asset_or_capability",
+                    "verification_harness",
+                    "dependency_harness",
+                ],
+                "properties": {
+                    "stage_id": {"type": "string", "minLength": 1},
+                    "produced_asset_or_capability": {
+                        "type": "string",
+                        "minLength": 1,
+                    },
+                    "verification_harness": {
+                        "$ref": "#/$defs/buildContractHarness"
+                    },
+                    "dependency_harness": {
+                        "$ref": "#/$defs/buildContractHarness"
+                    },
+                },
+            },
+        }
+    )
     return schema
 
 
@@ -651,6 +756,10 @@ def _render_governed_contract_rules(
             "- Declare symbolic `artifact_ids` and `fixture_ids` before any "
             "harness references them. Harnesses cannot contain `command`, "
             "`argv`, `shell`, `path`, `cwd`, or `executable`.",
+            "- `build_contract.forbidden_shortcuts` and "
+            "`build_contract.acceptance_tests` must be arrays of harness "
+            "objects, never strings. If there is no concrete harness to add, "
+            "use `[]`.",
             "- Closed harness kinds/assertions: "
             "`artifact_direct_run` -> `stdout_not_contains_flag` or `must_fail`; "
             "`fixture_assertion` -> `non_empty`, `equals`, or `contains`; "

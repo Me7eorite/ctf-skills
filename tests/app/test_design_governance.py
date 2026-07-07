@@ -208,6 +208,27 @@ def test_rejects_harness_shell_input() -> None:
         )
 
 
+def test_rejects_forbidden_shortcut_string_entries() -> None:
+    profile = _profile()
+    reservation = _reservation(profile)
+    finding = _finding()
+    challenge = _challenge(reservation, finding)
+    challenge["build_contract"]["forbidden_shortcuts"] = ["no direct flag read"]
+
+    with pytest.raises(DesignGovernanceError) as exc_info:
+        validate_design_evidence_output(
+            challenge=challenge,
+            design_task=_task(reservation),
+            reservation=reservation,
+            findings=[finding],
+            ledger_snapshot=_snapshot(reservation),
+        )
+
+    assert "build_contract.forbidden_shortcuts entries must be objects" in str(
+        exc_info.value
+    )
+
+
 def test_rejects_distinctness_claim_without_implementation_axis() -> None:
     profile = _profile()
     reservation = _reservation(profile)

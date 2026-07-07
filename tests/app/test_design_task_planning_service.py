@@ -225,6 +225,27 @@ def test_pwn_bss_variable_write_gets_matching_reservation_profile(
         assert reservation.profile["solve"]["chain_shape"] == "global-write-win"
 
 
+def test_pwn_heap_findings_map_to_supported_reservation_profile(
+    session_factory: SessionFactory,
+):
+    request, _ = _seed(
+        session_factory,
+        target_count=3,
+        distribution={"easy": 3},
+        category="pwn",
+        finding_labels=["glibc heap", "use after free", "tcache poisoning"],
+    )
+    service = DesignTaskPlanningService(session_factory)
+
+    tasks = service.generate_for_request(request.id)
+
+    assert len(tasks) == 3
+    assert {task.diversity_flags["sub_technique"] for task in tasks} == {
+        "heap_uaf_tcache"
+    }
+    assert all(task.current_reservation_id is not None for task in tasks)
+
+
 def test_pwn_unsupported_profile_is_rejected_explicitly(
     session_factory: SessionFactory,
     monkeypatch: pytest.MonkeyPatch,
