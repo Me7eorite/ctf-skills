@@ -11,7 +11,7 @@ from typing import Any
 from uuid import UUID
 
 from core.paths import ProjectPaths
-from domain.design.technique_taxonomy import resolve_family
+from domain.design.technique_taxonomy import CATEGORY_TECHNIQUE_FAMILIES, families_for_category, resolve_family
 from domain.research_validators import (
     CONTENT_HASH_RE,
     ResearchValidationError,
@@ -42,11 +42,6 @@ def parse_research_output(
         raise ResearchValidationError("unparseable_output:no_terminal_json_object")
     res_data = _normalize_legacy_result_shape(res_data)
     res_data = _normalize_source_content_hashes(res_data)
-    if enforce_quality:
-        ok, error = apply_research_quality_gate(res_data, target_count, category=category)
-        if not ok:
-            raise ResearchValidationError(error or "unparseable_output:quality_gate_failed")
-
     source_items = res_data.get("sources")
     finding_items = res_data.get("findings")
     if not isinstance(source_items, list):
@@ -62,14 +57,24 @@ def parse_research_output(
         _normalize_finding_payload(
             finding_item,
             source_count=len(source_payloads),
+            source_payloads=source_payloads,
             category=category,
         )
         for finding_item in finding_items
     ]
+    _reject_duplicate_findings(finding_payloads)
+    res_data["sources"] = source_payloads
+    res_data["findings"] = finding_payloads
+    if enforce_quality:
+        ok, error = apply_research_quality_gate(res_data, target_count, category=category)
+        if not ok:
+            raise ResearchValidationError(error or "unparseable_output:quality_gate_failed")
     return ParsedResearchOutput(
         sources=source_payloads,
         findings=finding_payloads,
-        trial_only=not enforce_quality,
+        trial_only=not enforce_quality or not parsed_output_contains_designable_findings(
+            ParsedResearchOutput(source_payloads, finding_payloads)
+        ),
     )
 
 
@@ -211,6 +216,7 @@ def _normalize_finding_payload(
     finding_item: Any,
     *,
     source_count: int,
+    source_payloads: list[dict[str, Any]],
     category: str | None = None,
 ) -> dict[str, Any]:
     if not isinstance(finding_item, Mapping):
@@ -223,6 +229,8 @@ def _normalize_finding_payload(
         raise ResearchValidationError("finding source_indices must be a list")
     if not source_indices:
         raise ResearchValidationError("finding source_indices must be non-empty")
+    if len(source_indices) != len(set(source_indices)):
+        raise ResearchValidationError("finding source_indices must not contain duplicates")
     for source_index in source_indices:
         if not isinstance(source_index, int) or isinstance(source_index, bool):
             raise ResearchValidationError(
@@ -230,26 +238,51 @@ def _normalize_finding_payload(
             )
         if source_index < 0 or source_index >= source_count:
             raise ResearchValidationError(f"source index {source_index} is out of range")
-    finding_payload["technique_family"] = _normalize_agent_technique_family(
+        _ = source_payloads[source_index]
+    finding_payload["technique_family"] = _normalize_output_technique_family(
         finding_payload,
         category=category,
     )
     return finding_payload
 
 
-def _normalize_agent_technique_family(
+def _normalize_output_technique_family(
     finding_payload: Mapping[str, Any],
     *,
     category: str | None,
 ) -> str:
     raw_family = finding_payload.get("technique_family")
     if not isinstance(raw_family, str) or not raw_family.strip():
-        LOGGER.warning(
-            "missing technique_family for finding label %r; using other",
-            finding_payload.get("label"),
+        return resolve_family(finding_payload, category=category)
+    normalized = raw_family.strip().lower().replace("-", "_").replace(" ", "_")
+    if category is None:
+        allowed = {family for lane_values in CATEGORY_TECHNIQUE_FAMILIES.values() for family in lane_values}
+    else:
+        allowed = set(families_for_category(category))
+    if normalized not in allowed:
+        raise ResearchValidationError(
+            f"technique_family {raw_family!r} is not allowed; allowed: {sorted(allowed)}"
         )
-        return "other"
-    return resolve_family(finding_payload, category=category)
+    return normalized
+
+
+def _reject_duplicate_findings(findings: list[dict[str, Any]]) -> None:
+    seen: set[tuple[Any, ...]] = set()
+    for finding in findings:
+        key = (
+            finding.get("kind"),
+            str(finding.get("label")).strip().casefold(),
+            str(finding.get("summary")).strip().casefold(),
+            finding.get("technique_family"),
+            tuple(finding.get("source_indices", [])),
+        )
+        if key in seen:
+            raise ResearchValidationError("quality_gate:duplicate_finding")
+        seen.add(key)
+
+
+def _empty_parsed_output() -> ParsedResearchOutput:
+    return ParsedResearchOutput(sources=[], findings=[])
 
 
 def _required_text(payload: Mapping[str, Any], field_name: str, item_name: str) -> str:

@@ -34,6 +34,7 @@ const state = {
   flags: {},
   filter: { category: "", displayStatus: "" },
   detailPoll: { timer: null, loading: false },
+  designTaskGenerating: false,
   lastRender: null,
 };
 
@@ -61,6 +62,7 @@ function detailSignature() {
     state.flags.detail?.refreshing || false,
     state.flags.deleting || false,
     state.flags.backfill?.loading || false,
+    state.designTaskGenerating || false,
   ].join("|");
 }
 
@@ -221,6 +223,9 @@ async function refreshDetail({ startPolling = false } = {}) {
 
 async function generateDesignTasks() {
   if (!state.detailId) return;
+  if (state.designTaskGenerating) return;
+  state.designTaskGenerating = true;
+  render(state.data);
   try {
     await postJson(`/api/research/requests/${state.detailId}/design-tasks/generate`, {});
     showToast("设计任务已生成");
@@ -228,7 +233,10 @@ async function generateDesignTasks() {
     showDesignTasksForRequest(state.detailId);
     initIcons();
   } catch (err) {
-    showToast(researchErrorMessage(err.message), true);
+    showToast(researchErrorMessage(err.code || err.message), true);
+  } finally {
+    state.designTaskGenerating = false;
+    render(state.data);
   }
 }
 
@@ -780,13 +788,13 @@ function renderDesignTasksSummary(summary, request, qualityPassed, findingCount,
           <button class="btn btn-secondary btn-sm design-tasks-view"${total ? "" : " disabled"}>
             <i data-lucide="list"></i> 查看设计任务
           </button>
-          <button class="btn btn-primary btn-sm design-tasks-generate"${qualityPassed && !total ? "" : " disabled"}>
-            <i data-lucide="wand-sparkles"></i> 生成设计任务
+          <button class="btn btn-primary btn-sm design-tasks-generate${state.designTaskGenerating ? " btn-loading" : ""}"${qualityPassed && !total && !state.designTaskGenerating ? "" : " disabled"}>
+            <i data-lucide="wand-sparkles"></i> ${state.designTaskGenerating ? "处理中" : "生成设计任务"}
           </button>
           <span class="pill">${total}</span>
         </div>
       </div>
-      <div class="rq-section-message ${qualityPassed ? "ready" : ""}">${escapeHtml(helper)}</div>
+      <div class="rq-section-message ${qualityPassed ? "ready" : ""}">${escapeHtml(state.designTaskGenerating ? "当前研究需求正在处理中，请稍后重试。" : helper)}</div>
     </section>
   `;
 }

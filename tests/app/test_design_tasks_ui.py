@@ -129,6 +129,8 @@ def test_missing_build_profile_is_visible_and_disables_build_eligibility() -> No
 
     assert "构建环境未就绪，相关题目暂时无法构建" in source
     assert "buildProfileReady(task.category)" in source
+    assert "task?.build_eligibility" in source
+    assert "typeof buildEligibility.eligible === \"boolean\"" in source
     assert "item.create_command" in source
     assert 'item.reason && item.reason !== "missing_profile"' in source
     assert "item.message || \"Profile 配置未就绪\"" in source

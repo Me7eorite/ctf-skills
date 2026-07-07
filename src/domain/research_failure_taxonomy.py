@@ -8,10 +8,13 @@ from typing import Literal
 
 FailureCategory = Literal[
     "timeout",
+    "rate_limit",
     "lease_expired",
     "parse_failure",
     "quality_gate",
+    "insufficient_evidence",
     "field_validation",
+    "resume_conflict",
     "binding",
     "runtime",
     "cancelled",
@@ -33,6 +36,11 @@ _CATEGORY_COPY: dict[FailureCategory, tuple[str, str, tuple[str, ...]]] = {
         "Hermes 研究进程超过允许时间后退出，可能是目标数量过大、提示词过重或外部检索耗时过长。",
         ("增大 `--hermes-timeout-seconds`", "降低 `target_count` 后重新研究", "查看日志末尾确认是否已有可恢复输出"),
     ),
+    "rate_limit": (
+        "研究被限流",
+        "Hermes 或其 provider 遇到 429/overload/请求速率限制，通常可以通过退避重试或降低并发缓解。",
+        ("降低搜索并发", "增加退避后重试", "检查是否已接近预算并收敛到既有 sources"),
+    ),
     "lease_expired": (
         "研究租约过期",
         "Worker 在运行期间未能持续续租，系统已将该次运行标记为失败并按重试规则处理。",
@@ -48,10 +56,20 @@ _CATEGORY_COPY: dict[FailureCategory, tuple[str, str, tuple[str, ...]]] = {
         "Hermes 输出可解析，但有效研究结论数量或结构没有达到质量门要求。",
         ("增加研究目标或种子线索", "降低 `target_count` 或调整难度分布", "查看 findings 是否过少或重复"),
     ),
+    "insufficient_evidence": (
+        "研究证据不足",
+        "Hermes 输出缺少足够的 sources 或 findings，无法形成可落库结果。",
+        ("补充 seed URLs 或关键检索词", "降低 `target_count`", "复用已确认的 sources 再收敛 findings"),
+    ),
     "field_validation": (
         "研究字段校验失败",
         "Hermes 输出中的 source 或 finding 字段缺失、类型错误或引用关系无效。",
         ("查看原始 JSON 中的字段形状", "修正提示词样例", "重新研究并检查 source_indices"),
+    ),
+    "resume_conflict": (
+        "研究恢复冲突",
+        "尝试恢复或补跑时，持久化状态已经包含更新的结果或并发 sibling 冲突。",
+        ("重新拉取最新 run 状态", "检查是否已有完成的 sibling run", "避免重复回填同一份证据"),
     ),
     "binding": (
         "研究 Agent 配置不可用",
@@ -99,6 +117,8 @@ def classify_last_error(text: str | None) -> FailureClassification:
 
     if _is_timeout(lower):
         category = "timeout"
+    elif _is_rate_limit(lower):
+        category = "rate_limit"
     elif _is_lease_expired(lower):
         category = "lease_expired"
     elif _is_parse_failure(lower):
@@ -113,6 +133,10 @@ def classify_last_error(text: str | None) -> FailureClassification:
         description_override = f"Hermes 输出只有 {got} 个不同子技巧，低于最低要求 {need} 个。"
     elif _is_quality_gate(lower):
         category = "quality_gate"
+    elif _is_insufficient_evidence(lower):
+        category = "insufficient_evidence"
+    elif _is_resume_conflict(lower):
+        category = "resume_conflict"
     elif _is_field_validation(lower):
         category = "field_validation"
     elif _is_binding(lower):
@@ -140,6 +164,15 @@ def _is_timeout(value: str) -> bool:
     return bool(match and match.group(1) == "124") or "timeout" in value or "timed out" in value
 
 
+def _is_rate_limit(value: str) -> bool:
+    return (
+        "rate_limit" in value
+        or "rate limit" in value
+        or "overloaded" in value
+        or "429" in value
+    )
+
+
 def _is_lease_expired(value: str) -> bool:
     return "lease expired" in value or "lease_expires_at" in value
 
@@ -152,16 +185,26 @@ def _is_quality_gate(value: str) -> bool:
     return "quality_gate" in value or value.startswith("insufficient_findings")
 
 
+def _is_insufficient_evidence(value: str) -> bool:
+    return value.startswith("insufficient_evidence")
+
+
+def _is_resume_conflict(value: str) -> bool:
+    return "resume_conflict" in value or value.startswith("preview_stale")
+
+
 def _is_field_validation(value: str) -> bool:
     prefixes = (
         "url_shape_invalid",
         "content_hash_shape_invalid",
+        "content_hash_dup",
         "research output field ",
         "each source must be",
         "each finding must be",
         "source raw_text must be",
         "source field ",
         "finding field ",
+        "technique_family ",
         "finding source_indices",
         "source index ",
         "finding must include",

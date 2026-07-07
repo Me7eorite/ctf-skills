@@ -27,6 +27,10 @@ REQUIRED_TEXT_FIELDS: tuple[str, ...] = (
 class DesignTaskValidationError(ValueError):
     """设计任务候选数据或状态转换不合法时抛出。"""
 
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+
 
 def validate_candidate(
     candidate: Mapping[str, Any],

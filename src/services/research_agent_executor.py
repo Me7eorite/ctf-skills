@@ -96,7 +96,6 @@ class ResearchAgentExecutor:
             )
         except StaleClaimError:
             LOGGER.warning("lost claim before recording profile for run %s", run.id)
-            return
 
         stop_event = threading.Event()
         lost_lease = threading.Event()

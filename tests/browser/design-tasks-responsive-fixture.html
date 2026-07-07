@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>Design tasks responsive browser fixture</title>
+  <style>
+    :root {
+      color-scheme: light;
+    }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    #fixture-result {
+      position: fixed;
+      inset: auto 0 0 0;
+      margin: 0;
+      padding: 8px 12px;
+      background: #111827;
+      color: #fff;
+      font-size: 12px;
+      z-index: 9999;
+    }
+    .shell {
+      padding: 12px;
+    }
+    .view {
+      min-height: 100vh;
+    }
+  </style>
+</head>
+<body>
+  <div id="viewTitle"></div>
+  <div id="toast" class="hidden"></div>
+  <section data-view="design-tasks" class="view active"></section>
+  <pre id="fixture-result">RUNNING</pre>
+  <script type="module">
+    const taskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const requestId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const reservationId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    const evidenceId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+
+    const task = {
+      id: taskId,
+      generation_request_id: requestId,
+      research_run_id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      task_no: 1,
+      challenge_id: "web-0001",
+      title: "多行标题设计任务用于检查响应式布局是否会溢出或遮挡",
+      category: "web",
+      difficulty: "easy",
+      primary_technique: "boolean blind sqli",
+      learning_objective: "验证治理链与按钮布局不会在窄屏下重叠",
+      points: 100,
+      port: 8080,
+      scenario: "登录表单与长文本场景说明需要完整展示",
+      constraints: { runtime: "docker", note: "this description is intentionally long to force wrapping" },
+      evidence_summary: "研究依据摘要足够长，以便在窄屏下观察是否换行。",
+      finding_ids: [requestId],
+      diversity_flags: { family: "web" },
+      plan_reviewed_at: "2026-06-01T00:00:00Z",
+      status: "designed",
+      current_reservation_id: reservationId,
+      current_design_evidence_id: evidenceId,
+      created_at: "2026-06-01T00:00:00Z",
+      updated_at: "2026-06-01T00:00:00Z",
+      attempts: [{
+        id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+        attempt: 1,
+        status: "completed",
+        started_at: "2026-06-01T00:10:00Z",
+        finished_at: "2026-06-01T00:20:00Z",
+        last_error: null,
+        prompt_artifact_url: "#",
+        log_artifact_url: "#",
+      }],
+      latest_design: {
+        id: "11111111-1111-4111-8111-111111111111",
+        design_task_id: taskId,
+        design_attempt_id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+        payload: { challenge: { title: "fixture" } },
+        summary: "设计摘要",
+        flag_format: "flag{...}",
+        validation_notes: "长文本验证",
+        quality_gate_passed: true,
+        status: "draft",
+        created_at: "2026-06-01T00:20:00Z",
+        updated_at: "2026-06-01T00:20:00Z",
+      },
+      current_reservation: {
+        id: reservationId,
+        design_task_id: taskId,
+        generation_request_id: requestId,
+        reservation_version: 1,
+        profile: {
+          semantic: { family: "web", sub_technique: "boolean blind sqli" },
+          solve: { required_action: "extract_with_boolean_oracle" },
+          implementation: {
+            artifact_format: "web_app",
+            language: "python",
+            interaction: "http_form",
+            flag_concealment: "database_record",
+          },
+          presentation: { scenario_type: "login", input_model: "form" },
+        },
+        profile_signature: "profile-a",
+        occupancy_scope: "web",
+        exclusive_signature_key: "profile-a",
+        state: "committed",
+        taxonomy_version: 1,
+        policy_version: 1,
+        ledger_version: 1,
+        created_at: "2026-06-01T00:00:00Z",
+        committed_at: "2026-06-01T00:00:00Z",
+        released_at: null,
+      },
+      current_design_evidence: {
+        id: evidenceId,
+        design_task_id: taskId,
+        evidence_version: 2,
+        challenge_design_id: "11111111-1111-4111-8111-111111111111",
+        research_finding_ids: [requestId],
+        profile: {
+          semantic: { family: "web", sub_technique: "boolean blind sqli" },
+          solve: { required_action: "extract_with_boolean_oracle" },
+          implementation: {
+            artifact_format: "web_app",
+            language: "python",
+            interaction: "http_form",
+            flag_concealment: "database_record",
+          },
+          presentation: { scenario_type: "login", input_model: "form" },
+        },
+        profile_signature: "profile-a",
+        distinctness_claim: "differs from siblings",
+        compared_challenge_ids: ["web-0000"],
+        evidence: {},
+        build_contract: {
+          required_profile: {
+            semantic: { family: "web", sub_technique: "boolean blind sqli" },
+            solve: { required_action: "extract_with_boolean_oracle" },
+            implementation: {
+              artifact_format: "web_app",
+              language: "python",
+              interaction: "http_form",
+              flag_concealment: "database_record",
+            },
+            presentation: { scenario_type: "login", input_model: "form" },
+          },
+          required_player_actions: ["extract_with_boolean_oracle"],
+          required_components: ["login"],
+          artifact_ids: ["primary"],
+          fixture_ids: ["oracle"],
+          required_asset_flow: [{
+            stage_id: "oracle",
+            produced_asset_or_capability: "boolean oracle",
+            verification_harness: {
+              test_kind: "fixture_assertion",
+              fixture_ref: "oracle",
+              assertion: "non_empty",
+            },
+            dependency_harness: {
+              test_kind: "solver_without_fixture",
+              fixture_ref: "oracle",
+              assertion: "must_fail",
+            },
+          }],
+          forbidden_shortcuts: [],
+          acceptance_tests: [],
+          allowed_implementation_freedom: ["function_names"],
+        },
+        ledger_version: 1,
+        created_at: "2026-06-01T00:30:00Z",
+        superseded_at: null,
+        superseded_by_evidence_id: null,
+        supersession_reason: null,
+      },
+      build_eligibility: {
+        eligible: true,
+        blocking_reasons: [],
+      },
+      governance_history: {
+        reservations: [],
+        design_evidence: [],
+      },
+    };
+
+    const list = [task];
+    const json = (payload, status = 200) => new Response(JSON.stringify(payload), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    });
+
+    window.fetch = async (input) => {
+      const url = new URL(typeof input === "string" ? input : input.url, location.href);
+      if (url.pathname === "/api/design-tasks") return json(list);
+      if (url.pathname === `/api/design-tasks/${taskId}`) return json(task);
+      if (url.pathname === "/api/design-tasks/collapse") {
+        return json({ generation_request_id: requestId, total: 1, too_small_to_judge: true });
+      }
+      if (url.pathname === "/api/profile/bindings") return json([]);
+      if (url.pathname === "/api/research/categories") return json([{ code: "web", display_name: "Web" }]);
+      return json({});
+    };
+
+    const waitFor = async (predicate, label) => {
+      const deadline = Date.now() + 4000;
+      while (Date.now() < deadline) {
+        const value = predicate();
+        if (value) return value;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      throw new Error(`timeout: ${label}`);
+    };
+
+    try {
+      const view = await import("/src/web/static/js/views/design-tasks.js");
+      view.bind();
+      view.render({});
+      view.showDesignTaskDetail(taskId);
+      view.render({});
+      await waitFor(() => document.querySelector(".dt-detail-layout"), "detail render");
+
+      const hero = document.querySelector(".dt-hero");
+      const summary = document.querySelector(".dt-task-summary");
+      if (!hero || !summary) throw new Error("missing detail sections");
+      if (hero.getBoundingClientRect().width <= 0 || summary.getBoundingClientRect().width <= 0) {
+        throw new Error("layout did not render");
+      }
+      if (document.querySelector(".dt-detail-layout")?.scrollWidth > document.querySelector(".dt-detail-layout")?.clientWidth + 1) {
+        throw new Error("detail layout overflows");
+      }
+
+      if (!document.querySelector(".dt-request-revision")) {
+        throw new Error("revision action missing");
+      }
+
+      document.body.dataset.status = "passed";
+      document.querySelector("#fixture-result").textContent =
+        `PASS hero=${Math.round(hero.getBoundingClientRect().width)} summary=${Math.round(summary.getBoundingClientRect().width)}`;
+    } catch (error) {
+      document.body.dataset.status = "failed";
+      document.querySelector("#fixture-result").textContent = `FAIL ${error.stack || error}`;
+    }
+  </script>
+</body>
+</html>

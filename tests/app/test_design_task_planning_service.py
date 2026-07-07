@@ -12,6 +12,7 @@ from uuid import uuid4
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy import create_engine
 
 from domain.design_task_validators import DesignTaskValidationError
@@ -558,6 +559,79 @@ def test_generate_records_current_reservation(session_factory: SessionFactory):
         assert reservation_row is not None
         assert reservation_row.design_task_id == task_row.id
         assert reservation_row.state == "reserved"
+
+
+def test_generate_returns_conflict_when_request_lock_is_busy(
+    session_factory: SessionFactory,
+    monkeypatch,
+):
+    request, _ = _seed(
+        session_factory,
+        target_count=1,
+        distribution={"easy": 1},
+        finding_labels=["blind SQLi"],
+    )
+    service = DesignTaskPlanningService(session_factory)
+
+    def _busy_lock(*_args, **_kwargs):
+        original = Exception("lock not available")
+        original.pgcode = "55P03"  # type: ignore[attr-defined]
+        raise DBAPIError("SELECT ... FOR UPDATE", {}, original)
+
+    monkeypatch.setattr(
+        planning_module.ResearchRepository,
+        "lock_generation_request",
+        _busy_lock,
+    )
+
+    with pytest.raises(DesignTaskValidationError, match="generation request is busy"):
+        service.generate_for_request(request.id)
+
+
+def test_concurrent_generate_fails_fast_with_busy_code(session_factory: SessionFactory):
+    request, _ = _seed(
+        session_factory,
+        target_count=1,
+        distribution={"easy": 1},
+        finding_labels=["blind SQLi"],
+    )
+    service = DesignTaskPlanningService(session_factory)
+    lock_ready = threading.Event()
+    release_lock = threading.Event()
+    outcome = {}
+
+    def hold_request_lock():
+        with session_factory() as session:
+            repo = planning_module.ResearchRepository(session)
+            repo.lock_generation_request(request.id)
+            lock_ready.set()
+            release_lock.wait(timeout=10)
+            session.rollback()
+
+    def try_generate():
+        lock_ready.wait(timeout=10)
+        started = datetime.now(timezone.utc)
+        try:
+            service.generate_for_request(request.id)
+            outcome["result"] = "success"
+        except DesignTaskValidationError as exc:
+            outcome["result"] = "error"
+            outcome["code"] = exc.code
+            outcome["message"] = str(exc)
+        outcome["elapsed"] = (datetime.now(timezone.utc) - started).total_seconds()
+
+    holder = threading.Thread(target=hold_request_lock)
+    worker = threading.Thread(target=try_generate)
+    holder.start()
+    worker.start()
+    assert lock_ready.wait(timeout=10)
+    worker.join(timeout=10)
+    release_lock.set()
+    holder.join(timeout=10)
+
+    assert outcome["result"] == "error"
+    assert outcome["code"] == "generation_request_busy"
+    assert outcome["elapsed"] < 2
 
 
 def test_regenerate_releases_replaced_reservations(session_factory: SessionFactory):

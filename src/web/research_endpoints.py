@@ -1072,12 +1072,10 @@ def _register_design_task_endpoints(app: FastAPI) -> None:
         try:
             tasks = DesignTaskPlanningService().generate_for_request(request_uuid)
         except DesignTaskValidationError as exc:
-            status = (
-                HTTPStatus.NOT_FOUND
-                if "does not exist" in str(exc)
-                else HTTPStatus.CONFLICT
-            )
-            raise HTTPException(status_code=status, detail=str(exc)) from exc
+            raise HTTPException(
+                status_code=_design_task_error_status(exc),
+                detail=_design_task_error_detail(exc),
+            ) from exc
 
         return JSONResponse(
             {
@@ -1433,7 +1431,16 @@ def _request_uuid_or_404(request_id: str) -> UUID:
 
 
 def _design_task_error_status(exc: DesignTaskValidationError) -> HTTPStatus:
+    if getattr(exc, "code", None) == "generation_request_busy":
+        return HTTPStatus.CONFLICT
     return HTTPStatus.NOT_FOUND if "does not exist" in str(exc) else HTTPStatus.CONFLICT
+
+
+def _design_task_error_detail(exc: DesignTaskValidationError) -> Any:
+    code = getattr(exc, "code", None)
+    if code:
+        return {"code": code, "message": str(exc)}
+    return str(exc)
 
 
 def _project_paths(app: FastAPI):

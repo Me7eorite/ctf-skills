@@ -271,6 +271,9 @@ task roll-forward. BuildReconciler SHALL update the DesignTask only from an
 attempt whose `design_evidence_id` equals
 `design_tasks.current_design_evidence_id`. This prevents an old successful
 attempt from moving a revised draft back to `built`.
+For clarity, `built` here means the current task state and `build_failed` means
+the current task state after a governed build attempt; there is no separate
+`unpublished-built` status.
 
 ### D5 - Build contract defines the construction boundary
 
@@ -410,13 +413,15 @@ plan-review checkpoint before another Design attempt.
 The full contract and evidence ID are embedded in the attributed shard.
 Governed matrix values have no generic defaults. Missing governed values cause
 `build_contract_incomplete`. The legacy renderer may keep category defaults
-for non-governed `legacy`, `legacy_trial`, and shadow-observation paths, but
-those fallback values must never be copied into or treated as a committed
-governed contract.
+for non-governed legacy compatibility flows, `legacy_trial` rebuilds, and
+shadow-observation paths, but those fallback values must never be copied into
+or treated as a committed governed contract.
 
 Historical designs without evidence remain readable and revalidatable. They may
 be rebuilt only through an explicit operator-only `legacy_trial` mode that is
-recorded as non-production and can never pass the production corpus gate.
+recorded as non-production and can never pass the production corpus gate. This
+path is distinct from governed `trial`, which requires committed evidence and
+the hard admission gates above.
 
 ### D7 - Host observation, not metadata, establishes implementation truth
 
@@ -531,13 +536,14 @@ evidence, never the only reason to declare semantic identity. The service
 stores matched challenge IDs and scores so an operator can review concrete
 pairs.
 
-Production publication requires an effectively accepted corpus decision:
-`passed`, or `review_required` with an explicit allowed corpus review decision
-recording actor, reason, and timestamp. Review approval does not rewrite the
-stored member decision; the aggregator records the provenance and treats that
-member as effectively accepted only for publication eligibility. Overrides
-cannot bypass exact combined-signature duplicates outside the same-task revision
-lineage, failed validation, or any other non-overrideable hard block.
+Production publication requires every selected member to be effectively
+accepted and the aggregate batch decision to be `passed`. A member stored as
+`review_required` becomes effectively accepted only when an explicit allowed
+corpus review decision records actor, reason, and timestamp; that provenance
+contributes to the aggregate pass but does not rewrite the stored member
+decision. Overrides cannot bypass exact combined-signature duplicates outside
+the same-task revision lineage, failed validation, or any other
+non-overrideable hard block.
 
 The aggregate batch decision is computed from effective member states, not by
 rewriting member decisions. A reviewed member may remain stored as
@@ -633,12 +639,13 @@ The server DTOs SHALL distinguish current governance state from history:
 - superseded DesignEvidence, released reservations, older BuildAttempts, and
   older observations are exposed only as immutable history or comparison
   context;
-- raw stored decisions (`review_required`, `blocked`, `passed`,
-  `inconclusive`) are exposed separately from effective acceptance derived from
-  allowed observation/corpus reviews. In this change, `review_required` is a
-  corpus-layer decision only; validation-layer observation results use
-  `passed|failed|inconclusive`, and observation review provenance stays in
-  separate review records rather than the raw observation status.
+- raw validation status is `passed|failed|inconclusive`; raw corpus decisions
+  are `passed|review_required|blocked`. Effective acceptance is derived
+  separately from allowed observation/corpus reviews. In this change,
+  `review_required` is a corpus-layer decision only; validation-layer
+  observation results use `passed|failed|inconclusive`, and observation review
+  provenance stays in separate review records rather than the raw observation
+  status.
 - "Current" means the single live row referenced by the task's current
   reservation/evidence/current observation pointers; all other rows in those
   families are historical.
@@ -650,21 +657,28 @@ policy client-side.
 
 ## Risks / Trade-offs
 
-- **Profile space can become over-constrained.** Keep policies versioned and
-  make exhaustion explicit via `design_diversity_exhausted`; never silently
-  relax a governed field.
-- **Observation will miss some facts.** Treat unknowns as `inconclusive` and
-  allow acceptance only through a separate observation review path; metadata
-  alone is never proof.
-- **Corpus checks can become expensive at scale.** Persist fingerprints, short
-  list by category/profile, and bound comparisons to batch plus nearest
-  history.
-- **Reservation churn can fragment capacity.** Release only under parent locks,
-  retry from a fresh ledger snapshot, and keep superseded evidence as
-  historical context.
+- **Profile space can become over-constrained.** Version policies, keep the
+  same-task revision exemption narrow, and fail fast with
+  `design_diversity_exhausted` plus exhausted dimensions instead of silently
+  relaxing governed fields. Watch allocator retries and exhausted-profile
+  counts by category.
+- **Observation will miss some facts.** Treat unknowns as `inconclusive`, keep
+  accepted review as a separate record, and require explicit scope-limited
+  review before governed success. Watch inconclusive rates per observer field
+  and review backlog growth.
+- **Corpus checks can become expensive or over-blocking.** Persist fingerprints,
+  shortlist by category/profile, and bound comparisons to batch plus nearest
+  history. Keep `review_required` distinct from `blocked` so borderline cases
+  can be reviewed without weakening hard-duplicate rules. Watch match counts,
+  blocked rates, and query latency.
+- **Reservation churn can fragment capacity.** Release only under parent
+  locks, retry from a fresh ledger snapshot, and preserve superseded evidence
+  as historical context. Watch release/re-reserve ratio and stale-ledger
+  retries; a rising ratio is a promotion warning sign.
 - **Negative-test execution is security-sensitive.** Use a closed harness
   registry, bounded timeout/output, challenge-local cwd, and no arbitrary
-  executable, argv, or shell input.
+  executable, argv, or shell input. Watch harness validation failures and
+  timeout spikes; unknown harness kinds should fail closed.
 
 ## Migration
 
@@ -674,7 +688,8 @@ reservations, ledger rows, design evidence, artifact observations, corpus
 batches/members/decisions/matches/reviews/history, and the `research_runs`
 trial-only marker described above.
 
-- historical DesignTasks have no reservation/evidence and are `legacy`;
+- historical DesignTasks have no reservation/evidence and are legacy
+  historical records;
 - historical successful artifacts may be asynchronously fingerprinted for
   comparison without becoming production-contract-compliant;
 - existing revalidation continues to use existing checks;

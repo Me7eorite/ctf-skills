@@ -29,7 +29,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 import sqlalchemy as sa
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from domain import design_tasks as dto
 from domain import research as research_dto
@@ -77,6 +77,8 @@ DEFAULT_COOLDOWN_WINDOW = 1
 DIVERSITY_WARNING_FAMILY_QUOTA = "family_quota_exceeded"
 DIVERSITY_WARNING_SUBTECHNIQUE_DUPLICATE = "subtechnique_duplicate"
 DIVERSITY_WARNING_FAMILY_OTHER = "family_other"
+LOCK_NOT_AVAILABLE_SQLSTATE = "55P03"
+GENERATION_REQUEST_BUSY_CODE = "generation_request_busy"
 
 
 class DesignTaskPlanningService:
@@ -114,7 +116,7 @@ class DesignTaskPlanningService:
             # 的 SELECT ... FOR UPDATE 锁不到任何行，两个并发 generate
             # 会都通过校验后才在 INSERT 阶段撞到唯一约束。父行锁让这种
             # 场景串行化为干净的 409，而非 5xx 完整性错误。
-            research_repo.lock_generation_request(request_id)
+            _lock_generation_request_or_busy(research_repo, request_id)
 
             latest = research_repo.get_latest_run_for_request(request_id)
             if latest is None or latest.status != "completed":
@@ -174,7 +176,7 @@ class DesignTaskPlanningService:
             request = research_repo.get_generation_request(request_id)
             if request is None:
                 raise DesignTaskValidationError(f"generation_request {request_id} does not exist")
-            research_repo.lock_generation_request(request_id)
+            _lock_generation_request_or_busy(research_repo, request_id)
             rows = _locked_task_rows(session, request_id)
             if not rows:
                 raise DesignTaskValidationError("no design tasks to approve")
@@ -201,7 +203,7 @@ class DesignTaskPlanningService:
             request = research_repo.get_generation_request(request_id)
             if request is None:
                 raise DesignTaskValidationError(f"generation_request {request_id} does not exist")
-            research_repo.lock_generation_request(request_id)
+            _lock_generation_request_or_busy(research_repo, request_id)
             rows = _locked_task_rows(session, request_id)
             if not rows:
                 raise DesignTaskValidationError("no design tasks to regenerate")
@@ -340,7 +342,7 @@ class DesignTaskPlanningService:
                 raise DesignTaskValidationError(
                     f"generation_request {task_request_id} does not exist"
                 )
-            research_repo.lock_generation_request(request.id)
+            _lock_generation_request_or_busy(research_repo, request.id)
             task = session.scalars(
                 sa.select(design_model.DesignTask)
                 .where(design_model.DesignTask.id == design_task_id)
@@ -922,6 +924,35 @@ def _allocate_primary_findings(
         used_subtechniques.add(sub_technique)
         recent_families.append(family)
     return allocations
+
+
+def _is_lock_not_available(exc: DBAPIError) -> bool:
+    orig = getattr(exc, "orig", None)
+    if orig is None:
+        return False
+    if getattr(orig, "pgcode", None) == LOCK_NOT_AVAILABLE_SQLSTATE:
+        return True
+    if getattr(orig, "sqlstate", None) == LOCK_NOT_AVAILABLE_SQLSTATE:
+        return True
+    diag = getattr(orig, "diag", None)
+    if diag is not None and getattr(diag, "sqlstate", None) == LOCK_NOT_AVAILABLE_SQLSTATE:
+        return True
+    return False
+
+
+def _lock_generation_request_or_busy(
+    research_repo: ResearchRepository,
+    request_id: UUID,
+) -> None:
+    try:
+        research_repo.lock_generation_request(request_id, nowait=True)
+    except DBAPIError as exc:
+        if _is_lock_not_available(exc):
+            raise DesignTaskValidationError(
+                "generation request is busy",
+                code=GENERATION_REQUEST_BUSY_CODE,
+            ) from exc
+        raise
 
 
 def _semantic_assignments_for_findings(

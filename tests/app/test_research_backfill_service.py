@@ -15,6 +15,7 @@ import pytest
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
+from sqlalchemy.exc import ProgrammingError
 
 import cli
 from core.paths import ProjectPaths
@@ -51,12 +52,18 @@ def session_factory() -> SessionFactory:
 @pytest.fixture(autouse=True)
 def clean_database(session_factory: SessionFactory):
     with session_factory() as session:
-        session.execute(sa.delete(model.ResearchFindingSource))
-        session.execute(sa.delete(model.ResearchFinding))
-        session.execute(sa.delete(model.ResearchSource))
-        session.execute(sa.delete(model.HermesProfileBinding))
-        session.execute(sa.delete(model.ResearchRun))
-        session.execute(sa.delete(model.GenerationRequest))
+        for table in (
+            model.ResearchFindingSource,
+            model.ResearchFinding,
+            model.ResearchSource,
+            model.HermesProfileBinding,
+            model.ResearchRun,
+            model.GenerationRequest,
+        ):
+            try:
+                session.execute(sa.delete(table))
+            except ProgrammingError:
+                session.rollback()
         session.execute(
             sa.delete(model.ChallengeCategory).where(
                 model.ChallengeCategory.code.not_in(["web", "pwn", "re"])

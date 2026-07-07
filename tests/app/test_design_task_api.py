@@ -394,6 +394,27 @@ class GenerateDesignTasksTests(unittest.TestCase):
             self.assertEqual(resp.status_code, 409)
             self.assertIn("cannot regenerate", resp.json()["detail"])
 
+    def test_generate_busy_returns_stable_code(self):
+        def _busy(_id):
+            raise DesignTaskValidationError(
+                "generation request is busy",
+                code="generation_request_busy",
+            )
+
+        planner = SimpleNamespace(generate_for_request=_busy)
+        with _app_client(planning_service=planner) as client:
+            resp = client.post(
+                f"/api/research/requests/{uuid4()}/design-tasks/generate"
+            )
+            self.assertEqual(resp.status_code, 409)
+            self.assertEqual(
+                resp.json()["detail"],
+                {
+                    "code": "generation_request_busy",
+                    "message": "generation request is busy",
+                },
+            )
+
     def test_non_uuid_returns_404(self):
         with _app_client() as client:
             resp = client.post(

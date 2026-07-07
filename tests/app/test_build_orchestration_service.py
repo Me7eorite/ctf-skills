@@ -561,6 +561,27 @@ def test_shadow_submit_keeps_failed_design_quality_non_blocking(
     assert list((service.paths.shards / "pending").glob("*.json"))
 
 
+def test_legacy_trial_is_supported_but_legacy_governance_mode_is_rejected(
+    tmp_path: Path,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory)
+    service = _service(tmp_path, session_factory, governance_mode="legacy_trial")
+
+    attempt_id = service.submit_single(task_id)
+
+    with session_factory() as session:
+        attempt = BuildAttemptsRepository(session).get(attempt_id)
+        assert attempt is not None
+        assert session.get(task_model.DesignTask, task_id).status == "building"
+
+    with pytest.raises(BuildOrchestrationError) as excinfo:
+        _service(tmp_path, session_factory, governance_mode="legacy")
+
+    assert excinfo.value.code == "unsupported_governance_mode"
+    assert "legacy_trial" in str(excinfo.value)
+
+
 @pytest.mark.parametrize("governance_mode", ["trial", "production"])
 def test_governed_submit_embeds_contract_and_persists_attempt_binding(
     governance_mode: str,

@@ -16,6 +16,14 @@ silently. If the topic turns out to be inherently cross-category, return
 fewer findings rather than violating this rule. The category value above is
 the authoritative scope marker for this run.
 
+Hard boundary:
+
+- `category` is the only category you may use.
+- `topic` is the only research subject you may expand.
+- `target_count` is a goal, not permission to drift outside `category`.
+- `technique_family` must come from the allowed lane vocabulary below.
+- Cross-category content is forbidden even when it looks useful.
+
 ## Request
 
 - **Topic**: {topic}
@@ -26,6 +34,15 @@ the authoritative scope marker for this run.
 - **Seed URLs** (start here):
 {seed_urls}
 
+Request contract:
+
+- Seed URLs are authoritative starting points and must be read first.
+- `target_count` may be underfilled only when the consulted evidence cannot
+  support more category-correct findings.
+- Partial results are allowed, but an empty run is not.
+- Every finding must cite at least one source via `source_indices`.
+- `source_indices` must point into the current run's `sources` array.
+
 ## Generation policy
 
 {generation_policy}
@@ -35,6 +52,16 @@ points, construct web searches from the category, topic, and keywords. Prefer
 authoritative primary sources: official docs, standards, advisories, CVE/NVD
 records, framework documentation, project repositories, release notes, and
 high-quality writeups with reproducible technical detail.
+
+Search discipline:
+
+- Search seed-first, then expand only when the current evidence is exhausted.
+- Keep concurrency low enough to avoid 429s, disconnects, and timeouts.
+- On 429, timeout, or disconnect, back off and retry instead of fanning out.
+- As the budget closes, stop opening new sources and converge on the evidence
+  already collected.
+- Resume from the persisted run state when a checkpoint exists; do not redo
+  sources or findings that are already confirmed.
 
 ## Procedure
 
@@ -58,6 +85,8 @@ high-quality writeups with reproducible technical detail.
 6. For each finding, set `technique_family` to one of the category lanes below.
    If none fits, use `other`.
 7. Do not invent references. If you cannot substantiate a finding, drop it.
+8. When evidence is partial, return the best category-correct subset rather than
+   fabricating the missing tail.
 
 ## Completion budget
 
@@ -69,6 +98,7 @@ category `{category}`, emit a partial but valid JSON document instead of no
 terminal JSON object; a supplemental run can continue from the persisted result.
 Never end the run with only progress text, subagent summaries, or search notes.
 The last thing printed to stdout must be the single JSON object described below.
+Do not empty the arrays just to satisfy shape.
 
 ## Technique family vocabulary
 
@@ -101,6 +131,7 @@ following per-entry schema:
   - `summary` (string, 1–3 sentences explaining the finding)
   - `source_indices` (list of integers, length ≥ 1; each integer is a
     0-based index into `sources[]`; the list MUST be non-empty)
+  - `source_indices` values must refer only to sources in this same output.
 
 A finding without at least one valid `source_indices` entry is invalid and
 will be rejected by the downstream parser. Every integer in
@@ -129,3 +160,5 @@ Note that `findings[0].source_indices` is `[0]` — a non-empty list of valid
   substantiated by a real source.
 - If search/iteration budget is exhausted, immediately summarize the consulted
   sources into the required JSON object instead of continuing exploration.
+- If you already have enough confirmed sources, stop searching and refine the
+  findings instead of widening scope.

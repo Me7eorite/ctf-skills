@@ -1201,6 +1201,10 @@ function renderBlockingReasons(reasons) {
 }
 
 function eligibleForBuild(task) {
+  const buildEligibility = task?.build_eligibility;
+  if (buildEligibility && typeof buildEligibility.eligible === "boolean") {
+    return buildEligibility.eligible;
+  }
   return (
     (task?.status === "designed" || task?.status === "build_failed")
     && buildProfileReady(task.category)

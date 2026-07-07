@@ -8,6 +8,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import sqlalchemy as sa
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from core.clock import utcnow as _utcnow
@@ -19,6 +20,8 @@ from domain.research_validators import (
     validate_finding,
 )
 from persistence.models import research as model
+
+LOCK_NOT_AVAILABLE_SQLSTATE = "55P03"
 
 
 class ResearchRepository:
@@ -43,17 +46,24 @@ class ResearchRepository:
         row = self.session.get(model.GenerationRequest, request_id)
         return _generation_request(row) if row else None
 
-    def lock_generation_request(self, request_id: UUID) -> None:
-        # SELECT ... FOR UPDATE 用于在事务内串行化对同一 generation_request
-        # 的并发写入（例如设计任务生成时的“无现有行也要避免竞态”场景）。
-        # 锁在 execute 时即生效，无需消费结果集；存在性检查由调用方通过
-        # get_generation_request 完成。
-        stmt = (
-            sa.select(model.GenerationRequest.id)
-            .where(model.GenerationRequest.id == request_id)
-            .with_for_update()
-        )
-        self.session.execute(stmt)
+    def lock_generation_request(self, request_id: UUID, *, nowait: bool = False) -> None:
+        # Advisory xact lock 用于 request-level mutex：它串行化同一
+        # generation_request 的并发 mutation，避免“没有现有 design_tasks
+        # 行时无法靠子表锁挡住竞态”的问题，也不会和后续 child-row
+        # 外键插入互相卡住。它不是后续业务锁的替代品。
+        key1, key2 = _advisory_lock_keys(request_id)
+        if nowait:
+            acquired = self.session.scalar(
+                sa.select(sa.func.pg_try_advisory_xact_lock(key1, key2))
+            )
+            if not acquired:
+                raise DBAPIError(
+                    "SELECT pg_try_advisory_xact_lock(:key1, :key2)",
+                    {"key1": key1, "key2": key2},
+                    _AdvisoryLockNotAvailable(),
+                )
+            return
+        self.session.execute(sa.select(sa.func.pg_advisory_xact_lock(key1, key2)))
 
     def list_generation_requests(
         self,
@@ -580,3 +590,15 @@ def _finding(row: model.ResearchFinding) -> dto.ResearchFinding:
         summary=row.summary,
         technique_family=row.technique_family,
     )
+
+
+def _advisory_lock_keys(request_id: UUID) -> tuple[int, int]:
+    raw = request_id.bytes
+    key1 = int.from_bytes(raw[:4], "big", signed=True)
+    key2 = int.from_bytes(raw[4:8], "big", signed=True)
+    return key1, key2
+
+
+class _AdvisoryLockNotAvailable:
+    pgcode = LOCK_NOT_AVAILABLE_SQLSTATE
+    sqlstate = LOCK_NOT_AVAILABLE_SQLSTATE

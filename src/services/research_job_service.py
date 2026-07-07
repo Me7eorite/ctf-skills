@@ -17,7 +17,7 @@ import sqlalchemy as sa
 
 from core.clock import utcnow as _utcnow
 from domain import research as dto
-from domain.design.technique_taxonomy import resolve_family
+from domain.design.technique_taxonomy import CATEGORY_TECHNIQUE_FAMILIES, families_for_category, resolve_family
 from domain.research_validators import (
     ResearchValidationError,
     minimum_research_findings,
@@ -952,7 +952,22 @@ def _optional_str(value: Any) -> str | None:
 
 
 def _normalize_technique_family(finding: Mapping[str, Any], category: str | None) -> str:
-    return resolve_family(finding, category=category)
+    raw_family = finding.get("technique_family")
+    if raw_family is None:
+        return resolve_family(finding, category=category)
+    if not isinstance(raw_family, str) or not raw_family.strip():
+        raise ResearchValidationError("finding technique_family must be a non-empty string when present")
+    normalized = raw_family.strip().lower().replace("-", "_").replace(" ", "_")
+    allowed = (
+        set(families_for_category(category))
+        if category is not None
+        else {family for families in CATEGORY_TECHNIQUE_FAMILIES.values() for family in families}
+    )
+    if normalized not in allowed:
+        raise ResearchValidationError(
+            f"technique_family {raw_family!r} is not allowed; allowed: {sorted(allowed)}"
+        )
+    return normalized
 
 
 def _required_str(payload: Mapping[str, Any], field: str) -> str:

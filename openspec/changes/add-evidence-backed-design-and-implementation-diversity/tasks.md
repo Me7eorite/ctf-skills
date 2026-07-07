@@ -80,13 +80,13 @@
       incomplete contracts, stale ledgers, retries, and atomic completion.
 - [x] 5.8 Add `request_design_revision`: supersede the live design/evidence,
       release and re-reserve under locks, clear stale review, and return eligible
-      `designed|build_failed|unpublished-built` tasks to `draft`; require plan
+      `designed|build_failed|built` tasks to `draft`; require plan
       approval before queue, reject active builds, and preserve released
       production versions.
 - [x] 5.9 Route governed failed pre-build difficulty reviews through
       `request_design_revision` diagnostics instead of the legacy direct
-      supersede/requeue helper; keep legacy behavior available only for
-      non-governed `legacy`/`legacy_trial` submissions.
+      supersede/requeue helper; keep legacy behavior available only for the
+      non-governed legacy compatibility path and `legacy_trial` submissions.
 
 ## 6. Build as construction
 
@@ -180,9 +180,10 @@
 
 ## 10. Compatibility, deletion, and operations
 
-- [ ] 10.1 Grandfather historical rows for read/revalidate while blocking new
+- [x] 10.1 Grandfather historical rows for read/revalidate while blocking new
       production builds without committed evidence; all legacy rebuilds must be
-      explicit `legacy_trial` and non-production.
+      explicit `legacy_trial`, non-production, and never counted as governed
+      `trial`.
 - [ ] 10.2 Extend ResourceDeletionService scopes to reservations, evidence,
       observations, and corpus decisions; preserve minimal published/retired
       corpus history, admitted-review provenance, and acceptance/blocking

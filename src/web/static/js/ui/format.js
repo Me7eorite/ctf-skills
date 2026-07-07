@@ -145,6 +145,8 @@ export function designErrorMessage(error) {
 
 export function researchErrorMessage(error) {
   if (!error) return "未提供失败原因";
+  if (error === "generation_request_busy" || error === "request_busy") return "当前研究需求正在处理中，请稍后重试";
+  if (error === "generation request is busy") return "当前研究需求正在处理中，请稍后重试";
   if (error === "profile_not_bound") return "未绑定研究 Agent 配置";
   if (error.startsWith("profile_disabled:")) {
     return `研究 Agent 配置已停用（${error.slice("profile_disabled:".length)}）`;

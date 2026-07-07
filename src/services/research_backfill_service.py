@@ -43,6 +43,8 @@ BackfillErrorCode = Literal[
     "log_unreadable",
     "parse_failed",
     "quality_gate_failed",
+    "insufficient_evidence",
+    "resume_conflict",
 ]
 
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -275,6 +277,7 @@ def _sha256_hex(data: bytes) -> str:
 def _parse_error_code(detail: str) -> BackfillErrorCode:
     if detail.startswith(
         (
+            "insufficient_evidence:",
             "insufficient_findings:",
             "url_shape_invalid:",
             "content_hash_shape_invalid:",
@@ -282,9 +285,15 @@ def _parse_error_code(detail: str) -> BackfillErrorCode:
             "unparseable_output:sources_not_list",
             "unparseable_output:findings_not_list",
             "unparseable_output:source_not_object",
+            "finding source_indices must be",
+            "source index ",
+            "finding source_indices must not contain duplicates",
+            "technique_family ",
         )
     ):
         return "quality_gate_failed"
+    if detail.startswith("preview_stale") or "resume_conflict" in detail:
+        return "resume_conflict"
     return "parse_failed"
 
 

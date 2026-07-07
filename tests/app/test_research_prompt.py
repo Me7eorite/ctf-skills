@@ -60,12 +60,15 @@ class RenderResearchPromptTests(unittest.TestCase):
         self.assertIn("0-based", prompt)
 
         # 中文注释：确认提示词要求拒绝跨 category 材料。
-        self.assertIn("Refuse cross-category material", prompt)
+        self.assertIn("Cross-category content is forbidden", prompt)
 
         # 中文注释：确认示例使用当前 category，并给出非空 source_indices。
         self.assertIn(f"Sample technique within {category}", prompt)
         self.assertRegex(prompt, r'"technique_family":\s*"other"')
         self.assertRegex(prompt, r'"source_indices":\s*\[\s*0\s*\]')
+        self.assertIn("Search discipline", prompt)
+        self.assertIn("Resume from the persisted run state", prompt)
+        self.assertIn("Partial results are allowed", prompt)
 
     def test_renders_seeded_web_category(self):
         request = _make_request(

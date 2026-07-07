@@ -132,6 +132,8 @@ def test_research_status_and_diagnostics_are_chinese() -> None:
         "研究来源存在重复内容",
     ):
         assert diagnostic in source
+    assert "generation_request_busy" in source
+    assert "当前研究需求正在处理中，请稍后重试" in source
 
 
 def test_research_failure_alert_uses_api_classification_fields() -> None:

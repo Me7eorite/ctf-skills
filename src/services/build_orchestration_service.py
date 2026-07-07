@@ -47,7 +47,6 @@ from services.design_task_planning_service import DesignTaskPlanningService
 LOG = logging.getLogger(__name__)
 BUILD_GOVERNANCE_MODE_ENV = "BUILD_GOVERNANCE_MODE"
 BUILD_GOVERNANCE_MODES: tuple[str, ...] = (
-    "legacy",
     "legacy_trial",
     "shadow",
     "trial",

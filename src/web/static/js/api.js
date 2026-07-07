@@ -17,7 +17,11 @@ export async function api(path, options = {}) {
         const message = typeof detail === "object" && detail !== null
           ? detail.code || JSON.stringify(detail)
           : detail;
-        throw new Error(message || `请求失败 (${response.status})`);
+        const error = new Error(message || `请求失败 (${response.status})`);
+        if (typeof detail === "object" && detail !== null && detail.code) {
+          error.code = detail.code;
+        }
+        throw error;
       }
       return payload;
     })

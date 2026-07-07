@@ -83,12 +83,14 @@ Default review thresholds:
 - an inconclusive ArtifactObservation with an allowed observation review.
 
 Thresholds and quotas MAY be configured per category. Production publication
-requires a corpus-accepted member decision: `passed`, or `review_required` with
-an explicit operator approval. Corpus approval SHALL record actor, reason, and
-timestamp and SHALL NOT rewrite the stored `review_required` member decision.
-Observation review and corpus review SHALL be separate records. Exact
-combined-profile duplicates outside the same-task revision lineage, failed
-observations, and hard profile mismatches SHALL not be overrideable.
+requires every selected member to be corpus-accepted and the aggregate batch
+decision to be `passed`. A member decision is corpus-accepted when it is
+`passed`, or `review_required` with an explicit operator approval. Corpus
+approval SHALL record actor, reason, and timestamp and SHALL NOT rewrite the
+stored `review_required` member decision. Observation review and corpus review
+SHALL be separate records. Exact combined-profile duplicates outside the
+same-task revision lineage, failed observations, and hard profile mismatches
+SHALL not be overrideable.
 
 An inconclusive ArtifactObservation without an allowed observation review SHALL
 block corpus admission.

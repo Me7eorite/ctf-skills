@@ -93,6 +93,13 @@ must not publish production releases, and must mark all outputs non-production.
 while keeping release manual and non-production. `production` mode uses this
 change's hard admission, observation, corpus, and release gates. New governed
 production submissions cannot fall back to the legacy build path.
+The separate `legacy_trial` rebuild path remains operator-only, non-production,
+and reserved for grandfathered artifacts without committed governance; it is
+not the same as governed `trial`.
+`research_runs.trial_only` is a source marker for research that was soft-passed
+below the production readiness floor. It is not a build mode, and it can flow
+into governed trial work only when the downstream Design and Build gates also
+pass.
 
 ## Capabilities
 
@@ -141,8 +148,8 @@ production submissions cannot fall back to the legacy build path.
   - source/solver/path fingerprints;
   - batch/history corpus decision.
 - **Compatibility**:
-  historical tasks/designs/builds remain readable. They are marked `legacy`
-  and are not retroactively required to have reservations/evidence, but they
+  historical tasks/designs/builds remain readable as legacy historical data.
+  They are not retroactively required to have reservations/evidence, but they
   may be fingerprinted as comparison candidates. New production submissions
   cannot use the legacy exemption.
 - **API/dashboard**:

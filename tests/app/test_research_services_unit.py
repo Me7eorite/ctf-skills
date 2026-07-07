@@ -140,7 +140,7 @@ def test_parse_research_output_marks_non_trial_only_when_designable_findings_exi
     assert parsed.trial_only is False
 
 
-def test_parse_research_output_preserves_valid_family_and_coerces_unknown(caplog):
+def test_parse_research_output_preserves_valid_family_and_rejects_unknown(caplog):
     stdout_text = json.dumps(
         {
             "sources": [
@@ -171,11 +171,35 @@ def test_parse_research_output_preserves_valid_family_and_coerces_unknown(caplog
     )
 
     with caplog.at_level("WARNING"):
-        parsed = parse_research_output(stdout_text, target_count=1, category="web")
+        with pytest.raises(ResearchValidationError, match="technique_family"):
+            parse_research_output(stdout_text, target_count=1, category="web")
 
-    assert parsed.findings[0]["technique_family"] == "injection"
-    assert parsed.findings[1]["technique_family"] == "other"
-    assert "unknown technique_family" in caplog.text
+
+def test_parse_research_output_rejects_cross_category_family():
+    stdout_text = json.dumps(
+        {
+            "sources": [
+                {
+                    "url": "https://example.com/a",
+                    "title": "A",
+                    "summary": "Summary",
+                    "content_hash": "a" * 64,
+                }
+            ],
+            "findings": [
+                {
+                    "kind": "technique",
+                    "label": "stack pivot",
+                    "technique_family": "stack",
+                    "summary": "Finding summary",
+                    "source_indices": [0],
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(ResearchValidationError, match="technique_family"):
+        parse_research_output(stdout_text, target_count=1, category="web")
 
 
 def test_parse_research_output_replaces_invalid_content_hash(caplog):
@@ -206,6 +230,32 @@ def test_parse_research_output_replaces_invalid_content_hash(caplog):
     assert re.fullmatch(r"[0-9a-f]{64}", parsed.sources[0]["content_hash"])
     assert parsed.sources[0]["content_hash"] != "not-a-sha256"
     assert "replaced invalid research source content_hash at index 0" in caplog.text
+
+
+def test_parse_research_output_rejects_duplicate_source_indices():
+    stdout_text = json.dumps(
+        {
+            "sources": [
+                {
+                    "url": "https://example.com/a",
+                    "title": "A",
+                    "summary": "Summary",
+                    "content_hash": "a" * 64,
+                }
+            ],
+            "findings": [
+                {
+                    "kind": "technique",
+                    "label": "Technique",
+                    "summary": "Finding summary",
+                    "source_indices": [0, 0],
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(ResearchValidationError, match="duplicates"):
+        parse_research_output(stdout_text)
 
 
 def test_parse_research_output_accepts_compact_finalize_shape():
@@ -244,6 +294,60 @@ def test_parse_research_output_accepts_compact_finalize_shape():
     assert parsed.findings[0]["label"] == "PE file structure"
     assert parsed.findings[0]["summary"].startswith("PE file structure")
     assert parsed.findings[0]["source_indices"] == [0, 1]
+
+
+def test_parse_research_output_marks_partial_without_designable_findings():
+    stdout_text = json.dumps(
+        {
+            "sources": [
+                {
+                    "url": "https://example.com/a",
+                    "title": "A",
+                    "summary": "Summary",
+                    "content_hash": "a" * 64,
+                }
+            ],
+            "findings": [
+                {
+                    "kind": "scenario",
+                    "label": "deployment note",
+                    "summary": "Operational context only.",
+                    "source_indices": [0],
+                }
+            ],
+        }
+    )
+
+    parsed = parse_research_output(stdout_text, target_count=5, category="web", enforce_quality=False)
+
+    assert parsed.trial_only is True
+
+
+def test_parse_research_output_rejects_non_web_family_as_cross_category():
+    stdout_text = json.dumps(
+        {
+            "sources": [
+                {
+                    "url": "https://example.com/a",
+                    "title": "A",
+                    "summary": "Summary",
+                    "content_hash": "a" * 64,
+                }
+            ],
+            "findings": [
+                {
+                    "kind": "technique",
+                    "label": "stack pivot",
+                    "technique_family": "stack",
+                    "summary": "Finding summary",
+                    "source_indices": [0],
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(ResearchValidationError, match="technique_family"):
+        parse_research_output(stdout_text, target_count=1, category="web")
 
 
 def test_research_failure_classification_targets_output_delivery_failures():
@@ -382,7 +486,7 @@ def test_legacy_parse_wrapper_still_materializes_raw_text(tmp_path):
                     }
                 ],
             },
-            "url_shape_invalid",
+            "must be a non-empty string",
         ),
         (
             {
@@ -475,7 +579,7 @@ def test_terminal_json_extraction_and_quality_gate_contracts(monkeypatch):
     assert apply_research_quality_gate(
         {"sources": [valid_source], "findings": []},
         3,
-    ) == (False, "insufficient_findings:got=0,need=2")
+    ) == (False, "insufficient_evidence:no_findings")
 
 
 def test_quality_gate_ratio_env_var(monkeypatch):

@@ -328,27 +328,36 @@ def apply_research_quality_gate(
         if content_hash in seen_hashes:
             return False, f"content_hash_dup:{content_hash}"
         seen_hashes.add(content_hash)
-
-    designable_findings = _designable_findings(findings)
-    designable_got = len(designable_findings)
-    if designable_got == 0:
-        return False, "insufficient_designable_capacity"
+    if not sources:
+        return False, "insufficient_evidence:no_sources"
+    if not findings:
+        return False, "insufficient_evidence:no_findings"
 
     needed = max(1, math.ceil(target_count * _quality_ratio()))
     slack = _quality_soft_pass_slack()
     soft_floor = max(1, needed - slack)
-    if designable_got < soft_floor:
-        return False, f"insufficient_findings:got={designable_got},need={needed}"
-    if designable_got < needed:
+    finding_count = len(findings)
+    if finding_count < soft_floor:
+        return False, f"insufficient_findings:got={finding_count},need={needed}"
+    if finding_count < needed:
         _LOGGER.warning(
             "research quality gate soft-passed: got=%d, needed=%d, slack=%d "
             "(set RESEARCH_QUALITY_SOFT_PASS_BELOW_BY=0 to disable soft pass)",
-            designable_got,
+            finding_count,
             needed,
             slack,
         )
 
+    designable_findings = _designable_findings(findings)
+    designable_got = len(designable_findings)
     if category is None:
+        if designable_got == 0:
+            if finding_count:
+                _LOGGER.warning(
+                    "research quality gate accepted partial evidence with no designable findings"
+                )
+                return True, None
+            return False, "insufficient_evidence:no_designable_findings"
         distinct = len({resolve_sub_technique(finding) for finding in designable_findings})
         diversity_needed = max(1, math.ceil(target_count * _quality_ratio()))
         diversity_slack = _diversity_soft_pass_slack()
@@ -383,7 +392,16 @@ def apply_research_quality_gate(
         semantic_assignments=semantic_assignments,
     )
     if not capacity.can_allocate:
-        return False, capacity.diagnostics.get("code") or "design_diversity_exhausted"
+        code = capacity.diagnostics.get("code") or "design_diversity_exhausted"
+        if designable_got < target_count:
+            _LOGGER.warning(
+                "research quality gate accepted partial category capacity: got=%d target=%d code=%s",
+                designable_got,
+                target_count,
+                code,
+            )
+            return True, None
+        return False, code
     return True, None
 
 
