@@ -233,7 +233,7 @@ def test_pwn_heap_findings_map_to_supported_reservation_profile(
         target_count=3,
         distribution={"easy": 3},
         category="pwn",
-        finding_labels=["glibc heap", "use after free", "tcache poisoning"],
+        finding_labels=["glibc heap exploitation", "UAF primitive", "tcache poisoning"],
     )
     service = DesignTaskPlanningService(session_factory)
 
@@ -244,11 +244,27 @@ def test_pwn_heap_findings_map_to_supported_reservation_profile(
         "heap_uaf_tcache"
     }
     assert all(task.current_reservation_id is not None for task in tasks)
+    assert [task.primary_technique for task in tasks] == [
+        "glibc heap exploitation",
+        "UAF primitive",
+        "tcache poisoning",
+    ]
+    assert [
+        task.diversity_flags["raw_sub_technique"] for task in tasks
+    ] == [
+        "glibc heap exploitation",
+        "uaf primitive",
+        "tcache poisoning",
+    ]
+    assert all(
+        task.diversity_flags["canonicalization_source"]
+        in {"exact", "alias", "family_fallback"}
+        for task in tasks
+    )
 
 
-def test_pwn_unsupported_profile_is_rejected_explicitly(
+def test_pwn_family_fallback_handles_unknown_finding_without_failure(
     session_factory: SessionFactory,
-    monkeypatch: pytest.MonkeyPatch,
 ):
     request, _ = _seed(
         session_factory,
@@ -256,11 +272,28 @@ def test_pwn_unsupported_profile_is_rejected_explicitly(
         distribution={"easy": 1},
         category="pwn",
         finding_labels=["rainbow table"],
+        technique_families=["heap"],
     )
-    monkeypatch.setattr(
-        planning_module,
-        "resolve_sub_technique",
-        lambda _finding: "rainbow table",
+    service = DesignTaskPlanningService(session_factory)
+
+    [task] = service.generate_for_request(request.id)
+
+    assert task.current_reservation_id is not None
+    assert task.diversity_flags["sub_technique"] == "heap_uaf_tcache"
+    assert task.diversity_flags["raw_sub_technique"] == "rainbow table"
+    assert task.diversity_flags["canonicalization_source"] == "family_fallback"
+
+
+def test_pwn_other_family_unknown_finding_still_returns_unsupported_profile(
+    session_factory: SessionFactory,
+):
+    request, _ = _seed(
+        session_factory,
+        target_count=1,
+        distribution={"easy": 1},
+        category="pwn",
+        finding_labels=["rainbow table"],
+        technique_families=["other"],
     )
     service = DesignTaskPlanningService(session_factory)
 

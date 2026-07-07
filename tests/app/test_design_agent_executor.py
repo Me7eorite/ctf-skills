@@ -170,6 +170,16 @@ def test_nonzero_rate_limit_output_maps_to_provider_rate_limited():
     )
 
 
+def test_zero_exit_code_with_rate_limit_output_maps_to_provider_rate_limited():
+    assert (
+        last_error_for_exit_code(
+            0,
+            "throttled: provider rate limited",
+        )
+        == PROVIDER_RATE_LIMITED_ERROR
+    )
+
+
 def test_success_exit_code_has_no_error():
     assert last_error_for_exit_code(0) is None
 

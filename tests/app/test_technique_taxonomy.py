@@ -95,6 +95,40 @@ def test_pwn_rop_aliases_match_governed_profile_key(label: str):
     assert resolve_sub_technique(_finding(label)) == "ret2libc"
 
 
+@pytest.mark.parametrize(
+    ("label", "expected_family", "expected_sub_technique"),
+    [
+        ("glibc heap exploitation", "heap", "heap_uaf_tcache"),
+        ("UAF primitive", "heap", "heap_uaf_tcache"),
+        ("tcache poisoning", "heap", "heap_uaf_tcache"),
+        ("ROP chain", "stack", "ret2libc"),
+        ("return oriented programming", "stack", "ret2libc"),
+        ("libc leak", "stack", "ret2libc"),
+        ("format string", "format_string", "format_string_got"),
+        ("got overwrite", "format_string", "format_string_got"),
+        ("BSS variable modification", "integer_oob", "global_bss_write"),
+        ("seccomp", "sandbox", "seccomp_orw"),
+    ],
+)
+def test_pwn_canonical_profile_adapter_returns_governed_semantic(
+    label: str,
+    expected_family: str,
+    expected_sub_technique: str,
+):
+    from domain.design.profile_taxonomy import canonicalize_pwn_semantic_assignment
+
+    result = canonicalize_pwn_semantic_assignment(
+        {"family": expected_family, "sub_technique": label}
+    )
+
+    assert result.supported is True
+    assert result.semantic == {
+        "family": expected_family,
+        "sub_technique": expected_sub_technique,
+    }
+    assert result.canonicalization_source in {"exact", "alias", "family_fallback"}
+
+
 def test_category_tactics_lane_list_matches_taxonomy_constants():
     doc = _category_tactics_text()
     expected_by_heading = {

@@ -294,6 +294,8 @@ def _reservation(row: model.DesignProfileReservation) -> dto.DesignProfileReserv
 
 
 def _all_scalars(result):
+    if isinstance(result, list):
+        return result
     all_method = getattr(result, "all", None)
     if callable(all_method):
         return all_method()

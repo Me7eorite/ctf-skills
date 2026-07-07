@@ -253,6 +253,57 @@ def test_prompt_includes_previous_draft_seed_path(tmp_path):
     assert "./state/previous_design.json" in prompt
 
 
+def test_governed_prompt_mentions_closed_harness_contract(tmp_path):
+    context = load_design_prompt_context(_paths(tmp_path))
+    task = _task()
+    reservation = {
+        "id": str(uuid4()),
+        "reservation_version": 1,
+        "reserved_profile": {
+            "semantic": {"family": "injection", "sub_technique": "sqli"},
+            "solve": {
+                "analysis_mode": "blackbox",
+                "required_action": "payload_injection",
+                "chain_shape": "inject-exfiltrate",
+                "required_tool_class": "http_client",
+            },
+            "implementation": {
+                "artifact_format": "container",
+                "language": "python",
+                "runtime": "flask",
+                "interaction": "http_form",
+                "control_structure": "route_handler",
+                "flag_concealment": "database_record",
+            },
+            "presentation": {
+                "scenario_type": "ticket_queue",
+                "input_model": "web_form",
+            },
+        },
+        "profile_signature": "sig",
+        "taxonomy_version": 1,
+        "policy_version": 1,
+        "ledger_version": 1,
+    }
+
+    prompt = build_design_prompt(
+        context,
+        task,
+        _request(),
+        [],
+        [],
+        reservation=reservation,
+        ledger_snapshot={"sibling_entries": [], "historical_entries": []},
+    )
+
+    assert "Copy the supplied `reserved_profile` exactly into" in prompt
+    assert "build_contract.required_profile" in prompt
+    assert "build_contract.required_asset_flow` must be a non-empty array" in prompt
+    assert "Harnesses cannot contain `command`" in prompt
+    assert '"buildContractHarness"' in prompt
+    assert '"buildContractAssetStage"' in prompt
+
+
 def test_re_prompt_calls_out_strings_and_no_hardcoded_flag(tmp_path):
     context = load_design_prompt_context(_paths(tmp_path))
 

@@ -35,6 +35,7 @@ from domain import design_tasks as dto
 from domain import research as research_dto
 from domain.design.profile_taxonomy import (
     canonical_profile_signatures,
+    canonicalize_pwn_semantic_assignment,
     load_profile_policy,
     normalize_semantic_assignment,
     profile_capacity_check,
@@ -1105,6 +1106,36 @@ def _normalized_candidate_semantic(
     category: str,
 ) -> dict[str, str]:
     flags = dict(candidate.get("diversity_flags") or {})
+    if category == "pwn":
+        canonicalization = canonicalize_pwn_semantic_assignment(
+            {
+                "family": str(
+                    flags.get("family")
+                    or resolve_family({"label": primary_technique}, category=category)
+                ),
+                "sub_technique": str(
+                    flags.get("sub_technique")
+                    or resolve_sub_technique({"label": primary_technique})
+                ),
+            }
+        )
+        if canonicalization.semantic is None:
+            semantic = {
+                "family": str(flags.get("family") or "other"),
+                "sub_technique": str(flags.get("sub_technique") or "unknown"),
+            }
+        else:
+            semantic = dict(canonicalization.semantic)
+            flags["family"] = semantic["family"]
+            flags["sub_technique"] = semantic["sub_technique"]
+            flags.update(canonicalization.as_mapping())
+            flags["raw_sub_technique"] = canonicalization.raw_sub_technique
+            flags["canonical_sub_technique"] = canonicalization.canonical_sub_technique
+            flags["canonicalization_source"] = canonicalization.canonicalization_source
+        candidate_flags = candidate.get("diversity_flags")
+        if isinstance(candidate_flags, dict):
+            candidate_flags.update(flags)
+        return semantic
     semantic = _closed_semantic_assignment(
         taxonomy,
         family=str(

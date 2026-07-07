@@ -571,11 +571,11 @@ def _governed_output_schema() -> dict[str, Any]:
             "acceptance_tests",
             "allowed_implementation_freedom",
         ],
-        "properties": {
-            "artifact_ids": {
-                "type": "array",
-                "items": {"type": "string", "minLength": 1},
-            },
+            "properties": {
+                "artifact_ids": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                },
             "fixture_ids": {
                 "type": "array",
                 "items": {"type": "string", "minLength": 1},
@@ -674,6 +674,7 @@ def _governed_output_schema() -> dict[str, Any]:
                         "$ref": "#/$defs/buildContractHarness"
                     },
                 },
+                "additionalProperties": False,
             },
         }
     )
@@ -745,12 +746,16 @@ def _render_governed_contract_rules(
         [
             "Governance fields are validated more strictly than the JSON Schema:",
             f"- {action_hint}",
+            "- `governed_profile` MUST exactly match `reserved_profile`.",
+            "- `build_contract.required_profile` MUST exactly match `governed_profile`.",
+            "- `build_contract.required_player_actions` MUST include the "
+            "reserved solve action exactly as declared in `reserved_profile`.",
             "- `distinctness_claim` must explain both solve-axis differences "
             "and implementation-axis differences; mentioning the reserved solve "
             "values and implementation values is valid.",
             f"- {compared_hint}",
             "- `build_contract.required_asset_flow` must be a non-empty array "
-            "with unique `stage_id` values. Every stage needs "
+            "of objects with unique `stage_id` values. Every stage needs "
             "`produced_asset_or_capability`, `verification_harness`, and "
             "`dependency_harness`.",
             "- Declare symbolic `artifact_ids` and `fixture_ids` before any "
@@ -767,6 +772,9 @@ def _render_governed_contract_rules(
             "`solver_without_fixture` -> `must_fail` or `stdout_not_contains_flag`; "
             "`random_flag_rebuild` -> `outputs_new_flag` or `old_flag_rejected` "
             "(re only).",
+            "- Harness references must point at declared `artifact_ids`, "
+            "`fixture_ids`, or `input_fixture` ids; if there is nothing concrete "
+            "to reference, leave the field out.",
         ]
     )
 

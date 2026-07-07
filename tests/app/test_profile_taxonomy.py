@@ -12,6 +12,7 @@ from domain.design.profile_taxonomy import (
     ProfileTaxonomyError,
     allocate_profile_batch,
     canonical_profile_signatures,
+    canonicalize_pwn_semantic_assignment,
     load_profile_policy,
     normalize_semantic_assignment,
     profile_capacity_check,
@@ -321,7 +322,7 @@ def test_quota_caps_keep_low_cardinality_dimensions_allocatable() -> None:
     assert len(result.allocations) == 25
 
 
-def test_profile_capacity_preserves_freeform_subtechniques() -> None:
+def test_profile_capacity_uses_family_fallback_for_freeform_pwn_terms() -> None:
     result = profile_capacity_check(
         category="pwn",
         target_count=1,
@@ -336,8 +337,19 @@ def test_profile_capacity_preserves_freeform_subtechniques() -> None:
     assert result.can_allocate is True
     assert result.allocations[0].profile.semantic == {
         "family": "format_string",
-        "sub_technique": "64_bit_stack_offset_determination",
+        "sub_technique": "format_string_got",
     }
+
+
+def test_profile_capacity_records_pwn_canonicalization_diagnostics() -> None:
+    canonical = canonicalize_pwn_semantic_assignment(
+        {"family": "heap", "sub_technique": "glibc heap exploitation"}
+    )
+
+    assert canonical.raw_sub_technique == "glibc heap exploitation"
+    assert canonical.canonical_sub_technique == "heap_uaf_tcache"
+    assert canonical.canonicalization_source == "family_fallback"
+    assert canonical.supported is True
 
 
 def test_profile_capacity_coerces_canary_buffer_overflow_phrase() -> None:
@@ -419,13 +431,14 @@ def test_pwn_stack_variants_keep_profile_capacity_distinct() -> None:
     ]
 
 
-def test_unknown_subtechnique_is_preserved_as_open_semantic_key() -> None:
-    semantic = normalize_semantic_assignment(
-        taxonomy_for_category("pwn"),
-        {"family": "stack", "sub_technique": "rainbow table"},
+def test_unknown_pwn_family_stays_unsupported() -> None:
+    canonical = canonicalize_pwn_semantic_assignment(
+        {"family": "other", "sub_technique": "rainbow table"}
     )
 
-    assert semantic == {"family": "stack", "sub_technique": "rainbow table"}
+    assert canonical.supported is False
+    assert canonical.canonicalization_source == "unsupported"
+    assert canonical.semantic is None
 
 
 def test_unsupported_pwn_profile_is_rejected_before_random_solve_allocation() -> None:
@@ -496,12 +509,40 @@ def test_profile_capacity_preserves_pwn_format_string_freeform_subtechniques() -
     ]
     assert result.can_allocate is True
     assert subtechniques == [
-        "64_bit_stack_offset_determination",
-        "got_overwrite_with_n",
-        "format_string_with_stack_pivot",
+        "format_string_got",
+        "format_string_got",
+        "format_string_got",
     ]
-    assert len(set(subtechniques)) == 3
-    assert set(subtechniques) != {"format_string_got"}
+    assert len(set(subtechniques)) == 1
+
+
+def test_pwn_bss_global_write_maps_to_integer_oob_global_bss_write() -> None:
+    semantic = normalize_semantic_assignment(
+        taxonomy_for_category("pwn"),
+        {"family": "integer_oob", "sub_technique": "BSS/global variable write"},
+    )
+
+    assert semantic == {
+        "family": "integer_oob",
+        "sub_technique": "global_bss_write",
+    }
+
+
+def test_pwn_unsupported_profile_does_not_get_recast_as_format_string() -> None:
+    result = profile_capacity_check(
+        category="pwn",
+        target_count=1,
+        semantic_assignments=[
+            {"family": "integer_oob", "sub_technique": "rainbow table"}
+        ],
+    )
+
+    assert result.can_allocate is False
+    assert result.diagnostics["code"] == "unsupported_pwn_profile"
+    assert result.diagnostics["semantic"] == {
+        "family": "integer_oob",
+        "sub_technique": "rainbow table",
+    }
 
 
 def test_capacity_check_accepts_new_subtechniques_for_any_category() -> None:

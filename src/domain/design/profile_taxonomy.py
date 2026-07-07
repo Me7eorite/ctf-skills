@@ -130,6 +130,29 @@ class ProfileSignatures:
 
 
 @dataclass(frozen=True)
+class PwnSemanticCanonicalization:
+    raw_family: str
+    raw_sub_technique: str
+    canonical_family: str | None
+    canonical_sub_technique: str | None
+    canonicalization_source: Literal["exact", "alias", "family_fallback", "unsupported"]
+    semantic: dict[str, str] | None
+
+    @property
+    def supported(self) -> bool:
+        return self.semantic is not None
+
+    def as_mapping(self) -> dict[str, Any]:
+        return {
+            "raw_family": self.raw_family,
+            "raw_sub_technique": self.raw_sub_technique,
+            "canonical_family": self.canonical_family,
+            "canonical_sub_technique": self.canonical_sub_technique,
+            "canonicalization_source": self.canonicalization_source,
+        }
+
+
+@dataclass(frozen=True)
 class ProfileCandidate:
     profile: GovernedProfile
     signatures: ProfileSignatures
@@ -414,6 +437,83 @@ _DEFAULT_HARD_EXCLUSIVE_SIGNATURE = (
     "implementation.control_structure",
     "implementation.flag_concealment",
 )
+
+PWN_CANONICAL_SUB_TECHNIQUE_ALIASES: Mapping[str, str] = {
+    "buffer overflow": "ret2libc",
+    "stack overflow": "ret2libc",
+    "canary leak": "ret2libc",
+    "canary leak then buffer overflow": "ret2libc",
+    "stack canary leak": "ret2libc",
+    "stack canary bypass": "ret2libc",
+    "rop": "ret2libc",
+    "rop chain": "ret2libc",
+    "return oriented programming": "ret2libc",
+    "libc leak": "ret2libc",
+    "glibc leak": "ret2libc",
+    "libc base leak": "ret2libc",
+    "ret2plt": "ret2libc",
+    "return to plt": "ret2libc",
+    "one gadget": "ret2libc",
+    "one_gadget": "ret2libc",
+    "ret2csu": "ret2csu",
+    "ret2csu flow": "ret2csu",
+    "ret2dlresolve": "ret2dlresolve",
+    "ret2dlresolve fake relocation": "ret2dlresolve",
+    "ret2dlresolve with stack pivot": "ret2dlresolve",
+    "stack pivot": "stack_pivot",
+    "stack pivot with leave ret gadget": "stack_pivot",
+    "partial overwrite for pivot": "stack_pivot",
+    "pop rsp gadget usage": "stack_pivot",
+    "format string": "format_string_got",
+    "got overwrite": "format_string_got",
+    "bss variable modification": "global_bss_write",
+    "bss variable write": "global_bss_write",
+    "bss overwrite": "global_bss_write",
+    "global variable modification": "global_bss_write",
+    "global variable write": "global_bss_write",
+    "global overwrite": "global_bss_write",
+    "glibc heap": "heap_uaf_tcache",
+    "heap": "heap_uaf_tcache",
+    "heap exploitation": "heap_uaf_tcache",
+    "heap overflow": "heap_uaf_tcache",
+    "fastbin": "heap_uaf_tcache",
+    "fastbin attack": "heap_uaf_tcache",
+    "fastbin dup": "heap_uaf_tcache",
+    "unsorted bin": "heap_uaf_tcache",
+    "unsorted bin attack": "heap_uaf_tcache",
+    "unlink attack": "heap_uaf_tcache",
+    "tcache poisoning": "heap_uaf_tcache",
+    "tcache dup": "heap_uaf_tcache",
+    "use after free": "heap_uaf_tcache",
+    "use after free primitive": "heap_uaf_tcache",
+    "uaf": "heap_uaf_tcache",
+    "integer overflow": "integer_oob",
+    "out of bounds": "integer_oob",
+    "oob": "integer_oob",
+    "seccomp": "seccomp_orw",
+    "orw": "seccomp_orw",
+}
+
+PWN_CANONICAL_SUB_TECHNIQUE_FAMILY: Mapping[str, str] = {
+    "ret2libc": "stack",
+    "ret2win": "stack",
+    "ret2csu": "stack",
+    "ret2dlresolve": "stack",
+    "stack_pivot": "stack",
+    "format_string_got": "format_string",
+    "heap_uaf_tcache": "heap",
+    "integer_oob": "integer_oob",
+    "global_bss_write": "integer_oob",
+    "seccomp_orw": "sandbox",
+}
+
+PWN_CANONICAL_FAMILY_DEFAULTS: Mapping[str, tuple[str, str]] = {
+    "stack": ("stack", "ret2libc"),
+    "format_string": ("format_string", "format_string_got"),
+    "heap": ("heap", "heap_uaf_tcache"),
+    "integer_oob": ("integer_oob", "integer_oob"),
+    "sandbox": ("sandbox", "seccomp_orw"),
+}
 
 SUB_TECHNIQUE_ALIASES_BY_CATEGORY: Mapping[str, Mapping[str, str]] = {
     "web": {
@@ -734,10 +834,22 @@ def profile_capacity_check(
     ] = {}
 
     for index in range(target_count):
-        semantic = normalize_semantic_assignment(
-            taxonomy,
-            semantic_assignments[index % len(semantic_assignments)],
-        )
+        raw_semantic = semantic_assignments[index % len(semantic_assignments)]
+        if taxonomy.category == "pwn":
+            canonicalization = canonicalize_pwn_semantic_assignment(raw_semantic)
+            if not canonicalization.supported or canonicalization.semantic is None:
+                return _unsupported_profile_semantic(
+                    taxonomy,
+                    {
+                        "family": canonicalization.raw_family,
+                        "sub_technique": canonicalization.raw_sub_technique,
+                    },
+                    target_count=target_count,
+                    allocated_count=len(allocations),
+                )
+            semantic = canonicalization.semantic
+        else:
+            semantic = normalize_semantic_assignment(taxonomy, raw_semantic)
         unsupported = _unsupported_profile_semantic(
             taxonomy,
             semantic,
@@ -807,6 +919,94 @@ def profile_capacity_check(
     )
 
 
+def canonicalize_pwn_semantic_assignment(
+    semantic: Mapping[str, str],
+) -> PwnSemanticCanonicalization:
+    raw_family = _normalize_family_value(semantic.get("family", ""))
+    raw_sub_technique = _normalize_semantic_value(str(semantic.get("sub_technique", "")))
+    if not raw_sub_technique:
+        return PwnSemanticCanonicalization(
+            raw_family=raw_family or "other",
+            raw_sub_technique="",
+            canonical_family=None,
+            canonical_sub_technique=None,
+            canonicalization_source="unsupported",
+            semantic=None,
+        )
+
+    canonical_sub_technique = _coerce_pwn_canonical_sub_technique(raw_sub_technique)
+    if raw_family == "integer_oob" and any(
+        token in raw_sub_technique for token in ("bss", "global", "variable", "write")
+    ):
+        canonical_sub_technique = "global_bss_write"
+    canonical_family = PWN_CANONICAL_SUB_TECHNIQUE_FAMILY.get(canonical_sub_technique)
+    source: Literal["exact", "alias", "family_fallback", "unsupported"] = "unsupported"
+    if (
+        canonical_sub_technique == raw_sub_technique
+        and canonical_sub_technique in PWN_TAXONOMY.semantic.fields["sub_technique"]
+    ):
+        source = "exact"
+    elif canonical_sub_technique in PWN_TAXONOMY.semantic.fields["sub_technique"]:
+        source = "alias"
+    else:
+        if raw_family == "stack" and not _pwn_stack_supports_freeform(raw_sub_technique):
+            return PwnSemanticCanonicalization(
+                raw_family=raw_family or "other",
+                raw_sub_technique=raw_sub_technique,
+                canonical_family=None,
+                canonical_sub_technique=None,
+                canonicalization_source="unsupported",
+                semantic=None,
+            )
+        if raw_family == "integer_oob" and not _pwn_integer_oob_supports_freeform(raw_sub_technique):
+            return PwnSemanticCanonicalization(
+                raw_family=raw_family or "other",
+                raw_sub_technique=raw_sub_technique,
+                canonical_family=None,
+                canonical_sub_technique=None,
+                canonicalization_source="unsupported",
+                semantic=None,
+            )
+        family_default = PWN_CANONICAL_FAMILY_DEFAULTS.get(raw_family)
+        if family_default is not None:
+            canonical_family, canonical_sub_technique = family_default
+            source = "family_fallback"
+        else:
+            return PwnSemanticCanonicalization(
+                raw_family=raw_family or "other",
+                raw_sub_technique=raw_sub_technique,
+                canonical_family=None,
+                canonical_sub_technique=None,
+                canonicalization_source="unsupported",
+                semantic=None,
+            )
+
+    if canonical_family is None:
+        canonical_family = PWN_CANONICAL_SUB_TECHNIQUE_FAMILY.get(canonical_sub_technique)
+    if canonical_family is None:
+        return PwnSemanticCanonicalization(
+            raw_family=raw_family or "other",
+            raw_sub_technique=raw_sub_technique,
+            canonical_family=None,
+            canonical_sub_technique=None,
+            canonicalization_source="unsupported",
+            semantic=None,
+        )
+
+    semantic_payload = normalize_semantic_assignment(
+        PWN_TAXONOMY,
+        {"family": canonical_family, "sub_technique": canonical_sub_technique},
+    )
+    return PwnSemanticCanonicalization(
+        raw_family=raw_family or "other",
+        raw_sub_technique=raw_sub_technique,
+        canonical_family=semantic_payload["family"],
+        canonical_sub_technique=semantic_payload["sub_technique"],
+        canonicalization_source=source,
+        semantic=semantic_payload,
+    )
+
+
 def _unsupported_profile_semantic(
     taxonomy: CategoryProfileTaxonomy,
     semantic: Mapping[str, str],
@@ -818,13 +1018,7 @@ def _unsupported_profile_semantic(
         return None
     family = semantic.get("family", "")
     sub_technique = semantic.get("sub_technique", "")
-    allowed_families = taxonomy.semantic.fields["family"]
-    allowed_subtechniques = taxonomy.semantic.fields["sub_technique"]
-    supported = family in allowed_families and (
-        sub_technique in allowed_subtechniques
-        or family == "format_string"
-    )
-    if supported:
+    if family in taxonomy.semantic.fields["family"] and sub_technique in taxonomy.semantic.fields["sub_technique"]:
         return None
     diagnostics = {
         "code": "unsupported_pwn_profile",
@@ -895,7 +1089,43 @@ def normalize_semantic_assignment(
             taxonomy.category,
             family,
         )
+    if taxonomy.category == "pwn":
+        sub_technique = _normalize_pwn_semantic_sub_technique(family, sub_technique, allowed)
     return {"family": family, "sub_technique": sub_technique}
+
+
+def _coerce_pwn_canonical_sub_technique(value: str) -> str:
+    if value in PWN_TAXONOMY.semantic.fields["sub_technique"]:
+        return value
+    alias = PWN_CANONICAL_SUB_TECHNIQUE_ALIASES.get(value)
+    if alias is not None:
+        return alias
+    return value
+
+
+def _normalize_pwn_semantic_sub_technique(
+    family: str,
+    sub_technique: str,
+    allowed: tuple[str, ...],
+) -> str:
+    if sub_technique in allowed:
+        return sub_technique
+    if family == "integer_oob" and any(
+        token in sub_technique for token in ("bss", "global", "variable", "write")
+    ):
+        return "global_bss_write"
+    return sub_technique
+
+
+def _pwn_stack_supports_freeform(value: str) -> bool:
+    return any(
+        token in value
+        for token in ("ret2", "overflow", "canary", "rop", "libc", "pivot")
+    )
+
+
+def _pwn_integer_oob_supports_freeform(value: str) -> bool:
+    return any(token in value for token in ("bss", "global", "variable", "write", "oob", "overflow"))
 
 
 def _first_eligible_candidate(
@@ -1156,6 +1386,10 @@ def _normalize_semantic_value(value: str) -> str:
     return " ".join(
         value.strip().lower().replace("-", " ").replace("_", " ").split()
     )
+
+
+def _normalize_family_value(value: Any) -> str:
+    return str(value).strip().lower().replace("-", "_").replace(" ", "_")
 
 
 def _semantic_slug(value: str) -> str:

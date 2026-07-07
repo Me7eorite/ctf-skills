@@ -545,13 +545,16 @@ def _load_previous_design_seed(
         return dict(latest_design.payload)
     if latest_attempt is None:
         return None
-    snapshot_path = (
-        paths.design_executions
-        / str(latest_attempt.id)
-        / "state"
-        / "last_design_draft.json"
-    )
-    return _read_design_snapshot(snapshot_path)
+    workspace = paths.design_executions / str(latest_attempt.id)
+    for path in (
+        workspace / "state" / "design_output.json",
+        workspace / "design_output.json",
+        workspace / "state" / "last_design_draft.json",
+    ):
+        snapshot = _read_design_snapshot(path)
+        if snapshot is not None:
+            return snapshot
+    return _recover_design_output_from_workspace(workspace)
 
 
 def _stage_previous_design_seed(
@@ -630,6 +633,7 @@ def _iter_workspace_output_candidates(workspace: Path) -> list[Path]:
     priority = [
         workspace / "state" / "design_output.json",
         workspace / "design_output.json",
+        workspace / "state" / "last_design_draft.json",
     ]
     candidates: list[Path] = []
     seen: set[Path] = set()

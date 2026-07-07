@@ -19,6 +19,7 @@ _RATE_LIMIT_MARKERS = (
     "too many requests",
     "throttling",
     "throttled",
+    "provider rate limited",
     "rate_limit",
     "rate limit",
     "quota exceeded",
@@ -69,10 +70,10 @@ class DesignChallengeExecutor:
 
 def last_error_for_exit_code(exit_code: int, output_text: str = "") -> str | None:
     """Translate Hermes exit code into the persisted attempt error string."""
-    if exit_code == 0:
-        return None
     if is_provider_rate_limit_error(output_text):
         return PROVIDER_RATE_LIMITED_ERROR
+    if exit_code == 0:
+        return None
     if exit_code == HERMES_TIMEOUT_RETURNCODE:
         return "timeout"
     return f"Hermes exited with {exit_code}"

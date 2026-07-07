@@ -254,6 +254,10 @@ def validate_design_evidence_output(
         "compared_challenge_ids",
         allow_empty=True,
     )
+    if not ledger_snapshot.compared_challenge_ids and compared_ids:
+        raise DesignGovernanceError(
+            "compared_challenge_ids must be [] when the ledger snapshot has no comparable challenge ids"
+        )
     invented = sorted(set(compared_ids) - ledger_snapshot.compared_challenge_ids)
     if invented:
         raise DesignGovernanceError(

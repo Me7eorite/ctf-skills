@@ -191,6 +191,32 @@ def test_rejects_invented_compared_challenge_id() -> None:
         )
 
 
+def test_rejects_compared_ids_when_ledger_has_none() -> None:
+    profile = _profile()
+    reservation = _reservation(profile)
+    finding = _finding()
+    challenge = _challenge(reservation, finding)
+    challenge["compared_challenge_ids"] = ["web-0000"]
+
+    empty_snapshot = DesignLedgerSnapshot(
+        ledger_version=reservation.ledger_version,
+        reservation_id=reservation.id,
+        quota_usage={},
+        forbidden_signatures=[],
+        sibling_entries=[],
+        historical_entries=[],
+    )
+
+    with pytest.raises(DesignGovernanceError, match="must be \\[\\]"):
+        validate_design_evidence_output(
+            challenge=challenge,
+            design_task=_task(reservation),
+            reservation=reservation,
+            findings=[finding],
+            ledger_snapshot=empty_snapshot,
+        )
+
+
 def test_rejects_harness_shell_input() -> None:
     profile = _profile()
     reservation = _reservation(profile)
