@@ -85,6 +85,41 @@ overwriting or violating the prior row.
 - **AND** a fresh reservation is attached
 - **AND** `plan_reviewed_at` is cleared
 
+### Requirement: Design task detail exposes the current governance chain
+
+The Design Task detail API SHALL expose governance fields from the server-owned
+current chain: `current_reservation`, `current_design_evidence`,
+`quality_gate_passed`, `build_contract_summary`, and `build_eligibility`.
+`build_eligibility` SHALL include a boolean plus machine-readable blocking
+reasons such as `missing_design_evidence`, `design_quality_gate_failed`,
+`reservation_not_committed`, and `build_contract_incomplete`.
+
+Superseded DesignEvidence, released reservations, failed-quality designs, and
+prior BuildAttempts SHALL be exposed only in bounded history arrays or links.
+They SHALL NOT be folded into the current chain and SHALL NOT cause
+`build_eligibility.eligible = true`.
+
+The dashboard SHALL render current governance state separately from historical
+state. It SHALL display server-provided eligibility and reasons and SHALL NOT
+derive profile equality, contract completeness, or build admission client-side.
+
+#### Scenario: Failed-quality evidence is inspectable but not build-eligible
+
+- **GIVEN** a task has current DesignEvidence whose ChallengeDesign has
+  `quality_gate_passed = false`
+- **WHEN** `GET /api/design-tasks/{id}` is called
+- **THEN** the response includes the current DesignEvidence for inspection
+- **AND** `build_eligibility.eligible` is false
+- **AND** the blocking reasons include `design_quality_gate_failed`
+
+#### Scenario: Superseded evidence remains history only
+
+- **GIVEN** a task was revised from evidence E1 to evidence E2
+- **WHEN** the Design Task detail API returns governance state
+- **THEN** E2 is returned as `current_design_evidence`
+- **AND** E1 appears only in a history collection or linked history endpoint
+- **AND** no Build action uses E1 as the current contract source
+
 ## MODIFIED Requirements
 
 ### Requirement: Design task status supports planning before execution
@@ -121,38 +156,3 @@ and cannot roll the revised parent status forward.
 - **WHEN** Design revision is requested
 - **THEN** the status remains `built`
 - **AND** a new DesignTask/version is required
-
-### Requirement: Design task detail exposes the current governance chain
-
-The Design Task detail API SHALL expose governance fields from the server-owned
-current chain: `current_reservation`, `current_design_evidence`,
-`quality_gate_passed`, `build_contract_summary`, and `build_eligibility`.
-`build_eligibility` SHALL include a boolean plus machine-readable blocking
-reasons such as `missing_design_evidence`, `design_quality_gate_failed`,
-`reservation_not_committed`, and `build_contract_incomplete`.
-
-Superseded DesignEvidence, released reservations, failed-quality designs, and
-prior BuildAttempts SHALL be exposed only in bounded history arrays or links.
-They SHALL NOT be folded into the current chain and SHALL NOT cause
-`build_eligibility.eligible = true`.
-
-The dashboard SHALL render current governance state separately from historical
-state. It SHALL display server-provided eligibility and reasons and SHALL NOT
-derive profile equality, contract completeness, or build admission client-side.
-
-#### Scenario: Failed-quality evidence is inspectable but not build-eligible
-
-- **GIVEN** a task has current DesignEvidence whose ChallengeDesign has
-  `quality_gate_passed = false`
-- **WHEN** `GET /api/design-tasks/{id}` is called
-- **THEN** the response includes the current DesignEvidence for inspection
-- **AND** `build_eligibility.eligible` is false
-- **AND** the blocking reasons include `design_quality_gate_failed`
-
-#### Scenario: Superseded evidence remains history only
-
-- **GIVEN** a task was revised from evidence E1 to evidence E2
-- **WHEN** the Design Task detail API returns governance state
-- **THEN** E2 is returned as `current_design_evidence`
-- **AND** E1 appears only in a history collection or linked history endpoint
-- **AND** no Build action uses E1 as the current contract source

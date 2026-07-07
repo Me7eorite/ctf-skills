@@ -307,6 +307,38 @@ def test_single_value_quota_dimension_does_not_exhaust_capacity() -> None:
     }
 
 
+def test_quota_caps_keep_low_cardinality_dimensions_allocatable() -> None:
+    result = profile_capacity_check(
+        category="pwn",
+        target_count=25,
+        semantic_assignments=[
+            {"family": "format_string", "sub_technique": "format_string_got"}
+        ],
+    )
+
+    assert result.can_allocate is True
+    assert len(result.allocations) == 25
+
+
+def test_profile_capacity_coerces_freeform_subtechniques_by_family() -> None:
+    result = profile_capacity_check(
+        category="pwn",
+        target_count=1,
+        semantic_assignments=[
+            {
+                "family": "stack",
+                "sub_technique": "64 bit stack offset determination",
+            }
+        ],
+    )
+
+    assert result.can_allocate is True
+    assert result.allocations[0].profile.semantic == {
+        "family": "stack",
+        "sub_technique": "ret2libc",
+    }
+
+
 def test_capacity_check_requires_semantic_assignments() -> None:
     with pytest.raises(ProfileTaxonomyError, match="semantic_assignments must not be empty"):
         profile_capacity_check(category="re", target_count=1, semantic_assignments=[])

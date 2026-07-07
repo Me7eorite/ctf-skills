@@ -5,31 +5,41 @@ TBD - created by archiving change add-resource-deletion. Update Purpose after ar
 ## Requirements
 ### Requirement: Generation requests, design tasks, and build attempts are deletable
 
-The system SHALL provide operator-initiated deletion for a generation request,
-a design task, and an individual build attempt. Deleting a generation request
-SHALL delete its relational research runs, sources, findings, design tasks,
-design attempts, challenge designs, and build attempts. Deleting a design task
-SHALL delete its relational design attempts, challenge designs, and build
-attempts. Deleting one build attempt SHALL leave its parent design task and
-sibling attempts intact.
+Deletion cascades SHALL include governance rows that are scoped to deleted
+mutable resources: DesignProfileReservations, DesignEvidence,
+ArtifactObservations, corpus batch memberships, member/aggregate decisions,
+matches, and unpublished/non-retired review rows whose whole scope is deleted.
+The service SHALL delete or detach these rows in an order that preserves
+foreign-key integrity and does not leave dangling current references on
+DesignTask, ChallengeDesign, or BuildAttempt rows.
 
-#### Scenario: Delete a completed generation request
+Published or retired corpus history entries are not ordinary mutable resource
+rows. Normal generation-request, design-task, or build-attempt deletion SHALL
+preserve the minimal corpus history projection needed for future duplicate
+comparison, including the review provenance required to explain why a
+`review_required` member or aggregate was accepted into a published/retired
+release. Removing that projection or its retained review provenance requires a
+separate explicit governance-history purge with an audit reason.
 
-- **WHEN** an operator deletes a generation request whose cascade scope has no active execution
-- **THEN** the request and all of its relational child rows are deleted
-- **AND** unrelated requests and their children remain unchanged
+#### Scenario: Deleting an unpublished governed design task removes mutable governance rows
 
-#### Scenario: Delete one design task
+- **GIVEN** an unpublished governed Design Task has reservations,
+  DesignEvidence, BuildAttempts, ArtifactObservations, and corpus batch
+  membership rows
+- **WHEN** an operator deletes the Design Task through normal resource deletion
+- **THEN** the task's mutable governance rows are deleted or detached in the
+  same transaction as the task cascade
+- **AND** no current governance reference points to a deleted row after commit
 
-- **WHEN** an operator deletes an inactive design task
-- **THEN** that task, its design history, and its build attempts are deleted
-- **AND** its parent generation request and sibling design tasks remain
+#### Scenario: Published corpus history survives normal deletion
 
-#### Scenario: Delete one terminal build attempt
-
-- **WHEN** an operator deletes a failed, lost, or succeeded build attempt
-- **THEN** only that build-attempt row and its attempt-scoped operational state are deleted
-- **AND** its parent design task and sibling attempts remain
+- **GIVEN** a published challenge has a minimal corpus history entry
+- **WHEN** an operator deletes its mutable request, task, build rows, or
+  artifacts through normal resource deletion
+- **THEN** the corpus history entry remains available for duplicate comparison
+- **AND** the review provenance needed to justify the published/retired
+  decision remains available
+- **AND** the deletion response reports that governance history was retained
 
 ### Requirement: Active execution prevents deletion
 
@@ -264,35 +274,19 @@ transaction as the remaining relational and progress cleanup.
 
 ### Requirement: Delete endpoints expose consistent contracts
 
-The system SHALL expose:
+Deletion responses SHALL report governance cleanup separately from artifact
+cleanup. The response SHALL include governance rows deleted or retained, and it
+SHALL identify retained corpus history entries and retained review provenance
+as `retained_governance_history` rather than as skipped artifact paths.
 
-- `DELETE /api/research/requests/{id}`;
-- `DELETE /api/design-tasks/{id}`; and
-- `DELETE /api/build-attempts/{id}`.
+#### Scenario: Delete response names retained governance history
 
-Each endpoint SHALL accept the boolean query parameter
-`delete_artifacts`, defaulting to `false`. A successful response SHALL identify
-the deleted resource and report artifact paths as `deleted`, `retained`,
-`skipped`, or `quarantined`, plus cleanup warnings. Unknown or malformed identifiers SHALL return
-`404`; active-state conflicts SHALL return `409` with an actionable detail.
-
-#### Scenario: Default API call retains artifacts
-
-- **WHEN** a client sends `DELETE /api/design-tasks/{id}` without a query parameter
-- **THEN** the server behaves as `delete_artifacts=false`
-- **AND** the success payload reports retained artifacts
-
-#### Scenario: Explicit API call deletes artifacts
-
-- **WHEN** a client sends `DELETE /api/research/requests/{id}?delete_artifacts=true`
-- **THEN** the server applies explicit artifact deletion to the full request cascade
-- **AND** reports each deletion or skip outcome
-
-#### Scenario: Unknown resource is not found
-
-- **WHEN** a client deletes a well-formed identifier that does not exist
-- **THEN** the endpoint returns `404 Not Found`
-- **AND** no filesystem cleanup occurs
+- **GIVEN** normal deletion affects a published challenge with corpus history
+- **WHEN** the delete endpoint succeeds
+- **THEN** the response includes the retained corpus history identifier
+- **AND** the response includes any retained review provenance identifiers
+- **AND** the response does not imply the retained history is an undeleted
+  mutable task/build row
 
 ### Requirement: Dashboard deletion requires explicit confirmation
 

@@ -199,69 +199,59 @@ later overwrites the dashboard snapshot with `validate/running` when invoking
 
 ### Requirement: Runner owns validate execution and validate events
 
-Hermes SHALL generate `validate.sh` and `writenup/exp.py` but SHALL NOT execute
-validation or write validate progress events. For non-dry-run execution,
-`HermesRunner` SHALL verify design, implement, build, and document prerequisites
-and validate files after Hermes returns. If prerequisites are incomplete, the
-runner MUST write validate/failed without invoking `ChallengeValidator`. If
-prerequisites are complete and validate is not skipped, the runner MUST write
-validate/running, call `ChallengeValidator.validate_challenge(challenge_id)`,
-and map only `status == "passed"` to validate/passed.
+Hermes SHALL generate validation artifacts but SHALL NOT own host validation or
+validate progress events. For non-dry-run execution the runner SHALL verify
+design, implement, build, and document prerequisites, then invoke host-owned
+validation unless a resume carry-forward is valid under this requirement.
 
-Carry-forward `validate/passed` events written by the runner under the resume
-protocol MUST start their message with the literal token `carry-forward:` and
-MUST include the source historical event id. Fresh `validate/passed` and
-`validate/failed` events written by the runner after invoking
-`ChallengeValidator` MUST start their message with the literal token
-`validator:` and MUST include the validator's status and elapsed time. The two
-prefixes MUST be machine-distinguishable so audit tooling can separate inherited
-historical validations from freshly executed ones.
+For a governed BuildAttempt, host-owned validation SHALL be contract-aware and
+SHALL produce a validation-layer ArtifactObservation bound to the exact
+BuildAttempt, DesignEvidence, canonical contract hash, and artifact-manifest
+hash before the runner writes a successful `validate/*` or `complete/*`
+terminal event. Existing artifact, reference-solve, and flag checks remain
+mandatory.
 
-The same host-owned validation behavior MAY be invoked by a build-attempt
-revalidation service for an existing failed attempt. That service path SHALL NOT
-invoke Hermes and SHALL NOT recompute the original resume/carry-forward
-decision; it SHALL use current disk lookup and evidence for the validation
-decision.
+For the validation layer, an observation is effectively accepted only when:
 
-#### Scenario: Carry-forward and validator messages are distinguishable
+- its status is `passed`; or
+- its status is `inconclusive` and an allowed observation review decision exists
+  for that exact observation.
 
-- **WHEN** the same shard window contains one carry-forward `validate/passed`
-  inherited from a prior run and one fresh `validate/passed` written after
-  `ChallengeValidator` returned passed
-- **THEN** the carry-forward event message starts with `carry-forward:` and
-  cites the historical source event id, while the fresh event message starts
-  with `validator:` and cites the validator status and elapsed time
+An observation with `failed`, stale binding/hash, or no allowed review for
+`inconclusive` SHALL produce validation failure. Validation-layer acceptance
+does not authorize corpus publication by itself.
 
-#### Scenario: Validate gate blocks missing prerequisites
+Carry-forward `validate/passed` remains available for legacy challenges. For a
+governed BuildAttempt it is allowed only when the prior effectively accepted
+observation still matches current BuildAttempt, DesignEvidence, contract hash,
+and artifact-manifest hash. Therefore the prior general rule that skipped
+validate is never re-executed has a governed-build exception: stale or missing
+observation evidence forces contract-aware validation again.
 
-- **WHEN** design, implement, build, document, `validate.sh`, or `writenup/exp.py`
-  evidence is incomplete
-- **THEN** the runner writes validate/failed, includes missing items in the
-  message/report, and does not call `validate_challenge`
+The same host-owned behavior applies to build-attempt revalidation without
+invoking Hermes.
 
-#### Scenario: Validate failure makes challenge fail
+#### Scenario: Matching passed observation permits completion
 
-- **WHEN** Hermes wrote design, implement, build, and document passed but
-  `validate_challenge` returns a non-passed status
-- **THEN** the runner writes validate/failed and final challenge complete/failed
-  while leaving prior document/passed events append-only
+- **GIVEN** contract-aware validation creates a passed observation whose
+  BuildAttempt, evidence, contract hash, and artifact hash match current state
+- **WHEN** runner validation completes
+- **THEN** it writes validate/passed and may write complete/passed
 
-#### Scenario: Skipped validate is not re-executed
+#### Scenario: All-skipped resume revalidates after artifact change
 
-- **WHEN** validate belongs to a verified resume skip prefix
-- **THEN** the runner does not call `ChallengeValidator.validate_challenge` for
-  that challenge in the current run
+- **GIVEN** all authoring stages have valid carry-forward evidence
+- **AND** the current artifact manifest differs from the prior observation
+- **WHEN** resume evaluates the governed challenge
+- **THEN** it does not short-circuit with `skipped_resume`
+- **AND** contract-aware validation runs again
 
-#### Scenario: Build-attempt revalidation uses current disk evidence only
+#### Scenario: Legacy skipped validation remains compatible
 
-- **GIVEN** a failed build attempt references a shard whose prior
-  `validate/failed` event came from stale host lookup state
-- **AND** the challenge directory now exists on disk
-- **WHEN** the build-attempt revalidation service invokes host validation
-- **THEN** validation resolves the current challenge directory before the gate
-- **AND** it does not invoke Hermes
-- **AND** it does not create carry-forward events from a newly computed resume
-  plan
+- **GIVEN** a grandfathered challenge has no governed DesignEvidence
+- **AND** its legacy resume prefix validly skips validation
+- **WHEN** resume runs
+- **THEN** existing carry-forward behavior remains unchanged
 
 ### Requirement: ChallengeValidator supports single-challenge validation
 
@@ -417,25 +407,30 @@ fails and passed when all challenges validate or are legally skipped by resume.
 ### Requirement: Timeout recovery cannot bypass validation
 
 When Hermes times out, the runner SHALL re-evaluate current-window events and
-deterministic evidence for design, implement, build, and document. The runner
-MUST NOT treat `metadata.build_status == "passed"` alone as complete and MUST
-NOT synthesize missing stage passed events. If prerequisites are complete, the
-runner SHALL continue into mandatory validation; final done/failed status SHALL
-depend on the same five-stage success rules as non-timeout execution.
+deterministic evidence for design, implement, build, and document. It SHALL NOT
+treat metadata build/solve status alone as complete and SHALL NOT synthesize
+missing stage events.
 
-#### Scenario: Timeout with missing document fails
+If prerequisites are complete, timeout recovery SHALL continue into mandatory
+host validation. A governed BuildAttempt may skip re-execution only when an
+effectively accepted ArtifactObservation still matches the current
+BuildAttempt, DesignEvidence, contract hash, and artifact-manifest hash.
+Otherwise contract-aware validation SHALL run before final done/failed status.
 
-- **WHEN** Hermes times out after build passed but document event or evidence is
-  missing
-- **THEN** the runner records final failure and does not write a synthetic
-  document/passed event
+#### Scenario: Timeout with matching observation may carry forward
 
-#### Scenario: Timeout with complete prerequisites still validates
+- **GIVEN** all prerequisites are complete
+- **AND** a matching effectively accepted observation already exists
+- **WHEN** timeout recovery runs
+- **THEN** it may carry forward validation success
 
-- **WHEN** Hermes times out after design, implement, build, and document are
-  fully verified
-- **THEN** the runner performs mandatory validate execution unless validate was
-  already skipped by resume
+#### Scenario: Timeout with stale observation validates again
+
+- **GIVEN** all prerequisites are complete
+- **AND** the prior observation's artifact hash is stale
+- **WHEN** timeout recovery runs
+- **THEN** contract-aware validation executes
+- **AND** final status depends on its result
 
 ### Requirement: Docker image inspection is isolated in core
 
@@ -1002,3 +997,22 @@ context; combine with each tailed record.
 - **AND** the host runner imports the record with shard/worker/category
   context from `input/manifest.json`
   without requiring additional model-visible CLI flags
+
+### Requirement: Reconciliation requires an accepted observation
+
+For governed BuildAttempts, BuildReconciler SHALL transition an attributed row
+to `succeeded` only when existing queue/artifact/solve requirements pass and the
+row has an effectively accepted ArtifactObservation with matching
+DesignEvidence, contract hash, and artifact-manifest hash.
+
+`metadata.solve_status = passed` alone SHALL not produce success. Legacy
+BuildAttempts without governed evidence retain their grandfathered
+reconciliation behavior.
+
+#### Scenario: Passed metadata without observation is insufficient
+
+- **GIVEN** a governed shard is done and metadata says `solve_status = passed`
+- **AND** no matching accepted ArtifactObservation exists
+- **WHEN** reconciliation runs
+- **THEN** the BuildAttempt does not become succeeded
+- **AND** its failure reason identifies missing or stale observation evidence

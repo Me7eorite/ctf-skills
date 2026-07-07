@@ -167,6 +167,12 @@ class ProfilePolicy:
     hard_exclusive_signature: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class _PreparedCandidate:
+    candidate: ProfileCandidate
+    quota_values: Mapping[str, str]
+
+
 WEB_TAXONOMY = CategoryProfileTaxonomy(
     category="web",
     semantic=AxisSchema(
@@ -569,6 +575,29 @@ def profile_capacity_check(
     advisory_existing = [item for item in existing if item.is_advisory_history]
     allocations: list[ProfileCandidate] = []
     exhausted: Counter[str] = Counter()
+    existing_signatures = {
+        canonical_profile_signatures(
+            item.profile,
+            category=category,
+            policy_version=active_policy.version,
+        ).combined_profile_signature
+        for item in hard_existing
+    }
+    existing_exact_keys = {
+        _exclusive_key(item.profile, active_policy.hard_exclusive_signature)
+        for item in hard_existing
+    }
+    planned_signatures: set[str] = set()
+    planned_exact_keys: set[str] = set()
+    quota_caps = _quota_caps(taxonomy, active_policy, target_count)
+    quota_counts: dict[str, Counter[str]] = {
+        path: Counter(_profile_value(item.profile, path) for item in hard_existing)
+        for path in quota_caps
+    }
+    candidate_cache: dict[
+        tuple[tuple[tuple[str, str], ...], int, int, int],
+        _PreparedCandidate | None,
+    ] = {}
 
     for index in range(target_count):
         semantic = normalize_semantic_assignment(
@@ -576,14 +605,22 @@ def profile_capacity_check(
             semantic_assignments[index % len(semantic_assignments)],
         )
         _validate_axis_values(taxonomy, "semantic", semantic)
+        semantic_key = tuple(sorted(semantic.items()))
         candidate = _first_eligible_candidate(
             category=category,
             taxonomy=taxonomy,
             policy=active_policy,
             semantic=semantic,
+            semantic_key=semantic_key,
             planned=allocations,
-            hard_existing=hard_existing,
-            target_count=target_count,
+            existing_signatures=existing_signatures,
+            existing_exact_keys=existing_exact_keys,
+            planned_signatures=planned_signatures,
+            planned_exact_keys=planned_exact_keys,
+            quota_caps=quota_caps,
+            quota_counts=quota_counts,
+            quota_paths=tuple(quota_caps),
+            candidate_cache=candidate_cache,
         )
         if candidate is None:
             exhausted["candidate_space"] += 1
@@ -605,6 +642,11 @@ def profile_capacity_check(
                 diagnostics=diagnostics,
             )
         allocations.append(candidate)
+        planned_signatures.add(candidate.signatures.combined_profile_signature)
+        if candidate.exclusive_signature_key:
+            planned_exact_keys.add(candidate.exclusive_signature_key)
+        for path in quota_caps:
+            quota_counts[path][_profile_value(candidate.profile, path)] += 1
 
     diagnostics = {
         "code": None,
@@ -658,7 +700,7 @@ def normalize_semantic_assignment(
     if raw_sub in allowed:
         sub_technique = raw_sub
     else:
-        sub_technique = _coerce_sub_technique(raw_sub, allowed)
+        sub_technique = _coerce_sub_technique(raw_sub, allowed, family=family)
     return {"family": family, "sub_technique": sub_technique}
 
 
@@ -668,72 +710,109 @@ def _first_eligible_candidate(
     taxonomy: CategoryProfileTaxonomy,
     policy: ProfilePolicy,
     semantic: Mapping[str, str],
+    semantic_key: tuple[tuple[str, str], ...],
     planned: Sequence[ProfileCandidate],
-    hard_existing: Sequence[ProfileOccupancy],
-    target_count: int,
+    existing_signatures: set[str],
+    existing_exact_keys: set[str],
+    planned_signatures: set[str],
+    planned_exact_keys: set[str],
+    quota_caps: Mapping[str, int],
+    quota_counts: Mapping[str, Counter[str]],
+    quota_paths: Sequence[str],
+    candidate_cache: dict[
+        tuple[tuple[tuple[str, str], ...], int, int, int],
+        _PreparedCandidate | None,
+    ],
 ) -> ProfileCandidate | None:
-    existing_signatures = {
-        canonical_profile_signatures(
-            item.profile,
-            category=category,
-            policy_version=policy.version,
-        ).combined_profile_signature
-        for item in hard_existing
-    }
-    planned_signatures = {item.signatures.combined_profile_signature for item in planned}
-    existing_exact_keys = {
-        _exclusive_key(item.profile, policy.hard_exclusive_signature)
-        for item in hard_existing
-    }
-    planned_exact_keys = {
-        item.exclusive_signature_key for item in planned if item.exclusive_signature_key
-    }
+    fallback_candidate: ProfileCandidate | None = None
 
     solve_rows = _axis_product(category, "solve")
     implementation_rows = _compatible_implementation_rows(taxonomy, policy)
     presentation_rows = _axis_product(category, "presentation")
-    fallback_candidate: ProfileCandidate | None = None
-
-    for solve in solve_rows:
-        for implementation in implementation_rows:
-            for presentation in presentation_rows:
-                profile = GovernedProfile(
-                    semantic=dict(semantic),
-                    solve=solve,
-                    implementation=implementation,
-                    presentation=presentation,
+    for solve_index, solve in enumerate(solve_rows):
+        for implementation_index, implementation in enumerate(implementation_rows):
+            for presentation_index, presentation in enumerate(presentation_rows):
+                cache_key = (
+                    semantic_key,
+                    solve_index,
+                    implementation_index,
+                    presentation_index,
                 )
-                signatures = canonical_profile_signatures(
-                    profile,
-                    category=category,
-                    policy_version=policy.version,
-                )
-                if signatures.combined_profile_signature in policy.hard_forbidden_combined_signatures:
+                if cache_key in candidate_cache:
+                    prepared = candidate_cache[cache_key]
+                else:
+                    prepared = _prepare_candidate(
+                        category=category,
+                        policy=policy,
+                        semantic=semantic,
+                        solve=solve,
+                        implementation=implementation,
+                        presentation=presentation,
+                        quota_paths=quota_paths,
+                    )
+                    candidate_cache[cache_key] = prepared
+                if prepared is None:
                     continue
-                if signatures.combined_profile_signature in existing_signatures | planned_signatures:
+                candidate = prepared.candidate
+                if candidate.signatures.combined_profile_signature in existing_signatures:
                     continue
-                exclusive_key = _exclusive_key(profile, policy.hard_exclusive_signature)
-                if exclusive_key in existing_exact_keys | planned_exact_keys:
+                if candidate.signatures.combined_profile_signature in planned_signatures:
                     continue
-                if _quota_exceeded(
-                    profile=profile,
-                    policy=policy,
-                    planned=planned,
-                    hard_existing=hard_existing,
-                    target_count=target_count,
+                if candidate.exclusive_signature_key in existing_exact_keys:
+                    continue
+                if candidate.exclusive_signature_key in planned_exact_keys:
+                    continue
+                if _prepared_quota_exceeded(
+                    prepared,
+                    quota_caps=quota_caps,
+                    quota_counts=quota_counts,
                 ):
                     continue
-                candidate = ProfileCandidate(
-                    profile=profile,
-                    signatures=signatures,
-                    occupancy_scope=category,
-                    exclusive_signature_key=exclusive_key,
-                )
                 if not _cooldown_conflicts(candidate.profile, policy, planned):
                     return candidate
                 if fallback_candidate is None:
                     fallback_candidate = candidate
     return fallback_candidate
+
+
+def _prepare_candidate(
+    *,
+    category: str,
+    policy: ProfilePolicy,
+    semantic: Mapping[str, str],
+    solve: Mapping[str, str],
+    implementation: Mapping[str, str],
+    presentation: Mapping[str, str],
+    quota_paths: Sequence[str],
+) -> _PreparedCandidate | None:
+    profile = GovernedProfile(
+        semantic=dict(semantic),
+        solve=solve,
+        implementation=implementation,
+        presentation=presentation,
+    )
+    signatures = canonical_profile_signatures(
+        profile,
+        category=category,
+        policy_version=policy.version,
+    )
+    if signatures.combined_profile_signature in policy.hard_forbidden_combined_signatures:
+        return None
+    return _PreparedCandidate(
+        candidate=ProfileCandidate(
+            profile=profile,
+            signatures=signatures,
+            occupancy_scope=category,
+            exclusive_signature_key=_exclusive_key(
+                profile,
+                policy.hard_exclusive_signature,
+            ),
+        ),
+        quota_values={
+            path: _profile_value(profile, path)
+            for path in quota_paths
+        },
+    )
 
 
 def _cooldown_conflicts(
@@ -747,6 +826,35 @@ def _cooldown_conflicts(
         recent = planned[-window:]
         value = _profile_value(profile, path)
         if any(_profile_value(item.profile, path) == value for item in recent):
+            return True
+    return False
+
+
+def _quota_caps(
+    taxonomy: CategoryProfileTaxonomy,
+    policy: ProfilePolicy,
+    target_count: int,
+) -> dict[str, int]:
+    caps: dict[str, int] = {}
+    for path, ratio in policy.quota_ratios.items():
+        value_count = len(_effective_values_for_path(taxonomy, policy, path))
+        if value_count <= 1:
+            continue
+        configured_cap = max(1, _ceil(target_count * ratio))
+        fair_share_cap = _ceil(target_count / value_count)
+        caps[path] = max(configured_cap, fair_share_cap)
+    return caps
+
+
+def _prepared_quota_exceeded(
+    candidate: _PreparedCandidate,
+    *,
+    quota_caps: Mapping[str, int],
+    quota_counts: Mapping[str, Counter[str]],
+) -> bool:
+    for path, cap in quota_caps.items():
+        value = candidate.quota_values[path]
+        if quota_counts[path][value] + 1 > cap:
             return True
     return False
 
@@ -841,7 +949,12 @@ def _normalize_semantic_value(value: str) -> str:
     )
 
 
-def _coerce_sub_technique(value: str, allowed: Sequence[str]) -> str:
+def _coerce_sub_technique(
+    value: str,
+    allowed: Sequence[str],
+    *,
+    family: str | None = None,
+) -> str:
     aliases = {
         "blind sqli": "sqli",
         "boolean blind sqli": "sqli",
@@ -853,9 +966,29 @@ def _coerce_sub_technique(value: str, allowed: Sequence[str]) -> str:
         "reflected xss": "xss",
         "prototype pollution": "prototype_pollution",
         "path traversal": "path_traversal",
-        "use after free": "uaf",
-        "format string": "format_string",
+        "use after free": "heap_uaf_tcache",
+        "uaf": "heap_uaf_tcache",
+        "format string": "format_string_got",
         "anti debug": "anti_debug",
+    }
+    family_defaults = {
+        "auth": "idor",
+        "injection": "sqli",
+        "server_side": "ssrf",
+        "client_side": "xss",
+        "upload": "upload_parse",
+        "node_api": "prototype_pollution",
+        "stack": "ret2libc",
+        "format_string": "format_string_got",
+        "heap": "heap_uaf_tcache",
+        "integer_oob": "integer_oob",
+        "sandbox": "seccomp_orw",
+        "crackme": "xor_transform",
+        "vm_bytecode": "bytecode_vm",
+        "runtime": "anti_debug",
+        "language": "language_bytecode",
+        "platform": "wasm_lift",
+        "visual_game": "xor_transform",
     }
     alias = aliases.get(value)
     normalized_allowed = {_normalize_semantic_value(item): item for item in allowed}
@@ -866,6 +999,9 @@ def _coerce_sub_technique(value: str, allowed: Sequence[str]) -> str:
     for normalized, original in normalized_allowed.items():
         if normalized and (normalized in value.split() or normalized in value):
             return original
+    family_default = family_defaults.get(str(family or ""))
+    if family_default in allowed:
+        return family_default
     raise ProfileTaxonomyError(
         f"profile semantic.sub_technique={value!r} cannot be mapped to closed vocabulary"
     )

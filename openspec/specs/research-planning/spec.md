@@ -678,49 +678,53 @@ The `generation_requests` table SHALL gain `idempotency_key TEXT` and `request_f
 
 ### Requirement: Research output minimum quality gate
 
-`ResearchAgentExecutor` SHALL apply a minimum-quality gate before persisting any `research_runs.status = 'completed'`. A run that fails any gate check SHALL be persisted as `failed` with a structured `last_error` value of the form `<code>:<detail>`. The codes and rules:
+The research quality gate SHALL require enough **designable mechanism capacity**
+in addition to the existing source-shape, hash, parse, and finding-count rules.
+A designable finding is exactly one whose `kind` is `technique` or `variant`.
+Findings whose kind is `scenario` or `prerequisite` SHALL remain valid evidence
+but SHALL NOT:
 
-- `url_shape_invalid:<url>` — any `sources[].url` that does not match `^https?://[^\s]+$` or has an empty hostname.
-- `content_hash_shape_invalid:<value>` — any `sources[].content_hash` not matching `^[0-9a-f]{64}$` (lower-case sha256 hex).
-- `content_hash_dup:<hash>` — two or more `sources[]` entries within the same run share a `content_hash`.
-- `insufficient_findings:got=<N>,need=<M>` — `findings.length < ceil(target_count * 0.5)`, where `M = ceil(target_count * 0.5)`.
-- `unparseable_output:<reason>` — stdout cannot be reduced to a single JSON object (see below).
+- count toward primary designable mechanism capacity;
+- be selected as a DesignTask primary technique;
+- conceal a monocultural technique pool by using distinct labels.
 
-The `research_sources` table SHALL carry a UNIQUE constraint on `(research_run_id, content_hash)`, replacing the prior non-unique `ix_research_sources_run_hash` index. The Alembic migration SHALL include a pre-step that audits existing rows, fails loudly if duplicates remain, and is preceded by a `tools/scripts/dedup_research_sources.py` operator script that resolves duplicates by keeping the earliest `research_sources.id` per `(research_run_id, content_hash)` group and rewriting `research_finding_sources.source_id` from every deleted source row to the kept source row before deletion.
+The strict production floor SHALL be evaluated by the profile allocator: the
+designable findings must allow `target_count` compatible governed profile
+reservations under the active category policy. Distinct sub-technique count MAY
+be used as a diagnostic input, but SHALL NOT be the sole production floor.
 
-`ResearchAgentExecutor` stdout parsing SHALL accept arbitrary leading lines (markdown, log, banners) and SHALL extract the LAST top-level JSON object in stdout by scanning from the end: locate the final `}`, walk back matching braces (respecting string literals and escapes), and attempt `json.loads(...)` on the resulting substring. The first object that parses cleanly is the output. If no such substring parses, the run is marked `failed: unparseable_output:no_terminal_json_object`.
+When the explicit soft-pass setting
+`RESEARCH_DIVERSITY_SOFT_PASS_BELOW_BY > 0` allows a run below the allocator
+capacity floor, the run SHALL persist `research_runs.trial_only = true`. The
+marker SHALL not be duplicated on GenerationRequest. Trial-only evidence MAY be
+used for development builds but SHALL NOT pass a production corpus release gate.
 
-#### Scenario: Invalid URL fails the run with diagnostic
+#### Scenario: Scenario labels cannot fake designable capacity
 
-- **GIVEN** Hermes emits a `sources[]` entry with `url = "httpbla://broken"`
-- **WHEN** the executor persists the result
-- **THEN** the run is marked `failed`
-- **AND** `last_error` matches `url_shape_invalid:httpbla://broken`
+- **GIVEN** a request with `target_count = 3`
+- **AND** research returns one technique finding plus four scenario findings
+  with distinct labels
+- **WHEN** the profile allocator evaluates production readiness
+- **THEN** it fails with
+  `insufficient_designable_capacity`
 
-#### Scenario: Non-sha256 content_hash fails the run
+#### Scenario: Repeated sub-technique can pass with distinct governed profiles
 
-- **GIVEN** Hermes emits a `sources[]` entry with `content_hash = "ABC"`
-- **WHEN** the executor persists the result
-- **THEN** the run is marked `failed`
-- **AND** `last_error` starts with `content_hash_shape_invalid:`
+- **GIVEN** a request with `target_count = 3`
+- **AND** research returns three designable findings with the same normalized
+  sub-technique
+- **AND** the active profile policy can reserve three distinct solve and
+  implementation profiles from those findings
+- **WHEN** the research quality gate runs
+- **THEN** the production readiness floor passes
+- **AND** same-sub-technique risk remains available to downstream diagnostics
 
-#### Scenario: Duplicate content_hash within a run is rejected
+#### Scenario: Soft-passed diversity is trial-only
 
-- **GIVEN** Hermes emits two `sources[]` entries sharing the same `content_hash`
-- **WHEN** the executor persists the result
-- **THEN** the run is marked `failed` with `last_error` starting `content_hash_dup:`
-- **AND** the DB UNIQUE constraint is the final defensive barrier if the application check is bypassed
-
-#### Scenario: Insufficient findings fails the run
-
-- **GIVEN** a request with `target_count = 4` and Hermes returns only 1 finding
-- **WHEN** the executor persists the result
-- **THEN** the run is marked `failed`
-- **AND** `last_error` equals `insufficient_findings:got=1,need=2`
-
-#### Scenario: Stdout with leading log lines parses successfully
-
-- **GIVEN** Hermes stdout is `INFO starting agent\n... agent thought ...\n{"sources":[...],"findings":[...]}\n`
-- **WHEN** the executor parses stdout
-- **THEN** the terminal JSON object is selected and persistence proceeds normally
+- **GIVEN** a request with `target_count = 3` and only two distinct designable
+  governed profile reservations available
+- **AND** the operator configured one item of readiness slack
+- **WHEN** the run completes
+- **THEN** it is persisted with a trial-only marker
+- **AND** that marker is available to downstream corpus admission
 
