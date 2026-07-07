@@ -36,7 +36,10 @@ def test_request_detail_exposes_quality_gate_and_runtime_constraints() -> None:
     assert "可继续补充研究" in source
     assert "生成设计任务" in source
     assert "暂停 Worker 可能影响正在执行的其他研究需求" in source
-    assert 'if (latest && (latest.status === "queued" || latest.status === "running"))' in source
+    assert (
+        'if (latest && (latest.status === "queued" || latest.status === "running"))'
+        in source
+    )
     assert "补充研究" in source
     assert "启动研究" in source
 
@@ -46,10 +49,22 @@ def test_request_detail_prompts_to_start_when_latest_run_is_queued_but_worker_is
         encoding="utf-8"
     )
 
-    assert 'if (latest && (latest.status === "queued" || latest.status === "running"))' in source
+    assert (
+        'if (latest && (latest.status === "queued" || latest.status === "running"))'
+        in source
+    )
     assert 'if (workerRunning) {' in source
-    assert 'return `<button class="btn btn-primary detail-open-runs"><i data-lucide="activity"></i> 查看运行状态</button>`;' in source
-    assert 'return `<button class="btn btn-primary" id="detail-run-loop"${!available ? " disabled" : ""}><i data-lucide="rotate-cw"></i> 持续处理该需求</button>`;' in source
+    assert (
+        'return `<button class="btn btn-primary detail-open-runs">'
+        '<i data-lucide="activity"></i> 查看运行状态</button>`;'
+        in source
+    )
+    assert (
+        'return `<button class="btn btn-primary" id="detail-run-loop"'
+        '${!available ? " disabled" : ""}><i data-lucide="rotate-cw"></i> '
+        "持续处理该需求</button>`;"
+        in source
+    )
     assert 'if (request.status === "researched") {' in source
     assert '研究已完成，仍可继续补充研究；设计任务生成基于最新 completed research run。' in source
 
@@ -160,6 +175,31 @@ def test_research_failure_alert_uses_api_classification_fields() -> None:
         ".rq-history-failure-col",
     ):
         assert selector in styles
+
+
+def test_generate_design_tasks_error_uses_post_response_payload_only() -> None:
+    source = (STATIC / "js" / "views" / "research-requests.js").read_text(
+        encoding="utf-8"
+    )
+    api_source = (STATIC / "js" / "api.js").read_text(encoding="utf-8")
+    format_source = (STATIC / "js" / "ui" / "format.js").read_text(encoding="utf-8")
+
+    assert "const result = await postJson" in source
+    assert "formatGenerateDesignTasksError(err)" in source
+    assert "err?.payload" in source
+    assert "showDesignTasksForRequest(result.request_id || state.detailId)" in source
+    generate_block = source[
+        source.index("async function generateDesignTasks") :
+        source.index("async function requestBackfillPreview")
+    ]
+    format_block = source[
+        source.index("function formatGenerateDesignTasksError") :
+        source.index("async function requestBackfillPreview")
+    ]
+    assert "latest_completed_run" not in generate_block
+    assert "latest_run" not in format_block
+    assert "error.payload = payload" in api_source
+    assert "design_task_persistence_failed" in format_source
 
 
 def test_research_run_history_shows_failure_reason_column() -> None:

@@ -16,19 +16,22 @@ from services.build_orchestration_service import (
     BuildOrchestrationService,
 )
 from services.build_reconciler import BuildReconciler
-from services.corpus_history_import_service import (
-    CorpusHistoryImportPreview,
-    CorpusHistoryImportResult,
-    CorpusHistoryImportService,
-)
 from services.challenge_design_service import (
     ChallengeDesignConflictError,
     ChallengeDesignNotFoundError,
     ChallengeDesignService,
     ChallengeDesignServiceResult,
 )
+from services.corpus_history_import_service import (
+    CorpusHistoryImportPreview,
+    CorpusHistoryImportResult,
+    CorpusHistoryImportService,
+)
 from services.design_difficulty_validator import DesignDifficultyValidator
-from services.design_task_planning_service import DesignTaskPlanningService
+from services.design_task_planning_service import (
+    DesignTaskGenerationPersistenceError,
+    DesignTaskPlanningService,
+)
 from services.research_agent_executor import ResearchAgentExecutor
 from services.research_backfill_service import (
     BackfillPreview,
@@ -64,6 +67,7 @@ __all__ = [
     "ChallengeDesignService",
     "ChallengeDesignServiceResult",
     "DesignTaskPlanningService",
+    "DesignTaskGenerationPersistenceError",
     "DesignDifficultyValidator",
     "ResearchAgentExecutor",
     "BackfillPreview",

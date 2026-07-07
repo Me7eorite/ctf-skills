@@ -227,17 +227,28 @@ async function generateDesignTasks() {
   state.designTaskGenerating = true;
   render(state.data);
   try {
-    await postJson(`/api/research/requests/${state.detailId}/design-tasks/generate`, {});
+    const result = await postJson(`/api/research/requests/${state.detailId}/design-tasks/generate`, {});
     showToast("设计任务已生成");
     await reloadDetail();
-    showDesignTasksForRequest(state.detailId);
+    showDesignTasksForRequest(result.request_id || state.detailId);
     initIcons();
   } catch (err) {
-    showToast(researchErrorMessage(err.code || err.message), true);
+    showToast(formatGenerateDesignTasksError(err), true);
   } finally {
     state.designTaskGenerating = false;
     render(state.data);
   }
+}
+
+function formatGenerateDesignTasksError(err) {
+  const payload = err?.payload && typeof err.payload === "object" ? err.payload : null;
+  const code = payload?.code || err?.code || "";
+  const message = payload?.message || payload?.detail || err?.message || "";
+  const rendered = researchErrorMessage(String(code || message));
+  if (payload?.stage && code === "design_task_persistence_failed") {
+    return `${rendered}（${payload.stage}）`;
+  }
+  return rendered;
 }
 
 async function requestBackfillPreview(runId) {

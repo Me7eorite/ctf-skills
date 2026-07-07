@@ -19,6 +19,7 @@ from unittest.mock import patch
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import OperationalError
 
 from core.paths import ProjectPaths
 from domain.challenge_designs import ChallengeDesign, DesignAttempt
@@ -29,6 +30,7 @@ from domain.design_profile_reservations import DesignProfileReservation
 from domain.design_task_validators import DesignTaskValidationError
 from domain.design_tasks import DesignTask
 from services.challenge_design_service import ChallengeDesignServiceResult
+from services.design_task_planning_service import DesignTaskGenerationPersistenceError
 from web.dashboard import DashboardService
 from web.server import create_app
 
@@ -422,6 +424,36 @@ class GenerateDesignTasksTests(unittest.TestCase):
                 "/api/research/requests/not-a-uuid/design-tasks/generate"
             )
             self.assertEqual(resp.status_code, 404)
+
+    def test_persistence_failure_returns_structured_retryable_error(self):
+        request_id = uuid4()
+
+        def _disk_full(_id):
+            original = Exception("No space left on device")
+            op_error = OperationalError("INSERT INTO design_tasks", {}, original)
+            raise DesignTaskGenerationPersistenceError(
+                request_id=request_id,
+                stage="design_task_insert",
+                message=(
+                    "design task generation failed while writing persistence state "
+                    "at stage design_task_insert: OperationalError"
+                ),
+            ) from op_error
+
+        planner = SimpleNamespace(generate_for_request=_disk_full)
+
+        with _app_client(planning_service=planner) as client:
+            resp = client.post(
+                f"/api/research/requests/{request_id}/design-tasks/generate"
+            )
+
+        self.assertEqual(resp.status_code, 503)
+        payload = resp.json()
+        self.assertEqual(payload["code"], "design_task_persistence_failed")
+        self.assertEqual(payload["stage"], "design_task_insert")
+        self.assertEqual(payload["request_id"], str(request_id))
+        self.assertTrue(payload["retryable"])
+        self.assertNotEqual(payload["code"], "design_diversity_exhausted")
 
 
 class PlanReviewEndpointTests(unittest.TestCase):

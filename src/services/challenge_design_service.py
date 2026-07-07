@@ -35,6 +35,7 @@ from persistence.session import SessionFactory, transaction
 from services.design_agent_executor import (
     DesignChallengeExecutor,
     PROVIDER_RATE_LIMITED_ERROR,
+    is_provider_rate_limit_error,
     last_error_for_exit_code,
 )
 from services.design_governance import (
@@ -200,6 +201,14 @@ class ChallengeDesignService:
                     exit_error,
                     started.max_attempts,
                     retryable=exit_error == PROVIDER_RATE_LIMITED_ERROR,
+                )
+            if is_provider_rate_limit_error("\n".join((stdout, log_text))):
+                return self._fail_attempt(
+                    attempt,
+                    log_rel,
+                    PROVIDER_RATE_LIMITED_ERROR,
+                    started.max_attempts,
+                    retryable=True,
                 )
 
             parsed = _parse_design_output_with_workspace_fallback(stdout, workspace)

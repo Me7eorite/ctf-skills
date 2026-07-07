@@ -244,7 +244,7 @@ def validate_design_evidence_output(
     distinctness_claim = challenge.get("distinctness_claim")
     if not isinstance(distinctness_claim, str) or not distinctness_claim.strip():
         raise DesignGovernanceError("distinctness_claim must be a non-empty string")
-    if not _distinctness_covers_axes(distinctness_claim):
+    if not _distinctness_covers_axes(distinctness_claim, profile):
         raise DesignGovernanceError(
             "distinctness_claim must explain solve and implementation differences"
         )
@@ -517,14 +517,44 @@ def _profiles_conflict(left: Mapping[str, Any], right: Mapping[str, Any]) -> boo
     )
 
 
-def _distinctness_covers_axes(claim: str) -> bool:
+def _distinctness_covers_axes(claim: str, profile: Mapping[str, Any]) -> bool:
     lowered = claim.lower()
-    return (
-        any(token in lowered for token in ("solve", "player", "action", "analysis"))
-        and any(
-            token in lowered
-            for token in ("implementation", "artifact", "runtime", "language", "concealment")
-        )
+    solve = profile.get("solve") if isinstance(profile.get("solve"), Mapping) else {}
+    implementation = (
+        profile.get("implementation")
+        if isinstance(profile.get("implementation"), Mapping)
+        else {}
+    )
+    solve_covered = any(
+        token in lowered for token in ("solve", "player", "action", "analysis")
+    ) or _claim_mentions_profile_value(lowered, solve)
+    implementation_covered = any(
+        token in lowered
+        for token in ("implementation", "artifact", "runtime", "language", "concealment")
+    ) or _claim_mentions_profile_value(lowered, implementation)
+    return solve_covered and implementation_covered
+
+
+def _claim_mentions_profile_value(claim: str, axis: Mapping[str, Any]) -> bool:
+    return any(
+        _claim_contains_value(claim, value)
+        for value in axis.values()
+        if isinstance(value, str) and value.strip()
+    )
+
+
+def _claim_contains_value(claim: str, value: str) -> bool:
+    normalized = value.strip().lower()
+    variants = {
+        normalized,
+        normalized.replace("_", " "),
+        normalized.replace("-", " "),
+        normalized.replace("_", "-"),
+        normalized.replace("-", "_"),
+    }
+    return any(
+        variant and (variant in claim or variant.replace(" ", "_") in claim)
+        for variant in variants
     )
 
 

@@ -155,6 +155,7 @@ export function researchErrorMessage(error) {
   if (error === "already_researched") return "研究已完成，无需重复启动";
   if (error === "no_runnable_run") return "当前没有可执行或可恢复的研究任务";
   if (error === "final_failure_no_retry_left") return "已达到最大尝试次数";
+  if (error === "design_task_persistence_failed") return "设计任务写入失败，请释放数据库空间后重试";
   if (error.startsWith("insufficient_findings")) return "有效研究结论不足，未通过质量检查";
   if (error.startsWith("content_hash_dup:")) return "研究来源存在重复内容";
   if (error.startsWith("url_shape_invalid")) return "研究来源 URL 格式无效";

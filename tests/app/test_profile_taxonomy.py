@@ -428,6 +428,32 @@ def test_unknown_subtechnique_is_preserved_as_open_semantic_key() -> None:
     assert semantic == {"family": "stack", "sub_technique": "rainbow table"}
 
 
+def test_unsupported_pwn_profile_is_rejected_before_random_solve_allocation() -> None:
+    result = profile_capacity_check(
+        category="pwn",
+        target_count=1,
+        semantic_assignments=[
+            {"family": "stack", "sub_technique": "rainbow table"}
+        ],
+    )
+
+    assert result.can_allocate is False
+    assert result.diagnostics["code"] == "unsupported_pwn_profile"
+    assert result.diagnostics["semantic"] == {
+        "family": "stack",
+        "sub_technique": "rainbow table",
+    }
+    with pytest.raises(DesignDiversityExhausted) as exc_info:
+        allocate_profile_batch(
+            category="pwn",
+            target_count=1,
+            semantic_assignments=[
+                {"family": "stack", "sub_technique": "rainbow table"}
+            ],
+        )
+    assert exc_info.value.code == "unsupported_pwn_profile"
+
+
 def test_pwn_format_string_freeform_subtechniques_slug_instead_of_collapsing() -> None:
     cases = {
         "64 bit stack offset determination": "64_bit_stack_offset_determination",

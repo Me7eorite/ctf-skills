@@ -31,6 +31,7 @@ from persistence.session import SessionFactory
 from services import DesignTaskPlanningService, ResearchJobService
 from services import design_task_planning_service as planning_module
 from services.design_task_planning_service import (
+    DesignTaskGenerationPersistenceError,
     _semantic_assignments_for_findings,
     validate_finding_provenance,
 )
@@ -224,6 +225,28 @@ def test_pwn_bss_variable_write_gets_matching_reservation_profile(
         assert reservation.profile["solve"]["chain_shape"] == "global-write-win"
 
 
+def test_pwn_unsupported_profile_is_rejected_explicitly(
+    session_factory: SessionFactory,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    request, _ = _seed(
+        session_factory,
+        target_count=1,
+        distribution={"easy": 1},
+        category="pwn",
+        finding_labels=["rainbow table"],
+    )
+    monkeypatch.setattr(
+        planning_module,
+        "resolve_sub_technique",
+        lambda _finding: "rainbow table",
+    )
+    service = DesignTaskPlanningService(session_factory)
+
+    with pytest.raises(DesignTaskValidationError, match="unsupported_pwn_profile"):
+        service.generate_for_request(request.id)
+
+
 def test_semantic_assignments_use_real_findings() -> None:
     findings = [
         {"kind": "technique", "label": "64-bit stack offset determination"},
@@ -322,6 +345,35 @@ def test_generate_rejected_when_no_completed_run(session_factory: SessionFactory
         assert rows == []
     finally:
         session.close()
+
+
+def test_generate_uses_latest_completed_run_when_newer_run_failed(
+    session_factory: SessionFactory,
+):
+    request, completed_run = _seed(
+        session_factory,
+        target_count=1,
+        distribution={"easy": 1},
+    )
+    with session_factory() as session:
+        session.add(
+            model.ResearchRun(
+                id=uuid4(),
+                generation_request_id=request.id,
+                parent_run_id=completed_run.id,
+                attempt=completed_run.attempt + 1,
+                status="failed",
+                finished_at=datetime.now(timezone.utc),
+                last_error="design_diversity_exhausted",
+            )
+        )
+        session.commit()
+    service = DesignTaskPlanningService(session_factory)
+
+    tasks = service.generate_for_request(request.id)
+
+    assert len(tasks) == 1
+    assert tasks[0].research_run_id == completed_run.id
 
 
 def test_difficulty_distribution_is_preserved(session_factory: SessionFactory):
@@ -699,6 +751,77 @@ def test_generate_returns_conflict_when_request_lock_is_busy(
 
     with pytest.raises(DesignTaskValidationError, match="generation request is busy"):
         service.generate_for_request(request.id)
+
+
+def test_generate_converts_design_task_insert_dbapi_error(
+    session_factory: SessionFactory,
+    monkeypatch,
+):
+    request, _ = _seed(
+        session_factory,
+        target_count=1,
+        distribution={"easy": 1},
+        finding_labels=["blind SQLi"],
+    )
+    service = DesignTaskPlanningService(session_factory)
+
+    def _disk_full_insert(*_args, **_kwargs):
+        original = Exception("No space left on device")
+        raise DBAPIError("INSERT INTO design_tasks", {}, original)
+
+    monkeypatch.setattr(
+        planning_module.DesignTaskRepository,
+        "replace_draft_or_archived_tasks",
+        _disk_full_insert,
+    )
+
+    with pytest.raises(DesignTaskGenerationPersistenceError) as exc_info:
+        service.generate_for_request(request.id)
+
+    exc = exc_info.value
+    assert exc.code == "design_task_persistence_failed"
+    assert exc.stage == "design_task_insert"
+    assert exc.request_id == request.id
+    assert exc.retryable is True
+
+
+def test_generate_converts_commit_dbapi_error(session_factory: SessionFactory):
+    request, completed_run = _seed(
+        session_factory,
+        target_count=1,
+        distribution={"easy": 1},
+        finding_labels=["blind SQLi"],
+    )
+
+    class CommitFailingSession:
+        def __init__(self, wrapped):
+            self._wrapped = wrapped
+
+        def __getattr__(self, name):
+            return getattr(self._wrapped, name)
+
+        def commit(self):
+            original = Exception("No space left on device")
+            raise DBAPIError("COMMIT", {}, original)
+
+        def close(self):
+            self._wrapped.close()
+
+    def failing_factory():
+        return CommitFailingSession(session_factory())
+
+    service = DesignTaskPlanningService(failing_factory)
+
+    with pytest.raises(DesignTaskGenerationPersistenceError) as exc_info:
+        service.generate_for_request(request.id)
+
+    exc = exc_info.value
+    assert exc.code == "design_task_persistence_failed"
+    assert exc.stage == "design_task_commit"
+    assert exc.request_id == request.id
+    assert exc.retryable is True
+    assert exc.__cause__ is not None
+    assert completed_run.id
 
 
 def test_concurrent_generate_fails_fast_with_busy_code(session_factory: SessionFactory):

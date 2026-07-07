@@ -402,3 +402,62 @@ def test_prompt_renders_advisory_mechanism_vocabulary_not_binding(tmp_path):
     assert "choose the mechanism from the request" in prompt
     assert "chosen_mechanism: MUST be declared by the design model" in prompt
     assert "assigned core_mechanism" not in prompt
+
+
+def test_governed_prompt_spells_out_server_side_contract_rules(tmp_path):
+    context = load_design_prompt_context(_paths(tmp_path))
+    reserved_profile = {
+        "semantic": {"family": "sql_injection", "sub_technique": "boolean_blind"},
+        "solve": {
+            "analysis_mode": "dynamic_probe",
+            "required_action": "payload_injection",
+            "chain_shape": "oracle_to_secret",
+            "required_tool_class": "http_client",
+        },
+        "implementation": {
+            "artifact_format": "container",
+            "language": "python",
+            "runtime": "flask",
+            "interaction": "http_form",
+            "control_structure": "route_handler",
+            "flag_concealment": "database_record",
+        },
+        "presentation": {
+            "scenario_type": "ticket_queue",
+            "input_model": "web_form",
+        },
+    }
+
+    prompt = build_design_prompt(
+        context,
+        _task(),
+        _request(),
+        _findings(1),
+        _sources(),
+        reservation={
+            "id": str(uuid4()),
+            "reserved_profile": reserved_profile,
+            "profile_signature": "sig",
+            "taxonomy_version": 1,
+            "policy_version": 1,
+            "ledger_version": 7,
+        },
+        ledger_snapshot={
+            "ledger_version": 7,
+            "reservation_id": str(uuid4()),
+            "quota_usage": {},
+            "forbidden_signatures": [],
+            "sibling_entries": [
+                {"challenge_id": "web-0000", "profile_signature": "sib"}
+            ],
+            "historical_entries": [
+                {"challenge_id": "web-old", "profile_signature": "hist"}
+            ],
+        },
+    )
+
+    assert "`build_contract.required_player_actions` MUST include exactly `payload_injection`" in prompt
+    assert "must explain both solve-axis differences and implementation-axis differences" in prompt
+    assert "web-0000, web-old" in prompt
+    assert "`artifact_direct_run` -> `stdout_not_contains_flag` or `must_fail`" in prompt
+    assert "Harnesses cannot contain `command`, `argv`, `shell`, `path`, `cwd`, or `executable`" in prompt

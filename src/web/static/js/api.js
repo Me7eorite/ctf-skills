@@ -18,6 +18,11 @@ export async function api(path, options = {}) {
           ? detail.code || JSON.stringify(detail)
           : detail;
         const error = new Error(message || `请求失败 (${response.status})`);
+        error.status = response.status;
+        error.payload = payload;
+        if (payload && typeof payload === "object" && payload.code) {
+          error.code = payload.code;
+        }
         if (typeof detail === "object" && detail !== null && detail.code) {
           error.code = detail.code;
         }

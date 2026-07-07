@@ -897,6 +897,31 @@ def test_rate_limit_failure_is_retryable_and_does_not_exhaust_attempt_budget(
         assert attempts[0].last_error == "provider_rate_limited"
 
 
+def test_rate_limit_text_with_zero_exit_is_retryable_not_schema_failure(
+    session_factory: SessionFactory,
+    tmp_path: Path,
+):
+    task_id, _ = _seed(session_factory, max_attempts=1)
+    executor = FakeDesignExecutor(
+        stdout="Request failed: HTTP 429 Too Many Requests",
+        exit_code=0,
+    )
+    service = _service(tmp_path, session_factory, executor)
+
+    first = service.design_for_task(task_id, "alice")
+    executor.stdout = _valid_stdout()
+    second = service.design_for_task(task_id, "alice")
+
+    assert first.design_task_status == "queued"
+    assert first.attempt_status == "failed"
+    assert first.error == "provider_rate_limited"
+    assert second.design_task_status == "designed"
+    with session_factory() as session:
+        attempts = ChallengeDesignRepository(session).list_attempts(task_id)
+        assert [attempt.attempt for attempt in attempts] == [1, 2]
+        assert attempts[0].last_error == "provider_rate_limited"
+
+
 def test_missing_design_binding_falls_back_to_default_profile(
     session_factory: SessionFactory,
     tmp_path: Path,

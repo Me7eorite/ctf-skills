@@ -41,8 +41,9 @@ class DesignDiversityExhausted(ValueError):
     """Raised when no deterministic profile candidate satisfies hard policy."""
 
     def __init__(self, diagnostics: Mapping[str, Any]) -> None:
-        super().__init__("design_diversity_exhausted")
-        self.code = "design_diversity_exhausted"
+        code = str(diagnostics.get("code") or "design_diversity_exhausted")
+        super().__init__(code)
+        self.code = code
         self.diagnostics = dict(diagnostics)
 
 
@@ -737,6 +738,14 @@ def profile_capacity_check(
             taxonomy,
             semantic_assignments[index % len(semantic_assignments)],
         )
+        unsupported = _unsupported_profile_semantic(
+            taxonomy,
+            semantic,
+            target_count=target_count,
+            allocated_count=len(allocations),
+        )
+        if unsupported is not None:
+            return unsupported
         _validate_axis_values(taxonomy, "semantic", semantic)
         semantic_key = tuple(sorted(semantic.items()))
         candidate = _first_eligible_candidate(
@@ -794,6 +803,46 @@ def profile_capacity_check(
         requested_count=target_count,
         available_count=len(allocations),
         allocations=tuple(allocations),
+        diagnostics=diagnostics,
+    )
+
+
+def _unsupported_profile_semantic(
+    taxonomy: CategoryProfileTaxonomy,
+    semantic: Mapping[str, str],
+    *,
+    target_count: int,
+    allocated_count: int,
+) -> ProfileCapacityResult | None:
+    if taxonomy.category != "pwn":
+        return None
+    family = semantic.get("family", "")
+    sub_technique = semantic.get("sub_technique", "")
+    allowed_families = taxonomy.semantic.fields["family"]
+    allowed_subtechniques = taxonomy.semantic.fields["sub_technique"]
+    supported = family in allowed_families and (
+        sub_technique in allowed_subtechniques
+        or family == "format_string"
+    )
+    if supported:
+        return None
+    diagnostics = {
+        "code": "unsupported_pwn_profile",
+        "category": taxonomy.category,
+        "target_count": target_count,
+        "allocated_count": allocated_count,
+        "available_count": allocated_count,
+        "semantic": dict(semantic),
+        "reason": (
+            "pwn semantic sub_technique has no governed solve primitive; "
+            "map it to a supported primitive before reserving a profile"
+        ),
+    }
+    return ProfileCapacityResult(
+        can_allocate=False,
+        requested_count=target_count,
+        available_count=allocated_count,
+        allocations=(),
         diagnostics=diagnostics,
     )
 

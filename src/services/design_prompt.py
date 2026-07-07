@@ -581,12 +581,25 @@ def _render_governance_context(
 ) -> str:
     if reservation is None:
         return ""
+    reserved_profile = reservation.get("reserved_profile")
+    required_action = None
+    if isinstance(reserved_profile, Mapping):
+        solve = reserved_profile.get("solve")
+        if isinstance(solve, Mapping):
+            value = solve.get("required_action")
+            if isinstance(value, str) and value.strip():
+                required_action = value.strip()
     return "\n".join(
         [
             "## Governed Design Reservation",
             "This is authoritative server-provided governance context. Copy "
             "`reserved_profile` exactly into `challenges[0].governed_profile` "
             "and into `challenges[0].build_contract.required_profile`.",
+            "",
+            _render_governed_contract_rules(
+                required_action=required_action,
+                ledger_snapshot=ledger_snapshot,
+            ),
             "",
             "```json",
             json.dumps(
@@ -601,6 +614,71 @@ def _render_governance_context(
             "```",
         ]
     )
+
+
+def _render_governed_contract_rules(
+    *,
+    required_action: str | None,
+    ledger_snapshot: Mapping[str, Any] | None,
+) -> str:
+    compared_ids = _ledger_compared_ids(ledger_snapshot)
+    action_hint = (
+        f"`build_contract.required_player_actions` MUST include exactly "
+        f"`{required_action}` from `reserved_profile.solve.required_action`."
+        if required_action
+        else "`build_contract.required_player_actions` MUST include the exact "
+        "value from `reserved_profile.solve.required_action`."
+    )
+    compared_hint = (
+        "`compared_challenge_ids` may be empty, or may only contain these "
+        f"ledger ids: {', '.join(compared_ids)}."
+        if compared_ids
+        else "`compared_challenge_ids` MUST be [] because this ledger snapshot "
+        "does not supply comparable challenge ids."
+    )
+    return "\n".join(
+        [
+            "Governance fields are validated more strictly than the JSON Schema:",
+            f"- {action_hint}",
+            "- `distinctness_claim` must explain both solve-axis differences "
+            "and implementation-axis differences; mentioning the reserved solve "
+            "values and implementation values is valid.",
+            f"- {compared_hint}",
+            "- `build_contract.required_asset_flow` must be a non-empty array "
+            "with unique `stage_id` values. Every stage needs "
+            "`produced_asset_or_capability`, `verification_harness`, and "
+            "`dependency_harness`.",
+            "- Declare symbolic `artifact_ids` and `fixture_ids` before any "
+            "harness references them. Harnesses cannot contain `command`, "
+            "`argv`, `shell`, `path`, `cwd`, or `executable`.",
+            "- Closed harness kinds/assertions: "
+            "`artifact_direct_run` -> `stdout_not_contains_flag` or `must_fail`; "
+            "`fixture_assertion` -> `non_empty`, `equals`, or `contains`; "
+            "`solver_with_fixture` -> `must_pass` or `outputs_flag`; "
+            "`solver_without_fixture` -> `must_fail` or `stdout_not_contains_flag`; "
+            "`random_flag_rebuild` -> `outputs_new_flag` or `old_flag_rejected` "
+            "(re only).",
+        ]
+    )
+
+
+def _ledger_compared_ids(
+    ledger_snapshot: Mapping[str, Any] | None,
+) -> tuple[str, ...]:
+    if not isinstance(ledger_snapshot, Mapping):
+        return ()
+    ids: list[str] = []
+    for key in ("sibling_entries", "historical_entries"):
+        entries = ledger_snapshot.get(key)
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, Mapping):
+                continue
+            challenge_id = entry.get("challenge_id")
+            if isinstance(challenge_id, str) and challenge_id.strip():
+                ids.append(challenge_id.strip())
+    return tuple(dict.fromkeys(ids))
 
 
 def _render_retry_feedback(previous_error: str | None) -> str:

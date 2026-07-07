@@ -225,6 +225,27 @@ def test_rejects_distinctness_claim_without_implementation_axis() -> None:
         )
 
 
+def test_distinctness_claim_can_use_profile_values_for_axes() -> None:
+    profile = _profile()
+    reservation = _reservation(profile)
+    finding = _finding()
+    challenge = _challenge(reservation, finding)
+    challenge["distinctness_claim"] = (
+        "Uses payload_injection through http_client flow with python/flask "
+        "container database_record storage instead of sibling patterns."
+    )
+
+    evidence = validate_design_evidence_output(
+        challenge=challenge,
+        design_task=_task(reservation),
+        reservation=reservation,
+        findings=[finding],
+        ledger_snapshot=_snapshot(reservation),
+    )
+
+    assert evidence["distinctness_claim"] == challenge["distinctness_claim"]
+
+
 def test_rejects_web_random_flag_rebuild_harness() -> None:
     profile = _profile()
     reservation = _reservation(profile)

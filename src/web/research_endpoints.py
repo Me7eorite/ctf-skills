@@ -1063,7 +1063,10 @@ def _binding_dict(
 def _register_design_task_endpoints(app: FastAPI) -> None:
     @app.post("/api/research/requests/{request_id}/design-tasks/generate")
     def generate_design_tasks(request_id: str) -> JSONResponse:
-        from services import DesignTaskPlanningService
+        from services import (
+            DesignTaskGenerationPersistenceError,
+            DesignTaskPlanningService,
+        )
 
         try:
             request_uuid = UUID(request_id)
@@ -1077,6 +1080,17 @@ def _register_design_task_endpoints(app: FastAPI) -> None:
             tasks = DesignTaskPlanningService().generate_for_request(request_uuid)
         except _DESIGN_TASK_DOMAIN_ERRORS as exc:
             return _design_task_domain_error_response(exc)
+        except DesignTaskGenerationPersistenceError as exc:
+            return JSONResponse(
+                {
+                    "code": exc.code,
+                    "message": exc.message,
+                    "stage": exc.stage,
+                    "request_id": str(exc.request_id),
+                    "retryable": exc.retryable,
+                },
+                status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+            )
 
         return JSONResponse(
             {

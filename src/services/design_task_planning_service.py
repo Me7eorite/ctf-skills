@@ -23,7 +23,7 @@ import math
 import re
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Literal
 from uuid import UUID
@@ -34,7 +34,6 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 from domain import design_tasks as dto
 from domain import research as research_dto
 from domain.design.profile_taxonomy import (
-    allocate_profile_batch,
     canonical_profile_signatures,
     load_profile_policy,
     normalize_semantic_assignment,
@@ -80,6 +79,21 @@ DIVERSITY_WARNING_SUBTECHNIQUE_DUPLICATE = "subtechnique_duplicate"
 DIVERSITY_WARNING_FAMILY_OTHER = "family_other"
 LOCK_NOT_AVAILABLE_SQLSTATE = "55P03"
 GENERATION_REQUEST_BUSY_CODE = "generation_request_busy"
+DESIGN_TASK_PERSISTENCE_FAILED_CODE = "design_task_persistence_failed"
+
+
+@dataclass
+class DesignTaskGenerationPersistenceError(RuntimeError):
+    """Typed wrapper for persistence failures during design-task generation."""
+
+    request_id: UUID
+    stage: str
+    message: str
+    retryable: bool = True
+    code: str = field(default=DESIGN_TASK_PERSISTENCE_FAILED_CODE, init=False)
+
+    def __str__(self) -> str:
+        return self.message
 
 
 class DesignTaskPlanningService:
@@ -104,6 +118,32 @@ class DesignTaskPlanningService:
         does not exist, has not been researched, or has any task whose
         status is past ``draft``/``archived``.
         """
+        active_request_id = request_id
+        active_research_run_id: UUID | None = None
+
+        def set_active_research_run_id(run_id: UUID) -> None:
+            nonlocal active_research_run_id
+            active_research_run_id = run_id
+
+        try:
+            return self._generate_for_request_in_transaction(
+                request_id,
+                set_active_research_run_id=set_active_research_run_id,
+            )
+        except DBAPIError as exc:
+            _raise_persistence_failed(
+                exc,
+                request_id=active_request_id,
+                research_run_id=active_research_run_id,
+                stage="design_task_commit",
+            )
+
+    def _generate_for_request_in_transaction(
+        self,
+        request_id: UUID,
+        *,
+        set_active_research_run_id,
+    ) -> list[dto.DesignTask]:
         with transaction(factory=self.session_factory) as session:
             research_repo = ResearchRepository(session)
             design_repo = DesignTaskRepository(session)
@@ -119,9 +159,10 @@ class DesignTaskPlanningService:
             # 场景串行化为干净的 409，而非 5xx 完整性错误。
             _lock_generation_request_or_busy(research_repo, request_id)
 
-            latest = research_repo.get_latest_run_for_request(request_id)
-            if latest is None or latest.status != "completed":
+            latest = research_repo.get_latest_completed_run_for_request(request_id)
+            if latest is None:
                 raise DesignTaskValidationError("latest_run_not_completed")
+            set_active_research_run_id(latest.id)
 
             findings = research_repo.list_findings(latest.id)
             sources = research_repo.list_sources(latest.id)
@@ -143,6 +184,12 @@ class DesignTaskPlanningService:
             candidates = _plan_candidates(
                 request, latest, findings, hermes_planner=self.hermes_planner
             )
+            _LOGGER.info(
+                "generate_design_tasks planned_candidate_count=%s request_id=%s research_run_id=%s stage=planning",
+                len(candidates),
+                request.id,
+                latest.id,
+            )
             # 跨表校验：design.md §Task Generation Flow 第 5 步要求
             # “每个 task 必须引用至少一个来自当前 research_run 的 finding”。
             # 这一规则需要 SELECT，所以放在 service 层（validators 模块
@@ -153,20 +200,58 @@ class DesignTaskPlanningService:
                 research_run_id=latest.id,
             )
             reservation_repo = DesignProfileReservationRepository(session)
-            reservation_repo.release_active_for_request(request.id)
-            design_repo.replace_draft_or_archived_tasks(
-                generation_request_id=request.id,
-                research_run_id=latest.id,
-                parent_category=request.category,
-                target_count=request.target_count,
-                difficulty_distribution=request.difficulty_distribution,
-                candidates=candidates,
+            try:
+                reservation_repo.release_active_for_request(request.id)
+            except DBAPIError as exc:
+                _raise_persistence_failed(
+                    exc,
+                    request_id=request.id,
+                    research_run_id=latest.id,
+                    stage="reservation_release",
+                )
+            try:
+                created_tasks = design_repo.replace_draft_or_archived_tasks(
+                    generation_request_id=request.id,
+                    research_run_id=latest.id,
+                    parent_category=request.category,
+                    target_count=request.target_count,
+                    difficulty_distribution=request.difficulty_distribution,
+                    candidates=candidates,
+                )
+            except DBAPIError as exc:
+                _raise_persistence_failed(
+                    exc,
+                    request_id=request.id,
+                    research_run_id=latest.id,
+                    stage="design_task_insert",
+                )
+            _LOGGER.info(
+                "generate_design_tasks inserted_task_count=%s request_id=%s "
+                "research_run_id=%s stage=design_task_insert",
+                len(created_tasks),
+                request.id,
+                latest.id,
             )
-            self._allocate_reservations(
-                session=session,
-                generation_request=request,
-                tasks=design_repo.list_design_tasks(request.id),
-                candidates=candidates,
+            try:
+                allocated_count = self._allocate_reservations(
+                    session=session,
+                    generation_request=request,
+                    tasks=created_tasks,
+                    candidates=candidates,
+                )
+            except DBAPIError as exc:
+                _raise_persistence_failed(
+                    exc,
+                    request_id=request.id,
+                    research_run_id=latest.id,
+                    stage="reservation_allocation",
+                )
+            _LOGGER.info(
+                "generate_design_tasks reservation_allocated_count=%s "
+                "request_id=%s research_run_id=%s stage=reservation_allocation",
+                allocated_count,
+                request.id,
+                latest.id,
             )
             return design_repo.list_design_tasks(request.id)
 
@@ -411,7 +496,7 @@ class DesignTaskPlanningService:
         generation_request: research_dto.GenerationRequest,
         tasks: Sequence[dto.DesignTask],
         candidates: Sequence[Mapping[str, Any]],
-    ) -> None:
+    ) -> int:
         reservation_repo = DesignProfileReservationRepository(session)
         policy = load_profile_policy(generation_request.category)
         ordered = sorted(
@@ -439,13 +524,19 @@ class DesignTaskPlanningService:
                 with session.begin_nested():
                     ledger.ledger_version += 1
                     ledger.updated_at = _utcnow()
-                    allocations = allocate_profile_batch(
+                    capacity = profile_capacity_check(
                         category=generation_request.category,
                         target_count=len(ordered),
                         semantic_assignments=semantic_assignments,
                         policy=policy,
                         existing=existing,
                     )
+                    if not capacity.can_allocate:
+                        raise DesignTaskValidationError(
+                            capacity.diagnostics.get("code")
+                            or "design_diversity_exhausted"
+                        )
+                    allocations = capacity.allocations
 
                     for (task, candidate), allocation in zip(ordered, allocations, strict=True):
                         signatures = canonical_profile_signatures(
@@ -465,12 +556,13 @@ class DesignTaskPlanningService:
                             ledger_version=ledger.ledger_version,
                         )
                         reservation_repo.set_current_reservation(task.id, reservation.id)
-                return
+                return len(ordered)
             except IntegrityError:
                 session.expire_all()
                 if attempt == 0:
                     continue
                 raise
+        return 0
 
 
 def validate_finding_provenance(
@@ -957,6 +1049,37 @@ def _lock_generation_request_or_busy(
                 code=GENERATION_REQUEST_BUSY_CODE,
             ) from exc
         raise
+
+
+def _raise_persistence_failed(
+    exc: DBAPIError,
+    *,
+    request_id: UUID,
+    research_run_id: UUID | None,
+    stage: str,
+) -> None:
+    event = {
+        "design_task_insert": "insert_failed",
+        "reservation_release": "reservation_failed",
+        "reservation_allocation": "reservation_failed",
+        "design_task_commit": "commit_failed",
+    }.get(stage, "persistence_failed")
+    _LOGGER.exception(
+        "generate_design_tasks %s request_id=%s research_run_id=%s stage=%s exception_code=%s",
+        event,
+        request_id,
+        research_run_id,
+        stage,
+        exc.__class__.__name__,
+    )
+    raise DesignTaskGenerationPersistenceError(
+        request_id=request_id,
+        stage=stage,
+        message=(
+            "design task generation failed while writing persistence state "
+            f"at stage {stage}: {exc.__class__.__name__}"
+        ),
+    ) from exc
 
 
 def _semantic_assignments_for_findings(
