@@ -463,6 +463,17 @@ class CorpusRepository:
         )
         if aggregate is None or aggregate.decision != dto.CorpusDecisionValue.PASSED.value:
             return set()
+        current_decisions = self.current_member_decisions(batch_id)
+        for decision in current_decisions:
+            corpus_review = self.latest_corpus_review(
+                corpus_decision_id=decision.id,
+                scope=corpus_review_scope,
+            )
+            if not dto.corpus_decision_is_effectively_accepted(
+                decision,
+                has_allowed_review=dto.corpus_review_allows_acceptance(corpus_review),
+            ):
+                return set()
 
         stmt = (
             sa.select(

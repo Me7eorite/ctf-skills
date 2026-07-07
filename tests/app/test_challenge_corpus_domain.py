@@ -148,6 +148,68 @@ def test_effective_acceptance_helpers_keep_review_separate_from_decision() -> No
     assert observation_review_allows_acceptance(observation_review)
 
 
+def test_aggregate_passes_with_approved_review_without_rewriting_member_decision() -> None:
+    now = datetime.now(timezone.utc)
+    batch_id = uuid4()
+    reviewed = CorpusDecision(
+        id=uuid4(),
+        batch_id=batch_id,
+        member_id=uuid4(),
+        scope=CorpusDecisionScope.MEMBER.value,
+        decision=CorpusDecisionValue.REVIEW_REQUIRED.value,
+        reasons=("source_similarity_review",),
+        policy_version=1,
+        is_current=True,
+        created_at=now,
+        superseded_at=None,
+    )
+    passed = CorpusDecision(
+        id=uuid4(),
+        batch_id=batch_id,
+        member_id=uuid4(),
+        scope=CorpusDecisionScope.MEMBER.value,
+        decision=CorpusDecisionValue.PASSED.value,
+        reasons=("ok",),
+        policy_version=1,
+        is_current=True,
+        created_at=now,
+        superseded_at=None,
+    )
+
+    aggregate = aggregate_corpus_decision(
+        [reviewed, passed],
+        member_acceptance=[True, True],
+    )
+
+    assert aggregate.decision == CorpusDecisionValue.PASSED.value
+    assert aggregate.reasons == ("all_members_accepted",)
+    assert reviewed.decision == CorpusDecisionValue.REVIEW_REQUIRED.value
+
+
+def test_aggregate_stays_review_required_when_member_review_is_unapproved() -> None:
+    now = datetime.now(timezone.utc)
+    reviewed = CorpusDecision(
+        id=uuid4(),
+        batch_id=uuid4(),
+        member_id=uuid4(),
+        scope=CorpusDecisionScope.MEMBER.value,
+        decision=CorpusDecisionValue.REVIEW_REQUIRED.value,
+        reasons=("source_similarity_review",),
+        policy_version=1,
+        is_current=True,
+        created_at=now,
+        superseded_at=None,
+    )
+
+    aggregate = aggregate_corpus_decision(
+        [reviewed],
+        member_acceptance=[False],
+    )
+
+    assert aggregate.decision == CorpusDecisionValue.REVIEW_REQUIRED.value
+    assert "member_review_required:source_similarity_review" in aggregate.reasons
+
+
 def test_renamed_constant_only_clone_blocks_on_source_similarity() -> None:
     candidate = {
         "combined": "candidate",

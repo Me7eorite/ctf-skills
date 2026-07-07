@@ -531,6 +531,111 @@ def test_production_eligible_challenge_ids_require_accepted_corpus_rows(
             policy_version=1,
         )
 
+        assert repo.production_eligible_challenge_ids(batch_id=batch.id) == set()
+
+
+def test_production_eligible_challenge_ids_allow_reviewed_member_with_passed_aggregate(
+    session_factory: SessionFactory,
+) -> None:
+    attempt_id, evidence_id, observation_id = _seed_candidate_with_id(
+        session_factory,
+        "web-reviewed",
+    )
+    with session_factory() as session:
+        repo = CorpusRepository(session)
+        batch = repo.create_batch(
+            mode=CorpusMode.PRODUCTION.value,
+            category="web",
+            policy_version=1,
+            created_by="operator",
+        )
+        member = repo.add_member(
+            batch_id=batch.id,
+            build_attempt_id=attempt_id,
+            design_evidence_id=evidence_id,
+            artifact_observation_id=observation_id,
+            fingerprint_version=CORPUS_FINGERPRINT_SCHEMA_VERSION,
+            fingerprints=_fingerprints(),
+        )
+        decision = repo.record_decision(
+            batch_id=batch.id,
+            member_id=member.id,
+            scope=CorpusDecisionScope.MEMBER.value,
+            decision=CorpusDecisionValue.REVIEW_REQUIRED.value,
+            reasons=["source_similarity_review"],
+            policy_version=1,
+        )
+        repo.record_corpus_review(
+            corpus_decision_id=decision.id,
+            decision=CorpusReviewDecisionValue.APPROVED.value,
+            actor="operator",
+            reason="acceptable overlap",
+            scope="production-publication",
+        )
+        repo.record_decision(
+            batch_id=batch.id,
+            scope=CorpusDecisionScope.AGGREGATE.value,
+            decision=CorpusDecisionValue.PASSED.value,
+            reasons=["all_members_accepted"],
+            policy_version=1,
+        )
+
         assert repo.production_eligible_challenge_ids(batch_id=batch.id) == {
-            "web-accepted"
+            "web-reviewed"
         }
+        current = repo.current_decision(
+            batch_id=batch.id,
+            member_id=member.id,
+            scope=CorpusDecisionScope.MEMBER.value,
+        )
+        assert current is not None
+        assert current.decision == CorpusDecisionValue.REVIEW_REQUIRED.value
+
+
+def test_production_eligible_challenge_ids_require_aggregate_pass(
+    session_factory: SessionFactory,
+) -> None:
+    attempt_id, evidence_id, observation_id = _seed_candidate_with_id(
+        session_factory,
+        "web-reviewed",
+    )
+    with session_factory() as session:
+        repo = CorpusRepository(session)
+        batch = repo.create_batch(
+            mode=CorpusMode.PRODUCTION.value,
+            category="web",
+            policy_version=1,
+            created_by="operator",
+        )
+        member = repo.add_member(
+            batch_id=batch.id,
+            build_attempt_id=attempt_id,
+            design_evidence_id=evidence_id,
+            artifact_observation_id=observation_id,
+            fingerprint_version=CORPUS_FINGERPRINT_SCHEMA_VERSION,
+            fingerprints=_fingerprints(),
+        )
+        decision = repo.record_decision(
+            batch_id=batch.id,
+            member_id=member.id,
+            scope=CorpusDecisionScope.MEMBER.value,
+            decision=CorpusDecisionValue.REVIEW_REQUIRED.value,
+            reasons=["source_similarity_review"],
+            policy_version=1,
+        )
+        repo.record_corpus_review(
+            corpus_decision_id=decision.id,
+            decision=CorpusReviewDecisionValue.APPROVED.value,
+            actor="operator",
+            reason="acceptable overlap",
+            scope="production-publication",
+        )
+        repo.record_decision(
+            batch_id=batch.id,
+            scope=CorpusDecisionScope.AGGREGATE.value,
+            decision=CorpusDecisionValue.REVIEW_REQUIRED.value,
+            reasons=["member_review_required:source_similarity_review"],
+            policy_version=1,
+        )
+
+        assert repo.production_eligible_challenge_ids(batch_id=batch.id) == set()

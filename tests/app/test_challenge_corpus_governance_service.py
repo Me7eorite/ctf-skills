@@ -14,15 +14,18 @@ from domain.challenge_corpus import (
     CorpusDecisionScope,
     CorpusDecisionValue,
     CorpusMode,
+    CorpusReviewDecision,
+    CorpusReviewDecisionValue,
     canonical_token_fingerprint,
 )
 from services.challenge_corpus_governance import ChallengeCorpusGovernanceService
 
 
 class FakeCorpusRepository:
-    def __init__(self) -> None:
+    def __init__(self, *, approve_corpus_reviews: bool = False) -> None:
         self.batch_id = uuid4()
         self.member_id = uuid4()
+        self.approve_corpus_reviews = approve_corpus_reviews
         self.batch = CorpusBatch(
             id=self.batch_id,
             mode=CorpusMode.PRODUCTION.value,
@@ -133,6 +136,16 @@ class FakeCorpusRepository:
         ]
 
     def latest_corpus_review(self, *, corpus_decision_id, scope=None):
+        if self.approve_corpus_reviews:
+            return CorpusReviewDecision(
+                id=uuid4(),
+                corpus_decision_id=corpus_decision_id,
+                decision=CorpusReviewDecisionValue.APPROVED.value,
+                actor="operator",
+                reason="acceptable source overlap",
+                scope=scope or "production-publication",
+                created_at=datetime.now(timezone.utc),
+            )
         return None
 
 
@@ -148,3 +161,15 @@ def test_evaluate_batch_records_matches_member_decision_and_aggregate() -> None:
     assert repo.decisions[0].decision == CorpusDecisionValue.REVIEW_REQUIRED.value
     assert repo.decisions[1].scope == CorpusDecisionScope.AGGREGATE.value
     assert summary.aggregate_result.decision == CorpusDecisionValue.REVIEW_REQUIRED.value
+
+
+def test_evaluate_batch_approved_review_produces_aggregate_pass_without_rewrite() -> None:
+    repo = FakeCorpusRepository(approve_corpus_reviews=True)
+    service = ChallengeCorpusGovernanceService(repo)  # type: ignore[arg-type]
+
+    summary = service.evaluate_batch(repo.batch_id)
+
+    assert repo.decisions[0].scope == CorpusDecisionScope.MEMBER.value
+    assert repo.decisions[0].decision == CorpusDecisionValue.REVIEW_REQUIRED.value
+    assert repo.decisions[1].scope == CorpusDecisionScope.AGGREGATE.value
+    assert summary.aggregate_result.decision == CorpusDecisionValue.PASSED.value

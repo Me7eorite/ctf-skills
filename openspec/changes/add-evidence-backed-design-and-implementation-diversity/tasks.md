@@ -150,7 +150,7 @@
 - [x] 8.8 Integrate explicit corpus batch selection with `Packer` so production
       bundles require `corpus_batch_id`, database membership decisions, and
       aggregate batch pass rather than `metadata.build_status` alone.
-- [ ] 8.9 Add regression coverage for aggregate corpus decisions: approved
+- [x] 8.9 Add regression coverage for aggregate corpus decisions: approved
       member reviews can produce an aggregate `passed` decision without
       rewriting raw member decisions, while unapproved reviews or hard blocks
       prevent production packing.
