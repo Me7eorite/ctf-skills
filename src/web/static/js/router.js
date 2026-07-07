@@ -74,6 +74,7 @@ const titles = {
   "design-tasks":     { title: "题目设计", group: "生产管线" },
   "challenges":       { title: "完成题目", group: "生产管线" },
   "build-attempts":   { title: "构建列表", group: "生产管线" },
+  "corpus-rollout":   { title: "治理上线", group: "生产管线" },
   "worker-pool":      { title: "实时进度", group: "运行监控" },
   "logs":             { title: "运行日志", group: "运行监控" },
   "shards":           { title: "任务队列", group: "系统" },

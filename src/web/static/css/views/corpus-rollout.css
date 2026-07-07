@@ -1,0 +1,235 @@
+.rollout-page {
+  display: grid;
+  gap: var(--space-lg);
+}
+
+.rollout-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-lg);
+}
+
+.rollout-title {
+  color: var(--ink-900);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.rollout-desc {
+  margin-top: 4px;
+  color: var(--ink-500);
+  font-size: var(--font-sm);
+}
+
+.rollout-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+}
+
+.rollout-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-lg);
+}
+
+.rollout-input-card {
+  min-width: 0;
+}
+
+.rollout-json {
+  min-height: 320px;
+  max-height: 560px;
+  white-space: pre;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.rollout-trial-stack {
+  display: grid;
+  gap: var(--space-md);
+}
+
+.rollout-trial-editor {
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.rollout-trial-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  color: var(--ink-700);
+  font-size: var(--font-sm);
+  font-weight: 600;
+}
+
+.rollout-result-card {
+  overflow: hidden;
+}
+
+.rollout-empty {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  color: var(--ink-500);
+  font-size: var(--font-sm);
+}
+
+.rollout-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+  border-radius: var(--radius-md);
+  font-size: var(--font-sm);
+}
+
+.rollout-banner-error {
+  border: 1px solid var(--accent-red-200);
+  background: var(--accent-red-50);
+  color: var(--accent-red);
+}
+
+.rollout-banner-ok {
+  border: 1px solid var(--accent-green-light);
+  background: var(--accent-green-light);
+  color: var(--accent-green);
+}
+
+.rollout-metrics,
+.rollout-shadow-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-md);
+  margin-bottom: var(--space-md);
+}
+
+.rollout-metric {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: var(--space-md);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--ink-50);
+}
+
+.rollout-metric span {
+  color: var(--ink-500);
+  font-size: var(--font-xs);
+}
+
+.rollout-metric strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink-900);
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.rollout-section-title {
+  margin: var(--space-lg) 0 var(--space-sm);
+  color: var(--ink-900);
+  font-size: var(--font-md);
+  font-weight: 700;
+}
+
+.rollout-table-wrap {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+
+.rollout-table {
+  min-width: 820px;
+}
+
+.rollout-row-reasons {
+  margin-top: 4px;
+  color: var(--accent-red);
+  font-size: var(--font-xs);
+  line-height: 1.5;
+}
+
+.rollout-dist {
+  display: grid;
+  gap: var(--space-sm);
+  margin-top: var(--space-md);
+}
+
+.rollout-dist-title {
+  color: var(--ink-600);
+  font-size: var(--font-xs);
+  font-weight: 600;
+}
+
+.rollout-dist-list {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+}
+
+.rollout-dist-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink-600);
+  font-size: var(--font-xs);
+}
+
+.rollout-dist-item code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.rollout-dist-item strong {
+  color: var(--ink-900);
+  font-variant-numeric: tabular-nums;
+}
+
+.rollout-dist-empty {
+  color: var(--ink-500);
+  font-size: var(--font-sm);
+}
+
+@media (max-width: 1023px) {
+  .rollout-header {
+    display: grid;
+  }
+
+  .rollout-header-actions {
+    justify-content: flex-start;
+  }
+
+  .rollout-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .rollout-metrics,
+  .rollout-shadow-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 639px) {
+  .rollout-metrics,
+  .rollout-shadow-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .rollout-json {
+    min-height: 240px;
+  }
+}

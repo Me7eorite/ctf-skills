@@ -152,6 +152,52 @@ class WebserverTests(unittest.TestCase):
         self.assertEqual(body["name"], "demo.log")
         self.assertIn("hello", body["content"])
 
+    def test_corpus_rollout_evidence_endpoint_evaluates_gate(self):
+        trial = {
+            "mode": "trial",
+            "challenge_count": 20,
+            "design_evidence_passed": 20,
+            "build_contracts_passed": 20,
+            "artifact_observations_passed": 20,
+            "aggregate_decision": "passed",
+            "member_decisions": {"passed": 18, "review_required": 2, "blocked": 0},
+        }
+
+        with self._client() as client:
+            response = client.post(
+                "/api/corpus/rollout-evidence",
+                json={
+                    "shadow_report": {
+                        "challenge_count": 40,
+                        "required_vs_observed": {"matched": 40},
+                        "member_decisions": {
+                            "passed": 36,
+                            "review_required": 4,
+                            "blocked": 0,
+                        },
+                    },
+                    "trial_reports": [
+                        {**trial, "id": "trial-1"},
+                        {**trial, "id": "trial-2"},
+                    ],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        evidence = response.json()["evidence"]
+        self.assertTrue(evidence["production_mode_allowed"])
+        self.assertEqual(evidence["production_mode_action"], "manual_enable_allowed")
+
+    def test_corpus_rollout_evidence_endpoint_requires_two_trials(self):
+        with self._client() as client:
+            response = client.post(
+                "/api/corpus/rollout-evidence",
+                json={"shadow_report": {}, "trial_reports": []},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("at least two", response.json()["message"])
+
     def test_delivery_download_returns_zip_for_publishable_challenges(self):
         self._write_deliverable_challenge()
 

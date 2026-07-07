@@ -15,6 +15,7 @@ import * as researchRuns from "./views/research-runs.js";
 import * as researchLogs from "./views/research-logs.js";
 import * as designTasks from "./views/design-tasks.js";
 import * as buildAttempts from "./views/build-attempts.js";
+import * as corpusRollout from "./views/corpus-rollout.js";
 
 const views = {
   overview,
@@ -28,6 +29,7 @@ const views = {
   "research-logs": researchLogs,
   "design-tasks": designTasks,
   "build-attempts": buildAttempts,
+  "corpus-rollout": corpusRollout,
 };
 
 registerViews({
@@ -42,6 +44,7 @@ registerViews({
   "research-logs": researchLogs.render,
   "design-tasks": designTasks.render,
   "build-attempts": buildAttempts.render,
+  "corpus-rollout": corpusRollout.render,
 });
 registerViewHooks({
   challengesEnter: () => challenges.activate?.(),
@@ -172,6 +175,7 @@ researchRuns.bind?.(loadState);
 researchLogs.bind?.(loadState);
 designTasks.bind?.(loadState);
 buildAttempts.bind?.(loadState);
+corpusRollout.bind?.(loadState);
 workerPool.bind?.(loadState);
 
 routeFromHash();

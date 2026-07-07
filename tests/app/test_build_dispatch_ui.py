@@ -10,6 +10,9 @@ BUILD_ATTEMPTS_JS = ROOT / "src" / "web" / "static" / "js" / "views" / "build-at
 BUILD_ATTEMPTS_CSS = ROOT / "src" / "web" / "static" / "css" / "views" / "build-attempts.css"
 WORKER_POOL_JS = ROOT / "src" / "web" / "static" / "js" / "views" / "worker-pool.js"
 FORMAT_JS = ROOT / "src" / "web" / "static" / "js" / "ui" / "format.js"
+MAIN_JS = ROOT / "src" / "web" / "static" / "js" / "main.js"
+ROUTER_JS = ROOT / "src" / "web" / "static" / "js" / "router.js"
+ROLLOUT_JS = ROOT / "src" / "web" / "static" / "js" / "views" / "corpus-rollout.js"
 
 
 def test_build_attempt_actions_use_constrained_endpoints():
@@ -110,6 +113,25 @@ def test_build_attempt_detail_exposes_governance_sections() -> None:
         "production_delivery_eligibility",
     ):
         assert label in source
+
+
+def test_corpus_rollout_view_exposes_ui_gate() -> None:
+    index = (ROOT / "src" / "web" / "static" / "index.html").read_text(encoding="utf-8")
+    main = MAIN_JS.read_text(encoding="utf-8")
+    router = ROUTER_JS.read_text(encoding="utf-8")
+    source = ROLLOUT_JS.read_text(encoding="utf-8")
+
+    assert 'data-target="corpus-rollout"' in index
+    assert 'data-view="corpus-rollout"' in index
+    assert '/css/views/corpus-rollout.css' in index
+    assert "corpusRollout" in main
+    assert '"corpus-rollout"' in router
+    assert "/api/corpus/rollout-evidence" in source
+    assert "治理上线证据" in source
+    assert "允许人工开启" in source
+    assert "保持关闭" in source
+    assert "Trial 批次" in source
+    assert "Shadow 报告" in source
 
 
 def test_detail_poll_supports_append_only_event_updates():

@@ -21,6 +21,7 @@ from starlette.background import BackgroundTask
 
 from core.jsonio import read_json
 from core.paths import ProjectPaths
+from domain.corpus_rollout import build_rollout_evidence
 from persistence import make_postgres_progress_store
 from services import ResourceDeletionService
 from services.build_profile_readiness import check_build_profile_readiness
@@ -203,6 +204,29 @@ def create_app(
             },
             status_code=HTTPStatus.CREATED,
         )
+
+    @app.post("/api/corpus/rollout-evidence")
+    async def post_corpus_rollout_evidence(request: Request) -> JSONResponse:
+        try:
+            payload = await request.json()
+            shadow_report = payload.get("shadow_report")
+            trial_reports = payload.get("trial_reports")
+            if not isinstance(shadow_report, dict):
+                raise ValueError("shadow_report must be a JSON object")
+            if not isinstance(trial_reports, list) or len(trial_reports) < 2:
+                raise ValueError("trial_reports must contain at least two JSON objects")
+            if not all(isinstance(item, dict) for item in trial_reports):
+                raise ValueError("trial_reports entries must be JSON objects")
+            evidence = build_rollout_evidence(
+                shadow_report=shadow_report,
+                trial_reports=trial_reports,
+            )
+        except ValueError as exc:
+            return JSONResponse(
+                {"ok": False, "message": str(exc)},
+                status_code=HTTPStatus.BAD_REQUEST,
+            )
+        return JSONResponse({"ok": True, "evidence": evidence})
 
     @app.post("/api/shards/{state}/{name:path}/requeue")
     def post_requeue_shard(state: str, name: str) -> JSONResponse:
