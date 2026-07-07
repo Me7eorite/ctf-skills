@@ -505,6 +505,30 @@ class ConfigureTerminalWorkspaceTests(unittest.TestCase):
         self.assertIn("ctf-skills-owner=ctf-skills", extra_args)
         self.assertIn("ctf-skills-execution=attempt", extra_args)
 
+    def test_docker_backend_mounts_design_execution_workspace(self):
+        with tempfile.TemporaryDirectory() as temp:
+            cwd = Path(temp) / "work" / "design" / "executions" / "design-attempt"
+            cwd.mkdir(parents=True)
+            environment = {}
+
+            configure_terminal_workspace(
+                environment,
+                cwd=cwd,
+                terminal_backend="docker",
+            )
+
+            expected_volume = f"{cwd.resolve()}:/workspace"
+
+        self.assertEqual(environment["TERMINAL_CWD"], "/workspace")
+        self.assertEqual(json.loads(environment["TERMINAL_DOCKER_VOLUMES"]), [expected_volume])
+        self.assertEqual(environment["CTF_SKILLS_EXECUTION_ID"], "design-attempt")
+        self.assertEqual(
+            environment["CTF_SKILLS_HERMES_TASK_ID"],
+            "ctf-build-design-attempt",
+        )
+        self.assertEqual(environment["CTF_SKILLS_HOST_WORKSPACE"], str(cwd.resolve()))
+        self.assertEqual(environment["CTF_SKILLS_CONTAINER_WORKSPACE"], "/workspace")
+
     def test_docker_backend_keeps_non_execution_cwd_fallback(self):
         with tempfile.TemporaryDirectory() as temp:
             cwd = Path(temp) / "workspace"

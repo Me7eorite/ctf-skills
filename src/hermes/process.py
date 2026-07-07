@@ -596,6 +596,13 @@ def _attempt_id_from_execution_cwd(cwd: Path) -> str | None:
     for index in range(len(parts) - 2):
         if parts[index] == "work" and parts[index + 1] == "executions":
             return parts[index + 2]
+    for index in range(len(parts) - 3):
+        if (
+            parts[index] == "work"
+            and parts[index + 1] == "design"
+            and parts[index + 2] == "executions"
+        ):
+            return parts[index + 3]
     return None
 
 
@@ -663,6 +670,17 @@ def _docker_workspace_mapping(cwd: Path) -> tuple[str, list[str]]:
             host_root = Path(*parts[: index + 4])
             relative = resolved.relative_to(host_root).as_posix()
             container_root = "/workspace/current"
+            container_cwd = container_root if relative == "." else f"{container_root}/{relative}"
+            return container_cwd, [f"{host_root}:{container_root}"]
+    for index in range(len(parts) - 3):
+        if (
+            parts[index] == "work"
+            and parts[index + 1] == "design"
+            and parts[index + 2] == "executions"
+        ):
+            host_root = Path(*parts[: index + 4])
+            relative = resolved.relative_to(host_root).as_posix()
+            container_root = "/workspace"
             container_cwd = container_root if relative == "." else f"{container_root}/{relative}"
             return container_cwd, [f"{host_root}:{container_root}"]
     return "/workspace", [f"{resolved}:/workspace"]

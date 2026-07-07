@@ -33,8 +33,8 @@ from persistence.repositories import (
 )
 from persistence.session import SessionFactory, transaction
 from services.design_agent_executor import (
-    DesignChallengeExecutor,
     PROVIDER_RATE_LIMITED_ERROR,
+    DesignChallengeExecutor,
     is_provider_rate_limit_error,
     last_error_for_exit_code,
 )
@@ -130,6 +130,7 @@ class ChallengeDesignService:
         prompt_path = self.paths.design_prompts / f"{attempt.id}.md"
         log_path = self.paths.design_logs / f"{attempt.id}.log"
         workspace = self.paths.design_executions / str(attempt.id)
+        (workspace / "state").mkdir(parents=True, exist_ok=True)
         prompt_rel = self._relative_path(prompt_path)
         log_rel = self._relative_path(log_path)
 
@@ -700,6 +701,7 @@ def _validation_notes(base_notes: str, quality_notes: Sequence[str]) -> str:
 
 
 _PROJECT_ROOT_LEAK_DIRS = ("output", "challenges", ".design_output")
+_PROJECT_ROOT_LEAK_FILES = ("state/design_output.json",)
 _PROJECT_ROOT_LEAK_FILE_PREFIXES = (
     "challenge",
     "design",
@@ -741,6 +743,10 @@ def _project_root_output_leaks(
 
 
 def _iter_project_root_output_candidates(root: Path):
+    for relative in _PROJECT_ROOT_LEAK_FILES:
+        path = root / relative
+        if path.is_file():
+            yield path
     for dirname in _PROJECT_ROOT_LEAK_DIRS:
         directory = root / dirname
         if directory.is_dir() and not directory.is_symlink():

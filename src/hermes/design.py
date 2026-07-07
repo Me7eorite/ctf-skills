@@ -57,6 +57,17 @@ def invoke_design_agent(
             session_root=invoke_cwd,
             profile_name=profile_name,
         )
+        terminal_backend = hermes_process.effective_terminal_backend(
+            paths.hermes_home,
+            environment_map,
+            profile_name=profile_name,
+            allow_cli_fallback=False,
+        )
+        hermes_process.configure_terminal_workspace(
+            environment_map,
+            cwd=invoke_cwd,
+            terminal_backend=terminal_backend,
+        )
     elif (
         hermes_process.project_hermes_home_is_configured(paths.hermes_home)
         and not environment_map.get("HERMES_HOME")

@@ -546,6 +546,7 @@ def test_happy_path_inserts_design_and_marks_task_designed(
     assert executor.calls[0]["workspace"] == (
         tmp_path / "work" / "design" / "executions" / str(result.attempt_id)
     )
+    assert (executor.calls[0]["workspace"] / "state").is_dir()
     prompt_path = tmp_path / "work" / "design" / "prompts" / f"{result.attempt_id}.md"
     assert prompt_path.exists()
 
@@ -724,6 +725,37 @@ def test_project_root_output_leak_fails_design_attempt(
     assert "output/pwn-leak.json" in result.error
     with session_factory() as session:
         assert ChallengeDesignRepository(session).latest_design(task_id) is None
+
+
+def test_project_root_state_design_output_leak_fails_design_attempt(
+    session_factory: SessionFactory,
+    tmp_path: Path,
+):
+    task_id, _ = _seed(session_factory)
+
+    class StateLeakingExecutor(FakeDesignExecutor):
+        def execute(self, prompt_text, profile_name, timeout_seconds, log_path, workspace):
+            result = super().execute(
+                prompt_text,
+                profile_name,
+                timeout_seconds,
+                log_path,
+                workspace,
+            )
+            leaked = tmp_path / "state" / "design_output.json"
+            leaked.parent.mkdir(parents=True, exist_ok=True)
+            leaked.write_text(_valid_stdout(), encoding="utf-8")
+            return result
+
+    executor = StateLeakingExecutor(stdout=_valid_stdout())
+
+    result = _service(tmp_path, session_factory, executor).design_for_task(task_id, "alice")
+
+    assert result.attempt_status == "failed"
+    assert result.challenge_design is None
+    assert result.error is not None
+    assert "outside the design workspace" in result.error
+    assert "state/design_output.json" in result.error
 
 
 def test_schema_invalid_requeues_when_retry_remains(
