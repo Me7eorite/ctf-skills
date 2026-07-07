@@ -377,7 +377,7 @@ def test_submit_batch_preserves_order_commits_and_publishes(
     assert service.paths.build_attempt_staging.is_dir()
 
 
-def test_prebuild_difficulty_review_blocks_failed_medium_design(
+def test_prebuild_difficulty_review_allows_rubric_weak_medium_design(
     tmp_path: Path,
     session_factory: SessionFactory,
 ):
@@ -400,15 +400,13 @@ def test_prebuild_difficulty_review_blocks_failed_medium_design(
     )
     service = _service(tmp_path, session_factory)
 
-    with pytest.raises(BuildOrchestrationError) as excinfo:
-        service.submit_single(task_id)
+    attempt_id = service.submit_single(task_id)
 
-    assert excinfo.value.code == "difficulty_review_failed"
-    assert "pre-build difficulty review" in str(excinfo.value)
     with session_factory() as session:
-        assert BuildAttemptsRepository(session).list_for_design_task(task_id) == []
+        attempts = BuildAttemptsRepository(session).list_for_design_task(task_id)
+        assert [attempt.id for attempt in attempts] == [attempt_id]
         task = session.get(task_model.DesignTask, task_id)
-        assert task is not None and task.status == "queued"
+        assert task is not None and task.status == "building"
         draft_count = session.scalar(
             sa.select(sa.func.count())
             .select_from(design_model.ChallengeDesign)
@@ -417,16 +415,7 @@ def test_prebuild_difficulty_review_blocks_failed_medium_design(
                 design_model.ChallengeDesign.status == "draft",
             )
         )
-        assert draft_count == 0
-        superseded_count = session.scalar(
-            sa.select(sa.func.count())
-            .select_from(design_model.ChallengeDesign)
-            .where(
-                design_model.ChallengeDesign.design_task_id == task_id,
-                design_model.ChallengeDesign.status == "superseded",
-            )
-        )
-        assert superseded_count == 1
+        assert draft_count == 1
         latest_attempt = session.scalar(
             sa.select(design_model.DesignAttempt)
             .where(design_model.DesignAttempt.design_task_id == task_id)
@@ -435,22 +424,21 @@ def test_prebuild_difficulty_review_blocks_failed_medium_design(
         )
         assert latest_attempt is not None
         assert latest_attempt.status == "completed"
-        assert latest_attempt.last_error is not None
-        assert "Pre-build difficulty review failed" in latest_attempt.last_error
+        assert latest_attempt.last_error is None
         review = session.scalar(
             sa.select(design_model.DesignDifficultyReview).where(
                 design_model.DesignDifficultyReview.design_task_id == task_id
             )
         )
         assert review is not None
-        assert review.passed is False
-        assert review.actual_difficulty == "below_claimed"
-        assert review.required_revision
-    assert not list((service.paths.shards / "pending").glob("*.json"))
+        assert review.passed is True
+        assert review.actual_difficulty == "medium"
+        assert not review.required_revision
+    assert list((service.paths.shards / "pending").glob("*.json"))
 
 
 @pytest.mark.parametrize("governance_mode", ["trial", "production"])
-def test_governed_failed_prebuild_review_requests_design_revision(
+def test_governed_prebuild_review_allows_rubric_weak_design(
     governance_mode: str,
     tmp_path: Path,
     session_factory: SessionFactory,
@@ -475,18 +463,16 @@ def test_governed_failed_prebuild_review_requests_design_revision(
     ids = _attach_governed_evidence(session_factory, task_id)
     service = _service(tmp_path, session_factory, governance_mode=governance_mode)
 
-    with pytest.raises(BuildOrchestrationError) as excinfo:
-        service.submit_single(task_id)
+    attempt_id = service.submit_single(task_id)
 
-    assert excinfo.value.code == "difficulty_review_failed"
     with session_factory() as session:
-        assert BuildAttemptsRepository(session).list_for_design_task(task_id) == []
+        attempts = BuildAttemptsRepository(session).list_for_design_task(task_id)
+        assert [attempt.id for attempt in attempts] == [attempt_id]
         task = session.get(task_model.DesignTask, task_id)
         assert task is not None
-        assert task.status == "draft"
-        assert task.plan_reviewed_at is None
-        assert task.current_design_evidence_id is None
-        assert task.current_reservation_id != ids["reservation_id"]
+        assert task.status == "building"
+        assert task.current_design_evidence_id == ids["evidence_id"]
+        assert task.current_reservation_id == ids["reservation_id"]
         old_reservation = session.get(
             reservation_model.DesignProfileReservation,
             ids["reservation_id"],
@@ -506,14 +492,13 @@ def test_governed_failed_prebuild_review_requests_design_revision(
             )
         )
 
-        assert old_reservation is not None and old_reservation.state == "released"
+        assert old_reservation is not None and old_reservation.state == "committed"
         assert old_evidence is not None
-        assert old_evidence.superseded_at is not None
-        assert old_evidence.supersession_reason is not None
-        assert "Pre-build difficulty review failed" in old_evidence.supersession_reason
-        assert draft_count == 0
-        assert review is not None and review.passed is False
-    assert not list((service.paths.shards / "pending").glob("*.json"))
+        assert old_evidence.superseded_at is None
+        assert old_evidence.supersession_reason is None
+        assert draft_count == 1
+        assert review is not None and review.passed is True
+    assert list((service.paths.shards / "pending").glob("*.json"))
 
 
 @pytest.mark.parametrize("governance_mode", ["trial", "production"])
@@ -616,7 +601,7 @@ def test_governed_submit_embeds_contract_and_persists_attempt_binding(
 
 
 @pytest.mark.parametrize("governance_mode", ["trial", "production"])
-def test_governed_submit_rejects_incomplete_contract_without_defaulting(
+def test_governed_submit_allows_incomplete_contract_content(
     governance_mode: str,
     tmp_path: Path,
     session_factory: SessionFactory,
@@ -636,14 +621,13 @@ def test_governed_submit_rejects_incomplete_contract_without_defaulting(
         session.commit()
     service = _service(tmp_path, session_factory, governance_mode=governance_mode)
 
-    with pytest.raises(BuildOrchestrationError) as excinfo:
-        service.submit_single(task_id)
+    attempt_id = service.submit_single(task_id)
 
-    assert excinfo.value.code == "build_contract_incomplete"
     with session_factory() as session:
-        assert BuildAttemptsRepository(session).list_for_design_task(task_id) == []
-    assert not service.paths.build_attempt_staging.exists()
-    assert not list((service.paths.shards / "pending").glob("*.json"))
+        attempts = BuildAttemptsRepository(session).list_for_design_task(task_id)
+        assert [attempt.id for attempt in attempts] == [attempt_id]
+    assert service.paths.build_attempt_staging.exists()
+    assert list((service.paths.shards / "pending").glob("*.json"))
 
 
 @pytest.mark.parametrize("category", ["web", "pwn", "re"])

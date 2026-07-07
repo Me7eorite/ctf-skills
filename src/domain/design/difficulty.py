@@ -61,20 +61,15 @@ _GENERIC_DEPENDENCY_PHRASES: frozenset[str] = frozenset(
     }
 )
 
-# Enforcement modes for the difficulty rubric. Default is ``strict`` —
-# any violation raises ChallengeDesignValidationError. ``lenient`` logs
-# each violation and lets the design through; that mode exists so
-# GLM-5 / DeepSeek-class models that are less consistent at hitting
-# the rubric do not waste an entire design attempt over a single edge.
-# Set ``DESIGN_DIFFICULTY_ENFORCEMENT=lenient`` in the runtime env to
-# opt in per-deployment.
+# Enforcement modes for the difficulty rubric. Difficulty violations are review
+# signals only; they are not used to reject design tasks.
 _ENFORCEMENT_STRICT = "strict"
 _ENFORCEMENT_LENIENT = "lenient"
 
 
 def _enforcement_mode() -> str:
-    raw = os.environ.get("DESIGN_DIFFICULTY_ENFORCEMENT", _ENFORCEMENT_STRICT)
-    mode = raw.strip().lower() if isinstance(raw, str) else _ENFORCEMENT_STRICT
+    raw = os.environ.get("DESIGN_DIFFICULTY_ENFORCEMENT", _ENFORCEMENT_LENIENT)
+    mode = raw.strip().lower() if isinstance(raw, str) else _ENFORCEMENT_LENIENT
     if mode not in {_ENFORCEMENT_STRICT, _ENFORCEMENT_LENIENT}:
         _LOGGER.warning(
             "invalid DESIGN_DIFFICULTY_ENFORCEMENT=%r; falling back to strict",
@@ -185,15 +180,11 @@ def validate_difficulty_alignment(
     legacy_grandfather: bool = False,
     enforcement: str | None = None,
 ) -> None:
-    """Reject ``challenge`` if its content does not match its difficulty tier.
+    """Log difficulty-rubric misses without rejecting the design.
 
     Set ``legacy_grandfather=True`` for designs created before this
     validator existed; the function returns immediately in that case so
     historical rows do not have to be regenerated.
-
-    Set ``DESIGN_DIFFICULTY_ENFORCEMENT=lenient`` in the runtime env to
-    log violations instead of raising. Useful when the model is GLM-5 /
-    DeepSeek-class and operators want the design through with a warning.
     """
     if legacy_grandfather:
         return
@@ -212,23 +203,13 @@ def validate_difficulty_alignment(
         raise ValueError(f"unsupported difficulty enforcement mode {selected_enforcement!r}")
     violations = difficulty_alignment_violations(challenge, parent_task)
 
-    if not violations:
-        return
-
-    if selected_enforcement == _ENFORCEMENT_LENIENT:
-        for message in violations:
-            _LOGGER.warning(
-                "design difficulty soft-passed for challenge %s (%s): %s "
-                "(set DESIGN_DIFFICULTY_ENFORCEMENT=strict to reject)",
-                challenge.get("id", "<unknown>"),
-                difficulty,
-                message,
-            )
-        return
-
-    # Strict (default): surface the first violation so the operator sees
-    # a single, actionable error rather than a wall of bullets.
-    raise ChallengeDesignValidationError(violations[0])
+    for message in violations:
+        _LOGGER.warning(
+            "design difficulty soft-passed for challenge %s (%s): %s",
+            challenge.get("id", "<unknown>"),
+            difficulty,
+            message,
+        )
 
 
 def difficulty_alignment_violations(

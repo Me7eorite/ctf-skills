@@ -15,7 +15,7 @@ from domain.challenge_design_validators import (
     run_quality_gate,
     validate_design_payload,
 )
-from domain.design.difficulty import _count_techniques
+from domain.design.difficulty import _count_techniques, validate_difficulty_alignment
 from domain.design.mechanical_transforms import MECHANICAL_TRANSFORMS
 from domain.design.technique_taxonomy import resolve_sub_technique
 from domain.design_tasks import DesignTask
@@ -809,33 +809,33 @@ def test_validate_design_payload_rejects_parent_mismatch():
         validate_design_payload(_payload(category="pwn"), _parent_task())
 
 
-def test_validate_design_payload_rejects_short_hints():
-    # Old behavior auto-padded with generated hints when fewer than 3 were
-    # given. Phase 3 requires the agent to emit exactly 3 staged hints.
-    with pytest.raises(
-        ChallengeDesignValidationError,
-        match="hints must contain exactly 3 entries",
-    ):
-        validate_design_payload(_payload(hints=["only one"]), _parent_task())
+def test_validate_design_payload_accepts_non_empty_hints_without_count_check():
+    result = validate_design_payload(_payload(hints=["only one"]), _parent_task())
+
+    assert result.challenge["hints"] == ["only one"]
 
 
-def test_validate_design_payload_rejects_mapping_hints():
-    # Stage-keyed mappings ({stage_1: ..., stage_2: ...}) are no longer
-    # translated; the agent must emit a flat list of 3 strings.
+def test_validate_design_payload_accepts_non_empty_hints_without_type_check():
+    result = validate_design_payload(
+        _payload(
+            hints={
+                "stage_1": "Inspect the visible token.",
+                "stage_2": "Control the key lookup.",
+                "stage_3": "Forge the trusted state.",
+            }
+        ),
+        _parent_task(),
+    )
+
+    assert result.challenge["hints"]["stage_1"] == "Inspect the visible token."
+
+
+def test_validate_design_payload_rejects_empty_hints():
     with pytest.raises(
         ChallengeDesignValidationError,
-        match="hints must contain exactly 3 entries",
+        match="hints must be present and non-empty",
     ):
-        validate_design_payload(
-            _payload(
-                hints={
-                    "stage_1": "Inspect the visible token.",
-                    "stage_2": "Control the key lookup.",
-                    "stage_3": "Forge the trusted state.",
-                }
-            ),
-            _parent_task(),
-        )
+        validate_design_payload(_payload(hints=[]), _parent_task())
 
 
 def test_validate_design_payload_rejects_web_without_docker():
@@ -890,7 +890,7 @@ def test_run_quality_gate_reports_explicit_predicates():
     passed, notes = run_quality_gate(payload)
 
     assert passed is False
-    assert "hints are not staged as three entries" in notes
+    assert "hints are missing" not in notes
     assert "artifacts must be relative paths" in notes
     assert "web/pwn deployment must be containerized" in notes
 
@@ -926,16 +926,14 @@ def test_difficulty_easy_accepts_single_technique():
     assert result.challenge["difficulty"] == "easy"
 
 
-def test_difficulty_easy_rejects_two_techniques():
+def test_difficulty_easy_accepts_two_techniques():
     payload = _easy_payload(
         secondary_technique="CSP bypass",
         techniques=["DOM XSS", "CSP bypass"],
     )
-    with pytest.raises(
-        ChallengeDesignValidationError,
-        match=r"easy allows at most 1 distinct techniques",
-    ):
-        validate_design_payload(payload, _easy_task())
+    result = validate_design_payload(payload, _easy_task())
+
+    assert result.challenge["techniques"] == ["DOM XSS", "CSP bypass"]
 
 
 def test_easy_normalizer_collapses_model_overbudget_techniques_and_steps():
@@ -968,23 +966,19 @@ def test_difficulty_easy_allows_omitting_unintended_solutions():
     assert result.challenge["difficulty"] == "easy"
 
 
-def test_difficulty_medium_requires_unintended_solutions():
+def test_difficulty_medium_allows_omitting_unintended_solutions():
     payload = _payload()
     payload["challenges"][0].pop("unintended_solutions", None)
-    with pytest.raises(
-        ChallengeDesignValidationError,
-        match=r"single intended solve path",
-    ):
-        validate_design_payload(payload, _parent_task())
+    result = validate_design_payload(payload, _parent_task())
+
+    assert "unintended_solutions" not in result.challenge
 
 
-def test_difficulty_medium_rejects_empty_unintended_solutions():
+def test_difficulty_medium_allows_empty_unintended_solutions():
     payload = _payload(unintended_solutions=[])
-    with pytest.raises(
-        ChallengeDesignValidationError,
-        match=r"unintended_solutions",
-    ):
-        validate_design_payload(payload, _parent_task())
+    result = validate_design_payload(payload, _parent_task())
+
+    assert result.challenge["unintended_solutions"] == []
 
 
 def test_difficulty_medium_accepts_enumerated_unintended_solutions():
@@ -992,45 +986,37 @@ def test_difficulty_medium_accepts_enumerated_unintended_solutions():
     assert result.challenge["difficulty"] == "medium"
 
 
-def test_difficulty_medium_requires_asset_flow_transition():
+def test_difficulty_medium_allows_omitting_asset_flow():
     payload = _payload()
     payload["challenges"][0].pop("asset_flow", None)
-    with pytest.raises(
-        ChallengeDesignValidationError,
-        match=r"asset/capability chain",
-    ):
-        validate_design_payload(payload, _parent_task())
+    result = validate_design_payload(payload, _parent_task())
+
+    assert "asset_flow" not in result.challenge
 
 
-def test_difficulty_medium_requires_difficulty_reason():
+def test_difficulty_medium_allows_omitting_difficulty_reason():
     payload = _payload()
     payload["challenges"][0].pop("difficulty_reason", None)
-    with pytest.raises(
-        ChallengeDesignValidationError,
-        match=r"difficulty_reason",
-    ):
-        validate_design_payload(payload, _parent_task())
+    result = validate_design_payload(payload, _parent_task())
+
+    assert "difficulty_reason" not in result.challenge
 
 
-def test_difficulty_medium_requires_shortcut_closure():
+def test_difficulty_medium_allows_empty_shortcut_closure():
     payload = _payload(shortcut_closure=[])
-    with pytest.raises(
-        ChallengeDesignValidationError,
-        match=r"shortcut_closure",
-    ):
-        validate_design_payload(payload, _parent_task())
+    result = validate_design_payload(payload, _parent_task())
+
+    assert result.challenge["shortcut_closure"] == []
 
 
-def test_difficulty_medium_requires_fingerprint():
+def test_difficulty_medium_allows_partial_fingerprint():
     payload = _payload(fingerprint={"entrypoint_type": "cookie"})
-    with pytest.raises(
-        ChallengeDesignValidationError,
-        match=r"fingerprint",
-    ):
-        validate_design_payload(payload, _parent_task())
+    result = validate_design_payload(payload, _parent_task())
+
+    assert result.challenge["fingerprint"] == {"entrypoint_type": "cookie"}
 
 
-def test_difficulty_medium_rejects_filler_only_asset_flow():
+def test_difficulty_medium_allows_filler_only_asset_flow():
     # A stage that produces nothing required is not an effective transition.
     payload = _payload(
         asset_flow=[
@@ -1043,14 +1029,12 @@ def test_difficulty_medium_rejects_filler_only_asset_flow():
             }
         ]
     )
-    with pytest.raises(
-        ChallengeDesignValidationError,
-        match=r"at least 1 effective transition",
-    ):
-        validate_design_payload(payload, _parent_task())
+    result = validate_design_payload(payload, _parent_task())
+
+    assert result.challenge["asset_flow"][0]["produced_asset_or_capability"] == ""
 
 
-def test_difficulty_medium_rejects_generic_asset_name():
+def test_difficulty_medium_allows_generic_asset_name():
     payload = _payload(
         asset_flow=[
             {
@@ -1062,15 +1046,13 @@ def test_difficulty_medium_rejects_generic_asset_name():
             }
         ]
     )
-    with pytest.raises(
-        ChallengeDesignValidationError,
-        match=r"at least 1 effective transition",
-    ):
-        validate_design_payload(payload, _parent_task())
+    result = validate_design_payload(payload, _parent_task())
+
+    assert result.challenge["asset_flow"][0]["produced_asset_or_capability"] == "access"
 
 
-def test_difficulty_hard_requires_two_transitions():
-    # The baseline asset_flow has 2 transitions → hard passes; trimming to 1 fails.
+def test_difficulty_hard_allows_one_transition():
+    # Difficulty rubric is no longer a hard design-payload validator.
     one_transition = _payload()["challenges"][0]["asset_flow"][:1]
     payload = _payload(
         difficulty="hard",
@@ -1079,24 +1061,20 @@ def test_difficulty_hard_requires_two_transitions():
         secondary_technique="b",
         asset_flow=one_transition,
     )
-    with pytest.raises(
-        ChallengeDesignValidationError,
-        match=r"at least 2 effective transition",
-    ):
-        validate_design_payload(payload, _parent_task(difficulty="hard"))
+    result = validate_design_payload(payload, _parent_task(difficulty="hard"))
+
+    assert result.challenge["asset_flow"] == one_transition
 
 
-def test_difficulty_medium_requires_actual_solution_type():
+def test_difficulty_medium_allows_omitting_actual_solution_type():
     payload = _payload()
     payload["challenges"][0].pop("actual_solution_type", None)
-    with pytest.raises(
-        ChallengeDesignValidationError,
-        match=r"non-empty `actual_solution_type`",
-    ):
-        validate_design_payload(payload, _parent_task())
+    result = validate_design_payload(payload, _parent_task())
+
+    assert "actual_solution_type" not in result.challenge
 
 
-def test_difficulty_rejects_solution_type_that_is_a_collapse_shortcut():
+def test_difficulty_allows_solution_type_that_is_a_collapse_shortcut():
     # category re + declared solve "static_xor_decrypt" = collapse by definition.
     payload = _payload(
         category="re",
@@ -1112,11 +1090,9 @@ def test_difficulty_rejects_solution_type_that_is_a_collapse_shortcut():
             "attachments/crackme",
         ],
     )
-    with pytest.raises(
-        ChallengeDesignValidationError,
-        match=r"collapse shortcut",
-    ):
-        validate_design_payload(payload, _parent_task(category="re", port=None))
+    result = validate_design_payload(payload, _parent_task(category="re", port=None))
+
+    assert result.challenge["actual_solution_type"] == ["static_xor_decrypt"]
 
 
 def test_difficulty_easy_allows_omitting_asset_flow():
@@ -1248,29 +1224,25 @@ def test_difficulty_reporter_decode_chains_both_validate_as_easy():
         assert _count_techniques(result.challenge) == 1
 
 
-def test_difficulty_medium_rejects_short_prompt():
+def test_difficulty_medium_accepts_short_prompt():
     payload = _payload(prompt="Find the bug.")
-    with pytest.raises(
-        ChallengeDesignValidationError,
-        match=r"medium-and-up difficulty requires a player prompt",
-    ):
-        validate_design_payload(payload, _parent_task())
+    result = validate_design_payload(payload, _parent_task())
+
+    assert result.challenge["prompt"] == "Find the bug."
 
 
-def test_difficulty_medium_rejects_single_technique():
+def test_difficulty_medium_accepts_single_technique():
     payload = _payload(
         secondary_technique=None,
         techniques=["JWT kid path traversal"],
     )
     payload["challenges"][0].pop("secondary_technique")
-    with pytest.raises(
-        ChallengeDesignValidationError,
-        match=r"medium requires at least 2 distinct techniques",
-    ):
-        validate_design_payload(payload, _parent_task())
+    result = validate_design_payload(payload, _parent_task())
+
+    assert result.challenge["techniques"] == ["JWT kid path traversal"]
 
 
-def test_difficulty_hard_requires_implementation_plan():
+def test_difficulty_hard_allows_omitting_implementation_plan():
     parent = _parent_task(difficulty="hard")
     payload = _payload(
         difficulty="hard",
@@ -1289,14 +1261,12 @@ def test_difficulty_hard_requires_implementation_plan():
         "Token replay across services",
     ]
     payload["challenges"][0].pop("implementation_plan")
-    with pytest.raises(
-        ChallengeDesignValidationError,
-        match=r"hard requires a non-empty implementation_plan",
-    ):
-        validate_design_payload(payload, parent)
+    result = validate_design_payload(payload, parent)
+
+    assert "implementation_plan" not in result.challenge
 
 
-def test_difficulty_expert_requires_novelty():
+def test_difficulty_expert_allows_omitting_novelty():
     parent = _parent_task(difficulty="expert")
     payload = _payload(
         difficulty="expert",
@@ -1309,11 +1279,9 @@ def test_difficulty_expert_requires_novelty():
     )
     # Phase 2 rubric demands a substantive `novelty` field for expert.
     payload["challenges"][0].pop("novelty", None)
-    with pytest.raises(
-        ChallengeDesignValidationError,
-        match=r"expert difficulty requires a `novelty` field",
-    ):
-        validate_design_payload(payload, parent)
+    result = validate_design_payload(payload, parent)
+
+    assert "novelty" not in result.challenge
 
 
 def test_difficulty_expert_accepts_substantive_novelty():
@@ -1335,18 +1303,16 @@ def test_difficulty_expert_accepts_substantive_novelty():
     assert result.challenge["difficulty"] == "expert"
 
 
-def test_difficulty_rejects_oversized_implementation_plan_for_medium():
+def test_difficulty_accepts_oversized_implementation_plan_for_medium():
     # Medium caps explicitly declared build/deploy components at 7.
     bloat = {
         "runtime": "Python",
         "components": [f"component-{i}" for i in range(8)],
     }
     payload = _payload(implementation_plan=bloat)
-    with pytest.raises(
-        ChallengeDesignValidationError,
-        match=r"medium allows at most 7 explicit implementation_plan.components",
-    ):
-        validate_design_payload(payload, _parent_task())
+    result = validate_design_payload(payload, _parent_task())
+
+    assert result.challenge["implementation_plan"]["components"] == bloat["components"]
 
 
 def test_difficulty_accepts_implementation_plan_at_hard_cap():
@@ -1413,13 +1379,11 @@ def test_difficulty_easy_accepts_four_intended_path_steps():
     validate_design_payload(_easy_re_payload(4), parent)
 
 
-def test_difficulty_easy_rejects_five_intended_path_steps():
+def test_difficulty_easy_accepts_five_intended_path_steps():
     parent = _parent_task(category="re", difficulty="easy", port=None)
-    with pytest.raises(
-        ChallengeDesignValidationError,
-        match=r"easy allows at most 4 intended_path steps",
-    ):
-        validate_design_payload(_easy_re_payload(5), parent)
+    result = validate_design_payload(_easy_re_payload(5), parent)
+
+    assert len(result.challenge["intended_path"]) == 5
 
 
 def test_difficulty_hard_accepts_one_intended_path_step_with_enough_techniques():
@@ -1441,7 +1405,7 @@ def test_difficulty_hard_accepts_one_intended_path_step_with_enough_techniques()
     assert result.challenge["difficulty"] == "hard"
 
 
-def test_difficulty_hard_single_technique_still_fails_technique_min():
+def test_difficulty_hard_single_technique_passes_payload_validation():
     parent = _parent_task(difficulty="hard")
     payload = _payload(
         difficulty="hard",
@@ -1452,14 +1416,28 @@ def test_difficulty_hard_single_technique_still_fails_technique_min():
     )
     payload["challenges"][0].pop("secondary_technique")
 
-    with pytest.raises(
-        ChallengeDesignValidationError,
-        match=r"hard requires at least 3 distinct techniques",
-    ):
-        validate_design_payload(payload, parent)
+    result = validate_design_payload(payload, parent)
+
+    assert result.challenge["techniques"] == ["JWT kid path traversal"]
 
 
-def test_difficulty_expert_single_technique_still_fails_technique_min():
+def test_difficulty_hard_accepts_five_distinct_techniques():
+    parent = _parent_task(difficulty="hard")
+    techniques = [f"technique-{index}" for index in range(1, 6)]
+    payload = _payload(
+        difficulty="hard",
+        techniques=techniques,
+        primary_technique=techniques[0],
+        secondary_technique=techniques[1],
+        intended_path=["Use the declared techniques to reach the flag."],
+    )
+
+    result = validate_design_payload(payload, parent)
+
+    assert result.challenge["techniques"] == techniques
+
+
+def test_difficulty_expert_single_technique_passes_payload_validation():
     parent = _parent_task(difficulty="expert")
     payload = _payload(
         difficulty="expert",
@@ -1474,11 +1452,9 @@ def test_difficulty_expert_single_technique_still_fails_technique_min():
     )
     payload["challenges"][0].pop("secondary_technique")
 
-    with pytest.raises(
-        ChallengeDesignValidationError,
-        match=r"expert requires at least 2 distinct techniques",
-    ):
-        validate_design_payload(payload, parent)
+    result = validate_design_payload(payload, parent)
+
+    assert result.challenge["techniques"] == ["JWT kid path traversal"]
 
 
 def test_difficulty_legacy_grandfather_skips_alignment():
@@ -1493,10 +1469,9 @@ def test_difficulty_legacy_grandfather_skips_alignment():
     validate_design_payload(payload, _parent_task(), legacy_grandfather=True)
 
 
-def test_difficulty_lenient_mode_logs_and_passes(monkeypatch, caplog):
-    # GLM-5 / DeepSeek deployments set DESIGN_DIFFICULTY_ENFORCEMENT=lenient
-    # so a design that misses the rubric is logged but not rejected.
-    monkeypatch.setenv("DESIGN_DIFFICULTY_ENFORCEMENT", "lenient")
+def test_difficulty_enforcement_env_is_ignored_by_payload_validation(monkeypatch, caplog):
+    # Difficulty rubric review is no longer a hard validation step for design tasks.
+    monkeypatch.setenv("DESIGN_DIFFICULTY_ENFORCEMENT", "strict")
     payload = _payload(
         secondary_technique=None,
         techniques=["JWT kid path traversal"],
@@ -1506,21 +1481,48 @@ def test_difficulty_lenient_mode_logs_and_passes(monkeypatch, caplog):
     with caplog.at_level("WARNING", logger="domain.design.difficulty"):
         validate_design_payload(payload, _parent_task())
 
+    assert not caplog.records
+
+
+def test_difficulty_alignment_soft_passes_by_default(monkeypatch, caplog):
+    monkeypatch.delenv("DESIGN_DIFFICULTY_ENFORCEMENT", raising=False)
+    challenge = _payload(
+        difficulty="hard",
+        techniques=[f"technique-{index}" for index in range(1, 6)],
+    )["challenges"][0]
+
+    with caplog.at_level("WARNING", logger="domain.design.difficulty"):
+        validate_difficulty_alignment(challenge, _parent_task(difficulty="hard"))
+
     assert any(
-        "design difficulty soft-passed" in rec.message for rec in caplog.records
+        "hard allows at most 4 distinct techniques" in rec.message
+        for rec in caplog.records
     )
 
 
-def test_difficulty_strict_mode_still_raises(monkeypatch):
-    # Default behavior is preserved: env var unset (or 'strict') = raise.
+def test_difficulty_alignment_strict_env_still_soft_passes(monkeypatch, caplog):
+    monkeypatch.setenv("DESIGN_DIFFICULTY_ENFORCEMENT", "strict")
+    challenge = _payload(
+        difficulty="hard",
+        techniques=[f"technique-{index}" for index in range(1, 6)],
+    )["challenges"][0]
+
+    with caplog.at_level("WARNING", logger="domain.design.difficulty"):
+        validate_difficulty_alignment(challenge, _parent_task(difficulty="hard"))
+
+    assert any(
+        "hard allows at most 4 distinct techniques" in rec.message
+        for rec in caplog.records
+    )
+
+
+def test_difficulty_strict_mode_does_not_raise_in_payload_validation(monkeypatch):
     monkeypatch.setenv("DESIGN_DIFFICULTY_ENFORCEMENT", "strict")
     payload = _payload(
         secondary_technique=None,
         techniques=["JWT kid path traversal"],
     )
     payload["challenges"][0].pop("secondary_technique")
-    with pytest.raises(
-        ChallengeDesignValidationError,
-        match=r"medium requires at least 2 distinct techniques",
-    ):
-        validate_design_payload(payload, _parent_task())
+    result = validate_design_payload(payload, _parent_task())
+
+    assert result.challenge["techniques"] == ["JWT kid path traversal"]

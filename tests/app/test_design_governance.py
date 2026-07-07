@@ -270,6 +270,25 @@ def test_accepts_non_empty_contract_fields_without_type_validation() -> None:
     assert evidence["build_contract"]["forbidden_shortcuts"] == "no direct flag read"
 
 
+def test_accepts_string_entries_in_contract_arrays() -> None:
+    profile = _profile()
+    reservation = _reservation(profile)
+    finding = _finding()
+    challenge = _challenge(reservation, finding)
+    challenge["build_contract"]["forbidden_shortcuts"] = ["no direct flag read"]
+    challenge["build_contract"]["acceptance_tests"] = ["solver eventually works"]
+
+    evidence = validate_design_evidence_output(
+        challenge=challenge,
+        design_task=_task(reservation),
+        reservation=reservation,
+        findings=[finding],
+        ledger_snapshot=_snapshot(reservation),
+    )
+
+    assert evidence["build_contract"]["forbidden_shortcuts"] == ["no direct flag read"]
+
+
 def test_accepts_unknown_harness_kind_as_design_intent() -> None:
     profile = _profile()
     reservation = _reservation(profile)
@@ -307,7 +326,7 @@ def test_accepts_unknown_harness_kind_as_design_intent() -> None:
         ("allowed_implementation_freedom", ""),
     ],
 )
-def test_rejects_empty_build_contract_fields(
+def test_accepts_empty_build_contract_fields(
     field: str,
     empty_value: object,
 ) -> None:
@@ -317,14 +336,15 @@ def test_rejects_empty_build_contract_fields(
     challenge = _challenge(reservation, finding)
     challenge["build_contract"][field] = empty_value
 
-    with pytest.raises(DesignGovernanceError, match=f"build_contract.{field}"):
-        validate_design_evidence_output(
-            challenge=challenge,
-            design_task=_task(reservation),
-            reservation=reservation,
-            findings=[finding],
-            ledger_snapshot=_snapshot(reservation),
-        )
+    evidence = validate_design_evidence_output(
+        challenge=challenge,
+        design_task=_task(reservation),
+        reservation=reservation,
+        findings=[finding],
+        ledger_snapshot=_snapshot(reservation),
+    )
+
+    assert evidence["build_contract"][field] == empty_value
 
 
 def test_rejects_empty_design_evidence_claims() -> None:

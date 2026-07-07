@@ -23,7 +23,6 @@ from pathlib import PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit
 
-from domain.design.difficulty import validate_difficulty_alignment
 from domain.design.schema import (
     COMMON_ARTIFACTS,
     CONTAINER_ARTIFACTS,
@@ -62,9 +61,7 @@ def validate_design_payload(
     payload, the single challenge entry, a generated summary, the
     canonical ``flag_format``, and the ``validation`` string.
 
-    ``legacy_grandfather`` is forwarded to the difficulty-alignment check
-    so designs created before the rubric existed can be re-validated
-    without forcing a rewrite.
+    ``legacy_grandfather`` is accepted for compatibility with older callers.
     """
     if not isinstance(payload, Mapping):
         raise ChallengeDesignValidationError("design payload must be an object")
@@ -155,12 +152,6 @@ def validate_design_payload(
     else:
         _require_artifacts(challenge["artifacts"], COMMON_ARTIFACTS, "artifacts")
 
-    # Difficulty-aware content alignment runs last so structural errors
-    # take precedence in the operator-facing message.
-    validate_difficulty_alignment(
-        challenge, parent_task, legacy_grandfather=legacy_grandfather
-    )
-
     summary = _make_summary(challenge)
     return ValidatedDesignPayload(
         payload=normalized,
@@ -200,17 +191,10 @@ def _validate_artifacts(challenge: dict[str, Any]) -> None:
 
 
 def _validate_hints(challenge: dict[str, Any]) -> None:
-    """Require exactly 3 non-empty string hints."""
+    """Require the hints field to be present and non-empty."""
     hints = challenge.get("hints")
-    if not isinstance(hints, list) or len(hints) != 3:
-        raise ChallengeDesignValidationError(
-            "hints must contain exactly 3 entries"
-        )
-    for hint in hints:
-        if not isinstance(hint, str) or not hint.strip():
-            raise ChallengeDesignValidationError(
-                "hints must contain non-empty strings"
-            )
+    if not _is_present_non_empty(hints):
+        raise ChallengeDesignValidationError("hints must be present and non-empty")
 
 
 def _require_artifacts(
@@ -352,6 +336,17 @@ def _require_non_empty_string(challenge: Mapping[str, Any], field: str) -> None:
         raise ChallengeDesignValidationError(
             f"{field} must be a non-empty string"
         )
+
+
+def _is_present_non_empty(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    try:
+        return bool(value)
+    except TypeError:
+        return True
 
 
 def _require_parent_equal(

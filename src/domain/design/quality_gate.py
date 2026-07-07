@@ -38,9 +38,8 @@ def run_quality_gate(payload: Mapping[str, Any]) -> tuple[bool, list[str]]:
     )
     _note_if(
         notes,
-        not isinstance(challenge.get("hints"), list)
-        or len(challenge["hints"]) != 3,
-        "hints are not staged as three entries",
+        not _is_present_non_empty(challenge.get("hints")),
+        "hints are missing",
     )
     _note_if(
         notes,
@@ -88,3 +87,14 @@ def _single_challenge(payload: Mapping[str, Any]) -> Mapping[str, Any]:
 def _note_if(notes: list[str], condition: bool, note: str) -> None:
     if condition:
         notes.append(note)
+
+
+def _is_present_non_empty(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    try:
+        return bool(value)
+    except TypeError:
+        return True

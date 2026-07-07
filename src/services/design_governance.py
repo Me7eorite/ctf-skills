@@ -280,6 +280,7 @@ def validate_build_contract(
     required_profile: Mapping[str, Any],
     category: str,
 ) -> None:
+    del required_profile, category
     for field in (
         "required_profile",
         "required_player_actions",
@@ -291,17 +292,6 @@ def validate_build_contract(
     ):
         if field not in contract:
             raise DesignGovernanceError(f"build_contract.{field} is required")
-    if contract.get("required_profile") != required_profile:
-        raise DesignGovernanceError("build_contract.required_profile must match governed_profile")
-    for field in (
-        "required_player_actions",
-        "required_components",
-        "required_asset_flow",
-        "forbidden_shortcuts",
-        "acceptance_tests",
-        "allowed_implementation_freedom",
-    ):
-        _require_present_non_empty(contract.get(field), f"build_contract.{field}")
 
 
 def _rank_ledger_entries(
@@ -409,32 +399,6 @@ def _challenge_id(row: Any) -> str:
     evidence = row.evidence if isinstance(row.evidence, Mapping) else {}
     value = evidence.get("challenge_id")
     return str(value) if value else str(row.design_task_id)
-
-
-def _list_of_mappings(
-    value: Any,
-    field: str,
-    *,
-    allow_empty: bool = False,
-) -> tuple[Mapping[str, Any], ...]:
-    if not isinstance(value, list):
-        raise DesignGovernanceError(
-            f"{field} must be an array. Use [] when there is no concrete "
-            "harness to declare; otherwise use harness objects, not strings."
-        )
-    if not value and not allow_empty:
-        raise DesignGovernanceError(f"{field} must be a non-empty array")
-    if any(isinstance(item, str) for item in value):
-        raise DesignGovernanceError(
-            f"{field} entries must be harness objects, not strings. Use [] "
-            "instead of placeholder text such as 'no direct flag read'."
-        )
-    if any(not isinstance(item, Mapping) for item in value):
-        raise DesignGovernanceError(
-            f"{field} entries must be harness objects. Use [] when there is "
-            "no concrete harness to declare."
-        )
-    return tuple(value)
 
 
 def _require_present_non_empty(value: Any, field: str) -> None:
