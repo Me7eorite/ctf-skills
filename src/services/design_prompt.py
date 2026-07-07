@@ -597,10 +597,18 @@ def _governed_output_schema() -> dict[str, Any]:
             },
             "forbidden_shortcuts": {
                 "type": "array",
+                "description": (
+                    "Array of harness objects. Never emit string entries such as "
+                    "[\"no direct flag read\"]."
+                ),
                 "items": {"$ref": "#/$defs/buildContractHarness"},
             },
             "acceptance_tests": {
                 "type": "array",
+                "description": (
+                    "Array of harness objects. Never emit string entries such as "
+                    "[\"must pass solve\"]."
+                ),
                 "items": {"$ref": "#/$defs/buildContractHarness"},
             },
             "allowed_implementation_freedom": {
@@ -652,6 +660,7 @@ def _governed_output_schema() -> dict[str, Any]:
                         {"required": ["executable"]},
                     ]
                 },
+                "additionalProperties": True,
             },
             "buildContractAssetStage": {
                 "type": "object",
@@ -764,7 +773,7 @@ def _render_governed_contract_rules(
             "- `build_contract.forbidden_shortcuts` and "
             "`build_contract.acceptance_tests` must be arrays of harness "
             "objects, never strings. If there is no concrete harness to add, "
-            "use `[]`.",
+            "use `[]` rather than a string placeholder.",
             "- Closed harness kinds/assertions: "
             "`artifact_direct_run` -> `stdout_not_contains_flag` or `must_fail`; "
             "`fixture_assertion` -> `non_empty`, `equals`, or `contains`; "

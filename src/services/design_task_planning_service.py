@@ -793,6 +793,27 @@ def _candidate_for_slot(
     task_findings = _findings_for_task(difficulty, findings, primary_index)
     primary = task_findings[0]
     secondaries = task_findings[1:]
+    flags = dict(diversity_flags)
+    canonicalization = None
+    if category == "pwn":
+        canonicalization = canonicalize_pwn_semantic_assignment(
+            {
+                "family": str(
+                    flags.get("family")
+                    or resolve_family({"label": primary.label}, category=category)
+                ),
+                "sub_technique": str(
+                    flags.get("sub_technique")
+                    or resolve_sub_technique({"label": primary.label})
+                ),
+            }
+        )
+        if canonicalization.semantic is not None:
+            flags["family"] = canonicalization.semantic["family"]
+            flags["sub_technique"] = canonicalization.semantic["sub_technique"]
+            flags["raw_sub_technique"] = canonicalization.raw_sub_technique
+            flags["canonical_sub_technique"] = canonicalization.canonical_sub_technique
+            flags["canonicalization_source"] = canonicalization.canonicalization_source
     candidate: dict[str, Any] = {
         "task_no": task_no,
         "challenge_id": _challenge_id(category, request.id, task_no),
@@ -810,7 +831,7 @@ def _candidate_for_slot(
         "constraints": dict(request.runtime_constraints or {}),
         "evidence_summary": _evidence_summary(run, request.topic, task_findings),
         "finding_ids": [f.id for f in task_findings],
-        "diversity_flags": dict(diversity_flags),
+        "diversity_flags": flags,
     }
     if hermes_planner is not None and difficulty in {"hard", "expert"}:
         enrichment = hermes_planner.plan(
@@ -1128,7 +1149,6 @@ def _normalized_candidate_semantic(
             semantic = dict(canonicalization.semantic)
             flags["family"] = semantic["family"]
             flags["sub_technique"] = semantic["sub_technique"]
-            flags.update(canonicalization.as_mapping())
             flags["raw_sub_technique"] = canonicalization.raw_sub_technique
             flags["canonical_sub_technique"] = canonicalization.canonical_sub_technique
             flags["canonicalization_source"] = canonicalization.canonicalization_source

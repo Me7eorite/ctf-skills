@@ -949,24 +949,6 @@ def canonicalize_pwn_semantic_assignment(
     elif canonical_sub_technique in PWN_TAXONOMY.semantic.fields["sub_technique"]:
         source = "alias"
     else:
-        if raw_family == "stack" and not _pwn_stack_supports_freeform(raw_sub_technique):
-            return PwnSemanticCanonicalization(
-                raw_family=raw_family or "other",
-                raw_sub_technique=raw_sub_technique,
-                canonical_family=None,
-                canonical_sub_technique=None,
-                canonicalization_source="unsupported",
-                semantic=None,
-            )
-        if raw_family == "integer_oob" and not _pwn_integer_oob_supports_freeform(raw_sub_technique):
-            return PwnSemanticCanonicalization(
-                raw_family=raw_family or "other",
-                raw_sub_technique=raw_sub_technique,
-                canonical_family=None,
-                canonical_sub_technique=None,
-                canonicalization_source="unsupported",
-                semantic=None,
-            )
         family_default = PWN_CANONICAL_FAMILY_DEFAULTS.get(raw_family)
         if family_default is not None:
             canonical_family, canonical_sub_technique = family_default
