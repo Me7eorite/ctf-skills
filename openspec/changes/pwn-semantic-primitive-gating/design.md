@@ -37,7 +37,7 @@ Ship only primitives whose positive and negative evidence can be checked determi
 
 Heap, integer/OOB, SROP, JOP, and custom allocator primitives remain unsupported until their `requires[]`, `disqualifiers[]`, and evidence schemas are versioned and regression-tested.
 
-Unsupported primitive ids may be routed to human triage so an operator can decide whether to add a new primitive definition or move the task out of governed pwn automation. That triage is not a governed pass.
+Unsupported primitive ids are rejected by Design validation before governed BuildAttempt creation when the current host primitive library is available. Human triage may decide whether to add a new primitive definition or move the task out of governed pwn automation. That triage is not a governed pass. Build/host semantic audit still needs a `pwn_primitive_unsupported` outcome for stale, legacy, imported, or externally submitted governed attempts that carry an unsupported primitive id.
 
 For the first version, `stack_overflow_ret2win_basic` requires a concrete control-flow target: a symbolized or otherwise host-locatable `win`/`print_flag`/`read_flag`-style function, or a host-generated dynamic control-flow observation bound to the accepted artifact. A generic hidden flag path is not enough unless the observation proves player-controlled control-flow transfer; fixed secret checks and debug commands are challenge escapes, not ret2win evidence.
 
@@ -50,11 +50,11 @@ Each primitive definition carries a minimum evidence envelope:
 
 `difficulty_controls` are player-experience constraints, not proof. They describe intended mitigations, intended solve steps, and forbidden shortcuts such as fixed passwords, plaintext flag exposure, debug/backdoor commands, solver reads from organizer files, or artifact/source mismatch.
 
-Stronger-than-declared primitive supersets, such as arbitrary write in a declared ret2win challenge, are treated as policy-sensitive semantic mismatches. The first version SHALL mark them `pwn_primitive_inconclusive` with a difficulty-policy detail unless the primitive definition explicitly lists that superset as allowed or as a hard disqualifier. A scoped observation review may accept only this inconclusive supported-primitive case; it may not accept challenge escapes or unsupported primitive ids.
+Stronger-than-declared primitive supersets, such as arbitrary write in a declared ret2win challenge, are treated as policy-sensitive semantic mismatches. The first version SHALL mark them `pwn_primitive_inconclusive` with a difficulty-policy detail unless the primitive definition explicitly lists that superset as allowed or as a hard disqualifier. A pwn-semantic scoped observation review may accept only this inconclusive supported-primitive case; it may not accept challenge escapes, unsupported primitive ids, disqualifier hits, non-realized primitives, or stale evidence.
 
 ## Contract Placement and Versioning
 
-The pwn primitive contract lives under the governed build contract, for example as `build_contract.pwn_primitive_contract`. The canonical build-contract hash includes this nested object, so the first version SHALL NOT add a separate database-level `primitive_contract_sha256`. If the primitive intent changes, the build contract changes and the system requires a new DesignEvidence/build-contract version.
+The pwn primitive contract lives under the governed build contract, for example as `build_contract.pwn_primitive_contract`. Contract fields such as `evidence_requirements`, `offset_policy`, and primitive version are a host-rendered snapshot or reference to the versioned primitive definition; Design may choose the supported primitive and describe intent, but it cannot redefine evidence semantics. Validation rejects contracts whose copied evidence/offset fields disagree with the host-owned primitive definition. The canonical build-contract hash includes this nested object, so the first version SHALL NOT add a separate database-level `primitive_contract_sha256`. If the primitive intent changes, the build contract changes and the system requires a new DesignEvidence/build-contract version.
 
 The versioned primitive library SHALL be host-owned code, with an initial module such as `src/domain/pwn_primitives.py`. Design prompt rendering may expose the supported primitive ids, versions, and intent/evidence field names from that host-owned library, but Design output cannot define or override primitive semantics. Build validation and tests consume the same host-owned definitions.
 
@@ -64,11 +64,15 @@ Semantic audit results are written into existing validation-layer surfaces:
 - ArtifactObservation `contract_checks` for the semantic-audit outcome, diagnostic code, primitive id/version, rule id, and evidence paths;
 - ArtifactObservation `fingerprints` for primitive id/version and primitive-intent fingerprint material that participates in existing corpus comparison without becoming a separate acceptance key.
 
+The binding hash is the existing ArtifactObservation `artifact_manifest_sha256`, produced from the output manifest hash machinery, not a new pwn-specific artifact hash.
+
+The pwn-semantic review scope is separate from the existing production publication scope. A suggested scope name is `pwn-semantic-primitive`. This scope may contribute validation-layer effective acceptance only for `pwn_primitive_inconclusive` observations on supported primitives; production packaging still requires the existing corpus-admission and publication review gates.
+
 ## Two-Stage Semantic Gating
 
 Pwn primitive validation has two host-owned stages:
 
-1. `pre_build_source_semantic_gate` runs after Build/implement has produced source files such as `xx.c`, but before image build. It checks source-level necessary conditions for the declared primitive and challenge-escape disqualifiers. Examples: attacker-controlled input reaches an unsafe stack sink, a ret2win target is present, a format-string sink uses player-controlled bytes as the format argument, and the implementation is not merely a fixed password, debug command, plaintext flag path, or safely bounded read. This stage can fail early with semantic diagnostics and repair guidance.
+1. `pre_build_source_semantic_gate` runs after Build/implement has produced source files such as `xx.c`, but before image build. It should extend or wrap the existing host pre-build contract gate rather than creating a parallel pre-build lifecycle. It checks source-level necessary conditions for the declared primitive and challenge-escape disqualifiers. Examples: attacker-controlled input reaches an unsafe stack sink, a ret2win target is present, a format-string sink uses player-controlled bytes as the format argument, and the implementation is not merely a fixed password, debug command, plaintext flag path, or safely bounded read. This stage can fail early with semantic diagnostics and repair guidance.
 2. `post_build_artifact_semantic_audit` runs after binaries, attachments, and solver/debug evidence exist. It checks compiled artifact identity, symbols/mitigations, final attachment hashes, artifact-derived offsets/gadgets/libc facts when required, and solver evidence bound to the accepted artifact.
 
 The pre-build source gate is a necessary-condition gate, not a final proof. Passing it does not make a BuildAttempt successful and does not replace binary/solver validation. Failing it blocks image build for that attempt until repair or Design revision resolves the mismatch.
@@ -79,7 +83,7 @@ The pre-build source gate is a necessary-condition gate, not a final proof. Pass
    Alternative: run semantic admissibility before primitive selection in Design. Rejected because current Design has no source or binary to inspect.
 
 2. Extend the build contract instead of creating an unrelated locked-binary contract.
-   Alternative: introduce a separate signed contract around a design-time build. Rejected because current governed work already binds DesignEvidence, canonical build-contract hash, artifact manifest hash, and ArtifactObservation. The primitive contract is part of the canonical build contract.
+   Alternative: introduce a separate signed contract around a design-time build. Rejected because current governed work already binds DesignEvidence, canonical build-contract hash, ArtifactObservation, and its `artifact_manifest_sha256`. The primitive contract is part of the canonical build contract.
 
 3. Treat bounded safe patterns as disqualifiers for specific primitives, not as global proof that no pwn exists.
    Alternative: any bounded read produces `NO_VALID_PWN_PRIMITIVE`. Rejected because the same program may still contain another valid primitive.
@@ -91,10 +95,10 @@ The pre-build source gate is a necessary-condition gate, not a final proof. Pass
    Alternative: let Design or LLM output offsets and exploit details. Rejected because this recreates the original hallucination vector.
 
 6. Make diagnostic precedence explicit.
-   Unsupported ids produce `pwn_primitive_unsupported`; primitive-specific disqualifier hits produce `pwn_primitive_disqualified`; challenge escapes such as fixed secrets, plaintext flags, debug/backdoors, or organizer-file solver paths produce `pwn_challenge_escape`; missing required evidence produces `pwn_primitive_evidence_missing`; realized non-equivalent or non-pwn challenge types produce `pwn_primitive_not_realized`; true uncertainty produces `pwn_primitive_inconclusive`.
+   Unsupported ids produce `pwn_primitive_unsupported`; stale or unbound artifact evidence produces `pwn_primitive_stale_evidence`; challenge escapes such as fixed secrets, plaintext flags, debug/backdoors, or organizer-file solver paths produce `pwn_challenge_escape`; primitive-specific safe-pattern disqualifier hits produce `pwn_primitive_disqualified`; missing required evidence produces `pwn_primitive_evidence_missing`; realized non-equivalent or non-pwn challenge types produce `pwn_primitive_not_realized`; true uncertainty produces `pwn_primitive_inconclusive`.
 
 7. Keep manual acceptance outside the normal pass path.
-   If inconclusive supported-primitive evidence can be accepted by a human, it must be recorded as an accepted `observation_review_decision` with a pwn-semantic scope bound to the current ArtifactObservation. The underlying observation remains `inconclusive`; effective acceptance is derived only when the BuildAttempt, DesignEvidence/build-contract version, canonical `contract_sha256`, artifact manifest hash, reviewer, scope, and rationale all match policy. Review may accept only inconclusive evidence; it may not override unsupported primitives, disqualifiers, non-realized primitives, challenge escapes, or stale artifact evidence.
+   If inconclusive supported-primitive evidence can be accepted by a human, it must be recorded as an accepted `observation_review_decision` with a pwn-semantic scope such as `pwn-semantic-primitive`, bound to the current ArtifactObservation. The underlying observation remains `inconclusive`; effective acceptance is derived only when the BuildAttempt, DesignEvidence/build-contract version, canonical `contract_sha256`, ArtifactObservation `artifact_manifest_sha256`, reviewer, scope, and rationale all match policy. Review may accept only inconclusive evidence; it may not override unsupported primitives, challenge escapes, disqualifiers, non-realized primitives, or stale artifact evidence. The existing `production-publication` scope is not sufficient for pwn semantic acceptance.
 
 8. Route unsupported primitives to triage, not governed acceptance.
    Unsupported ids produce `pwn_primitive_unsupported`. A reviewer may decide to author a new versioned primitive definition or reclassify the task outside governed pwn automation, but may not mark the existing unsupported contract successful.
@@ -127,13 +131,13 @@ Host validation
 
 Release packaging
   bundles only the accepted BuildAttempt artifacts
-  relies on the existing production corpus gate, which requires an effectively accepted ArtifactObservation, matching canonical contract hash, matching artifact manifest hash, and accepted corpus membership/aggregate decisions
+  relies on the existing production corpus gate, which requires an effectively accepted ArtifactObservation, matching canonical contract hash, matching ArtifactObservation `artifact_manifest_sha256`, and accepted corpus membership/aggregate decisions
   never recompiles or relinks the binary
 ```
 
 ## Risks / Trade-offs
 
-- [Risk] Primitive verification may initially cover only common pwn patterns. -> Mitigation: version primitive definitions, ship a small first-version subset, and fail inconclusive governed builds closed unless a scoped observation-review decision exists.
+- [Risk] Primitive verification may initially cover only common pwn patterns. -> Mitigation: version primitive definitions, ship a small first-version subset, and fail inconclusive governed builds closed unless a pwn-semantic scoped observation-review decision exists.
 - [Risk] A valid but unusual exploit may be rejected. -> Mitigation: route unsupported primitive contracts to human triage and add a new primitive definition with tests before accepting it in governed automation.
 - [Risk] Host validation may need richer source/binary discovery. -> Mitigation: start with declared source paths, final attachment metadata, existing pwn debug reports, and bounded negative tests.
 - [Risk] Build repair may try to rewrite the design intent. -> Mitigation: require a new DesignEvidence version for primitive-contract changes and verify retries keep the original contract.
@@ -147,7 +151,7 @@ Release packaging
 2. Render primitive-contract fields into attributed build shards.
 3. Add host validation semantic audit for governed pwn attempts.
 4. Emit structured failure codes for disqualifier hits, missing evidence, unsupported primitives, primitive mismatch, and challenge-type escape paths.
-5. Bind accepted observations to BuildAttempt, DesignEvidence/build-contract version, canonical `contract_sha256`, artifact manifest hash, and current ArtifactObservation.
-6. Use scoped `observation_review_decision` rows only for inconclusive supported-primitive acceptance, and keep production packaging behind the existing corpus gate.
+5. Bind accepted observations to BuildAttempt, DesignEvidence/build-contract version, canonical `contract_sha256`, current ArtifactObservation, and its `artifact_manifest_sha256`.
+6. Use pwn-semantic scoped `observation_review_decision` rows only for inconclusive supported-primitive acceptance, and keep production packaging behind the existing corpus gate and publication scopes.
 7. Preserve repair/retry/revalidation paths for semantic-audit failures while requiring Design revision for primitive intent changes.
 8. Add regression tests for bounded-read false positives, accepted unsafe primitive evidence, retry/revalidate behavior, observation-review binding, production corpus eligibility, and legacy compatibility.

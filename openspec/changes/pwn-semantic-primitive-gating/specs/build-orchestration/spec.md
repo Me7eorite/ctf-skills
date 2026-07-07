@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Governed pwn source is checked before image build
-For governed pwn BuildAttempts carrying `build_contract.pwn_primitive_contract`, Build SHALL run a host-owned source semantic gate after implementation source and deployment files exist and before invoking image build, compile-in-container build, or final artifact packaging. The gate SHALL inspect generated source paths and declared primitive requirements/disqualifiers that can be evaluated from source. It SHALL fail fast on source-level primitive mismatches and challenge escapes while leaving binary-only evidence to post-build validation.
+For governed pwn BuildAttempts carrying `build_contract.pwn_primitive_contract`, Build SHALL run a host-owned source semantic gate after implementation source and deployment files exist and before invoking image build, compile-in-container build, or final artifact packaging. The gate SHALL extend or wrap the existing host pre-build contract gate lifecycle, not create a second unrelated pre-build state machine. The gate SHALL inspect generated source paths and declared primitive requirements/disqualifiers that can be evaluated from source. It SHALL fail fast on source-level primitive mismatches and challenge escapes while leaving binary-only evidence to post-build validation. BuildAttempts without a governed pwn primitive contract, including legacy unguided pwn shards, SHALL continue through the existing validation path unless a future migration explicitly opts them in.
 
 The source gate SHALL be a necessary-condition gate only. Passing it SHALL NOT mark validation passed, create an accepted ArtifactObservation, or skip post-build artifact semantic audit.
 
@@ -27,6 +27,8 @@ The source gate SHALL be a necessary-condition gate only. Passing it SHALL NOT m
 
 ### Requirement: Governed pwn validation verifies primitive realization
 For governed pwn BuildAttempts carrying `build_contract.pwn_primitive_contract`, host validation SHALL run semantic primitive audit after implementation artifacts exist and before marking validation passed. The audit SHALL inspect declared source paths, final player artifacts, binary metadata, solver/debug evidence, and primitive-library disqualifiers. It SHALL write its machine-readable findings into the existing validation result/history surface, preserve `contract_errors` / `validation_contract_errors` compatibility for callers that still consume string diagnostics, add structured entries to validation failure details when available, and persist the semantic-audit outcome in the current ArtifactObservation's `contract_checks` and primitive fingerprint material.
+
+If a stale, imported, or externally submitted governed BuildAttempt carries an unsupported primitive id that current Design validation would reject, host validation SHALL fail it with `pwn_primitive_unsupported` rather than treating it as a legacy unguided shard.
 
 #### Scenario: Declared primitive is disqualified
 - **GIVEN** a governed pwn BuildAttempt declares a stack-overflow primitive
@@ -84,11 +86,11 @@ When semantic audit fails because the implementation does not realize the declar
 
 #### Scenario: Semantic audit observation is bound to exact evidence
 - **WHEN** host validation records a semantic-audit pass or failure
-- **THEN** the observation includes the BuildAttempt id, DesignEvidence/build-contract version, canonical `contract_sha256`, artifact manifest hash, primitive id, primitive version, and validation diagnostic details
+- **THEN** the observation includes the BuildAttempt id, DesignEvidence/build-contract version, canonical `contract_sha256`, ArtifactObservation `artifact_manifest_sha256`, primitive id, primitive version, and validation diagnostic details
 - **AND** later retries, revalidations, or release packaging cannot reuse the observation when any bound value differs
 
 ### Requirement: Release packaging uses accepted build evidence
-Release packaging for governed pwn artifacts SHALL use the existing accepted BuildAttempt artifact and the existing production corpus-admission gate. A pwn primitive pass or scoped observation-review acceptance is a validation-layer prerequisite; it does not bypass corpus membership, member decision, aggregate decision, or non-overrideable corpus rules. Release packaging SHALL require a matching canonical `contract_sha256`, artifact manifest hash, and effectively accepted ArtifactObservation. Release packaging SHALL NOT invoke a compiler or relink the pwn binary as part of packaging.
+Release packaging for governed pwn artifacts SHALL use the existing accepted BuildAttempt artifact and the existing production corpus-admission gate. A pwn primitive pass or pwn-semantic scoped observation-review acceptance is a validation-layer prerequisite; it does not bypass corpus membership, member decision, aggregate decision, or non-overrideable corpus rules. Release packaging SHALL require a matching canonical `contract_sha256`, ArtifactObservation `artifact_manifest_sha256`, and effectively accepted ArtifactObservation. Release packaging SHALL NOT invoke a compiler or relink the pwn binary as part of packaging.
 
 #### Scenario: Release refuses stale validation evidence
 - **WHEN** a governed pwn artifact manifest differs from the manifest bound to the accepted validation observation
@@ -102,5 +104,6 @@ Release packaging for governed pwn artifacts SHALL use the existing accepted Bui
 
 #### Scenario: Manual review cannot float across artifacts
 - **WHEN** inconclusive semantic evidence is accepted by manual review
-- **THEN** the accepted `observation_review_decision` is valid only for the current ArtifactObservation with the same BuildAttempt, DesignEvidence/build-contract version, canonical `contract_sha256`, artifact manifest hash, review scope, reviewer, and rationale
-- **AND** release packaging rejects the artifact if any bound value differs, the scoped observation review is missing, or corpus admission is not effectively accepted
+- **THEN** the accepted `observation_review_decision` is valid only for the current ArtifactObservation with the same BuildAttempt, DesignEvidence/build-contract version, canonical `contract_sha256`, ArtifactObservation `artifact_manifest_sha256`, review scope, reviewer, and rationale
+- **AND** the pwn-semantic review scope is distinct from the production-publication scope
+- **AND** release packaging rejects the artifact if any bound value differs, the scoped pwn-semantic observation review is missing for inconclusive primitive evidence, or corpus admission is not effectively accepted

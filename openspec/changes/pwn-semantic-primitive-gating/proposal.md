@@ -20,13 +20,13 @@ This proposal closes that gap by making the exploit primitive a verifiable build
 - Extend structured pwn Design so it declares the intended primitive contract without claiming source-level proof before source exists.
 - Add a host-owned pre-build source semantic gate after implementation source exists and before image build, so obvious primitive mismatches are rejected early.
 - Add host-owned artifact semantic audit during Build validation that inspects generated source, compiled artifacts, and solver evidence after implementation.
-- Add explicit failure outcomes for non-realized pwn primitives, including `pwn_primitive_disqualified`, `pwn_primitive_evidence_missing`, `pwn_primitive_not_realized`, `pwn_primitive_unsupported`, `pwn_challenge_escape`, and `pwn_primitive_inconclusive`, without forcing a non-pwn logic challenge into a pwn solve path.
+- Add explicit failure outcomes for non-realized pwn primitives, including `pwn_primitive_disqualified`, `pwn_primitive_evidence_missing`, `pwn_primitive_not_realized`, `pwn_primitive_unsupported`, `pwn_challenge_escape`, `pwn_primitive_stale_evidence`, and `pwn_primitive_inconclusive`, without forcing a non-pwn logic challenge into a pwn solve path.
 - Keep semantic-audit failures repairable: automatic repair may fix implementation artifacts, solver/debug evidence, or missing artifact-derived proof while preserving the original primitive contract.
 - Keep exploit offsets and final solver facts derived from artifact evidence, not from LLM design text.
-- Bind primitive acceptance to the existing `contract_sha256`, artifact manifest hash, current ArtifactObservation, and scoped observation-review decision rather than adding a separate primitive hash or release rebuild.
+- Bind primitive acceptance to the existing `contract_sha256`, ArtifactObservation `artifact_manifest_sha256`, current ArtifactObservation, and pwn-semantic scoped observation-review decision rather than adding a separate primitive hash or release rebuild.
 - Preserve production release behavior through the existing corpus-admission gate; pwn primitive acceptance is a validation-layer prerequisite, not an alternate production gate.
 - Preserve existing validation result/history and contract-error compatibility while adding structured semantic-audit diagnostics for operators, repair, and revalidation.
-- Treat unsupported primitive ids as review/triage inputs only; a scoped observation-review decision can accept inconclusive supported-primitive evidence, but it cannot convert unsupported, disqualified, non-realized, challenge-escape, or stale evidence into a governed pass.
+- Treat unsupported primitive ids as review/triage inputs only; Design validation rejects unsupported ids before governed BuildAttempt creation when the current host primitive library is available. Build/host semantic audit still returns `pwn_primitive_unsupported` for stale, legacy, imported, or externally submitted governed attempts whose contract references an unsupported id. A pwn-semantic scoped observation-review decision can accept inconclusive supported-primitive evidence, but it cannot convert unsupported, challenge-escape, disqualified, non-realized, or stale evidence into a governed pass.
 
 ## Capabilities
 
