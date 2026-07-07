@@ -91,6 +91,22 @@ def test_build_attempt_view_has_mobile_card_layout():
     assert "display: none;" in styles
 
 
+def test_build_attempt_detail_exposes_governance_sections() -> None:
+    source = BUILD_ATTEMPTS_JS.read_text(encoding="utf-8")
+
+    for label in (
+        "验证治理",
+        "构建契约",
+        "Corpus 治理",
+        "required vs observed",
+        "renderContractComparison",
+        "renderCorpusGovernance",
+        "validation_governance",
+        "production_delivery_eligibility",
+    ):
+        assert label in source
+
+
 def test_detail_poll_supports_append_only_event_updates():
     source = BUILD_ATTEMPTS_JS.read_text(encoding="utf-8")
 

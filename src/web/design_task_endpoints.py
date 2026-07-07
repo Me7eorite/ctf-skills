@@ -11,8 +11,11 @@ from fastapi.responses import JSONResponse
 
 from core.clock import beijing_isoformat
 from domain import challenge_designs as challenge_dto
+from domain import design_evidence as evidence_dto
+from domain import design_profile_reservations as reservation_dto
 from domain import design_tasks as design_dto
 from domain.design.difficulty_review import DesignDifficultyReview
+from services.design_governance import DesignGovernanceError, validate_build_contract
 
 
 def register_design_task_read_endpoints(app: FastAPI) -> None:
@@ -138,6 +141,11 @@ def register_design_task_read_endpoints(app: FastAPI) -> None:
                 if result is not None
                 else None
             )
+            governance = (
+                _design_task_governance_state(session, result[0], result[2])
+                if result is not None
+                else None
+            )
         if result is None:
             raise HTTPException(
                 status_code=HTTPStatus.NOT_FOUND,
@@ -150,6 +158,7 @@ def register_design_task_read_endpoints(app: FastAPI) -> None:
                 attempts=attempts,
                 latest_design=latest_design,
                 difficulty_review_summary=review_summary,
+                governance=governance,
             )
         )
 
@@ -199,6 +208,7 @@ def design_task_dict(
     attempts: list[challenge_dto.DesignAttempt] | None = None,
     latest_design: challenge_dto.ChallengeDesign | None = None,
     difficulty_review_summary: dict[str, object] | None = None,
+    governance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     row = {
         "id": str(task.id),
@@ -220,6 +230,16 @@ def design_task_dict(
         "diversity_flags": dict(task.diversity_flags) if task.diversity_flags else None,
         "plan_reviewed_at": isofmt(task.plan_reviewed_at),
         "status": task.status,
+        "current_reservation_id": (
+            str(task.current_reservation_id)
+            if task.current_reservation_id is not None
+            else None
+        ),
+        "current_design_evidence_id": (
+            str(task.current_design_evidence_id)
+            if task.current_design_evidence_id is not None
+            else None
+        ),
         "created_at": isofmt(task.created_at),
         "updated_at": isofmt(task.updated_at),
     }
@@ -231,7 +251,191 @@ def design_task_dict(
         row["difficulty_review_summary"] = difficulty_review_summary_dict(
             difficulty_review_summary
         )
+    if governance is not None:
+        row.update(governance)
     return row
+
+
+def _design_task_governance_state(
+    session,
+    task: design_dto.DesignTask,
+    latest_design: challenge_dto.ChallengeDesign | None,
+) -> dict[str, Any]:
+    from persistence.repositories import (
+        DesignEvidenceRepository,
+        DesignProfileReservationRepository,
+    )
+
+    reservation_repo = DesignProfileReservationRepository(session)
+    evidence_repo = DesignEvidenceRepository(session)
+    current_reservation = (
+        reservation_repo.get(task.current_reservation_id)
+        if task.current_reservation_id is not None
+        else None
+    )
+    current_evidence = (
+        evidence_repo.get(task.current_design_evidence_id)
+        if task.current_design_evidence_id is not None
+        else None
+    )
+    reservations = reservation_repo.list_for_task(task.id)
+    evidence_rows = evidence_repo.list_for_task(task.id)
+    eligibility = _build_eligibility(
+        task,
+        latest_design=latest_design,
+        current_reservation=current_reservation,
+        current_evidence=current_evidence,
+    )
+    return {
+        "quality_gate_passed": (
+            latest_design.quality_gate_passed if latest_design is not None else None
+        ),
+        "current_reservation": reservation_dict(current_reservation),
+        "current_design_evidence": design_evidence_dict(current_evidence),
+        "build_contract_summary": build_contract_summary(
+            current_evidence.build_contract if current_evidence is not None else None
+        ),
+        "build_eligibility": eligibility,
+        "governance_history": {
+            "reservations": [
+                reservation_dict(row)
+                for row in reservations
+                if current_reservation is None or row.id != current_reservation.id
+            ][:20],
+            "design_evidence": [
+                design_evidence_history_dict(row)
+                for row in evidence_rows
+                if current_evidence is None or row.id != current_evidence.id
+            ][:20],
+        },
+    }
+
+
+def _build_eligibility(
+    task: design_dto.DesignTask,
+    *,
+    latest_design: challenge_dto.ChallengeDesign | None,
+    current_reservation: reservation_dto.DesignProfileReservation | None,
+    current_evidence: evidence_dto.DesignEvidence | None,
+) -> dict[str, Any]:
+    reasons: list[str] = []
+    if task.status not in {"designed", "build_failed"}:
+        reasons.append("task_status_not_buildable")
+    if latest_design is None:
+        reasons.append("missing_latest_design")
+    elif latest_design.quality_gate_passed is not True:
+        reasons.append("design_quality_gate_failed")
+    if current_evidence is None:
+        reasons.append("missing_design_evidence")
+    if current_reservation is None:
+        reasons.append("missing_reservation")
+    elif current_reservation.state != "committed":
+        reasons.append("reservation_not_committed")
+    if current_reservation is not None and current_evidence is not None:
+        if current_evidence.profile_signature != current_reservation.profile_signature:
+            reasons.append("profile_signature_mismatch")
+        try:
+            validate_build_contract(
+                current_evidence.build_contract,
+                required_profile=current_evidence.profile,
+                category=task.category,
+            )
+        except DesignGovernanceError:
+            reasons.append("build_contract_incomplete")
+    return {
+        "eligible": not reasons,
+        "blocking_reasons": reasons,
+    }
+
+
+def reservation_dict(
+    reservation: reservation_dto.DesignProfileReservation | None,
+) -> dict[str, Any] | None:
+    if reservation is None:
+        return None
+    return {
+        "id": str(reservation.id),
+        "design_task_id": (
+            str(reservation.design_task_id)
+            if reservation.design_task_id is not None
+            else None
+        ),
+        "generation_request_id": str(reservation.generation_request_id),
+        "reservation_version": reservation.reservation_version,
+        "profile": dict(reservation.profile),
+        "profile_signature": reservation.profile_signature,
+        "occupancy_scope": reservation.occupancy_scope,
+        "exclusive_signature_key": reservation.exclusive_signature_key,
+        "state": reservation.state,
+        "taxonomy_version": reservation.taxonomy_version,
+        "policy_version": reservation.policy_version,
+        "ledger_version": reservation.ledger_version,
+        "created_at": isofmt(reservation.created_at),
+        "committed_at": isofmt(reservation.committed_at),
+        "released_at": isofmt(reservation.released_at),
+    }
+
+
+def design_evidence_dict(
+    evidence: evidence_dto.DesignEvidence | None,
+) -> dict[str, Any] | None:
+    if evidence is None:
+        return None
+    return {
+        **design_evidence_history_dict(evidence),
+        "research_finding_ids": [str(item) for item in evidence.research_finding_ids],
+        "profile": dict(evidence.profile),
+        "distinctness_claim": evidence.distinctness_claim,
+        "compared_challenge_ids": list(evidence.compared_challenge_ids),
+        "evidence": dict(evidence.evidence),
+        "build_contract": dict(evidence.build_contract),
+    }
+
+
+def design_evidence_history_dict(
+    evidence: evidence_dto.DesignEvidence,
+) -> dict[str, Any]:
+    return {
+        "id": str(evidence.id),
+        "design_task_id": str(evidence.design_task_id),
+        "evidence_version": evidence.evidence_version,
+        "challenge_design_id": str(evidence.challenge_design_id),
+        "profile_signature": evidence.profile_signature,
+        "ledger_version": evidence.ledger_version,
+        "created_at": isofmt(evidence.created_at),
+        "superseded_at": isofmt(evidence.superseded_at),
+        "superseded_by_evidence_id": (
+            str(evidence.superseded_by_evidence_id)
+            if evidence.superseded_by_evidence_id is not None
+            else None
+        ),
+        "supersession_reason": evidence.supersession_reason,
+    }
+
+
+def build_contract_summary(contract: Any) -> dict[str, Any] | None:
+    if not isinstance(contract, dict):
+        return None
+    required_asset_flow = contract.get("required_asset_flow")
+    forbidden_shortcuts = contract.get("forbidden_shortcuts")
+    acceptance_tests = contract.get("acceptance_tests")
+    return {
+        "required_profile": contract.get("required_profile"),
+        "required_player_actions": list(contract.get("required_player_actions") or []),
+        "required_components_count": len(contract.get("required_components") or []),
+        "required_asset_flow_count": (
+            len(required_asset_flow) if isinstance(required_asset_flow, list) else 0
+        ),
+        "forbidden_shortcuts_count": (
+            len(forbidden_shortcuts) if isinstance(forbidden_shortcuts, list) else 0
+        ),
+        "acceptance_tests_count": (
+            len(acceptance_tests) if isinstance(acceptance_tests, list) else 0
+        ),
+        "allowed_implementation_freedom": list(
+            contract.get("allowed_implementation_freedom") or []
+        ),
+    }
 
 
 def difficulty_review_summary_dict(summary: dict[str, object]) -> dict[str, Any]:

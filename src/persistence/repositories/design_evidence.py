@@ -40,6 +40,18 @@ class DesignEvidenceRepository:
         row = self.session.get(model.DesignEvidence, evidence_id)
         return _evidence(row) if row else None
 
+    def list_for_task(self, design_task_id: UUID) -> list[dto.DesignEvidence]:
+        rows = self.session.scalars(
+            sa.select(model.DesignEvidence)
+            .where(model.DesignEvidence.design_task_id == design_task_id)
+            .order_by(
+                model.DesignEvidence.evidence_version.desc(),
+                model.DesignEvidence.created_at.desc(),
+                model.DesignEvidence.id,
+            )
+        ).all()
+        return [_evidence(row) for row in rows]
+
     def list_live_for_request(
         self,
         generation_request_id: UUID,

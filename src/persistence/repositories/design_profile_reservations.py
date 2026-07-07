@@ -119,6 +119,18 @@ class DesignProfileReservationRepository:
         row = self.session.get(model.DesignProfileReservation, reservation_id)
         return _reservation(row) if row else None
 
+    def list_for_task(self, design_task_id: UUID) -> list[dto.DesignProfileReservation]:
+        rows = self.session.scalars(
+            sa.select(model.DesignProfileReservation)
+            .where(model.DesignProfileReservation.design_task_id == design_task_id)
+            .order_by(
+                model.DesignProfileReservation.reservation_version.desc(),
+                model.DesignProfileReservation.created_at.desc(),
+                model.DesignProfileReservation.id,
+            )
+        ).all()
+        return [_reservation(row) for row in rows]
+
     def reserve_task(
         self,
         *,

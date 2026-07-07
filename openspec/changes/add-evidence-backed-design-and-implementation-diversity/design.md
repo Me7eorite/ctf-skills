@@ -279,8 +279,8 @@ attempt from moving a revised draft back to `built`.
 ```json
 {
   "required_profile": {},
-  "required_player_actions": [],
-  "required_components": [],
+  "required_player_actions": ["recover runtime key"],
+  "required_components": ["runtime-key-loader"],
   "required_asset_flow": [
     {
       "stage_id": "recover-key",
@@ -392,9 +392,11 @@ machine-readable error and creates no BuildAttempt, staged shard, difficulty
 review row, counter increment, or parent status change. The existing
 pre-build difficulty review remains applicable only after the governed
 evidence contract is present and structurally valid. If that later review
-fails, its retry/requeue behavior applies, but it must not mutate or supersede
-a committed DesignEvidence/build contract in place; remediation is a new
-Design evidence version through the explicit revision path.
+fails, governed remediation is through the explicit Design revision path; it
+must not mutate or supersede a committed DesignEvidence/build contract in
+place. Legacy and `legacy_trial` submissions may keep the older
+retry/requeue behavior because they have no committed governance contract and
+cannot satisfy production admission.
 
 For governed tasks, the difficulty-review integration is therefore narrowed to
 diagnostics plus a revision request. It may append a
@@ -403,10 +405,7 @@ but it may not call the legacy draft-supersession/requeue helper directly. The
 only allowed mutation path after a failed governed difficulty review is
 `request_design_revision`, which returns the task to `draft`, clears
 `plan_reviewed_at`, releases/re-reserves the profile, and requires the normal
-plan-review checkpoint before another Design attempt. Legacy and
-`legacy_trial` submissions may keep the older retry/requeue behavior because
-they have no committed governance contract and cannot satisfy production
-admission.
+plan-review checkpoint before another Design attempt.
 
 The full contract and evidence ID are embedded in the attributed shard.
 Governed matrix values have no generic defaults. Missing governed values cause
@@ -497,7 +496,8 @@ Closed failure codes include:
 The new corpus service compares a candidate batch with:
 
 - other candidates in the batch;
-- committed/published historical observations.
+- live committed governed evidence;
+- published/retired corpus history entries.
 
 Fingerprints:
 
@@ -563,6 +563,11 @@ Membership is immutable once evaluation starts. Rebuilt/revised challenges enter
 a new batch membership version. The pack command names one corpus batch
 explicitly; there is no implicit "current batch".
 
+Any API or dashboard DTO that reports production delivery eligibility must name
+the selected `corpus_batch_id`. Without that explicit batch, the server may list
+memberships and raw/effective states, but it must not infer eligibility from
+latest-created, latest-evaluated, or singleton-looking corpus rows.
+
 The existing delivery packer is the production publication boundary. In
 production mode it selects only challenges whose BuildAttempt has an effectively
 accepted ArtifactObservation for the validation layer (`passed`, or
@@ -620,6 +625,24 @@ The dashboard displays:
 - negative-test results;
 - corpus matches and decision.
 
+The server DTOs SHALL distinguish current governance state from history:
+
+- current reservation, current DesignEvidence, current build contract, and
+  current ArtifactObservation are exposed as the authoritative chain used by
+  Build admission and delivery;
+- superseded DesignEvidence, released reservations, older BuildAttempts, and
+  older observations are exposed only as immutable history or comparison
+  context;
+- raw stored decisions (`review_required`, `blocked`, `passed`,
+  `inconclusive`) are exposed separately from effective acceptance derived from
+  allowed observation/corpus reviews. In this change, `review_required` is a
+  corpus-layer decision only; validation-layer observation results use
+  `passed|failed|inconclusive`, and observation review provenance stays in
+  separate review records rather than the raw observation status.
+- "Current" means the single live row referenced by the task's current
+  reservation/evidence/current observation pointers; all other rows in those
+  families are historical.
+
 It exposes service-backed actions only: regenerate/re-reserve at planning,
 retry Design, submit Build, request corpus review, record allowed review
 decision. It never computes profiles, fingerprints, similarity, or admission
@@ -631,7 +654,8 @@ policy client-side.
   category policy and explicit `design_diversity_exhausted`, not silent
   fallback.
 - **Observation cannot infer every semantic fact.** Unknown is surfaced as
-  review-required; metadata is never accepted as proof.
+  `inconclusive` and may be accepted only through a separate allowed
+  observation review; metadata is never accepted as proof.
 - **Corpus comparison cost grows with 500+ challenges.** Store fingerprints and
   shortlist by category/profile before exact Jaccard comparison.
 - **Reservation churn can reduce capacity.** Release only under parent locks

@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
@@ -22,6 +23,8 @@ from fastapi.testclient import TestClient
 from core.paths import ProjectPaths
 from domain.challenge_designs import ChallengeDesign, DesignAttempt
 from domain.design.difficulty_review import DesignDifficultyReview
+from domain.design_evidence import DesignEvidence
+from domain.design_profile_reservations import DesignProfileReservation
 from domain.design_task_validators import DesignTaskValidationError
 from domain.design_tasks import DesignTask
 from services.challenge_design_service import ChallengeDesignServiceResult
@@ -98,6 +101,104 @@ def _make_design(task_id: UUID, attempt_id: UUID) -> ChallengeDesign:
     )
 
 
+def _make_reservation(
+    task: DesignTask,
+    *,
+    state: str = "committed",
+) -> DesignProfileReservation:
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    profile = {
+        "semantic": {"family": "web", "sub_technique": "boolean blind sqli"},
+        "solve": {"required_action": "extract_with_boolean_oracle"},
+        "implementation": {
+            "artifact_format": "web_app",
+            "language": "python",
+            "interaction": "http_form",
+            "flag_concealment": "database_record",
+        },
+        "presentation": {"scenario_type": "login", "input_model": "form"},
+    }
+    return DesignProfileReservation(
+        id=uuid4(),
+        design_task_id=task.id,
+        generation_request_id=task.generation_request_id,
+        reservation_version=1,
+        profile=profile,
+        profile_signature="profile-a",
+        occupancy_scope="web",
+        exclusive_signature_key="profile-a",
+        state=state,
+        taxonomy_version=1,
+        policy_version=1,
+        ledger_version=1,
+        created_at=now,
+        committed_at=now if state == "committed" else None,
+        released_at=now if state == "released" else None,
+    )
+
+
+def _make_evidence(
+    task: DesignTask,
+    design: ChallengeDesign,
+    *,
+    superseded: bool = False,
+) -> DesignEvidence:
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    profile = {
+        "semantic": {"family": "web", "sub_technique": "boolean blind sqli"},
+        "solve": {"required_action": "extract_with_boolean_oracle"},
+        "implementation": {
+            "artifact_format": "web_app",
+            "language": "python",
+            "interaction": "http_form",
+            "flag_concealment": "database_record",
+        },
+        "presentation": {"scenario_type": "login", "input_model": "form"},
+    }
+    return DesignEvidence(
+        id=uuid4(),
+        design_task_id=task.id,
+        evidence_version=2 if not superseded else 1,
+        challenge_design_id=design.id,
+        research_finding_ids=task.finding_ids,
+        profile=profile,
+        profile_signature="profile-a",
+        distinctness_claim="differs from sibling solve flow",
+        compared_challenge_ids=("web-0000",),
+        evidence={"claims": [{"finding_id": str(task.finding_ids[0])}]},
+        build_contract={
+            "required_profile": profile,
+            "required_player_actions": ["extract_with_boolean_oracle"],
+            "required_components": ["login"],
+            "artifact_ids": ["primary"],
+            "fixture_ids": ["oracle"],
+            "required_asset_flow": [
+                {
+                    "stage_id": "oracle",
+                    "produced_asset_or_capability": "boolean oracle",
+                    "verification_harness": {
+                        "test_kind": "fixture_assertion",
+                        "fixture_ref": "oracle",
+                        "assertion": "non_empty",
+                    },
+                    "dependency_harness": {
+                        "test_kind": "solver_without_fixture",
+                        "fixture_ref": "oracle",
+                        "assertion": "must_fail",
+                    },
+                }
+            ],
+            "forbidden_shortcuts": [],
+            "acceptance_tests": [],
+            "allowed_implementation_freedom": ["function_names"],
+        },
+        ledger_version=1,
+        created_at=now,
+        superseded_at=now if superseded else None,
+        supersession_reason="revision" if superseded else None,
+    )
+
+
 def _make_review(task_id: UUID, design_id: UUID) -> DesignDifficultyReview:
     now = datetime(2026, 6, 1, tzinfo=timezone.utc)
     return DesignDifficultyReview(
@@ -124,6 +225,8 @@ def _app_client(
     design_repo=None,
     research_repo=None,
     difficulty_review_repo=None,
+    evidence_repo=None,
+    reservation_repo=None,
 ):
     """Build a TestClient whose design-task endpoints see the supplied stubs."""
     temp = tempfile.TemporaryDirectory()
@@ -171,6 +274,14 @@ def _app_client(
                 "latest": None,
             },
         )
+        default_evidence_repo = SimpleNamespace(
+            get=lambda _id: None,
+            list_for_task=lambda _task_id: [],
+        )
+        default_reservation_repo = SimpleNamespace(
+            get=lambda _id: None,
+            list_for_task=lambda _task_id: [],
+        )
         default_planning_service = SimpleNamespace(
             generate_for_request=lambda _request_id: [],
         )
@@ -192,6 +303,14 @@ def _app_client(
             patch(
                 "persistence.repositories.DesignDifficultyReviewRepository",
                 return_value=difficulty_review_repo or default_difficulty_review_repo,
+            ),
+            patch(
+                "persistence.repositories.DesignEvidenceRepository",
+                return_value=evidence_repo or default_evidence_repo,
+            ),
+            patch(
+                "persistence.repositories.DesignProfileReservationRepository",
+                return_value=reservation_repo or default_reservation_repo,
             ),
             patch(
                 "services.DesignTaskPlanningService",
@@ -662,6 +781,61 @@ class DesignTaskReadEndpointTests(unittest.TestCase):
             self.assertEqual(summary["failed"], 1)
             self.assertFalse(summary["latest"]["passed"])
             self.assertEqual(summary["latest"]["required_revision"], ["revise asset_flow"])
+
+    def test_detail_exposes_current_governance_chain_and_history(self):
+        task = _make_design_task(status="designed")
+        attempt = _make_attempt(task.id)
+        design = _make_design(task.id, attempt.id)
+        design = replace(design, quality_gate_passed=False)
+        reservation = _make_reservation(task)
+        evidence = _make_evidence(task, design)
+        superseded_reservation = _make_reservation(task, state="released")
+        superseded_evidence = _make_evidence(task, design, superseded=True)
+
+        repo = SimpleNamespace(
+            list_design_tasks=lambda _id: [],
+            list_tasks=lambda **_kw: [],
+            summarize_for_request=lambda _id: {"total": 0, "by_status": {}},
+            get_with_history=lambda _id: (task, [attempt], design),
+            set_design_task_status=lambda _id, _status: None,
+        )
+        evidence_repo = SimpleNamespace(
+            get=lambda evidence_id: evidence if evidence_id == evidence.id else None,
+            list_for_task=lambda _task_id: [superseded_evidence, evidence],
+        )
+        reservation_repo = SimpleNamespace(
+            get=lambda reservation_id: reservation if reservation_id == reservation.id else None,
+            list_for_task=lambda _task_id: [superseded_reservation, reservation],
+        )
+
+        task = replace(
+            task,
+            current_reservation_id=reservation.id,
+            current_design_evidence_id=evidence.id,
+        )
+        repo = SimpleNamespace(
+            list_design_tasks=lambda _id: [],
+            list_tasks=lambda **_kw: [],
+            summarize_for_request=lambda _id: {"total": 0, "by_status": {}},
+            get_with_history=lambda _id: (task, [attempt], design),
+            set_design_task_status=lambda _id, _status: None,
+        )
+
+        with _app_client(
+            design_repo=repo,
+            evidence_repo=evidence_repo,
+            reservation_repo=reservation_repo,
+        ) as client:
+            resp = client.get(f"/api/design-tasks/{task.id}")
+
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        self.assertEqual(payload["current_reservation"]["id"], str(reservation.id))
+        self.assertEqual(payload["current_design_evidence"]["id"], str(evidence.id))
+        self.assertFalse(payload["build_eligibility"]["eligible"])
+        self.assertIn("design_quality_gate_failed", payload["build_eligibility"]["blocking_reasons"])
+        self.assertEqual(payload["governance_history"]["reservations"][0]["id"], str(superseded_reservation.id))
+        self.assertEqual(payload["governance_history"]["design_evidence"][0]["id"], str(superseded_evidence.id))
 
     def test_detail_unknown_or_malformed_returns_404(self):
         with _app_client() as client:

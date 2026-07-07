@@ -16,8 +16,11 @@ from sqlalchemy import create_engine
 
 from core.jsonio import write_json
 from core.paths import ProjectPaths
+from persistence.models import artifact_observations as observation_model
 from persistence.models import build_attempts as build_model
+from persistence.models import challenge_corpus as corpus_model
 from persistence.models import challenge_designs as design_model
+from persistence.models import design_profile_reservations as reservation_model
 from persistence.models import design_tasks as task_model
 from persistence.models import executions as exec_model
 from persistence.models import research as research_model
@@ -25,6 +28,7 @@ from persistence.models.progress import ProgressEvent, ProgressSnapshot
 from persistence.repositories import (
     ArtifactObservationRepository,
     BuildAttemptsRepository,
+    CorpusRepository,
     ExecutionsRepository,
 )
 from persistence.session import SessionFactory, transaction
@@ -167,6 +171,30 @@ def client(tmp_path: Path) -> TestClient:
 
 def _clean_database(session_factory: SessionFactory) -> None:
     with session_factory() as session:
+        session.execute(sa.delete(corpus_model.CorpusReviewDecision))
+        session.execute(sa.delete(corpus_model.ObservationReviewDecision))
+        session.execute(sa.delete(corpus_model.CorpusDecision))
+        session.execute(sa.delete(corpus_model.CorpusMatch))
+        session.execute(sa.delete(corpus_model.CorpusBatchMember))
+        session.execute(sa.delete(corpus_model.CorpusHistoryEntry))
+        session.execute(sa.delete(corpus_model.CorpusBatch))
+        session.execute(
+            sa.update(task_model.DesignTask).values(
+                current_reservation_id=None,
+                current_design_evidence_id=None,
+            )
+        )
+        session.execute(
+            sa.update(build_model.BuildAttempt).values(
+                design_evidence_id=None,
+                artifact_observation_id=None,
+                contract_sha256=None,
+            )
+        )
+        session.execute(sa.delete(observation_model.ArtifactObservation))
+        session.execute(sa.delete(design_model.DesignEvidence))
+        session.execute(sa.delete(reservation_model.DesignProfileReservation))
+        session.execute(sa.delete(reservation_model.DesignProfileLedger))
         session.execute(sa.delete(exec_model.RevalidationEvent))
         session.execute(
             sa.update(build_model.BuildAttempt).values(
@@ -492,6 +520,118 @@ def test_detail_exposes_siblings_and_progress_events(
     assert payload["artifact_observation"]["observed_profile"]["language"] == "python"
     assert payload["artifact_observation"]["contract_sha256"] == "contract-a"
     assert any(event["message"].startswith("carry-forward:") for event in payload["progress_events"])
+
+
+def test_detail_exposes_validation_and_corpus_governance(
+    client: TestClient,
+    session_factory: SessionFactory,
+):
+    task_id = _seed_designed_task(session_factory)
+    with transaction(factory=session_factory) as session:
+        design_id = session.scalar(
+            sa.select(design_model.ChallengeDesign.id).where(
+                design_model.ChallengeDesign.design_task_id == task_id
+            )
+        )
+        assert design_id is not None
+        evidence_id = uuid4()
+        evidence = design_model.DesignEvidence(
+            id=evidence_id,
+            design_task_id=task_id,
+            evidence_version=1,
+            challenge_design_id=design_id,
+            research_finding_ids=[],
+            profile={"solve": {"required_action": "inspect"}},
+            profile_signature="profile-a",
+            distinctness_claim="different implementation",
+            compared_challenge_ids=[],
+            evidence={},
+            build_contract={},
+            ledger_version=1,
+        )
+        session.add(evidence)
+        attempt = BuildAttemptsRepository(session).create_attempt(task_id, f"{uuid4()}.json")
+        row = session.get(build_model.BuildAttempt, attempt.id)
+        row.design_evidence_id = evidence_id
+        row.contract_sha256 = "contract-a"
+        observation = ArtifactObservationRepository(session).create_current(
+            build_attempt_id=attempt.id,
+            design_evidence_id=evidence_id,
+            contract_sha256="contract-a",
+            artifact_manifest_sha256="artifact-a",
+            observed_profile={"language": "python"},
+            contract_checks={"profile_compare": "unknown"},
+            negative_test_results={},
+            fingerprints={"combined": "combined-a"},
+            status="inconclusive",
+        )
+        corpus_repo = CorpusRepository(session)
+        batch = corpus_repo.create_batch(
+            mode="production",
+            category="web",
+            policy_version=1,
+            created_by="tester",
+        )
+        member = corpus_repo.add_member(
+            batch_id=batch.id,
+            build_attempt_id=attempt.id,
+            design_evidence_id=evidence_id,
+            artifact_observation_id=observation.id,
+            fingerprint_version=1,
+            fingerprints={"combined": "combined-a"},
+        )
+        corpus_repo.record_observation_review(
+            artifact_observation_id=observation.id,
+            decision="accepted",
+            actor="tester",
+            reason="manual language inspection",
+            scope="production-publication",
+        )
+        member_decision = corpus_repo.record_decision(
+            batch_id=batch.id,
+            member_id=member.id,
+            scope="member",
+            decision="review_required",
+            reasons=["source similarity borderline"],
+            policy_version=1,
+        )
+        corpus_repo.record_corpus_review(
+            corpus_decision_id=member_decision.id,
+            decision="approved",
+            actor="tester",
+            reason="acceptable variant",
+            scope="production-publication",
+        )
+        corpus_repo.record_decision(
+            batch_id=batch.id,
+            scope="aggregate",
+            decision="passed",
+            reasons=[],
+            policy_version=1,
+        )
+
+    no_batch = client.get(f"/api/build-attempts/{attempt.id}")
+    selected = client.get(f"/api/build-attempts/{attempt.id}?corpus_batch_id={batch.id}")
+
+    assert no_batch.status_code == 200
+    no_batch_payload = no_batch.json()
+    assert no_batch_payload["validation_governance"]["raw_state"] == "inconclusive"
+    assert no_batch_payload["validation_governance"]["effective_acceptance"] is True
+    assert no_batch_payload["corpus_governance"]["delivery_eligibility_computed"] is False
+    assert no_batch_payload["production_delivery_eligibility"]["computed"] is False
+    assert no_batch_payload["production_delivery_eligibility"]["eligible"] is False
+
+    assert selected.status_code == 200
+    selected_payload = selected.json()
+    assert selected_payload["design_evidence_id"] == str(evidence_id)
+    assert selected_payload["contract_sha256"] == "contract-a"
+    assert selected_payload["artifact_manifest_sha256"] == "artifact-a"
+    membership = selected_payload["corpus_governance"]["selected_membership"]
+    assert membership["member_raw_state"] == "review_required"
+    assert membership["member_effective_acceptance"] is True
+    assert membership["aggregate_raw_state"] == "passed"
+    assert selected_payload["production_delivery_eligibility"]["computed"] is True
+    assert selected_payload["production_delivery_eligibility"]["eligible"] is True
 
 
 def test_list_and_detail_expose_latest_validation_failure_context(

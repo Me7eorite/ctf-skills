@@ -1119,6 +1119,9 @@ function renderConstraintChips(constraints) {
 }
 
 function renderTaskSummary(task, latestAttempt, latestDesign, attemptCount) {
+  const currentReservation = task.current_reservation || null;
+  const currentEvidence = task.current_design_evidence || null;
+  const eligibility = task.build_eligibility || { eligible: false, blocking_reasons: [] };
   return `
     <section class="card dt-task-summary">
       <div class="dt-side-title">任务摘要</div>
@@ -1131,7 +1134,28 @@ function renderTaskSummary(task, latestAttempt, latestDesign, attemptCount) {
         <div><dt>质量检查</dt><dd>${latestDesign ? (latestDesign.quality_gate_passed ? "已通过" : "未通过") : "未执行"}</dd></div>
       </dl>
     </section>
+
+    <section class="card dt-section-card">
+      <div class="card-header">
+        <div>
+          <div class="card-title">治理链</div>
+          <div class="card-subtitle">当前 reservation、证据和构建资格。</div>
+        </div>
+      </div>
+      <dl class="ba-info-grid dt-governance-grid">
+        <div><dt>Current Reservation</dt><dd>${currentReservation ? escapeHtml(shortId(currentReservation.id)) : "—"}</dd></div>
+        <div><dt>Reservation 状态</dt><dd>${currentReservation ? escapeHtml(currentReservation.state || "—") : "—"}</dd></div>
+        <div><dt>Current Evidence</dt><dd>${currentEvidence ? escapeHtml(shortId(currentEvidence.id)) : "—"}</dd></div>
+        <div><dt>Build Eligibility</dt><dd>${eligibility.eligible ? "可构建" : "不可构建"}</dd></div>
+        <div class="dt-brief-wide"><dt>Blocking Reasons</dt><dd>${renderBlockingReasons(eligibility.blocking_reasons)}</dd></div>
+      </dl>
+    </section>
   `;
+}
+
+function renderBlockingReasons(reasons) {
+  if (!Array.isArray(reasons) || !reasons.length) return "—";
+  return `<ul class="dt-inline-list">${reasons.map((reason) => `<li><code>${escapeHtml(reason)}</code></li>`).join("")}</ul>`;
 }
 
 function eligibleForBuild(task) {

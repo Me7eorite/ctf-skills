@@ -105,6 +105,7 @@ production submissions cannot fall back to the legacy build path.
 - `hermes-execution-protocol`
 - `delivery-bundle`
 - `postgres-persistence`
+- `resource-deletion`
 
 ### New Capabilities
 
@@ -144,6 +145,12 @@ production submissions cannot fall back to the legacy build path.
   and are not retroactively required to have reservations/evidence, but they
   may be fingerprinted as comparison candidates. New production submissions
   cannot use the legacy exemption.
+- **API/dashboard**:
+  operator surfaces expose the current governance chain and raw/effective
+  review states from server DTOs. Delivery eligibility is reported only for an
+  explicitly selected corpus batch. Surfaces do not infer build eligibility,
+  rewrite stored review decisions, or collapse historical/superseded evidence
+  into the current chain.
 - **Operational change**:
   the production release unit becomes a corpus-gated batch, not merely a set of
   individually passing build attempts.

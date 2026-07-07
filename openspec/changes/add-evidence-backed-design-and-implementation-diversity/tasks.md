@@ -138,7 +138,8 @@
       `corpus_decisions`, `corpus_matches`, `observation_review_decisions`, and
       `corpus_review_decisions`, plus append-only `corpus_history_entries`.
 - [x] 8.3 Implement indexed candidate shortlisting and exact similarity
-      comparison against batch plus committed history.
+      comparison against batch, live committed evidence, and published/retired
+      corpus history.
 - [x] 8.4 Implement `passed|review_required|blocked` decisions and configurable
       thresholds/quotas.
 - [x] 8.5 Persist matched challenge IDs, scores, reasons, and separate
@@ -157,12 +158,21 @@
 
 ## 9. API and dashboard
 
-- [ ] 9.1 Expose reservations and DesignEvidence on DesignTask detail APIs.
-- [ ] 9.2 Expose ArtifactObservation and corpus decision on BuildAttempt detail.
+- [x] 9.1 Expose current reservation, current DesignEvidence, build
+      eligibility, and superseded/history summaries on DesignTask detail APIs;
+      keep failed-quality and superseded evidence inspectable but never mark
+      it build-eligible.
+- [x] 9.2 Expose ArtifactObservation and corpus decision on BuildAttempt detail,
+      including raw member decision, effective acceptance, aggregate batch
+      decision, review provenance, selected `corpus_batch_id`, and
+      non-overrideable failure reasons; without an explicit batch, list
+      memberships but do not compute production delivery eligibility.
 - [ ] 9.3 Add dashboard sections for profile allocation, evidence citations,
-      required-vs-observed contract, negative tests, and matched corpus entries.
+      required-vs-observed contract, negative tests, and matched corpus entries;
+      label current vs historical rows and raw vs effective review states.
 - [ ] 9.4 Add service-backed re-reserve/regenerate, review-request, and review
-      decision actions; no client-side policy/fingerprint computation.
+      decision actions; no client-side policy/fingerprint computation and no
+      client-side promotion from raw `review_required` to accepted.
 - [ ] 9.5 Add service-backed Design revision action with quality-failure and
       contract-revision diagnostics.
 - [ ] 9.6 Add Chinese operator copy and responsive rendering tests.
@@ -170,10 +180,12 @@
 ## 10. Compatibility, deletion, and operations
 
 - [ ] 10.1 Grandfather historical rows for read/revalidate while blocking new
-      production builds without committed evidence.
+      production builds without committed evidence; all legacy rebuilds must be
+      explicit `legacy_trial` and non-production.
 - [ ] 10.2 Extend ResourceDeletionService scopes to reservations, evidence,
-      observations, and corpus decisions; preserve minimal published corpus
-      history unless an explicit governance purge is requested.
+      observations, and corpus decisions; preserve minimal published/retired
+      corpus history, admitted-review provenance, and acceptance/blocking
+      reasons unless an explicit governance purge is requested.
 - [ ] 10.3 Add optional import/fingerprint tool for reviewed historical
       challenges.
 - [ ] 10.4 Document profile policy, thresholds, shadow/trial/production modes,

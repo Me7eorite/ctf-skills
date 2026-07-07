@@ -967,6 +967,9 @@ function renderDetail(root) {
   const attempt = state.detail;
   if (!attempt) return;
   const tone = buildDetailTone(attempt.status);
+  const validationGovernance = attempt.validation_governance || {};
+  const corpusGovernance = attempt.corpus_governance || {};
+  const productionEligibility = attempt.production_delivery_eligibility || {};
   root.innerHTML = `
     ${renderBuildReadinessWarning()}
     <div class="ba-detail-toolbar">
@@ -1040,6 +1043,43 @@ function renderDetail(root) {
 
     <section class="card ba-section-card">
       <div class="card-header">
+        <div>
+          <div class="card-title">验证治理</div>
+          <div class="card-subtitle">required vs observed 与负向测试结果。</div>
+        </div>
+        <span class="pill">${validationGovernance.raw_state || "-"}</span>
+      </div>
+      <dl class="ba-info-grid">
+        <div><dt>原始状态</dt><dd>${escapeHtml(validationGovernance.raw_state || "-")}</dd></div>
+        <div><dt>有效接受</dt><dd>${validationGovernance.effective_acceptance ? "是" : "否"}</dd></div>
+        <div><dt>观察审查</dt><dd>${renderGovernanceReview(validationGovernance.review_provenance)}</dd></div>
+      </dl>
+      ${renderObservationPanel(attempt.artifact_observation)}
+    </section>
+
+    <section class="card ba-section-card">
+      <div class="card-header">
+        <div>
+          <div class="card-title">构建契约</div>
+          <div class="card-subtitle">required vs observed contract checks 和 asset flow。</div>
+        </div>
+      </div>
+      ${renderContractComparison(attempt)}
+    </section>
+
+    <section class="card ba-section-card">
+      <div class="card-header">
+        <div>
+          <div class="card-title">Corpus 治理</div>
+          <div class="card-subtitle">成员判定、聚合判定与交付资格。</div>
+        </div>
+        <span class="pill">${productionEligibility.computed ? (productionEligibility.eligible ? "eligible" : "blocked") : "未计算"}</span>
+      </div>
+      ${renderCorpusGovernance(corpusGovernance, productionEligibility)}
+    </section>
+
+    <section class="card ba-section-card">
+      <div class="card-header">
         <div><div class="card-title">执行历史</div></div>
         <span class="pill">${(attempt.executions || []).length}</span>
       </div>
@@ -1062,6 +1102,86 @@ function renderDetail(root) {
       ${renderProgressEvents(attempt.progress_events || [], attempt.shard_basename)}
     </section>
   `;
+}
+
+function renderGovernanceReview(review) {
+  if (!review) return "—";
+  const parts = [
+    review.decision,
+    review.actor,
+    review.reason,
+  ].filter(Boolean);
+  return parts.length ? escapeHtml(parts.join(" · ")) : "—";
+}
+
+function renderObservationPanel(observation) {
+  if (!observation) {
+    return `<div class="empty card-body">暂无 ArtifactObservation</div>`;
+  }
+  return `
+    <dl class="ba-info-grid ba-observation-grid">
+      <div><dt>Observation</dt><dd>${escapeHtml(shortId(observation.id))}</dd></div>
+      <div><dt>Design Evidence</dt><dd>${escapeHtml(shortId(observation.design_evidence_id))}</dd></div>
+      <div><dt>Contract Hash</dt><dd class="mono">${escapeHtml(observation.contract_sha256 || "-")}</dd></div>
+      <div><dt>Manifest Hash</dt><dd class="mono">${escapeHtml(observation.artifact_manifest_sha256 || "-")}</dd></div>
+      <div class="ba-observation-wide"><dt>Observed Profile</dt><dd>${renderJsonMini(observation.observed_profile)}</dd></div>
+      <div class="ba-observation-wide"><dt>Negative Tests</dt><dd>${renderJsonMini(observation.negative_test_results)}</dd></div>
+      <div class="ba-observation-wide"><dt>Contract Checks</dt><dd>${renderJsonMini(observation.contract_checks)}</dd></div>
+      <div class="ba-observation-wide"><dt>Fingerprints</dt><dd>${renderJsonMini(observation.fingerprints)}</dd></div>
+    </dl>
+  `;
+}
+
+function renderContractComparison(attempt) {
+  const requiredProfile = attempt.required_profile || {};
+  const contract = attempt.build_contract || {};
+  const observedProfile = attempt.artifact_observation?.observed_profile || {};
+  return `
+    <dl class="ba-info-grid">
+      <div class="ba-observation-wide"><dt>Required Profile</dt><dd>${renderJsonMini(requiredProfile)}</dd></div>
+      <div class="ba-observation-wide"><dt>Observed Profile</dt><dd>${renderJsonMini(observedProfile)}</dd></div>
+      <div class="ba-observation-wide"><dt>Required Asset Flow</dt><dd>${renderJsonMini(contract.required_asset_flow || [])}</dd></div>
+      <div class="ba-observation-wide"><dt>Forbidden Shortcuts</dt><dd>${renderJsonMini(contract.forbidden_shortcuts || [])}</dd></div>
+      <div class="ba-observation-wide"><dt>Acceptance Tests</dt><dd>${renderJsonMini(contract.acceptance_tests || [])}</dd></div>
+      <div class="ba-observation-wide"><dt>Allowed Freedom</dt><dd>${renderJsonMini(contract.allowed_implementation_freedom || [])}</dd></div>
+    </dl>
+  `;
+}
+
+function renderCorpusGovernance(corpusGovernance, productionEligibility) {
+  const memberships = Array.isArray(corpusGovernance.memberships) ? corpusGovernance.memberships : [];
+  const selected = corpusGovernance.selected_membership || null;
+  return `
+    <dl class="ba-info-grid">
+      <div><dt>Batch</dt><dd>${escapeHtml(corpusGovernance.selected_corpus_batch_id || "—")}</dd></div>
+      <div><dt>验证可见性</dt><dd>${corpusGovernance.delivery_eligibility_computed ? "已计算" : "未选择 batch"}</dd></div>
+      <div><dt>Delivery</dt><dd>${productionEligibility.computed ? (productionEligibility.eligible ? "可交付" : "阻断") : "未计算"}</dd></div>
+      <div class="ba-observation-wide"><dt>Blocking Reasons</dt><dd>${renderGovernanceReasons(productionEligibility.blocking_reasons)}</dd></div>
+      <div class="ba-observation-wide"><dt>Selected Membership</dt><dd>${selected ? renderJsonMini(selected) : "—"}</dd></div>
+      <div class="ba-observation-wide"><dt>All Memberships</dt><dd>${renderMembershipList(memberships)}</dd></div>
+    </dl>
+  `;
+}
+
+function renderGovernanceReasons(reasons) {
+  if (!Array.isArray(reasons) || !reasons.length) return "—";
+  return `<ul class="ba-inline-list">${reasons.map((reason) => `<li><code>${escapeHtml(reason)}</code></li>`).join("")}</ul>`;
+}
+
+function renderMembershipList(memberships) {
+  if (!memberships.length) return "—";
+  return `<div class="ba-mini-list">${memberships.map((membership) => `
+    <div class="ba-mini-row">
+      <strong>${escapeHtml(shortId(membership.batch_id))}</strong>
+      <span>${escapeHtml(membership.member_raw_state || "-")} / ${escapeHtml(membership.aggregate_raw_state || "-")}</span>
+    </div>
+  `).join("")}</div>`;
+}
+
+function renderJsonMini(value) {
+  if (value === null || value === undefined) return "—";
+  if (typeof value !== "object") return `<span class="mono">${escapeHtml(String(value))}</span>`;
+  return `<pre class="ba-json-mini">${escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
 }
 
 function buildDetailTone(status) {

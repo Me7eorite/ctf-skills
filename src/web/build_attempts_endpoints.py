@@ -22,6 +22,13 @@ from core.clock import beijing_isoformat
 from core.jsonio import read_json
 from core.state import EXECUTION_STAGES
 from domain.build_attempts import BuildAttempt, BuildAttemptListItem, BuildAttemptStatus
+from domain.challenge_corpus import (
+    CorpusDecisionScope,
+    CorpusDecisionValue,
+    corpus_decision_is_effectively_accepted,
+    corpus_review_allows_acceptance,
+    observation_review_allows_acceptance,
+)
 from domain.output_consistency import validate_workspace_success_state
 from domain.validation_failure_governance import latest_failed_validation, summarize_validation_entry
 from domain.validation_repair_policy import policy_for_validation_failure
@@ -32,9 +39,11 @@ from persistence.models.progress import ProgressEvent, ProgressSnapshot
 from persistence.repositories import (
     ArtifactObservationRepository,
     BuildAttemptsRepository,
+    CorpusRepository,
     ExecutionsRepository,
 )
 from services import BuildOrchestrationError, BuildOrchestrationService
+from services.artifact_observation_governance import observation_is_effectively_accepted
 from services.build_attempt_auto_iteration_service import read_auto_iteration_state
 from services.build_attempt_repair_service import (
     BuildAttemptRepairError,
@@ -52,6 +61,7 @@ DEFAULT_LIST_LIMIT = 200
 MAX_LIST_LIMIT = 500
 DEFAULT_SEQUENTIAL_LANES = 4
 DEFAULT_MAX_SEQUENTIAL_LANES = 6
+GOVERNANCE_REVIEW_SCOPE = "production-publication"
 
 
 def _env_int(name: str, default: int) -> int:
@@ -216,9 +226,13 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
         )
 
     @app.get("/api/build-attempts/{attempt_id}")
-    def get_build_attempt(attempt_id: str) -> JSONResponse:
+    def get_build_attempt(
+        attempt_id: str,
+        corpus_batch_id: str | None = Query(default=None),
+    ) -> JSONResponse:
         _sync_finished_dashboard_workers(app)
         attempt_uuid = _parse_uuid(attempt_id, "build attempt id", not_found=True)
+        selected_corpus_batch_id = _parse_optional_uuid(corpus_batch_id, "corpus_batch_id")
 
         from persistence.session import transaction
 
@@ -254,6 +268,12 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
             artifact_observation = ArtifactObservationRepository(
                 session
             ).latest_current_for_attempt(attempt.id)
+            corpus_governance = _build_attempt_corpus_governance(
+                CorpusRepository(session),
+                attempt.id,
+                artifact_observation=artifact_observation,
+                selected_batch_id=selected_corpus_batch_id,
+            )
             resume_progress = _resume_progress_summary(
                 session,
                 _project_paths(app),
@@ -275,8 +295,21 @@ def register_build_attempts_endpoints(app: FastAPI) -> None:
             body["difficulty"] = task.difficulty
         body.update(_timeout_metadata_for_attempt(_project_paths(app), attempt.id))
         body.update(_execution_summary_from_rows(executions))
-        if artifact_observation is not None:
-            body["artifact_observation"] = _artifact_observation_dict(artifact_observation)
+        body["artifact_observation"] = (
+            _artifact_observation_dict(artifact_observation)
+            if artifact_observation is not None
+            else None
+        )
+        body["artifact_manifest_sha256"] = (
+            artifact_observation.artifact_manifest_sha256
+            if artifact_observation is not None
+            else None
+        )
+        body["validation_governance"] = corpus_governance["validation_governance"]
+        body["corpus_governance"] = corpus_governance["corpus_governance"]
+        body["production_delivery_eligibility"] = corpus_governance[
+            "production_delivery_eligibility"
+        ]
         body["sibling_attempts"] = [
             _attempt_dict(row, paths=_project_paths(app))
             for row in siblings
@@ -1066,6 +1099,227 @@ def _artifact_observation_dict(observation) -> dict[str, Any]:
     }
 
 
+def _build_attempt_corpus_governance(
+    corpus_repo: CorpusRepository,
+    build_attempt_id: UUID,
+    *,
+    artifact_observation,
+    selected_batch_id: UUID | None,
+) -> dict[str, Any]:
+    observation_review = (
+        corpus_repo.latest_observation_review(
+            artifact_observation_id=artifact_observation.id,
+            scope=GOVERNANCE_REVIEW_SCOPE,
+        )
+        if artifact_observation is not None
+        else None
+    )
+    validation_effective = (
+        observation_is_effectively_accepted(
+            artifact_observation,
+            has_allowed_review=observation_review_allows_acceptance(
+                observation_review
+            ),
+        )
+        if artifact_observation is not None
+        else False
+    )
+    memberships = corpus_repo.list_members_for_build_attempt(build_attempt_id)
+    membership_payloads = [
+        _corpus_membership_detail(corpus_repo, member)
+        for member in memberships
+    ]
+    selected_payload = None
+    if selected_batch_id is not None:
+        selected_payload = next(
+            (
+                item
+                for item in membership_payloads
+                if item["batch_id"] == str(selected_batch_id)
+            ),
+            None,
+        )
+
+    eligibility = _production_delivery_eligibility(
+        selected_batch_id=selected_batch_id,
+        selected_membership=selected_payload,
+        validation_effective=validation_effective,
+    )
+    return {
+        "validation_governance": {
+            "raw_state": (
+                artifact_observation.status
+                if artifact_observation is not None
+                else None
+            ),
+            "effective_acceptance": validation_effective,
+            "review_provenance": review_decision_dict(observation_review),
+        },
+        "corpus_governance": {
+            "selected_corpus_batch_id": (
+                str(selected_batch_id) if selected_batch_id is not None else None
+            ),
+            "selected_membership": selected_payload,
+            "memberships": membership_payloads,
+            "delivery_eligibility_computed": selected_batch_id is not None,
+        },
+        "production_delivery_eligibility": eligibility,
+    }
+
+
+def _corpus_membership_detail(
+    corpus_repo: CorpusRepository,
+    member,
+) -> dict[str, Any]:
+    batch = corpus_repo.get_batch(member.batch_id)
+    member_decision = corpus_repo.current_decision(
+        batch_id=member.batch_id,
+        member_id=member.id,
+        scope=CorpusDecisionScope.MEMBER.value,
+    )
+    aggregate_decision = corpus_repo.current_decision(
+        batch_id=member.batch_id,
+        scope=CorpusDecisionScope.AGGREGATE.value,
+    )
+    corpus_review = (
+        corpus_repo.latest_corpus_review(
+            corpus_decision_id=member_decision.id,
+            scope=GOVERNANCE_REVIEW_SCOPE,
+        )
+        if member_decision is not None
+        else None
+    )
+    corpus_effective = corpus_decision_is_effectively_accepted(
+        member_decision,
+        has_allowed_review=corpus_review_allows_acceptance(corpus_review),
+    )
+    return {
+        "id": str(member.id),
+        "batch_id": str(member.batch_id),
+        "batch": corpus_batch_dict(batch),
+        "build_attempt_id": str(member.build_attempt_id),
+        "design_evidence_id": str(member.design_evidence_id),
+        "artifact_observation_id": str(member.artifact_observation_id),
+        "fingerprint_version": member.fingerprint_version,
+        "member_decision": corpus_decision_dict(member_decision),
+        "member_raw_state": member_decision.decision if member_decision else None,
+        "member_effective_acceptance": corpus_effective,
+        "member_review_provenance": review_decision_dict(corpus_review),
+        "aggregate_batch_decision": corpus_decision_dict(aggregate_decision),
+        "aggregate_raw_state": (
+            aggregate_decision.decision if aggregate_decision else None
+        ),
+        "non_overrideable_failure_reasons": _non_overrideable_failure_reasons(
+            member_decision,
+            aggregate_decision,
+        ),
+        "created_at": _isofmt(member.created_at),
+    }
+
+
+def _production_delivery_eligibility(
+    *,
+    selected_batch_id: UUID | None,
+    selected_membership: dict[str, Any] | None,
+    validation_effective: bool,
+) -> dict[str, Any]:
+    if selected_batch_id is None:
+        return {
+            "computed": False,
+            "eligible": False,
+            "blocking_reasons": ["corpus_batch_id_required"],
+        }
+    if selected_membership is None:
+        return {
+            "computed": True,
+            "eligible": False,
+            "selected_corpus_batch_id": str(selected_batch_id),
+            "blocking_reasons": ["not_a_corpus_batch_member"],
+        }
+    reasons: list[str] = []
+    if not validation_effective:
+        reasons.append("artifact_observation_not_effectively_accepted")
+    batch = selected_membership.get("batch")
+    if not isinstance(batch, dict) or batch.get("mode") != "production":
+        reasons.append("corpus_batch_not_production")
+    if selected_membership["member_effective_acceptance"] is not True:
+        reasons.append("corpus_member_not_effectively_accepted")
+    aggregate = selected_membership.get("aggregate_batch_decision")
+    if not isinstance(aggregate, dict) or aggregate.get("decision") != CorpusDecisionValue.PASSED.value:
+        reasons.append("aggregate_batch_not_passed")
+    reasons.extend(selected_membership.get("non_overrideable_failure_reasons") or [])
+    return {
+        "computed": True,
+        "eligible": not reasons,
+        "selected_corpus_batch_id": str(selected_batch_id),
+        "blocking_reasons": list(dict.fromkeys(reasons)),
+    }
+
+
+def _non_overrideable_failure_reasons(member_decision, aggregate_decision) -> list[str]:
+    reasons: list[str] = []
+    if member_decision is not None and member_decision.decision == CorpusDecisionValue.BLOCKED.value:
+        reasons.extend(str(reason) for reason in member_decision.reasons)
+    if (
+        aggregate_decision is not None
+        and aggregate_decision.decision == CorpusDecisionValue.BLOCKED.value
+    ):
+        reasons.extend(str(reason) for reason in aggregate_decision.reasons)
+    return reasons
+
+
+def corpus_batch_dict(batch) -> dict[str, Any] | None:
+    if batch is None:
+        return None
+    return {
+        "id": str(batch.id),
+        "mode": batch.mode,
+        "category": batch.category,
+        "policy_version": batch.policy_version,
+        "status": batch.status,
+        "created_by": batch.created_by,
+        "created_at": _isofmt(batch.created_at),
+        "evaluation_started_at": _isofmt(batch.evaluation_started_at),
+        "evaluated_at": _isofmt(batch.evaluated_at),
+        "released_at": _isofmt(batch.released_at),
+    }
+
+
+def corpus_decision_dict(decision) -> dict[str, Any] | None:
+    if decision is None:
+        return None
+    return {
+        "id": str(decision.id),
+        "batch_id": str(decision.batch_id),
+        "member_id": str(decision.member_id) if decision.member_id else None,
+        "scope": decision.scope,
+        "decision": decision.decision,
+        "reasons": list(decision.reasons),
+        "policy_version": decision.policy_version,
+        "is_current": decision.is_current,
+        "created_at": _isofmt(decision.created_at),
+        "superseded_at": _isofmt(decision.superseded_at),
+    }
+
+
+def review_decision_dict(review) -> dict[str, Any] | None:
+    if review is None:
+        return None
+    payload = {
+        "id": str(review.id),
+        "decision": review.decision,
+        "actor": review.actor,
+        "reason": review.reason,
+        "scope": review.scope,
+        "created_at": _isofmt(review.created_at),
+    }
+    if hasattr(review, "artifact_observation_id"):
+        payload["artifact_observation_id"] = str(review.artifact_observation_id)
+    if hasattr(review, "corpus_decision_id"):
+        payload["corpus_decision_id"] = str(review.corpus_decision_id)
+    return payload
+
+
 def _parse_build_attempt_ids(payload: dict[str, Any]) -> list[UUID]:
     raw_ids = payload.get("build_attempt_ids")
     if not isinstance(raw_ids, list) or not raw_ids:
@@ -1657,6 +1911,17 @@ def _attempt_dict(
         "resulting_challenge_dir": attempt.resulting_challenge_dir,
         "artifact_status": attempt.artifact_status,
         "error": attempt.error,
+        "design_evidence_id": (
+            str(attempt.design_evidence_id)
+            if attempt.design_evidence_id is not None
+            else None
+        ),
+        "artifact_observation_id": (
+            str(attempt.artifact_observation_id)
+            if attempt.artifact_observation_id is not None
+            else None
+        ),
+        "contract_sha256": attempt.contract_sha256,
         "created_at": _isofmt(attempt.created_at),
         "started_at": _isofmt(attempt.started_at),
         "finished_at": _isofmt(attempt.finished_at),

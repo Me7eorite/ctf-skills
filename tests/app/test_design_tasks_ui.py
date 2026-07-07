@@ -129,3 +129,19 @@ def test_missing_build_profile_is_visible_and_disables_build_eligibility() -> No
     assert "item.create_command" in source
     assert 'item.reason && item.reason !== "missing_profile"' in source
     assert "item.message || \"Profile 配置未就绪\"" in source
+
+
+def test_design_task_view_exposes_governance_chain_sections() -> None:
+    source = (STATIC / "js" / "views" / "design-tasks.js").read_text(
+        encoding="utf-8"
+    )
+
+    for label in (
+        "治理链",
+        "Current Reservation",
+        "Current Evidence",
+        "Build Eligibility",
+        "Blocking Reasons",
+        "renderBlockingReasons",
+    ):
+        assert label in source

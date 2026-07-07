@@ -14,9 +14,10 @@ challenge:
 - intended path.
 
 The corpus service SHALL compare candidates with all other challenges in the
-candidate production batch and with a bounded indexed shortlist from committed
-history. It SHALL store each material match's challenge IDs, fingerprint type,
-score, threshold, and decision reason.
+candidate production batch, live committed governed evidence, and
+published/retired `corpus_history_entries` selected through a bounded indexed
+shortlist. It SHALL store each material match's live challenge ID or history
+entry ID, fingerprint type, score, threshold, and decision reason.
 
 Corpus persistence SHALL include:
 
@@ -25,7 +26,8 @@ Corpus persistence SHALL include:
 - immutable `corpus_batch_members` binding BuildAttempt, DesignEvidence,
   ArtifactObservation, and fingerprint versions;
 - member and aggregate `corpus_decisions`;
-- pairwise `corpus_matches`;
+- pairwise `corpus_matches` that can reference either live batch/history
+  candidates or retained published/retired history entries;
 - separate `observation_review_decisions` and `corpus_review_decisions`;
 - append-only `corpus_history_entries` containing the minimal governed
   signatures/fingerprints needed to detect recurrence after operational
@@ -55,10 +57,11 @@ by that projection.
 - **THEN** the minimal corpus history entry remains available for duplicate
   comparison
 
-### Requirement: Corpus gate returns passed, review_required, or blocked
+### Requirement: Corpus gate returns member and aggregate decisions
 
-The corpus gate SHALL return exactly one decision:
-`passed`, `review_required`, or `blocked`.
+The corpus gate SHALL return one decision per member plus one aggregate batch
+decision. The aggregate batch decision SHALL be exactly one of `passed`,
+`review_required`, or `blocked`.
 
 Default hard blocks:
 

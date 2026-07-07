@@ -20,6 +20,15 @@ mutating audit-significant results in place. Current/live rows SHALL be
 identified by explicit state or current-reference fields plus database
 constraints.
 
+Published or retired release provenance SHALL survive normal operational
+deletion even when mutable request/task/build rows are removed. Persistence
+SHALL retain or project the minimal `corpus_history_entries`, accepted member or
+aggregate review provenance, and blocking/acceptance reasons needed to explain
+why the released/retired corpus was admitted. Foreign-key cascades SHALL NOT be
+the only copy of that release audit trail; if mutable rows are deleted, the
+service must detach, project, or otherwise preserve the retained governance
+history before commit.
+
 `design_profile_reservations` SHALL include nullable `occupancy_scope` and
 `exclusive_signature_key` columns. Active exclusive reservations SHALL be unique
 by `(policy_version, occupancy_scope, exclusive_signature_key)` through a

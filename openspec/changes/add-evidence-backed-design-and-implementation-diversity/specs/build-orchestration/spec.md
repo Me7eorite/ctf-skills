@@ -19,10 +19,10 @@ pre-build difficulty review. When they fail, the system SHALL NOT record a
 difficulty review, supersede the current draft, requeue the task, or otherwise
 invoke difficulty-review retry behavior. Difficulty review MAY run only after a
 live committed DesignEvidence row and category-valid build contract are
-available. A later difficulty-review failure MAY request a new Design revision,
-but SHALL NOT mutate a committed DesignEvidence/build contract in place, SHALL
-NOT directly requeue the task, and SHALL NOT bypass the `draft -> queued`
-plan-review checkpoint.
+available. A later difficulty-review failure SHALL request a new Design
+revision rather than mutating a committed DesignEvidence/build contract in
+place, SHALL NOT directly requeue the task, and SHALL NOT bypass the `draft ->
+queued` plan-review checkpoint.
 
 Governed fields SHALL come from the committed contract. The renderer SHALL NOT
 default missing governed language/runtime, artifact format, interaction,
@@ -177,3 +177,64 @@ immutable history and SHALL NOT change the revised task's state.
 - **WHEN** reconciliation runs
 - **THEN** the E1 attempt remains succeeded as history
 - **AND** T remains draft rather than returning to built
+
+### Requirement: BuildAttempt detail exposes validation and corpus governance
+
+The BuildAttempt detail API SHALL expose the attempt's bound
+`design_evidence_id`, contract hash, artifact-manifest hash, current
+ArtifactObservation, observation review provenance, corpus membership,
+member corpus decision, aggregate batch decision, corpus review provenance, and
+delivery eligibility. The response SHALL expose raw stored decisions separately
+from effective layer-local acceptance:
+
+- validation raw state is the current ArtifactObservation status;
+- validation effective acceptance is true only for `passed`, or
+  `inconclusive` with an allowed observation review scoped to build success;
+- corpus raw state is the stored member decision;
+- corpus effective acceptance is true only for `passed`, or
+  `review_required` with an allowed corpus review;
+- delivery eligibility also requires the selected batch aggregate decision to
+  be `passed` and no non-overrideable rule failure.
+
+Because a BuildAttempt may appear in more than one corpus batch over its
+lifecycle, delivery eligibility SHALL be computed only for an explicit
+`corpus_batch_id` selected by the caller or release workflow. If no batch is
+selected, the detail API SHALL list available memberships and raw/effective
+states, but SHALL NOT infer delivery eligibility from the latest-created,
+latest-evaluated, or only visible batch.
+
+Observation review and corpus review SHALL remain separate fields. A review in
+one layer SHALL NOT imply acceptance in the other layer. Older observations and
+older sibling attempts SHALL remain visible as history but SHALL NOT replace
+the current bound observation used for governed success.
+
+#### Scenario: Detail separates raw review from effective acceptance
+
+- **GIVEN** a BuildAttempt has a current ArtifactObservation with
+  `status = inconclusive`
+- **AND** an allowed observation review exists for build success
+- **AND** its corpus member decision is stored as `review_required` with an
+  allowed corpus review
+- **WHEN** `GET /api/build-attempts/{id}` is called
+- **THEN** the response reports the raw observation status as `inconclusive`
+- **AND** validation effective acceptance is true with review provenance
+- **AND** the raw corpus member decision remains `review_required`
+- **AND** corpus effective acceptance is true with separate corpus review
+  provenance
+
+#### Scenario: Member approval cannot override aggregate block
+
+- **GIVEN** a BuildAttempt's member corpus decision has an allowed approval
+- **AND** the selected batch aggregate decision is `blocked`
+- **WHEN** the BuildAttempt detail API computes delivery eligibility
+- **THEN** delivery eligibility is false
+- **AND** the response includes the aggregate blocking reason
+
+#### Scenario: Detail without selected batch does not infer eligibility
+
+- **GIVEN** a BuildAttempt belongs to two corpus batches
+- **WHEN** `GET /api/build-attempts/{id}` is called without a selected
+  `corpus_batch_id`
+- **THEN** the response lists both memberships and their raw/effective states
+- **AND** production delivery eligibility is reported as not computed or false
+- **AND** the API does not choose a batch by creation time or evaluation status

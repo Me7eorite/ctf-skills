@@ -121,6 +121,17 @@ class CorpusRepository:
         ).all()
         return [_member(row) for row in rows]
 
+    def list_members_for_build_attempt(
+        self,
+        build_attempt_id: UUID,
+    ) -> list[dto.CorpusBatchMember]:
+        rows = self.session.scalars(
+            sa.select(model.CorpusBatchMember)
+            .where(model.CorpusBatchMember.build_attempt_id == build_attempt_id)
+            .order_by(model.CorpusBatchMember.created_at, model.CorpusBatchMember.id)
+        ).all()
+        return [_member(row) for row in rows]
+
     def list_batch_comparison_targets(
         self,
         *,
