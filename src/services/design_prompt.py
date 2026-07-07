@@ -331,15 +331,29 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                             "runtime_language": {
                                 "type": "string",
                                 "description": (
-                                    "Required for web. One of python, node, php, "
-                                    "java, go, rust; do not default to python."
+                                    "Required for web runtime selection; also "
+                                    "accepted for pwn native services. Web values: "
+                                    "python, node, php, java, go, rust. Pwn values: "
+                                    "c, cpp, rust, go, asm or pwn/native. Do not "
+                                    "default to python."
                                 ),
                             },
                             "runtime_profile": {
                                 "type": "string",
                                 "description": (
                                     "Optional runtime profile such as default, "
-                                    "jar, or tomcat."
+                                    "jar, tomcat, binary, kernel, or xinetd."
+                                ),
+                            },
+                            "service_user": {
+                                "type": "string",
+                                "description": (
+                                    "Required for node/go/rust/java jar and pwn "
+                                    "default/native/binary/kernel services. "
+                                    "For pwn default/native/binary/kernel, set "
+                                    "exactly `ctf`; xinetd launchers may use "
+                                    "`root` or `xinetd`; PHP may use `www-data`, "
+                                    "`apache`, or `ctf`; Tomcat uses `tomcat`."
                                 ),
                             },
                             "components": {
@@ -388,7 +402,10 @@ def _render_output_contract(task: DesignTask, *, governed: bool = False) -> str:
             "`deploy/src/Main.java` or `deploy/src/src/main/java/...` plus a "
             "build file; Tomcat `deploy/src/src/main/webapp/WEB-INF/web.xml` "
             "plus a Servlet/JSP; Rust `deploy/src/Cargo.toml` plus "
-            "`deploy/src/src/main.rs` or `deploy/src/main.rs`."
+            "`deploy/src/src/main.rs` or `deploy/src/main.rs`. Declare "
+            "`implementation_plan.service_user`: Node/Go/Rust/Java jar use "
+            "`ctf`; PHP may use `www-data`, `apache`, or `ctf`; Tomcat uses "
+            "`tomcat`."
         )
     elif task.category == "pwn":
         container_artifacts_hint = (
@@ -397,9 +414,16 @@ def _render_output_contract(task: DesignTask, *, governed: bool = False) -> str:
             "`deploy/_files/start.sh`, `deploy/_files/ctf.xinetd`, and "
             "native binary service artifacts. "
             "Use diverse challenge-specific names under `deploy/src/` or "
-            "`src/`, such as `deploy/src/vuln.c`, `deploy/src/menu_service.cpp`, "
-            "`deploy/src/heap_lab.c`, `deploy/src/Makefile`, or "
-            "`deploy/src/bin/challenge`. If `implementation_plan.runtime_profile` "
+            "`src/`. A small multi-file project is valid: list every planned "
+            "source/build artifact such as `deploy/src/src/main.c`, "
+            "`deploy/src/lib/menu.c`, `deploy/src/include/menu.h`, "
+            "`deploy/src/Makefile`, or `deploy/src/bin/challenge`; it is not "
+            "limited to a single `deploy/src/vuln.c`. For the "
+            "default/native/binary pwn "
+            "runtime, `implementation_plan.service_user` MUST be exactly `ctf` "
+            "or validation will reject the design with "
+            "`runtime (pwn/default) artifact requires service_user=ctf`. "
+            "If `implementation_plan.runtime_profile` "
             "is `xinetd`, or `implementation_plan.service_model` mentions "
             "xinetd/chroot/socket, `deploy/_files/ctf.xinetd` is REQUIRED in "
             "`artifacts` or validation will reject the design with "

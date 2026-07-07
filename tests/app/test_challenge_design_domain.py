@@ -547,6 +547,36 @@ def test_validate_design_payload_accepts_cpp_pwn_source_variant_without_app_py()
     assert result.challenge["language"] == "cpp"
 
 
+def test_validate_design_payload_accepts_pwn_multifile_source_project():
+    payload = _pwn_payload(
+        artifacts=[
+            "README.md",
+            "metadata.json",
+            "validate.sh",
+            "deploy/Dockerfile",
+            "deploy/docker-compose.yml",
+            "deploy/src/src/main.c",
+            "deploy/src/lib/menu.c",
+            "deploy/src/include/menu.h",
+            "deploy/src/Makefile",
+            "deploy/_files/start.sh",
+            "writenup/wp.md",
+            "writenup/exp.py",
+        ],
+        implementation_plan={
+            "runtime": "debian:bookworm-slim",
+            "service_model": "socat TCP listener launching compiled ELF",
+            "service_user": "ctf",
+            "runtime_language": "c",
+        },
+    )
+
+    result = validate_design_payload(payload, _pwn_task())
+
+    assert "deploy/src/src/main.c" in result.challenge["artifacts"]
+    assert "deploy/src/lib/menu.c" in result.challenge["artifacts"]
+
+
 def test_validate_design_payload_accepts_pwn_xinetd_launcher_artifact():
     payload = _pwn_payload(
         artifacts=[
