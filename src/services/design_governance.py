@@ -236,14 +236,10 @@ def validate_design_evidence_output(
         raise DesignGovernanceError("design_evidence must cite at least one designable finding")
 
     claims = evidence.get("claims")
-    if not isinstance(claims, list) or not claims:
-        raise DesignGovernanceError("design_evidence.claims must be a non-empty array")
-    if any(not isinstance(item, str) or not item.strip() for item in claims):
-        raise DesignGovernanceError("design_evidence.claims must contain non-empty strings")
+    _require_present_non_empty(claims, "design_evidence.claims")
 
     distinctness_claim = challenge.get("distinctness_claim")
-    if not isinstance(distinctness_claim, str) or not distinctness_claim.strip():
-        raise DesignGovernanceError("distinctness_claim must be a non-empty string")
+    _require_present_non_empty(distinctness_claim, "distinctness_claim")
 
     compared_ids = _string_list(
         challenge.get("compared_challenge_ids"),
@@ -270,7 +266,7 @@ def validate_design_evidence_output(
         "research_finding_ids": tuple(finding_ids),
         "profile": profile,
         "profile_signature": signatures.combined_profile_signature,
-        "distinctness_claim": distinctness_claim.strip(),
+        "distinctness_claim": distinctness_claim,
         "compared_challenge_ids": tuple(compared_ids),
         "evidence": evidence,
         "build_contract": build_contract,
@@ -297,60 +293,15 @@ def validate_build_contract(
             raise DesignGovernanceError(f"build_contract.{field} is required")
     if contract.get("required_profile") != required_profile:
         raise DesignGovernanceError("build_contract.required_profile must match governed_profile")
-    _string_list(contract.get("required_player_actions"), "build_contract.required_player_actions")
-    _string_list(
-        contract.get("required_components"),
-        "build_contract.required_components",
-        allow_empty=True,
-    )
-    _string_list(
-        contract.get("allowed_implementation_freedom"),
-        "build_contract.allowed_implementation_freedom",
-        allow_empty=True,
-    )
-
-    forbidden_shortcuts = _list_of_mappings(
-        contract.get("forbidden_shortcuts"),
-        "build_contract.forbidden_shortcuts",
-        allow_empty=True,
-    )
-    acceptance_tests = _list_of_mappings(
-        contract.get("acceptance_tests"),
-        "build_contract.acceptance_tests",
-        allow_empty=True,
-    )
-    for harness in (*forbidden_shortcuts, *acceptance_tests):
-        _validate_harness_shape(harness)
-
-    asset_flow = contract.get("required_asset_flow")
-    if not isinstance(asset_flow, list) or not asset_flow:
-        raise DesignGovernanceError("build_contract.required_asset_flow must be a non-empty array")
-    seen_stage_ids: set[str] = set()
-    for stage in asset_flow:
-        if not isinstance(stage, Mapping):
-            raise DesignGovernanceError("required_asset_flow entries must be objects")
-        stage_id = stage.get("stage_id")
-        if not isinstance(stage_id, str) or not stage_id.strip():
-            raise DesignGovernanceError("required_asset_flow.stage_id is required")
-        if stage_id in seen_stage_ids:
-            raise DesignGovernanceError("required_asset_flow.stage_id values must be unique")
-        seen_stage_ids.add(stage_id)
-        produced = stage.get("produced_asset_or_capability")
-        if not isinstance(produced, str) or not produced.strip():
-            raise DesignGovernanceError(
-                "required_asset_flow.produced_asset_or_capability is required"
-            )
-        _validate_harness_shape(
-            _mapping(stage.get("verification_harness"), "verification_harness")
-        )
-        _validate_harness_shape(
-            _mapping(stage.get("dependency_harness"), "dependency_harness")
-        )
-
-
-def _validate_harness_shape(payload: Mapping[str, Any]) -> None:
-    if not payload:
-        raise DesignGovernanceError("build contract harness must be a non-empty object")
+    for field in (
+        "required_player_actions",
+        "required_components",
+        "required_asset_flow",
+        "forbidden_shortcuts",
+        "acceptance_tests",
+        "allowed_implementation_freedom",
+    ):
+        _require_present_non_empty(contract.get(field), f"build_contract.{field}")
 
 
 def _rank_ledger_entries(
@@ -484,6 +435,15 @@ def _list_of_mappings(
             "no concrete harness to declare."
         )
     return tuple(value)
+
+
+def _require_present_non_empty(value: Any, field: str) -> None:
+    if value is None:
+        raise DesignGovernanceError(f"{field} is required")
+    if isinstance(value, str) and not value.strip():
+        raise DesignGovernanceError(f"{field} must be non-empty")
+    if isinstance(value, (list, tuple, dict, set)) and not value:
+        raise DesignGovernanceError(f"{field} must be non-empty")
 
 
 def _mapping(value: Any, field: str) -> dict[str, Any]:

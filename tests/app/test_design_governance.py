@@ -109,7 +109,7 @@ def _contract(profile: dict[str, object]) -> dict[str, object]:
         "fixture_ids": ["admin-password"],
         "required_profile": profile,
         "required_player_actions": ["payload_injection"],
-        "required_components": [],
+        "required_components": ["primary-service"],
         "required_asset_flow": [
             {
                 "stage_id": "recover-password",
@@ -133,8 +133,8 @@ def _contract(profile: dict[str, object]) -> dict[str, object]:
                 "assertion": "stdout_not_contains_flag",
             }
         ],
-        "acceptance_tests": [],
-        "allowed_implementation_freedom": [],
+        "acceptance_tests": ["solver should eventually pass"],
+        "allowed_implementation_freedom": ["file_names"],
     }
 
 
@@ -242,26 +242,32 @@ def test_accepts_harness_objects_without_quality_validation() -> None:
     )
 
 
-def test_rejects_forbidden_shortcut_string_entries() -> None:
+def test_accepts_non_empty_contract_fields_without_type_validation() -> None:
     profile = _profile()
     reservation = _reservation(profile)
     finding = _finding()
     challenge = _challenge(reservation, finding)
-    challenge["build_contract"]["forbidden_shortcuts"] = ["no direct flag read"]
+    challenge["design_evidence"]["claims"] = "research-backed claim"
+    challenge["distinctness_claim"] = ["distinctness noted"]
+    challenge["build_contract"]["required_player_actions"] = "payload_injection"
+    challenge["build_contract"]["required_components"] = "primary-service"
+    challenge["build_contract"]["required_asset_flow"] = "recover-password"
+    challenge["build_contract"]["forbidden_shortcuts"] = "no direct flag read"
+    challenge["build_contract"]["acceptance_tests"] = {"intent": "solver pass"}
+    challenge["build_contract"]["allowed_implementation_freedom"] = {
+        "intent": "builder may choose names"
+    }
 
-    with pytest.raises(DesignGovernanceError) as exc_info:
-        validate_design_evidence_output(
-            challenge=challenge,
-            design_task=_task(reservation),
-            reservation=reservation,
-            findings=[finding],
-            ledger_snapshot=_snapshot(reservation),
-        )
-
-    assert "build_contract.forbidden_shortcuts entries must be harness objects, not strings" in str(
-        exc_info.value
+    evidence = validate_design_evidence_output(
+        challenge=challenge,
+        design_task=_task(reservation),
+        reservation=reservation,
+        findings=[finding],
+        ledger_snapshot=_snapshot(reservation),
     )
-    assert "Use [] instead of placeholder text" in str(exc_info.value)
+
+    assert evidence["distinctness_claim"] == ["distinctness noted"]
+    assert evidence["build_contract"]["forbidden_shortcuts"] == "no direct flag read"
 
 
 def test_accepts_unknown_harness_kind_as_design_intent() -> None:
@@ -290,45 +296,45 @@ def test_accepts_unknown_harness_kind_as_design_intent() -> None:
     )
 
 
-def test_accepts_empty_forbidden_shortcuts_and_allowed_freedom_arrays() -> None:
-    profile = _profile()
-    reservation = _reservation(profile)
-    finding = _finding()
-    challenge = _challenge(reservation, finding)
-    challenge["build_contract"]["forbidden_shortcuts"] = []
-    challenge["build_contract"]["allowed_implementation_freedom"] = []
-
-    evidence = validate_design_evidence_output(
-        challenge=challenge,
-        design_task=_task(reservation),
-        reservation=reservation,
-        findings=[finding],
-        ledger_snapshot=_snapshot(reservation),
-    )
-
-    assert evidence["build_contract"]["forbidden_shortcuts"] == []
-    assert evidence["build_contract"]["allowed_implementation_freedom"] == []
-
-
 @pytest.mark.parametrize(
-    ("bad_value", "message"),
+    ("field", "empty_value"),
     [
-        ("builder may choose labels", "must be a non-empty array"),
-        ([{"note": "builder may choose labels"}], "must contain non-empty strings"),
-        ([""], "must contain non-empty strings"),
+        ("required_player_actions", ""),
+        ("required_components", []),
+        ("required_asset_flow", {}),
+        ("forbidden_shortcuts", []),
+        ("acceptance_tests", {}),
+        ("allowed_implementation_freedom", ""),
     ],
 )
-def test_rejects_allowed_implementation_freedom_bad_shapes(
-    bad_value: object,
-    message: str,
+def test_rejects_empty_build_contract_fields(
+    field: str,
+    empty_value: object,
 ) -> None:
     profile = _profile()
     reservation = _reservation(profile)
     finding = _finding()
     challenge = _challenge(reservation, finding)
-    challenge["build_contract"]["allowed_implementation_freedom"] = bad_value
+    challenge["build_contract"][field] = empty_value
 
-    with pytest.raises(DesignGovernanceError, match=message):
+    with pytest.raises(DesignGovernanceError, match=f"build_contract.{field}"):
+        validate_design_evidence_output(
+            challenge=challenge,
+            design_task=_task(reservation),
+            reservation=reservation,
+            findings=[finding],
+            ledger_snapshot=_snapshot(reservation),
+        )
+
+
+def test_rejects_empty_design_evidence_claims() -> None:
+    profile = _profile()
+    reservation = _reservation(profile)
+    finding = _finding()
+    challenge = _challenge(reservation, finding)
+    challenge["design_evidence"]["claims"] = []
+
+    with pytest.raises(DesignGovernanceError, match="design_evidence.claims"):
         validate_design_evidence_output(
             challenge=challenge,
             design_task=_task(reservation),
