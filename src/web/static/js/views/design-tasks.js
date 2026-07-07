@@ -1005,6 +1005,7 @@ function renderDetail(root) {
             <div><span>端口</span><strong>${task.port ? escapeHtml(task.port) : "无需端口"}</strong></div>
             <div class="dt-brief-wide"><span>场景描述</span><p>${escapeHtml(task.scenario || "未填写场景描述")}</p></div>
             <div class="dt-brief-wide"><span>运行约束</span>${renderConstraintChips(task.constraints)}</div>
+            <div class="dt-brief-wide"><span>多样性诊断</span>${renderDiversityFlagChips(task.diversity_flags)}</div>
           </div>
         </section>
 
@@ -1157,6 +1158,15 @@ function renderDetailPrimaryAction(task, isDesigning, isBuilding) {
 function renderConstraintChips(constraints) {
   const entries = Object.entries(constraints || {});
   if (!entries.length) return `<p>未设置额外约束</p>`;
+  return `<div class="dt-chip-list">${entries.map(([key, value]) => `<span>${escapeHtml(key)}：${escapeHtml(typeof value === "object" ? JSON.stringify(value) : value)}</span>`).join("")}</div>`;
+}
+
+function renderDiversityFlagChips(flags) {
+  const entries = Object.entries(flags || {}).filter(([key, value]) => {
+    if (key === "advisory_mechanism_vocabulary") return false;
+    return value !== null && value !== undefined && value !== "";
+  });
+  if (!entries.length) return `<p>未记录</p>`;
   return `<div class="dt-chip-list">${entries.map(([key, value]) => `<span>${escapeHtml(key)}：${escapeHtml(typeof value === "object" ? JSON.stringify(value) : value)}</span>`).join("")}</div>`;
 }
 

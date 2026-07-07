@@ -457,9 +457,11 @@ PWN_CANONICAL_SUB_TECHNIQUE_ALIASES: Mapping[str, str] = {
     "one_gadget": "ret2libc",
     "ret2csu": "ret2csu",
     "ret2csu flow": "ret2csu",
+    "ret2csu gadget part 1": "ret2csu",
     "ret2dlresolve": "ret2dlresolve",
     "ret2dlresolve fake relocation": "ret2dlresolve",
     "ret2dlresolve with stack pivot": "ret2dlresolve",
+    "dl runtime resolve exploitation": "ret2dlresolve",
     "stack pivot": "stack_pivot",
     "stack pivot with leave ret gadget": "stack_pivot",
     "partial overwrite for pivot": "stack_pivot",
@@ -704,15 +706,30 @@ def validate_profile(
         for field, allowed in schema.fields.items():
             value = raw_axis.get(field)
             if axis_name == "semantic" and field == "sub_technique":
-                normalized = _coerce_sub_technique(
-                    _normalize_semantic_value(str(value or "")),
-                    allowed,
-                    family=str(raw_axis.get("family", "")),
-                    category=taxonomy.category,
-                )
+                raw_normalized = _normalize_semantic_value(str(value or ""))
+                if taxonomy.category == "pwn":
+                    normalized_allowed = {
+                        _normalize_semantic_value(item): item for item in allowed
+                    }
+                    normalized = (
+                        str(value)
+                        if isinstance(value, str) and value in allowed
+                        else normalized_allowed.get(raw_normalized, "")
+                    )
+                else:
+                    normalized = _coerce_sub_technique(
+                        raw_normalized,
+                        allowed,
+                        family=str(raw_axis.get("family", "")),
+                        category=taxonomy.category,
+                    )
                 if not normalized:
                     raise ProfileTaxonomyError(
                         f"profile {axis_name}.{field}={value!r} must not be empty"
+                    )
+                if taxonomy.category == "pwn" and normalized not in allowed:
+                    raise ProfileTaxonomyError(
+                        f"profile {axis_name}.{field}={value!r} is not in closed vocabulary"
                     )
                 axis_values[field] = normalized
                 continue
@@ -838,7 +855,7 @@ def profile_capacity_check(
         if taxonomy.category == "pwn":
             canonicalization = canonicalize_pwn_semantic_assignment(raw_semantic)
             if not canonicalization.supported or canonicalization.semantic is None:
-                return _unsupported_profile_semantic(
+                unsupported = _unsupported_profile_semantic(
                     taxonomy,
                     {
                         "family": canonicalization.raw_family,
@@ -847,6 +864,17 @@ def profile_capacity_check(
                     target_count=target_count,
                     allocated_count=len(allocations),
                 )
+                if unsupported is not None:
+                    diagnostics = dict(unsupported.diagnostics)
+                    diagnostics.update(canonicalization.as_mapping())
+                    return ProfileCapacityResult(
+                        can_allocate=unsupported.can_allocate,
+                        requested_count=unsupported.requested_count,
+                        available_count=unsupported.available_count,
+                        allocations=unsupported.allocations,
+                        diagnostics=diagnostics,
+                    )
+                return unsupported
             semantic = canonicalization.semantic
         else:
             semantic = normalize_semantic_assignment(taxonomy, raw_semantic)
@@ -923,8 +951,9 @@ def canonicalize_pwn_semantic_assignment(
     semantic: Mapping[str, str],
 ) -> PwnSemanticCanonicalization:
     raw_family = _normalize_family_value(semantic.get("family", ""))
-    raw_sub_technique = _normalize_semantic_value(str(semantic.get("sub_technique", "")))
-    if not raw_sub_technique:
+    raw_sub_technique = str(semantic.get("sub_technique", "")).strip()
+    normalized_sub_technique = _normalize_semantic_value(raw_sub_technique)
+    if not normalized_sub_technique:
         return PwnSemanticCanonicalization(
             raw_family=raw_family or "other",
             raw_sub_technique="",
@@ -934,16 +963,21 @@ def canonicalize_pwn_semantic_assignment(
             semantic=None,
         )
 
-    canonical_sub_technique = _coerce_pwn_canonical_sub_technique(raw_sub_technique)
+    canonical_sub_technique = _coerce_pwn_canonical_sub_technique(
+        raw_sub_technique,
+        normalized_sub_technique=normalized_sub_technique,
+    )
     if raw_family == "integer_oob" and any(
-        token in raw_sub_technique for token in ("bss", "global", "variable", "write")
+        token in normalized_sub_technique
+        for token in ("bss", "global", "variable", "write")
     ):
         canonical_sub_technique = "global_bss_write"
     canonical_family = PWN_CANONICAL_SUB_TECHNIQUE_FAMILY.get(canonical_sub_technique)
     source: Literal["exact", "alias", "family_fallback", "unsupported"] = "unsupported"
     if (
-        canonical_sub_technique == raw_sub_technique
-        and canonical_sub_technique in PWN_TAXONOMY.semantic.fields["sub_technique"]
+        canonical_sub_technique in PWN_TAXONOMY.semantic.fields["sub_technique"]
+        and normalized_sub_technique
+        == _normalize_semantic_value(canonical_sub_technique)
     ):
         source = "exact"
     elif canonical_sub_technique in PWN_TAXONOMY.semantic.fields["sub_technique"]:
@@ -975,10 +1009,11 @@ def canonicalize_pwn_semantic_assignment(
             semantic=None,
         )
 
-    semantic_payload = normalize_semantic_assignment(
-        PWN_TAXONOMY,
-        {"family": canonical_family, "sub_technique": canonical_sub_technique},
-    )
+    semantic_payload = {
+        "family": canonical_family,
+        "sub_technique": canonical_sub_technique,
+    }
+    _validate_axis_values(PWN_TAXONOMY, "semantic", semantic_payload)
     return PwnSemanticCanonicalization(
         raw_family=raw_family or "other",
         raw_sub_technique=raw_sub_technique,
@@ -1053,6 +1088,29 @@ def normalize_semantic_assignment(
     if family not in taxonomy.semantic.fields["family"]:
         family = "other" if "other" in taxonomy.semantic.fields["family"] else family
 
+    if taxonomy.category == "pwn":
+        canonicalization = canonicalize_pwn_semantic_assignment(
+            {
+                "family": family,
+                "sub_technique": str(semantic.get("sub_technique", "")),
+            }
+        )
+        if canonicalization.semantic is not None:
+            if canonicalization.semantic["sub_technique"] != canonicalization.raw_sub_technique:
+                LOGGER.warning(
+                    "normalized profile semantic.sub_technique raw=%r normalized=%r category=%s family=%s source=%s",
+                    semantic.get("sub_technique", ""),
+                    canonicalization.semantic["sub_technique"],
+                    taxonomy.category,
+                    canonicalization.semantic["family"],
+                    canonicalization.canonicalization_source,
+                )
+            return dict(canonicalization.semantic)
+        return {
+            "family": canonicalization.raw_family or "other",
+            "sub_technique": canonicalization.raw_sub_technique,
+        }
+
     raw_sub = _normalize_semantic_value(str(semantic.get("sub_technique", "")))
     allowed = taxonomy.semantic.fields["sub_technique"]
     if raw_sub in allowed:
@@ -1071,43 +1129,26 @@ def normalize_semantic_assignment(
             taxonomy.category,
             family,
         )
-    if taxonomy.category == "pwn":
-        sub_technique = _normalize_pwn_semantic_sub_technique(family, sub_technique, allowed)
     return {"family": family, "sub_technique": sub_technique}
 
 
-def _coerce_pwn_canonical_sub_technique(value: str) -> str:
+def _coerce_pwn_canonical_sub_technique(
+    value: str,
+    *,
+    normalized_sub_technique: str,
+) -> str:
     if value in PWN_TAXONOMY.semantic.fields["sub_technique"]:
         return value
-    alias = PWN_CANONICAL_SUB_TECHNIQUE_ALIASES.get(value)
+    normalized_allowed = {
+        _normalize_semantic_value(item): item
+        for item in PWN_TAXONOMY.semantic.fields["sub_technique"]
+    }
+    if normalized_sub_technique in normalized_allowed:
+        return normalized_allowed[normalized_sub_technique]
+    alias = PWN_CANONICAL_SUB_TECHNIQUE_ALIASES.get(normalized_sub_technique)
     if alias is not None:
         return alias
     return value
-
-
-def _normalize_pwn_semantic_sub_technique(
-    family: str,
-    sub_technique: str,
-    allowed: tuple[str, ...],
-) -> str:
-    if sub_technique in allowed:
-        return sub_technique
-    if family == "integer_oob" and any(
-        token in sub_technique for token in ("bss", "global", "variable", "write")
-    ):
-        return "global_bss_write"
-    return sub_technique
-
-
-def _pwn_stack_supports_freeform(value: str) -> bool:
-    return any(
-        token in value
-        for token in ("ret2", "overflow", "canary", "rop", "libc", "pivot")
-    )
-
-
-def _pwn_integer_oob_supports_freeform(value: str) -> bool:
-    return any(token in value for token in ("bss", "global", "variable", "write", "oob", "overflow"))
 
 
 def _first_eligible_candidate(

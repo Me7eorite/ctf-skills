@@ -255,6 +255,34 @@ def test_rejects_forbidden_shortcut_string_entries() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("bad_value", "message"),
+    [
+        ("builder may choose labels", "must be a non-empty array"),
+        ([{"note": "builder may choose labels"}], "must contain non-empty strings"),
+        ([""], "must contain non-empty strings"),
+    ],
+)
+def test_rejects_allowed_implementation_freedom_bad_shapes(
+    bad_value: object,
+    message: str,
+) -> None:
+    profile = _profile()
+    reservation = _reservation(profile)
+    finding = _finding()
+    challenge = _challenge(reservation, finding)
+    challenge["build_contract"]["allowed_implementation_freedom"] = bad_value
+
+    with pytest.raises(DesignGovernanceError, match=message):
+        validate_design_evidence_output(
+            challenge=challenge,
+            design_task=_task(reservation),
+            reservation=reservation,
+            findings=[finding],
+            ledger_snapshot=_snapshot(reservation),
+        )
+
+
 def test_rejects_distinctness_claim_without_implementation_axis() -> None:
     profile = _profile()
     reservation = _reservation(profile)

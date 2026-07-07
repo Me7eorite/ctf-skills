@@ -588,6 +588,10 @@ def _governed_output_schema() -> dict[str, Any]:
             },
             "required_components": {
                 "type": "array",
+                "description": (
+                    "Array of non-empty strings. Use [] when there are no "
+                    "required component notes."
+                ),
                 "items": {"type": "string", "minLength": 1},
             },
             "required_asset_flow": {
@@ -613,6 +617,12 @@ def _governed_output_schema() -> dict[str, Any]:
             },
             "allowed_implementation_freedom": {
                 "type": "array",
+                "description": (
+                    "Array of non-empty strings describing implementation "
+                    "choices left to the builder. Use [] when there are no "
+                    "freedoms to declare. Never emit null, a single string, "
+                    "or object entries."
+                ),
                 "items": {"type": "string", "minLength": 1},
             },
         },
@@ -774,6 +784,11 @@ def _render_governed_contract_rules(
             "`build_contract.acceptance_tests` must be arrays of harness "
             "objects, never strings. If there is no concrete harness to add, "
             "use `[]` rather than a string placeholder.",
+            "- `build_contract.required_components` and "
+            "`build_contract.allowed_implementation_freedom` must be arrays "
+            "of non-empty strings. Empty arrays are valid; use `[]` when "
+            "there are no entries. Never emit null, a single string, object "
+            "entries, or empty string placeholders.",
             "- Closed harness kinds/assertions: "
             "`artifact_direct_run` -> `stdout_not_contains_flag` or `must_fail`; "
             "`fixture_assertion` -> `non_empty`, `equals`, or `contains`; "

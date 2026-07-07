@@ -255,6 +255,46 @@ def test_pwn_heap_findings_map_to_supported_reservation_profile(
     )
 
 
+def test_pwn_stack_findings_map_to_ret2libc_reservation_profile(
+    session_factory: SessionFactory,
+):
+    request, _ = _seed(
+        session_factory,
+        target_count=3,
+        distribution={"easy": 3},
+        category="pwn",
+        finding_labels=["ROP chain", "return oriented programming", "libc leak"],
+    )
+    service = DesignTaskPlanningService(session_factory)
+
+    tasks = service.generate_for_request(request.id)
+
+    assert len(tasks) == 3
+    assert {task.primary_technique for task in tasks} == {
+        "ROP chain",
+        "return oriented programming",
+        "libc leak",
+    }
+    assert {task.diversity_flags["sub_technique"] for task in tasks} == {"ret2libc"}
+    assert all(
+        task.diversity_flags["raw_sub_technique"] == task.primary_technique
+        for task in tasks
+    )
+    with session_factory() as session:
+        reservations = list(
+            session.scalars(
+                sa.select(reservation_model.DesignProfileReservation).where(
+                    reservation_model.DesignProfileReservation.generation_request_id
+                    == request.id,
+                    reservation_model.DesignProfileReservation.state == "reserved",
+                )
+            )
+        )
+    assert {
+        row.profile["semantic"]["sub_technique"] for row in reservations
+    } == {"ret2libc"}
+
+
 def test_pwn_family_fallback_handles_unknown_finding_without_failure(
     session_factory: SessionFactory,
 ):
@@ -304,12 +344,11 @@ def test_semantic_assignments_use_real_findings() -> None:
 
     assert {item["family"] for item in assignments} == {"format_string"}
     assert [item["sub_technique"] for item in assignments] == [
-        "64_bit_stack_offset_determination",
-        "got_overwrite_with_n",
-        "format_string_with_stack_pivot",
+        "format_string_got",
+        "format_string_got",
+        "format_string_got",
     ]
-    assert len({item["sub_technique"] for item in assignments}) == 3
-    assert {item["sub_technique"] for item in assignments} != {"format_string_got"}
+    assert {item["sub_technique"] for item in assignments} == {"format_string_got"}
 
 
 def test_generate_reservations_preserve_task_semantic_diversity(
@@ -350,8 +389,20 @@ def test_generate_reservations_preserve_task_semantic_diversity(
         str(row.profile["semantic"]["sub_technique"]) for row in reservations
     ]
     assert len(reservations) == 5
-    assert len(set(subtechniques)) > 1
-    assert set(subtechniques) != {"format_string_got"}
+    assert set(subtechniques) == {"format_string_got", "ret2libc"}
+    assert all(
+        task.diversity_flags["raw_sub_technique"] == task.primary_technique
+        for task in tasks
+    )
+    assert {task.primary_technique for task in tasks}.issubset(
+        {
+            "64-bit stack offset determination",
+            "GOT overwrite with %n",
+            "Format string with stack pivot",
+            "stack canary leak",
+            "byte by byte leak",
+        }
+    )
 
 
 def test_generated_challenge_ids_are_distinct_across_requests(
@@ -1419,6 +1470,25 @@ def test_plan_candidates_is_deterministic_for_diversity_flags():
         (c["task_no"], c["primary_technique"], c["diversity_flags"])
         for c in second
     ]
+
+
+def test_plan_candidates_preserves_pwn_raw_label_while_canonicalizing_flags():
+    findings = [_fake_finding("glibc heap exploitation")]
+    request = _fake_request({"easy": 1}, category="pwn")
+    run = _fake_run()
+
+    [candidate] = planning_module._plan_candidates(request, run, findings)
+
+    assert candidate["primary_technique"] == "glibc heap exploitation"
+    assert candidate["learning_objective"].startswith(
+        "Reproduce glibc heap exploitation"
+    )
+    assert candidate["title"] != "heap_uaf_tcache"
+    assert candidate["diversity_flags"]["family"] == "heap"
+    assert candidate["diversity_flags"]["sub_technique"] == "heap_uaf_tcache"
+    assert candidate["diversity_flags"]["raw_sub_technique"] == "glibc heap exploitation"
+    assert candidate["diversity_flags"]["canonical_sub_technique"] == "heap_uaf_tcache"
+    assert candidate["diversity_flags"]["canonicalization_source"] == "family_fallback"
 
 
 

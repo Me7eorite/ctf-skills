@@ -483,12 +483,12 @@ def test_unsupported_pwn_profile_is_rejected_before_random_solve_allocation() ->
     assert exc_info.value.code == "unsupported_pwn_profile"
 
 
-def test_pwn_format_string_freeform_subtechniques_slug_instead_of_collapsing() -> None:
+def test_pwn_normalize_semantic_uses_family_fallback_for_format_string_freeform() -> None:
     cases = {
-        "64 bit stack offset determination": "64_bit_stack_offset_determination",
-        "GOT overwrite with %n": "got_overwrite_with_n",
-        "Format string with stack pivot": "format_string_with_stack_pivot",
-        "byte by byte leak": "byte_by_byte_leak",
+        "64 bit stack offset determination": "format_string_got",
+        "GOT overwrite with %n": "format_string_got",
+        "Format string with stack pivot": "format_string_got",
+        "byte by byte leak": "format_string_got",
     }
 
     normalized = [
@@ -500,7 +500,7 @@ def test_pwn_format_string_freeform_subtechniques_slug_instead_of_collapsing() -
     ]
 
     assert [item["sub_technique"] for item in normalized] == list(cases.values())
-    assert "format_string_got" not in {item["sub_technique"] for item in normalized}
+    assert {item["family"] for item in normalized} == {"format_string"}
 
 
 def test_profile_capacity_preserves_pwn_format_string_freeform_subtechniques() -> None:

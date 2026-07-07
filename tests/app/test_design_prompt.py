@@ -513,6 +513,10 @@ def test_governed_prompt_spells_out_server_side_contract_rules(tmp_path):
     assert "`artifact_direct_run` -> `stdout_not_contains_flag` or `must_fail`" in prompt
     assert "Harnesses cannot contain `command`, `argv`, `shell`, `path`, `cwd`, or `executable`" in prompt
     assert "`build_contract.forbidden_shortcuts` and `build_contract.acceptance_tests` must be arrays of harness objects" in prompt
+    assert "`build_contract.required_components` and `build_contract.allowed_implementation_freedom` must be arrays of non-empty strings" in prompt
+    assert "Empty arrays are valid; use `[]` when there are no entries" in prompt
+    assert '"allowed_implementation_freedom"' in prompt
+    assert "Never emit null, a single string, or object entries" in prompt
     assert '"buildContractHarness"' in prompt
     assert '"forbidden_shortcuts"' in prompt
     assert '"$ref": "#/$defs/buildContractHarness"' in prompt

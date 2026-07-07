@@ -477,23 +477,17 @@ class DesignTaskPlanningService:
                 }
             }
             if task.category == "pwn":
-                canonicalization = canonicalize_pwn_semantic_assignment(
-                    {
-                        "family": str(candidate["diversity_flags"].get("family") or "other"),
-                        "sub_technique": str(
-                            candidate["diversity_flags"].get("sub_technique") or "unknown"
-                        ),
-                    }
+                flags = dict(candidate["diversity_flags"])
+                _pwn_semantic_for_reservation(
+                    family=str(flags.get("family") or "other"),
+                    raw_sub_technique=str(
+                        flags.get("raw_sub_technique")
+                        or flags.get("sub_technique")
+                        or task.primary_technique
+                    ),
+                    flags=flags,
                 )
-                if canonicalization.semantic is not None:
-                    candidate["diversity_flags"] = {
-                        **candidate["diversity_flags"],
-                        "family": canonicalization.semantic["family"],
-                        "sub_technique": canonicalization.semantic["sub_technique"],
-                        "raw_sub_technique": canonicalization.raw_sub_technique,
-                        "canonical_sub_technique": canonicalization.canonical_sub_technique,
-                        "canonicalization_source": canonicalization.canonicalization_source,
-                    }
+                candidate["diversity_flags"] = flags
             task.status = "draft"
             task.plan_reviewed_at = None
             task.current_design_evidence_id = None
@@ -752,24 +746,16 @@ def _plan_candidates(
             },
         }
         if category == "pwn":
-            canonicalization = canonicalize_pwn_semantic_assignment(
-                {
-                    "family": str(candidate["diversity_flags"].get("family") or "other"),
-                    "sub_technique": str(
-                        candidate["diversity_flags"].get("sub_technique") or "unknown"
-                    ),
-                }
+            flags = candidate["diversity_flags"]
+            _pwn_semantic_for_reservation(
+                family=str(flags.get("family") or "other"),
+                raw_sub_technique=str(
+                    flags.get("raw_sub_technique")
+                    or flags.get("sub_technique")
+                    or primary.label
+                ),
+                flags=flags,
             )
-            if canonicalization.semantic is not None:
-                candidate["diversity_flags"].update(
-                    {
-                        "family": canonicalization.semantic["family"],
-                        "sub_technique": canonicalization.semantic["sub_technique"],
-                        "raw_sub_technique": canonicalization.raw_sub_technique,
-                        "canonical_sub_technique": canonicalization.canonical_sub_technique,
-                        "canonicalization_source": canonicalization.canonicalization_source,
-                    }
-                )
         # Phase 2 (D5=b): for hard/expert tasks the optional Hermes
         # planner can replace the template scenario with a Hermes-locked
         # technique chain. Failure is non-fatal — we keep the template
@@ -831,26 +817,19 @@ def _candidate_for_slot(
     primary = task_findings[0]
     secondaries = task_findings[1:]
     flags = dict(diversity_flags)
-    canonicalization = None
     if category == "pwn":
-        canonicalization = canonicalize_pwn_semantic_assignment(
-            {
-                "family": str(
-                    flags.get("family")
-                    or resolve_family({"label": primary.label}, category=category)
-                ),
-                "sub_technique": str(
-                    flags.get("sub_technique")
-                    or resolve_sub_technique({"label": primary.label})
-                ),
-            }
+        _pwn_semantic_for_reservation(
+            family=str(
+                flags.get("family")
+                or resolve_family({"label": primary.label}, category=category)
+            ),
+            raw_sub_technique=str(
+                flags.get("raw_sub_technique")
+                or flags.get("sub_technique")
+                or primary.label
+            ),
+            flags=flags,
         )
-        if canonicalization.semantic is not None:
-            flags["family"] = canonicalization.semantic["family"]
-            flags["sub_technique"] = canonicalization.semantic["sub_technique"]
-            flags["raw_sub_technique"] = canonicalization.raw_sub_technique
-            flags["canonical_sub_technique"] = canonicalization.canonical_sub_technique
-            flags["canonicalization_source"] = canonicalization.canonicalization_source
     candidate: dict[str, Any] = {
         "task_no": task_no,
         "challenge_id": _challenge_id(category, request.id, task_no),
@@ -1013,14 +992,7 @@ def _allocate_primary_findings(
     if pool_size == 0:
         raise DesignTaskValidationError("_plan_candidates called with no findings")
 
-    metadata = [
-        {
-            "family": resolve_family(finding, category=category),
-            "raw_sub_technique": str(getattr(finding, "label", "")).strip().lower(),
-            "canonical_sub_technique": resolve_sub_technique(finding),
-        }
-        for finding in findings
-    ]
+    metadata = [_finding_semantic_metadata(category, finding) for finding in findings]
     family_counts: Counter[str] = Counter()
     used_subtechniques: set[str] = set()
     recent_families: list[str] = []
@@ -1060,6 +1032,7 @@ def _allocate_primary_findings(
         family = metadata[chosen]["family"]
         raw_sub_technique = metadata[chosen]["raw_sub_technique"]
         canonical_sub_technique = metadata[chosen]["canonical_sub_technique"]
+        canonicalization_source = metadata[chosen].get("canonicalization_source")
         warnings: list[str] = []
         if family_quota_exceeded:
             warnings.append(DIVERSITY_WARNING_FAMILY_QUOTA)
@@ -1076,6 +1049,11 @@ def _allocate_primary_findings(
                     "sub_technique": canonical_sub_technique,
                     "raw_sub_technique": raw_sub_technique,
                     "canonical_sub_technique": canonical_sub_technique,
+                    **(
+                        {"canonicalization_source": canonicalization_source}
+                        if canonicalization_source
+                        else {}
+                    ),
                     "warnings": warnings,
                 },
                 avoid_techniques=frozenset(used_subtechniques),
@@ -1154,6 +1132,14 @@ def _semantic_assignments_for_findings(
     findings: Sequence[research_dto.ResearchFinding],
 ) -> list[dict[str, str]]:
     taxonomy = taxonomy_for_category(category)
+    if category == "pwn":
+        return [
+            _pwn_semantic_for_reservation(
+                family=resolve_family(finding, category=category),
+                raw_sub_technique=_raw_finding_label(finding),
+            )
+            for finding in findings
+        ]
     return [
         _closed_semantic_assignment(
             taxonomy,
@@ -1173,30 +1159,18 @@ def _normalized_candidate_semantic(
 ) -> dict[str, str]:
     flags = dict(candidate.get("diversity_flags") or {})
     if category == "pwn":
-        canonicalization = canonicalize_pwn_semantic_assignment(
-            {
-                "family": str(
-                    flags.get("family")
-                    or resolve_family({"label": primary_technique}, category=category)
-                ),
-                "sub_technique": str(
-                    flags.get("sub_technique")
-                    or resolve_sub_technique({"label": primary_technique})
-                ),
-            }
+        semantic = _pwn_semantic_for_reservation(
+            family=str(
+                flags.get("family")
+                or resolve_family({"label": primary_technique}, category=category)
+            ),
+            raw_sub_technique=str(
+                flags.get("raw_sub_technique")
+                or flags.get("sub_technique")
+                or primary_technique
+            ),
+            flags=flags,
         )
-        if canonicalization.semantic is None:
-            semantic = {
-                "family": str(flags.get("family") or "other"),
-                "sub_technique": str(flags.get("sub_technique") or "unknown"),
-            }
-        else:
-            semantic = dict(canonicalization.semantic)
-            flags["family"] = semantic["family"]
-            flags["sub_technique"] = semantic["sub_technique"]
-            flags["raw_sub_technique"] = canonicalization.raw_sub_technique
-            flags["canonical_sub_technique"] = canonicalization.canonical_sub_technique
-            flags["canonicalization_source"] = canonicalization.canonicalization_source
         candidate_flags = candidate.get("diversity_flags")
         if isinstance(candidate_flags, dict):
             candidate_flags.update(flags)
@@ -1238,6 +1212,73 @@ def _closed_semantic_assignment(
             "sub_technique": sub_technique,
         },
     )
+
+
+def _finding_semantic_metadata(
+    category: str,
+    finding: research_dto.ResearchFinding,
+) -> dict[str, str | None]:
+    family = resolve_family(finding, category=category)
+    raw_sub_technique = _raw_finding_label(finding)
+    if category != "pwn":
+        canonical_sub_technique = resolve_sub_technique(finding)
+        return {
+            "family": family,
+            "raw_sub_technique": raw_sub_technique,
+            "canonical_sub_technique": canonical_sub_technique,
+            "canonicalization_source": None,
+        }
+    flags: dict[str, Any] = {}
+    _pwn_semantic_for_reservation(
+        family=family,
+        raw_sub_technique=raw_sub_technique,
+        flags=flags,
+    )
+    return {
+        "family": str(flags.get("family") or family),
+        "raw_sub_technique": str(flags.get("raw_sub_technique") or raw_sub_technique),
+        "canonical_sub_technique": str(
+            flags.get("canonical_sub_technique")
+            or flags.get("sub_technique")
+            or resolve_sub_technique(finding)
+        ),
+        "canonicalization_source": str(flags.get("canonicalization_source") or ""),
+    }
+
+
+def _raw_finding_label(finding: research_dto.ResearchFinding | Mapping[str, Any]) -> str:
+    if isinstance(finding, Mapping):
+        value = finding.get("label")
+    else:
+        value = getattr(finding, "label", None)
+    return str(value or "").strip()
+
+
+def _pwn_semantic_for_reservation(
+    *,
+    family: str,
+    raw_sub_technique: str,
+    flags: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    canonicalization = canonicalize_pwn_semantic_assignment(
+        {
+            "family": family,
+            "sub_technique": raw_sub_technique,
+        }
+    )
+    if flags is not None:
+        flags["raw_sub_technique"] = canonicalization.raw_sub_technique
+        flags["canonical_sub_technique"] = canonicalization.canonical_sub_technique
+        flags["canonicalization_source"] = canonicalization.canonicalization_source
+        if canonicalization.semantic is not None:
+            flags["family"] = canonicalization.semantic["family"]
+            flags["sub_technique"] = canonicalization.semantic["sub_technique"]
+    if canonicalization.semantic is None:
+        return {
+            "family": canonicalization.raw_family or "other",
+            "sub_technique": canonicalization.raw_sub_technique or "unknown",
+        }
+    return dict(canonicalization.semantic)
 
 
 # Per-category advisory mechanism vocabulary. These examples help the model talk
