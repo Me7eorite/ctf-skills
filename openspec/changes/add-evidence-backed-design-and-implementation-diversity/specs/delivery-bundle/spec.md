@@ -12,8 +12,8 @@ following are true:
 - the challenge belongs to the explicitly requested corpus-admission batch;
 - its member decision is corpus-accepted (`passed`, or `review_required`
   with a valid recorded corpus approval);
-- the aggregate batch decision is `passed` after accounting for allowed member
-  reviews;
+- the aggregate batch decision is `passed` after the corpus service accounts
+  for allowed member reviews without rewriting raw member decisions;
 - no non-overrideable corpus rule failed.
 
 Observation review and corpus review are independent. Passing one SHALL NOT
@@ -46,8 +46,19 @@ SHALL NOT satisfy or publish through the production release gate.
 - **GIVEN** a challenge whose corpus decision is `review_required`
 - **AND** an authorized operator recorded an allowed approval with reason and
   timestamp
+- **AND** the selected corpus batch's aggregate decision is `passed` after
+  accounting for that allowed review
 - **WHEN** production packing runs
 - **THEN** the challenge is eligible if every other delivery requirement passes
+
+#### Scenario: Member review without aggregate pass is not enough
+
+- **GIVEN** a challenge whose member corpus decision has an allowed approval
+- **AND** the selected corpus batch aggregate decision is still
+  `review_required` or `blocked`
+- **WHEN** production packing runs
+- **THEN** the challenge is excluded
+- **AND** the pack operation reports the aggregate corpus decision
 
 #### Scenario: Trial bundle is visibly non-production
 

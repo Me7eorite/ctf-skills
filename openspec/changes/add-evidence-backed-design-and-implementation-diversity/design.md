@@ -534,9 +534,17 @@ pairs.
 Production publication requires an effectively accepted corpus decision:
 `passed`, or `review_required` with an explicit allowed corpus review decision
 recording actor, reason, and timestamp. Review approval does not rewrite the
-stored member decision; the aggregator records the provenance and may treat the
-member as effectively accepted. Overrides cannot bypass exact combined-signature
-duplicates outside the same-task revision lineage or failed validation.
+stored member decision; the aggregator records the provenance and treats that
+member as effectively accepted only for publication eligibility. Overrides
+cannot bypass exact combined-signature duplicates outside the same-task revision
+lineage, failed validation, or any other non-overrideable hard block.
+
+The aggregate batch decision is computed from effective member states, not by
+rewriting member decisions. A reviewed member may remain stored as
+`review_required` while contributing as accepted to the aggregate. The aggregate
+is `blocked` if any member has a non-overrideable block, `review_required` if
+any overrideable review remains unapproved, and `passed` only when every member
+is either stored `passed` or has the required allowed review provenance.
 
 Corpus persistence is explicit:
 
@@ -561,7 +569,8 @@ accepted ArtifactObservation for the validation layer (`passed`, or
 `inconclusive` with an allowed observation review), and whose explicitly
 selected member decision is effectively accepted for the corpus layer
 (`passed`, or `review_required` with an allowed corpus review). The aggregate
-batch decision must be `passed` after accounting for allowed member reviews.
+batch decision must be `passed` after the corpus service accounts for allowed
+member reviews using the aggregate rules above.
 Observation review and corpus review are independent records. Selection by
 `metadata.build_status` alone is no longer sufficient.
 Shadow/trial packing remains available only through explicit mode flags and

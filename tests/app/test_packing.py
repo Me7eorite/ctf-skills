@@ -6,6 +6,7 @@ import zipfile
 from datetime import date
 from pathlib import Path
 from unittest.mock import patch
+from uuid import uuid4
 
 from openpyxl import load_workbook
 
@@ -236,6 +237,49 @@ class PackingTests(unittest.TestCase):
         overview = overview_book.active
         self.assertEqual(overview.max_row, 2)  # header + only re-0001
         self.assertEqual(overview["A2"].value, "re-0001")
+
+    def test_production_pack_requires_explicit_corpus_batch(self):
+        self._challenge("re-0001", "re")
+
+        with self.assertRaisesRegex(PackingError, "corpus_batch_id"):
+            Packer(
+                self.paths,
+                PackerOptions(
+                    skip_docker=True,
+                    generated_on=date(2026, 6, 9),
+                    corpus_mode="production",
+                ),
+            ).pack(self.output)
+
+    def test_production_pack_filters_to_corpus_accepted_members(self):
+        self._challenge("re-0001", "re")
+        self._challenge("re-0002", "re")
+
+        summary = Packer(
+            self.paths,
+            PackerOptions(
+                skip_docker=True,
+                generated_on=date(2026, 6, 9),
+                corpus_mode="production",
+                corpus_batch_id=uuid4(),
+                production_eligible_ids={"re-0002"},
+            ),
+        ).pack(self.output)
+
+        self.assertTrue(summary["production"])
+        self.assertEqual(summary["challenges"], 1)
+        self.assertIn("excluded by corpus production gate", summary["warnings"][0])
+        summary_json = json.loads(
+            (self.output / "bundle-summary.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(summary_json["corpus_mode"], "production")
+        overview_book = load_workbook(
+            self.output / "题库资源" / "ctf-overview.xlsx", read_only=True
+        )
+        self.addCleanup(overview_book.close)
+        overview = overview_book.active
+        self.assertEqual(overview.max_row, 2)
+        self.assertEqual(overview["A2"].value, "re-0002")
 
     def test_non_chinese_writeup_produces_warning(self):
         challenge = self._challenge("re-0001", "re")

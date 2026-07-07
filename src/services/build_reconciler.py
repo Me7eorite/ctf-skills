@@ -27,7 +27,10 @@ from persistence.repositories import (
     ExecutionsRepository,
 )
 from persistence.session import SessionFactory, transaction
-from services.artifact_observation_governance import build_artifact_observation_payload
+from services.artifact_observation_governance import (
+    build_artifact_observation_payload,
+    observation_status_is_accepted,
+)
 from services.build_orchestration_service import BuildOrchestrationService
 
 LOG = logging.getLogger(__name__)
@@ -601,7 +604,9 @@ class BuildReconciler:
                 resulting_challenge_dir=resulting_challenge_dir,
             )
             observation_status = observation.status
-            if row.design_evidence_id is not None and observation.status != "passed":
+            if row.design_evidence_id is not None and not observation_status_is_accepted(
+                observation.status
+            ):
                 status = "failed"
                 error = (
                     "artifact observation "

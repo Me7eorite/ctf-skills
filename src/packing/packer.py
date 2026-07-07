@@ -7,8 +7,11 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
+from core.jsonio import write_json
 from core.paths import ProjectPaths
+from domain.challenge_corpus import CorpusMode
 from packing.archive import _enclosure_members, _tree_members, _write_tools_zip, _write_zip
 from packing.docker import _is_containerized, _save_docker, _should_emit_enclosure
 from packing.errors import PackingError
@@ -87,6 +90,9 @@ class PackerOptions:
     require_docker: bool = False
     generated_on: date | None = None
     include_ids: set[str] | None = None
+    corpus_mode: str = CorpusMode.SHADOW.value
+    corpus_batch_id: UUID | None = None
+    production_eligible_ids: set[str] | None = None
 
 
 class Packer:
@@ -101,11 +107,31 @@ class Packer:
         self.errors.clear()
         if self.options.skip_docker and self.options.require_docker:
             raise PackingError("--skip-docker and --require-docker cannot be combined")
+        if self.options.corpus_mode not in {item.value for item in CorpusMode}:
+            raise PackingError(f"unknown corpus mode: {self.options.corpus_mode}")
+        if (
+            self.options.corpus_mode == CorpusMode.PRODUCTION.value
+            and self.options.corpus_batch_id is None
+        ):
+            raise PackingError("production packing requires explicit corpus_batch_id")
 
         output = (out_dir or self.paths.delivery_bundle).resolve()
         _prepare_output(output)
         directories = _create_layout(output)
         challenges = _selected_challenges(self.paths, self.options.include_ids)
+        production_eligible_ids = self._production_eligible_ids()
+        if production_eligible_ids is not None:
+            before = len(challenges)
+            challenges = [
+                (challenge_dir, metadata)
+                for challenge_dir, metadata in challenges
+                if str(metadata.get("id")) in production_eligible_ids
+            ]
+            excluded = before - len(challenges)
+            if excluded:
+                self.warnings.append(
+                    f"{excluded} challenge(s) excluded by corpus production gate"
+                )
         overview_rows = []
         image_rows = []
         emitted = []
@@ -137,13 +163,38 @@ class Packer:
             IMAGE_HEADERS,
             image_rows,
         )
-        return {
+        summary = {
             "output": str(output),
+            "corpus_mode": self.options.corpus_mode,
+            "corpus_batch_id": str(self.options.corpus_batch_id)
+            if self.options.corpus_batch_id
+            else None,
+            "production": self.options.corpus_mode == CorpusMode.PRODUCTION.value,
             "challenges": len(challenges),
             "emitted": emitted,
             "warnings": self.warnings,
             "errors": self.errors,
         }
+        write_json(output / "bundle-summary.json", summary)
+        return summary
+
+    def _production_eligible_ids(self) -> set[str] | None:
+        if self.options.corpus_mode != CorpusMode.PRODUCTION.value:
+            return None
+        if self.options.production_eligible_ids is not None:
+            return set(self.options.production_eligible_ids)
+        if self.options.corpus_batch_id is None:
+            raise PackingError("production packing requires explicit corpus_batch_id")
+        from persistence.repositories import CorpusPersistenceError, CorpusRepository
+        from persistence.session import transaction
+
+        try:
+            with transaction() as session:
+                return CorpusRepository(session).production_eligible_challenge_ids(
+                    batch_id=self.options.corpus_batch_id,
+                )
+        except CorpusPersistenceError as exc:
+            raise PackingError(str(exc)) from exc
 
     def _pack_challenge(
         self,

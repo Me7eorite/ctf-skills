@@ -11,7 +11,12 @@ from sqlalchemy.orm import Session
 
 from core.clock import utcnow as _utcnow
 from domain import challenge_corpus as dto
+from persistence.models import artifact_observations as observation_model
+from persistence.models import build_attempts as build_model
 from persistence.models import challenge_corpus as model
+from persistence.models import challenge_designs as design_model
+from persistence.models import design_tasks as task_model
+from persistence.models import research as research_model
 
 
 class CorpusPersistenceError(ValueError):
@@ -66,6 +71,18 @@ class CorpusRepository:
         self.session.refresh(row)
         return _batch(row)
 
+    def mark_evaluated(self, batch_id: UUID) -> dto.CorpusBatch:
+        row = self._lock_batch(batch_id)
+        if row.status != dto.CorpusBatchStatus.EVALUATING.value:
+            raise CorpusPersistenceError(
+                f"corpus batch {batch_id} is {row.status}, expected evaluating"
+            )
+        row.status = dto.CorpusBatchStatus.EVALUATED.value
+        row.evaluated_at = _utcnow()
+        self.session.flush()
+        self.session.refresh(row)
+        return _batch(row)
+
     def add_member(
         self,
         *,
@@ -103,6 +120,97 @@ class CorpusRepository:
             .order_by(model.CorpusBatchMember.created_at, model.CorpusBatchMember.id)
         ).all()
         return [_member(row) for row in rows]
+
+    def list_batch_comparison_targets(
+        self,
+        *,
+        batch_id: UUID,
+        exclude_member_id: UUID | None = None,
+    ) -> list[dto.CorpusComparisonTarget]:
+        stmt = (
+            sa.select(
+                model.CorpusBatchMember,
+                design_model.DesignEvidence.design_task_id,
+                task_model.DesignTask.challenge_id,
+            )
+            .join(
+                design_model.DesignEvidence,
+                design_model.DesignEvidence.id
+                == model.CorpusBatchMember.design_evidence_id,
+            )
+            .join(
+                task_model.DesignTask,
+                task_model.DesignTask.id == design_model.DesignEvidence.design_task_id,
+            )
+            .where(model.CorpusBatchMember.batch_id == batch_id)
+            .order_by(model.CorpusBatchMember.created_at, model.CorpusBatchMember.id)
+        )
+        if exclude_member_id is not None:
+            stmt = stmt.where(model.CorpusBatchMember.id != exclude_member_id)
+        rows = self.session.execute(stmt).all()
+        return [
+            dto.CorpusComparisonTarget(
+                member_id=member.id,
+                design_task_id=design_task_id,
+                challenge_id=challenge_id,
+                fingerprints=dict(member.fingerprints),
+            )
+            for member, design_task_id, challenge_id in rows
+        ]
+
+    def list_history_shortlist(
+        self,
+        *,
+        category: str,
+        fingerprints: Mapping[str, Any],
+        limit: int = 100,
+    ) -> list[dto.CorpusComparisonTarget]:
+        if limit <= 0:
+            return []
+        stmt = (
+            sa.select(
+                model.CorpusHistoryEntry,
+                design_model.DesignEvidence.design_task_id,
+            )
+            .outerjoin(
+                design_model.DesignEvidence,
+                design_model.DesignEvidence.id
+                == model.CorpusHistoryEntry.design_evidence_id,
+            )
+            .where(
+                model.CorpusHistoryEntry.category == category,
+                model.CorpusHistoryEntry.status.in_(
+                    [
+                        dto.CorpusHistoryStatus.PUBLISHED.value,
+                        dto.CorpusHistoryStatus.RETIRED.value,
+                    ]
+                ),
+            )
+            .order_by(model.CorpusHistoryEntry.created_at.desc())
+            .limit(limit)
+        )
+        rows = self.session.execute(stmt).all()
+        combined = str(fingerprints.get("combined") or "")
+        source_sha = _token_sha(fingerprints, "source")
+        solver_sha = _token_sha(fingerprints, "solver")
+
+        def score(row: model.CorpusHistoryEntry) -> tuple[int, str]:
+            row_fingerprints = row.fingerprints
+            exact = int(combined and row_fingerprints.get("combined") == combined)
+            exact += int(source_sha and _token_sha(row_fingerprints, "source") == source_sha)
+            exact += int(solver_sha and _token_sha(row_fingerprints, "solver") == solver_sha)
+            return exact, str(row.created_at)
+
+        ordered = sorted(rows, key=lambda item: score(item[0]), reverse=True)
+        return [
+            dto.CorpusComparisonTarget(
+                history_entry_id=entry.id,
+                design_task_id=design_task_id,
+                challenge_id=entry.challenge_id,
+                fingerprints=dict(entry.fingerprints),
+            )
+            for entry, design_task_id in ordered
+        ]
 
     def record_decision(
         self,
@@ -203,6 +311,29 @@ class CorpusRepository:
         self.session.refresh(row)
         return _observation_review(row)
 
+    def latest_observation_review(
+        self,
+        *,
+        artifact_observation_id: UUID,
+        scope: str | None = None,
+    ) -> dto.ObservationReviewDecision | None:
+        stmt = (
+            sa.select(model.ObservationReviewDecision)
+            .where(
+                model.ObservationReviewDecision.artifact_observation_id
+                == artifact_observation_id
+            )
+            .order_by(
+                model.ObservationReviewDecision.created_at.desc(),
+                model.ObservationReviewDecision.id.desc(),
+            )
+            .limit(1)
+        )
+        if scope is not None:
+            stmt = stmt.where(model.ObservationReviewDecision.scope == scope)
+        row = self.session.scalars(stmt).one_or_none()
+        return _observation_review(row) if row else None
+
     def record_corpus_review(
         self,
         *,
@@ -227,6 +358,165 @@ class CorpusRepository:
         self.session.flush()
         self.session.refresh(row)
         return _corpus_review(row)
+
+    def latest_corpus_review(
+        self,
+        *,
+        corpus_decision_id: UUID,
+        scope: str | None = None,
+    ) -> dto.CorpusReviewDecision | None:
+        stmt = (
+            sa.select(model.CorpusReviewDecision)
+            .where(model.CorpusReviewDecision.corpus_decision_id == corpus_decision_id)
+            .order_by(
+                model.CorpusReviewDecision.created_at.desc(),
+                model.CorpusReviewDecision.id.desc(),
+            )
+            .limit(1)
+        )
+        if scope is not None:
+            stmt = stmt.where(model.CorpusReviewDecision.scope == scope)
+        row = self.session.scalars(stmt).one_or_none()
+        return _corpus_review(row) if row else None
+
+    def current_decision(
+        self,
+        *,
+        batch_id: UUID,
+        scope: str,
+        member_id: UUID | None = None,
+    ) -> dto.CorpusDecision | None:
+        if scope not in {item.value for item in dto.CorpusDecisionScope}:
+            raise CorpusPersistenceError(f"unknown corpus decision scope {scope!r}")
+        stmt = sa.select(model.CorpusDecision).where(
+            model.CorpusDecision.batch_id == batch_id,
+            model.CorpusDecision.scope == scope,
+            model.CorpusDecision.is_current.is_(True),
+        )
+        if member_id is None:
+            stmt = stmt.where(model.CorpusDecision.member_id.is_(None))
+        else:
+            stmt = stmt.where(model.CorpusDecision.member_id == member_id)
+        row = self.session.scalars(stmt.limit(1)).one_or_none()
+        return _decision(row) if row else None
+
+    def current_member_decisions(self, batch_id: UUID) -> list[dto.CorpusDecision]:
+        rows = self.session.scalars(
+            sa.select(model.CorpusDecision)
+            .where(
+                model.CorpusDecision.batch_id == batch_id,
+                model.CorpusDecision.scope == dto.CorpusDecisionScope.MEMBER.value,
+                model.CorpusDecision.is_current.is_(True),
+            )
+            .order_by(model.CorpusDecision.created_at, model.CorpusDecision.id)
+        ).all()
+        return [_decision(row) for row in rows]
+
+    def member_observation_status(self, member_id: UUID) -> str | None:
+        row = self.session.execute(
+            sa.select(observation_model.ArtifactObservation.status)
+            .join(
+                model.CorpusBatchMember,
+                model.CorpusBatchMember.artifact_observation_id
+                == observation_model.ArtifactObservation.id,
+            )
+            .where(model.CorpusBatchMember.id == member_id)
+            .limit(1)
+        ).one_or_none()
+        return str(row[0]) if row else None
+
+    def member_research_trial_only(self, member_id: UUID) -> bool:
+        row = self.session.execute(
+            sa.select(research_model.ResearchRun.trial_only)
+            .join(
+                task_model.DesignTask,
+                task_model.DesignTask.research_run_id == research_model.ResearchRun.id,
+            )
+            .join(
+                design_model.DesignEvidence,
+                design_model.DesignEvidence.design_task_id == task_model.DesignTask.id,
+            )
+            .join(
+                model.CorpusBatchMember,
+                model.CorpusBatchMember.design_evidence_id == design_model.DesignEvidence.id,
+            )
+            .where(model.CorpusBatchMember.id == member_id)
+            .limit(1)
+        ).one_or_none()
+        return bool(row[0]) if row else False
+
+    def production_eligible_challenge_ids(
+        self,
+        *,
+        batch_id: UUID,
+        observation_review_scope: str = "production-publication",
+        corpus_review_scope: str = "production-publication",
+    ) -> set[str]:
+        batch = self.get_batch(batch_id)
+        if batch is None:
+            raise CorpusPersistenceError(f"corpus batch {batch_id} does not exist")
+        if batch.mode != dto.CorpusMode.PRODUCTION.value:
+            raise CorpusPersistenceError("production packing requires a production corpus batch")
+        aggregate = self.current_decision(
+            batch_id=batch_id,
+            scope=dto.CorpusDecisionScope.AGGREGATE.value,
+        )
+        if aggregate is None or aggregate.decision != dto.CorpusDecisionValue.PASSED.value:
+            return set()
+
+        stmt = (
+            sa.select(
+                model.CorpusBatchMember.id,
+                model.CorpusBatchMember.artifact_observation_id,
+                task_model.DesignTask.challenge_id,
+                observation_model.ArtifactObservation.status,
+            )
+            .join(
+                build_model.BuildAttempt,
+                build_model.BuildAttempt.id == model.CorpusBatchMember.build_attempt_id,
+            )
+            .join(
+                task_model.DesignTask,
+                task_model.DesignTask.id == build_model.BuildAttempt.design_task_id,
+            )
+            .join(
+                observation_model.ArtifactObservation,
+                observation_model.ArtifactObservation.id
+                == model.CorpusBatchMember.artifact_observation_id,
+            )
+            .where(model.CorpusBatchMember.batch_id == batch_id)
+            .order_by(model.CorpusBatchMember.created_at, model.CorpusBatchMember.id)
+        )
+        eligible: set[str] = set()
+        for member_id, observation_id, challenge_id, observation_status in self.session.execute(stmt):
+            observation_review = self.latest_observation_review(
+                artifact_observation_id=observation_id,
+                scope=observation_review_scope,
+            )
+            observation_ok = observation_status == "passed" or (
+                observation_status == "inconclusive"
+                and dto.observation_review_allows_acceptance(observation_review)
+            )
+            decision = self.current_decision(
+                batch_id=batch_id,
+                member_id=member_id,
+                scope=dto.CorpusDecisionScope.MEMBER.value,
+            )
+            corpus_review = (
+                self.latest_corpus_review(
+                    corpus_decision_id=decision.id,
+                    scope=corpus_review_scope,
+                )
+                if decision
+                else None
+            )
+            decision_ok = dto.corpus_decision_is_effectively_accepted(
+                decision,
+                has_allowed_review=dto.corpus_review_allows_acceptance(corpus_review),
+            )
+            if observation_ok and decision_ok:
+                eligible.add(str(challenge_id))
+        return eligible
 
     def add_history_entry(
         self,
@@ -303,6 +593,13 @@ def _required_text(value: str, field: str) -> str:
     if not value.strip():
         raise CorpusPersistenceError(f"{field} is required")
     return value.strip()
+
+
+def _token_sha(fingerprints: Mapping[str, Any], key: str) -> str:
+    value = fingerprints.get(key)
+    if isinstance(value, Mapping):
+        return str(value.get("sha256") or "")
+    return ""
 
 
 def _batch(row: model.CorpusBatch) -> dto.CorpusBatch:

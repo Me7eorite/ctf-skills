@@ -34,7 +34,10 @@ from persistence.repositories import (
     DesignEvidenceRepository,
 )
 from persistence.session import SessionFactory, transaction
-from services.artifact_observation_governance import build_artifact_observation_payload
+from services.artifact_observation_governance import (
+    build_artifact_observation_payload,
+    observation_status_is_accepted,
+)
 
 REVALIDATION_WORKER = "dashboard-revalidate"
 
@@ -525,7 +528,9 @@ class BuildAttemptRevalidationService:
                     row,
                     challenge_dir=challenge_dir,
                 )
-                if row.design_evidence_id is not None and observation.status != "passed":
+                if row.design_evidence_id is not None and not observation_status_is_accepted(
+                    observation.status
+                ):
                     observation_error = (
                         "artifact observation "
                         f"{observation.status}: "

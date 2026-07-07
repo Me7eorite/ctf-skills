@@ -13,6 +13,7 @@ from core.jsonio import read_json
 from domain.output_consistency import output_manifest_hash
 
 OBSERVATION_ACCEPTED_STATUSES = frozenset({"passed"})
+OBSERVATION_REVIEW_ACCEPTED_DECISION = "accepted"
 _HARNESS_ASSERTIONS: Mapping[str, frozenset[str]] = {
     "artifact_direct_run": frozenset({"stdout_not_contains_flag", "must_fail"}),
     "fixture_assertion": frozenset({"non_empty", "equals", "contains"}),
@@ -127,6 +128,25 @@ def observation_is_bound_and_accepted(
     if getattr(observation, "artifact_manifest_sha256", None) != artifact_manifest_sha256:
         return False
     return getattr(observation, "status", None) in OBSERVATION_ACCEPTED_STATUSES
+
+
+def observation_status_is_accepted(status: str | None) -> bool:
+    """Return validation-layer acceptance for observations without review context."""
+
+    return status in OBSERVATION_ACCEPTED_STATUSES
+
+
+def observation_is_effectively_accepted(
+    observation: Any,
+    *,
+    has_allowed_review: bool = False,
+) -> bool:
+    """Return validation-layer acceptance, including explicitly allowed review."""
+
+    status = getattr(observation, "status", None)
+    if status in OBSERVATION_ACCEPTED_STATUSES:
+        return True
+    return status == "inconclusive" and has_allowed_review
 
 
 def _observed_profile(challenge_dir: Path, metadata: Mapping[str, Any]) -> dict[str, Any]:

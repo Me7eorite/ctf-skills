@@ -80,9 +80,9 @@ Default review thresholds:
 - an inconclusive ArtifactObservation with an allowed observation review.
 
 Thresholds and quotas MAY be configured per category. Production publication
-requires a corpus-accepted decision: `passed`, or `review_required` with an
-explicit operator approval. Corpus approval SHALL record actor, reason, and
-timestamp and SHALL NOT rewrite the stored `review_required` decision.
+requires a corpus-accepted member decision: `passed`, or `review_required` with
+an explicit operator approval. Corpus approval SHALL record actor, reason, and
+timestamp and SHALL NOT rewrite the stored `review_required` member decision.
 Observation review and corpus review SHALL be separate records. Exact
 combined-profile duplicates outside the same-task revision lineage, failed
 observations, and hard profile mismatches SHALL not be overrideable.
@@ -91,11 +91,37 @@ An inconclusive ArtifactObservation without an allowed observation review SHALL
 block corpus admission.
 
 The service SHALL compute both a decision for each member and one aggregate
-batch decision. A production batch is eligible only when every member is
-passed/allowed-reviewed and the aggregate decision is `passed`. An allowed
-member review does not rewrite the original `review_required` decision; the
-aggregator treats it as corpus-accepted for publication and records that
-provenance when computing the aggregate pass.
+batch decision. The aggregate decision SHALL be computed from effective member
+states while preserving raw member decisions. A member with stored `passed` is
+effective-accepted. A member with stored `review_required` is
+effective-accepted only when an allowed corpus review exists for that member.
+A member with stored `blocked` or any non-overrideable hard rule is never
+effective-accepted.
+
+The aggregate decision SHALL be `blocked` if any member is blocked or any
+non-overrideable hard rule failed, `review_required` if at least one
+overrideable review remains unapproved, and `passed` only when every member is
+effective-accepted. An allowed member review does not rewrite the original
+`review_required` decision; the aggregator records the review provenance used
+to compute the aggregate pass.
+
+#### Scenario: Approved member review can produce aggregate pass
+
+- **GIVEN** a production batch has one member stored as `review_required`
+- **AND** an authorized operator recorded an allowed corpus review for that
+  member
+- **AND** every other member is stored as `passed`
+- **WHEN** the aggregate batch decision is computed
+- **THEN** the aggregate decision is `passed`
+- **AND** the reviewed member's stored decision remains `review_required`
+
+#### Scenario: Unapproved member review keeps aggregate in review
+
+- **GIVEN** a production batch has one member stored as `review_required`
+- **AND** no allowed corpus review exists for that member
+- **WHEN** the aggregate batch decision is computed
+- **THEN** the aggregate decision is `review_required`
+- **AND** production packing is not eligible
 
 #### Scenario: Exact governed duplicate is blocked
 

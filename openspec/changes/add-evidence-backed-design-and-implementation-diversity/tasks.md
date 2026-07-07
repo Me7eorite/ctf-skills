@@ -137,19 +137,23 @@
 - [x] 8.2 Add `corpus_batches`, immutable batch memberships,
       `corpus_decisions`, `corpus_matches`, `observation_review_decisions`, and
       `corpus_review_decisions`, plus append-only `corpus_history_entries`.
-- [ ] 8.3 Implement indexed candidate shortlisting and exact similarity
+- [x] 8.3 Implement indexed candidate shortlisting and exact similarity
       comparison against batch plus committed history.
-- [ ] 8.4 Implement `passed|review_required|blocked` decisions and configurable
+- [x] 8.4 Implement `passed|review_required|blocked` decisions and configurable
       thresholds/quotas.
-- [ ] 8.5 Persist matched challenge IDs, scores, reasons, and separate
+- [x] 8.5 Persist matched challenge IDs, scores, reasons, and separate
       observation/corpus review decisions; forbid overrides for hard mismatches,
       exact combined duplicates, and failed validation.
-- [ ] 8.6 Add production publication gate and keep shadow/trial modes explicit.
-- [ ] 8.7 Tests: renamed/constant-only clones block; high source/solver
+- [x] 8.6 Add production publication gate and keep shadow/trial modes explicit.
+- [x] 8.7 Tests: renamed/constant-only clones block; high source/solver
       similarity routes correctly; distinct implementation profiles pass.
-- [ ] 8.8 Integrate explicit corpus batch selection with `Packer` so production
+- [x] 8.8 Integrate explicit corpus batch selection with `Packer` so production
       bundles require `corpus_batch_id`, database membership decisions, and
       aggregate batch pass rather than `metadata.build_status` alone.
+- [ ] 8.9 Add regression coverage for aggregate corpus decisions: approved
+      member reviews can produce an aggregate `passed` decision without
+      rewriting raw member decisions, while unapproved reviews or hard blocks
+      prevent production packing.
 
 ## 9. API and dashboard
 

@@ -593,6 +593,12 @@ def parser() -> argparse.ArgumentParser:
     pack.add_argument("--include-pwn-attachments", action="store_true")
     pack.add_argument("--skip-docker", action="store_true")
     pack.add_argument("--require-docker", action="store_true")
+    pack.add_argument(
+        "--corpus-mode",
+        choices=("shadow", "trial", "production"),
+        default="shadow",
+    )
+    pack.add_argument("--corpus-batch-id", type=UUID)
 
     web = commands.add_parser("serve", help="start the dashboard")
     web.add_argument("--host", default="127.0.0.1")
@@ -1827,6 +1833,8 @@ def main() -> None:
                 include_pwn_attachments=args.include_pwn_attachments,
                 skip_docker=args.skip_docker,
                 require_docker=args.require_docker,
+                corpus_mode=args.corpus_mode,
+                corpus_batch_id=args.corpus_batch_id,
             ),
         ).pack(args.out)
         print(json.dumps(result, ensure_ascii=False, indent=2))
