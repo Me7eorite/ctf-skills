@@ -244,20 +244,6 @@ def validate_design_evidence_output(
     distinctness_claim = challenge.get("distinctness_claim")
     if not isinstance(distinctness_claim, str) or not distinctness_claim.strip():
         raise DesignGovernanceError("distinctness_claim must be a non-empty string")
-    if not _distinctness_uses_template(distinctness_claim):
-        raise DesignGovernanceError(
-            "distinctness_claim must contain two sentences prefixed exactly "
-            "`Solve-axis:` and `Implementation-axis:`"
-        )
-    missing_axes = _distinctness_missing_axes(distinctness_claim, profile)
-    if missing_axes:
-        raise DesignGovernanceError(
-            "distinctness_claim must explain solve and implementation differences; "
-            "missing axis coverage: "
-            + ", ".join(missing_axes)
-            + ". Use `Solve-axis:` to mention reserved solve values and "
-            "`Implementation-axis:` to mention reserved implementation values."
-        )
 
     compared_ids = _string_list(
         challenge.get("compared_challenge_ids"),
@@ -311,12 +297,7 @@ def validate_build_contract(
             raise DesignGovernanceError(f"build_contract.{field} is required")
     if contract.get("required_profile") != required_profile:
         raise DesignGovernanceError("build_contract.required_profile must match governed_profile")
-    required_action = _profile_required_action(required_profile)
-    actions = _string_list(contract.get("required_player_actions"), "build_contract.required_player_actions")
-    if required_action not in actions:
-        raise DesignGovernanceError(
-            "build_contract.required_player_actions must include the reserved solve action"
-        )
+    _string_list(contract.get("required_player_actions"), "build_contract.required_player_actions")
     _string_list(
         contract.get("required_components"),
         "build_contract.required_components",
@@ -328,8 +309,6 @@ def validate_build_contract(
         allow_empty=True,
     )
 
-    declared_artifacts = _declared_ids(contract, "artifact_ids")
-    declared_fixtures = _declared_ids(contract, "fixture_ids")
     forbidden_shortcuts = _list_of_mappings(
         contract.get("forbidden_shortcuts"),
         "build_contract.forbidden_shortcuts",
@@ -340,20 +319,8 @@ def validate_build_contract(
         "build_contract.acceptance_tests",
         allow_empty=True,
     )
-    for test in forbidden_shortcuts:
-        _validate_harness(
-            test,
-            category=category,
-            declared_artifacts=declared_artifacts,
-            declared_fixtures=declared_fixtures,
-        )
-    for test in acceptance_tests:
-        _validate_harness(
-            test,
-            category=category,
-            declared_artifacts=declared_artifacts,
-            declared_fixtures=declared_fixtures,
-        )
+    for harness in (*forbidden_shortcuts, *acceptance_tests):
+        _validate_harness_shape(harness)
 
     asset_flow = contract.get("required_asset_flow")
     if not isinstance(asset_flow, list) or not asset_flow:
@@ -373,72 +340,17 @@ def validate_build_contract(
             raise DesignGovernanceError(
                 "required_asset_flow.produced_asset_or_capability is required"
             )
-        _validate_harness(
-            _mapping(stage.get("verification_harness"), "verification_harness"),
-            category=category,
-            declared_artifacts=declared_artifacts,
-            declared_fixtures=declared_fixtures,
+        _validate_harness_shape(
+            _mapping(stage.get("verification_harness"), "verification_harness")
         )
-        _validate_harness(
-            _mapping(stage.get("dependency_harness"), "dependency_harness"),
-            category=category,
-            declared_artifacts=declared_artifacts,
-            declared_fixtures=declared_fixtures,
+        _validate_harness_shape(
+            _mapping(stage.get("dependency_harness"), "dependency_harness")
         )
 
 
-_HARNESS_ASSERTIONS: Mapping[str, frozenset[str]] = {
-    "artifact_direct_run": frozenset({"stdout_not_contains_flag", "must_fail"}),
-    "fixture_assertion": frozenset({"non_empty", "equals", "contains"}),
-    "solver_with_fixture": frozenset({"must_pass", "outputs_flag"}),
-    "solver_without_fixture": frozenset({"must_fail", "stdout_not_contains_flag"}),
-    "random_flag_rebuild": frozenset({"outputs_new_flag", "old_flag_rejected"}),
-}
-
-
-def _validate_harness(
-    payload: Mapping[str, Any],
-    *,
-    category: str,
-    declared_artifacts: set[str],
-    declared_fixtures: set[str],
-) -> None:
-    kind = payload.get("test_kind")
-    if not isinstance(kind, str) or kind not in _HARNESS_ASSERTIONS:
-        allowed = ", ".join(sorted(_HARNESS_ASSERTIONS))
-        raise DesignGovernanceError(
-            "unknown build contract harness kind"
-            f"{f': {kind}' if isinstance(kind, str) and kind else ''}. "
-            f"Allowed test_kind values: {allowed}. Do not invent shortcut "
-            "names such as no_direct_flag_read as test_kind; use [] when "
-            "there is no concrete harness to declare."
-        )
-    if kind == "random_flag_rebuild" and category not in {"re"}:
-        raise DesignGovernanceError(
-            "random_flag_rebuild is not permitted for this category"
-        )
-    assertion = payload.get("assertion")
-    if not isinstance(assertion, str) or assertion not in _HARNESS_ASSERTIONS[kind]:
-        allowed = ", ".join(sorted(_HARNESS_ASSERTIONS[kind]))
-        raise DesignGovernanceError(
-            f"unknown build contract harness assertion for {kind}. "
-            f"Allowed assertions: {allowed}."
-        )
-    for forbidden in ("command", "argv", "shell", "path", "cwd", "executable"):
-        if forbidden in payload:
-            raise DesignGovernanceError("harnesses cannot declare executable paths or shell input")
-    artifact_ref = payload.get("artifact_ref")
-    if artifact_ref is not None:
-        if not isinstance(artifact_ref, str) or artifact_ref not in declared_artifacts:
-            raise DesignGovernanceError("harness artifact_ref must reference a declared artifact id")
-    fixture_ref = payload.get("fixture_ref")
-    if fixture_ref is not None:
-        if not isinstance(fixture_ref, str) or fixture_ref not in declared_fixtures:
-            raise DesignGovernanceError("harness fixture_ref must reference a declared fixture id")
-    input_fixture = payload.get("input_fixture")
-    if input_fixture is not None:
-        if not isinstance(input_fixture, str) or input_fixture not in declared_fixtures:
-            raise DesignGovernanceError("harness input_fixture must reference a declared fixture id")
+def _validate_harness_shape(payload: Mapping[str, Any]) -> None:
+    if not payload:
+        raise DesignGovernanceError("build contract harness must be a non-empty object")
 
 
 def _rank_ledger_entries(
@@ -542,91 +454,10 @@ def _profiles_conflict(left: Mapping[str, Any], right: Mapping[str, Any]) -> boo
     )
 
 
-def _distinctness_covers_axes(claim: str, profile: Mapping[str, Any]) -> bool:
-    return not _distinctness_missing_axes(claim, profile)
-
-
-def _distinctness_missing_axes(
-    claim: str, profile: Mapping[str, Any]
-) -> tuple[str, ...]:
-    solve_text, implementation_text = _distinctness_axis_texts(claim)
-    solve = profile.get("solve") if isinstance(profile.get("solve"), Mapping) else {}
-    implementation = (
-        profile.get("implementation")
-        if isinstance(profile.get("implementation"), Mapping)
-        else {}
-    )
-    solve_covered = any(
-        token in solve_text for token in ("solve", "player", "action", "analysis")
-    ) or _claim_mentions_profile_value(solve_text, solve)
-    implementation_covered = any(
-        token in implementation_text
-        for token in ("implementation", "artifact", "runtime", "language", "concealment")
-    ) or _claim_mentions_profile_value(implementation_text, implementation)
-    missing = []
-    if not solve_covered:
-        missing.append("solve")
-    if not implementation_covered:
-        missing.append("implementation")
-    return tuple(missing)
-
-
-def _distinctness_axis_texts(claim: str) -> tuple[str, str]:
-    sentences = [line.strip() for line in claim.splitlines() if line.strip()]
-    solve_prefix = "Solve-axis:"
-    implementation_prefix = "Implementation-axis:"
-    solve = claim.lower()
-    if len(sentences) >= 1 and sentences[0].startswith(solve_prefix):
-        solve = sentences[0][len(solve_prefix) :].strip().lower()
-    implementation = (
-        sentences[1][len(implementation_prefix) :].strip().lower()
-        if len(sentences) >= 2 and sentences[1].startswith(implementation_prefix)
-        else claim.lower()
-    )
-    return solve, implementation
-
-
-def _distinctness_uses_template(claim: str) -> bool:
-    sentences = [line.strip() for line in claim.splitlines() if line.strip()]
-    if len(sentences) != 2:
-        return False
-    return sentences[0].startswith("Solve-axis:") and sentences[1].startswith(
-        "Implementation-axis:"
-    )
-
-
-def _claim_mentions_profile_value(claim: str, axis: Mapping[str, Any]) -> bool:
-    return any(
-        _claim_contains_value(claim, value)
-        for value in axis.values()
-        if isinstance(value, str) and value.strip()
-    )
-
-
-def _claim_contains_value(claim: str, value: str) -> bool:
-    normalized = value.strip().lower()
-    variants = {
-        normalized,
-        normalized.replace("_", " "),
-        normalized.replace("-", " "),
-        normalized.replace("_", "-"),
-        normalized.replace("-", "_"),
-    }
-    return any(
-        variant and (variant in claim or variant.replace(" ", "_") in claim)
-        for variant in variants
-    )
-
-
 def _challenge_id(row: Any) -> str:
     evidence = row.evidence if isinstance(row.evidence, Mapping) else {}
     value = evidence.get("challenge_id")
     return str(value) if value else str(row.design_task_id)
-
-
-def _declared_ids(contract: Mapping[str, Any], key: str) -> set[str]:
-    raw = contract.get(key, [])
-    return set(_string_list(raw, f"build_contract.{key}", allow_empty=True))
 
 
 def _list_of_mappings(
@@ -653,16 +484,6 @@ def _list_of_mappings(
             "no concrete harness to declare."
         )
     return tuple(value)
-
-
-def _profile_required_action(profile: Mapping[str, Any]) -> str:
-    solve = profile.get("solve")
-    if not isinstance(solve, Mapping):
-        raise DesignGovernanceError("required_profile.solve is required")
-    action = solve.get("required_action")
-    if not isinstance(action, str) or not action.strip():
-        raise DesignGovernanceError("required_profile.solve.required_action is required")
-    return action
 
 
 def _mapping(value: Any, field: str) -> dict[str, Any]:

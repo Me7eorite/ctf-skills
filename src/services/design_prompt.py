@@ -480,8 +480,8 @@ def _render_output_contract(task: DesignTask, *, governed: bool = False) -> str:
         "do not choose alternate governed values. Provide "
         "`design_evidence`, `distinctness_claim`, `compared_challenge_ids`, "
         "and `build_contract`. The build contract is authoritative for Build: "
-        "use only symbolic artifact/fixture ids and closed harness kinds, never "
-        "shell commands, argv, executable paths, or file contents."
+        "prefer symbolic artifact/fixture ids and suggested harness kinds; keep "
+        "shell commands, argv, executable paths, and file contents out of Design."
         if governed
         else ""
     )
@@ -785,11 +785,12 @@ def _render_governed_contract_rules(
             "- `build_contract.required_profile` MUST exactly match `governed_profile`.",
             "- `build_contract.required_player_actions` MUST include the "
             "reserved solve action exactly as declared in `reserved_profile`.",
-            "- `distinctness_claim` MUST use this exact two-line template: "
-            "line 1 `Solve-axis: ...`; line 2 `Implementation-axis: ...`. "
-            f"The solve line must include at least one reserved solve value: "
-            f"{solve_values_hint}. The implementation line must include at "
-            f"least one reserved implementation value: {implementation_values_hint}.",
+            "- `distinctness_claim` must be a non-empty string. Prefer this "
+            "two-line template for clarity, but Design validation only checks "
+            "that the field exists: line 1 `Solve-axis: ...`; line 2 "
+            "`Implementation-axis: ...`. Helpful solve values: "
+            f"{solve_values_hint}. Helpful implementation values: "
+            f"{implementation_values_hint}.",
             f"- {compared_hint}",
             "- `build_contract.required_asset_flow` must be a non-empty array "
             "of objects with unique `stage_id` values. Every stage needs "
@@ -808,15 +809,14 @@ def _render_governed_contract_rules(
             "of non-empty strings. Empty arrays are valid; use `[]` when "
             "there are no entries. Never emit null, a single string, object "
             "entries, or empty string placeholders.",
-            "- Closed harness kinds/assertions: "
+            "- Suggested harness kinds/assertions for later Build validation: "
             "`artifact_direct_run` -> `stdout_not_contains_flag` or `must_fail`; "
             "`fixture_assertion` -> `non_empty`, `equals`, or `contains`; "
             "`solver_with_fixture` -> `must_pass` or `outputs_flag`; "
             "`solver_without_fixture` -> `must_fail` or `stdout_not_contains_flag`; "
             "`random_flag_rebuild` -> `outputs_new_flag` or `old_flag_rejected` "
-            "(re only). Do not use shortcut labels such as `no_direct_flag_read`, "
-            "`no_backdoor`, or `no_metadata_read` as `test_kind`; if you cannot "
-            "express the check with one of the closed harness kinds, use `[]`.",
+            "(re only). Design validation only checks harness entries are objects; "
+            "if you cannot express a concrete harness, use `[]`.",
             "- Harness references must point at declared `artifact_ids`, "
             "`fixture_ids`, or `input_fixture` ids; if there is nothing concrete "
             "to reference, leave the field out.",

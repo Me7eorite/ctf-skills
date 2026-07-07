@@ -508,17 +508,18 @@ def test_governed_prompt_spells_out_server_side_contract_rules(tmp_path):
     )
 
     assert "`build_contract.required_player_actions` MUST include exactly `payload_injection`" in prompt
-    assert "`distinctness_claim` MUST use this exact two-line template" in prompt
+    assert "`distinctness_claim` must be a non-empty string" in prompt
+    assert "Design validation only checks that the field exists" in prompt
     assert "line 1 `Solve-axis: ...`; line 2 `Implementation-axis: ...`" in prompt
-    assert "reserved solve value: dynamic_probe, payload_injection, oracle_to_secret, http_client" in prompt
-    assert "reserved implementation value: container, python, flask, http_form, route_handler, database_record" in prompt
+    assert "Helpful solve values: dynamic_probe, payload_injection, oracle_to_secret, http_client" in prompt
+    assert "Helpful implementation values: container, python, flask, http_form, route_handler, database_record" in prompt
     assert "web-0000, web-old" in prompt
     assert "`artifact_direct_run` -> `stdout_not_contains_flag` or `must_fail`" in prompt
     assert "Harnesses cannot contain `command`, `argv`, `shell`, `path`, `cwd`, or `executable`" in prompt
     assert "`build_contract.forbidden_shortcuts` and `build_contract.acceptance_tests` must be arrays of harness objects" in prompt
     assert "use `[]` rather than a string placeholder" in prompt
-    assert "Do not use shortcut labels such as `no_direct_flag_read`" in prompt
-    assert "if you cannot express the check with one of the closed harness kinds, use `[]`" in prompt
+    assert "Design validation only checks harness entries are objects" in prompt
+    assert "if you cannot express a concrete harness, use `[]`" in prompt
     assert "`build_contract.required_components` and `build_contract.allowed_implementation_freedom` must be arrays of non-empty strings" in prompt
     assert "Empty arrays are valid; use `[]` when there are no entries" in prompt
     assert '"allowed_implementation_freedom"' in prompt

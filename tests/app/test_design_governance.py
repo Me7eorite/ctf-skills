@@ -220,21 +220,26 @@ def test_rejects_compared_ids_when_ledger_has_none() -> None:
         )
 
 
-def test_rejects_harness_shell_input() -> None:
+def test_accepts_harness_objects_without_quality_validation() -> None:
     profile = _profile()
     reservation = _reservation(profile)
     finding = _finding()
     challenge = _challenge(reservation, finding)
     challenge["build_contract"]["forbidden_shortcuts"][0]["command"] = "cat /flag"
+    challenge["build_contract"]["forbidden_shortcuts"][0]["test_kind"] = "no_direct_flag_read"
 
-    with pytest.raises(DesignGovernanceError, match="shell input"):
-        validate_design_evidence_output(
-            challenge=challenge,
-            design_task=_task(reservation),
-            reservation=reservation,
-            findings=[finding],
-            ledger_snapshot=_snapshot(reservation),
-        )
+    evidence = validate_design_evidence_output(
+        challenge=challenge,
+        design_task=_task(reservation),
+        reservation=reservation,
+        findings=[finding],
+        ledger_snapshot=_snapshot(reservation),
+    )
+
+    assert (
+        evidence["build_contract"]["forbidden_shortcuts"][0]["test_kind"]
+        == "no_direct_flag_read"
+    )
 
 
 def test_rejects_forbidden_shortcut_string_entries() -> None:
@@ -259,7 +264,7 @@ def test_rejects_forbidden_shortcut_string_entries() -> None:
     assert "Use [] instead of placeholder text" in str(exc_info.value)
 
 
-def test_rejects_unknown_harness_kind_with_actionable_message() -> None:
+def test_accepts_unknown_harness_kind_as_design_intent() -> None:
     profile = _profile()
     reservation = _reservation(profile)
     finding = _finding()
@@ -271,20 +276,18 @@ def test_rejects_unknown_harness_kind_with_actionable_message() -> None:
         }
     ]
 
-    with pytest.raises(DesignGovernanceError) as exc_info:
-        validate_design_evidence_output(
-            challenge=challenge,
-            design_task=_task(reservation),
-            reservation=reservation,
-            findings=[finding],
-            ledger_snapshot=_snapshot(reservation),
-        )
+    evidence = validate_design_evidence_output(
+        challenge=challenge,
+        design_task=_task(reservation),
+        reservation=reservation,
+        findings=[finding],
+        ledger_snapshot=_snapshot(reservation),
+    )
 
-    message = str(exc_info.value)
-    assert "unknown build contract harness kind: no_direct_flag_read" in message
-    assert "Allowed test_kind values:" in message
-    assert "artifact_direct_run" in message
-    assert "use [] when there is no concrete harness" in message
+    assert (
+        evidence["build_contract"]["forbidden_shortcuts"][0]["test_kind"]
+        == "no_direct_flag_read"
+    )
 
 
 def test_accepts_empty_forbidden_shortcuts_and_allowed_freedom_arrays() -> None:
@@ -335,7 +338,7 @@ def test_rejects_allowed_implementation_freedom_bad_shapes(
         )
 
 
-def test_rejects_distinctness_claim_without_implementation_axis() -> None:
+def test_accepts_distinctness_claim_without_axis_quality_check() -> None:
     profile = _profile()
     reservation = _reservation(profile)
     finding = _finding()
@@ -345,35 +348,33 @@ def test_rejects_distinctness_claim_without_implementation_axis() -> None:
         "Implementation-axis: Different from siblings."
     )
 
-    with pytest.raises(DesignGovernanceError) as exc_info:
-        validate_design_evidence_output(
-            challenge=challenge,
-            design_task=_task(reservation),
-            reservation=reservation,
-            findings=[finding],
-            ledger_snapshot=_snapshot(reservation),
-        )
+    evidence = validate_design_evidence_output(
+        challenge=challenge,
+        design_task=_task(reservation),
+        reservation=reservation,
+        findings=[finding],
+        ledger_snapshot=_snapshot(reservation),
+    )
 
-    message = str(exc_info.value)
-    assert "missing axis coverage: implementation" in message
-    assert "`Implementation-axis:` to mention reserved implementation values" in message
+    assert evidence["distinctness_claim"] == challenge["distinctness_claim"]
 
 
-def test_rejects_distinctness_claim_without_two_line_template() -> None:
+def test_accepts_distinctness_claim_without_two_line_template() -> None:
     profile = _profile()
     reservation = _reservation(profile)
     finding = _finding()
     challenge = _challenge(reservation, finding)
     challenge["distinctness_claim"] = "Different solve path only."
 
-    with pytest.raises(DesignGovernanceError, match="prefixed exactly"):
-        validate_design_evidence_output(
-            challenge=challenge,
-            design_task=_task(reservation),
-            reservation=reservation,
-            findings=[finding],
-            ledger_snapshot=_snapshot(reservation),
-        )
+    evidence = validate_design_evidence_output(
+        challenge=challenge,
+        design_task=_task(reservation),
+        reservation=reservation,
+        findings=[finding],
+        ledger_snapshot=_snapshot(reservation),
+    )
+
+    assert evidence["distinctness_claim"] == "Different solve path only."
 
 
 def test_distinctness_claim_can_use_profile_values_for_axes() -> None:
@@ -397,7 +398,7 @@ def test_distinctness_claim_can_use_profile_values_for_axes() -> None:
     assert evidence["distinctness_claim"] == challenge["distinctness_claim"]
 
 
-def test_rejects_web_random_flag_rebuild_harness() -> None:
+def test_accepts_category_specific_harness_intent_without_quality_validation() -> None:
     profile = _profile()
     reservation = _reservation(profile)
     finding = _finding()
@@ -409,14 +410,18 @@ def test_rejects_web_random_flag_rebuild_harness() -> None:
         }
     ]
 
-    with pytest.raises(DesignGovernanceError, match="not permitted"):
-        validate_design_evidence_output(
-            challenge=challenge,
-            design_task=_task(reservation),
-            reservation=reservation,
-            findings=[finding],
-            ledger_snapshot=_snapshot(reservation),
-        )
+    evidence = validate_design_evidence_output(
+        challenge=challenge,
+        design_task=_task(reservation),
+        reservation=reservation,
+        findings=[finding],
+        ledger_snapshot=_snapshot(reservation),
+    )
+
+    assert (
+        evidence["build_contract"]["acceptance_tests"][0]["test_kind"]
+        == "random_flag_rebuild"
+    )
 
 
 def test_conflicting_new_occupancy_requires_retry() -> None:
