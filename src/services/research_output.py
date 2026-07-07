@@ -41,7 +41,10 @@ def parse_research_output(
     """Parse, normalize, and quality-gate Hermes research stdout without I/O."""
     res_data = extract_terminal_json_object(stdout_text)
     if not _is_research_result_shape(res_data):
-        res_data = _extract_python_research_assignment(stdout_text) or res_data
+        res_data = (
+            _extract_research_result_object(stdout_text)
+            or _extract_python_research_assignment(stdout_text)
+        )
     if res_data is None:
         raise ResearchValidationError("unparseable_output:no_terminal_json_object")
     res_data = _normalize_legacy_result_shape(res_data)
@@ -101,6 +104,19 @@ def _extract_python_research_assignment(stdout_text: str) -> dict[str, Any] | No
         LOGGER.warning("recovered research output from Python list assignments in stdout")
         return {"sources": sources, "findings": findings}
     return None
+
+
+def _extract_research_result_object(stdout_text: str) -> dict[str, Any] | None:
+    decoder = json.JSONDecoder()
+    result: dict[str, Any] | None = None
+    for match in re.finditer(r"\{", stdout_text):
+        try:
+            parsed, _end = decoder.raw_decode(stdout_text, match.start())
+        except json.JSONDecodeError:
+            continue
+        if _is_research_result_shape(parsed):
+            result = parsed
+    return result
 
 
 def _extract_last_python_list_assignment(stdout_text: str, name: str) -> list[Any] | None:

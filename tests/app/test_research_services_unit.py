@@ -146,6 +146,24 @@ a//tmp/heap_research_output.py → b//tmp/heap_research_output.py
     assert len(parsed.sources[0]["content_hash"]) == 64
 
 
+def test_parse_research_output_prefers_top_level_object_over_last_finding():
+    stdout_text = (
+        "--- stdout ---\n"
+        "  ⚠ tirith security scanner enabled but not available — command scanning will use pattern matching only\n"
+        '{"sources":[{"url":"https://example.com/a","title":"A","summary":"Summary",'
+        '"content_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],'
+        '"findings":[{"kind":"technique","label":"One","summary":"First finding.",'
+        '"source_indices":[0]},{"kind":"variant","label":"Two","summary":"Second finding.",'
+        '"source_indices":[0]}]}\n'
+        "--- end stdout ---\n"
+    )
+
+    parsed = parse_research_output(stdout_text, target_count=1, category="web")
+
+    assert len(parsed.sources) == 1
+    assert [finding["label"] for finding in parsed.findings] == ["One", "Two"]
+
+
 def test_parse_research_output_marks_non_trial_only_when_designable_findings_exist():
     stdout_text = json.dumps(
         {

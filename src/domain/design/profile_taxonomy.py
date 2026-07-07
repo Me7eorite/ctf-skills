@@ -969,6 +969,12 @@ def _coerce_sub_technique(
         "use after free": "heap_uaf_tcache",
         "uaf": "heap_uaf_tcache",
         "format string": "format_string_got",
+        "buffer overflow": "ret2libc",
+        "stack overflow": "ret2libc",
+        "canary leak": "ret2libc",
+        "canary leak then buffer overflow": "ret2libc",
+        "stack canary leak": "ret2libc",
+        "stack canary bypass": "ret2libc",
         "anti debug": "anti_debug",
     }
     family_defaults = {

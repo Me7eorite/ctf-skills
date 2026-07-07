@@ -339,6 +339,25 @@ def test_profile_capacity_coerces_freeform_subtechniques_by_family() -> None:
     }
 
 
+def test_profile_capacity_coerces_canary_buffer_overflow_phrase() -> None:
+    result = profile_capacity_check(
+        category="pwn",
+        target_count=1,
+        semantic_assignments=[
+            {
+                "family": "stack",
+                "sub_technique": "canary leak then buffer overflow",
+            }
+        ],
+    )
+
+    assert result.can_allocate is True
+    assert result.allocations[0].profile.semantic == {
+        "family": "stack",
+        "sub_technique": "ret2libc",
+    }
+
+
 def test_capacity_check_requires_semantic_assignments() -> None:
     with pytest.raises(ProfileTaxonomyError, match="semantic_assignments must not be empty"):
         profile_capacity_check(category="re", target_count=1, semantic_assignments=[])
