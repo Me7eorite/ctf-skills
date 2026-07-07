@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -278,6 +279,7 @@ PWN_TAXONOMY = CategoryProfileTaxonomy(
                 "format_string_got",
                 "heap_uaf_tcache",
                 "integer_oob",
+                "global_bss_write",
                 "seccomp_orw",
             ),
         }
@@ -296,6 +298,7 @@ PWN_TAXONOMY = CategoryProfileTaxonomy(
                 "leak-rop-shell",
                 "overwrite-hook-win",
                 "heap-overlap-edit",
+                "global-write-win",
                 "orw-chain",
             ),
             "required_tool_class": ("debugger", "exploit_script", "rop_tool"),
@@ -467,6 +470,12 @@ SUB_TECHNIQUE_ALIASES_BY_CATEGORY: Mapping[str, Mapping[str, str]] = {
         "format string": "format_string_got",
         "format string vulnerability": "format_string_got",
         "got overwrite": "format_string_got",
+        "bss variable modification": "global_bss_write",
+        "bss variable write": "global_bss_write",
+        "bss overwrite": "global_bss_write",
+        "global variable modification": "global_bss_write",
+        "global variable write": "global_bss_write",
+        "global overwrite": "global_bss_write",
         "unlink attack": "heap_uaf_tcache",
         "tcache poisoning": "heap_uaf_tcache",
         "use after free": "heap_uaf_tcache",
@@ -862,7 +871,7 @@ def _first_eligible_candidate(
 ) -> ProfileCandidate | None:
     fallback_candidate: ProfileCandidate | None = None
 
-    solve_rows = _axis_product(category, "solve")
+    solve_rows = _compatible_solve_rows(category, semantic)
     implementation_rows = _compatible_implementation_rows(taxonomy, policy)
     presentation_rows = _axis_product(category, "presentation")
     for solve_index, solve in enumerate(solve_rows):
@@ -1047,6 +1056,21 @@ def _compatible_implementation_rows(
     return tuple(compatible)
 
 
+def _compatible_solve_rows(
+    category: str,
+    semantic: Mapping[str, str],
+) -> tuple[dict[str, str], ...]:
+    rows = _axis_product(category, "solve")
+    if category == "pwn" and semantic.get("sub_technique") == "global_bss_write":
+        return tuple(
+            row
+            for row in rows
+            if row.get("required_action") == "write_what_where"
+            and row.get("chain_shape") == "global-write-win"
+        )
+    return rows
+
+
 @lru_cache(maxsize=None)
 def _axis_product(category: str, axis_name: ProfileAxis) -> tuple[dict[str, str], ...]:
     axis = taxonomy_for_category(category).axis(axis_name)
@@ -1085,6 +1109,17 @@ def _normalize_semantic_value(value: str) -> str:
     )
 
 
+def _semantic_slug(value: str) -> str:
+    return "_".join(
+        replaced
+        for replaced in _NON_ALNUM_RE.sub("_", value.lower()).split("_")
+        if replaced
+    )
+
+
+_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
+
+
 def _coerce_sub_technique(
     value: str,
     allowed: Sequence[str],
@@ -1107,6 +1142,8 @@ def _coerce_sub_technique(
         return normalized_allowed[_normalize_semantic_value(alias)]
     if alias is not None:
         return alias
+    if category == "pwn" and family == "format_string" and value:
+        return _semantic_slug(value)
     for normalized, original in normalized_allowed.items():
         if normalized and (normalized in value.split() or normalized in value):
             return original

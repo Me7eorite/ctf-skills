@@ -12,6 +12,19 @@ from hermes.process import HERMES_TIMEOUT_RETURNCODE, HermesProcessResult
 
 DesignInvoke = Callable[..., HermesProcessResult]
 DesignExecutionResult = tuple[str, int, float]
+PROVIDER_RATE_LIMITED_ERROR = "provider_rate_limited"
+_RATE_LIMIT_MARKERS = (
+    "http 429",
+    "429 too many requests",
+    "too many requests",
+    "throttling",
+    "throttled",
+    "rate_limit",
+    "rate limit",
+    "quota exceeded",
+    "quota_exceeded",
+    "overloaded_error",
+)
 
 
 class DesignChallengeExecutor:
@@ -54,10 +67,17 @@ class DesignChallengeExecutor:
         return result.stdout, result.returncode, duration_s
 
 
-def last_error_for_exit_code(exit_code: int) -> str | None:
+def last_error_for_exit_code(exit_code: int, output_text: str = "") -> str | None:
     """Translate Hermes exit code into the persisted attempt error string."""
     if exit_code == 0:
         return None
+    if is_provider_rate_limit_error(output_text):
+        return PROVIDER_RATE_LIMITED_ERROR
     if exit_code == HERMES_TIMEOUT_RETURNCODE:
         return "timeout"
     return f"Hermes exited with {exit_code}"
+
+
+def is_provider_rate_limit_error(text: str) -> bool:
+    lowered = text.lower()
+    return any(marker in lowered for marker in _RATE_LIMIT_MARKERS)

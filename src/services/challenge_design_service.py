@@ -34,6 +34,7 @@ from persistence.repositories import (
 from persistence.session import SessionFactory, transaction
 from services.design_agent_executor import (
     DesignChallengeExecutor,
+    PROVIDER_RATE_LIMITED_ERROR,
     last_error_for_exit_code,
 )
 from services.design_governance import (
@@ -187,9 +188,19 @@ class ChallengeDesignService:
                     f"project root: {leak_list}",
                     started.max_attempts,
                 )
-            exit_error = last_error_for_exit_code(exit_code)
+            log_text = _read_text_if_small(log_path)
+            exit_error = last_error_for_exit_code(
+                exit_code,
+                "\n".join((stdout, log_text)),
+            )
             if exit_error is not None:
-                return self._fail_attempt(attempt, log_rel, exit_error, started.max_attempts)
+                return self._fail_attempt(
+                    attempt,
+                    log_rel,
+                    exit_error,
+                    started.max_attempts,
+                    retryable=exit_error == PROVIDER_RATE_LIMITED_ERROR,
+                )
 
             parsed = _parse_design_output_with_workspace_fallback(stdout, workspace)
             parsed = normalize_design_payload_for_task(parsed, started.design_task)
@@ -301,8 +312,12 @@ class ChallengeDesignService:
                     f"generation request {design_task.generation_request_id} does not exist"
                 )
 
-            latest_attempt = design_repo.latest_attempt(design_task_id)
-            if latest_attempt is not None and latest_attempt.attempt >= request.max_attempts:
+            attempts = design_repo.list_attempts(design_task_id)
+            latest_attempt = attempts[-1] if attempts else None
+            consumed_attempts = [
+                item for item in attempts if item.last_error != PROVIDER_RATE_LIMITED_ERROR
+            ]
+            if len(consumed_attempts) >= request.max_attempts:
                 raise ChallengeDesignConflictError(
                     f"design task {design_task_id} exhausted {request.max_attempts} attempt(s)"
                 )
@@ -402,6 +417,8 @@ class ChallengeDesignService:
         log_path: str,
         last_error: str,
         max_attempts: int,
+        *,
+        retryable: bool = False,
     ) -> ChallengeDesignServiceResult:
         with transaction(factory=self.session_factory) as session:
             design_repo = ChallengeDesignRepository(session)
@@ -410,7 +427,7 @@ class ChallengeDesignService:
                 attempt.claim_token,
                 log_path,
                 last_error,
-                max_attempts,
+                max(attempt.attempt + 1, max_attempts) if retryable else max_attempts,
             )
             task = DesignTaskRepository(session).get_design_task(failed.design_task_id)
             if task is None:
@@ -601,17 +618,48 @@ def _recover_design_output_from_workspace(workspace: Path) -> dict[str, Any] | N
 
 def _iter_workspace_output_candidates(workspace: Path) -> list[Path]:
     suffixes = {".json", ".txt", ".md", ".out"}
+    priority = [
+        workspace / "state" / "design_output.json",
+        workspace / "design_output.json",
+    ]
     candidates: list[Path] = []
+    seen: set[Path] = set()
+    priority_count = 0
+    for path in priority:
+        if path.is_file():
+            candidates.append(path)
+            seen.add(path.resolve())
+            priority_count += 1
     try:
         iterator = workspace.rglob("*")
         for path in iterator:
             if not path.is_file() or path.name.startswith("."):
                 continue
+            try:
+                resolved = path.resolve()
+            except OSError:
+                resolved = path
+            if resolved in seen:
+                continue
             if path.suffix.lower() in suffixes:
                 candidates.append(path)
     except OSError:
-        return []
-    return sorted(candidates, key=lambda path: path.relative_to(workspace).as_posix())
+        return candidates
+    head = candidates[:priority_count]
+    tail = sorted(
+        candidates[priority_count:],
+        key=lambda path: path.relative_to(workspace).as_posix(),
+    )
+    return head + tail
+
+
+def _read_text_if_small(path: Path, *, limit: int = 1_000_000) -> str:
+    try:
+        if not path.is_file() or path.stat().st_size > limit:
+            return ""
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
 
 
 def _reservation_prompt_mapping(

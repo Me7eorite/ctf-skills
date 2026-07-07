@@ -11,6 +11,7 @@ from hermes import process as hermes_process
 from hermes.process import HERMES_TIMEOUT_RETURNCODE, HermesProcessResult, invoke_capture
 from services.design_agent_executor import (
     DesignChallengeExecutor,
+    PROVIDER_RATE_LIMITED_ERROR,
     last_error_for_exit_code,
 )
 
@@ -157,6 +158,16 @@ def test_timeout_exit_code_maps_to_timeout_error():
 
 def test_nonzero_exit_code_maps_to_hermes_error():
     assert last_error_for_exit_code(7) == "Hermes exited with 7"
+
+
+def test_nonzero_rate_limit_output_maps_to_provider_rate_limited():
+    assert (
+        last_error_for_exit_code(
+            1,
+            "HTTP 429 Too Many Requests: quota exceeded",
+        )
+        == PROVIDER_RATE_LIMITED_ERROR
+    )
 
 
 def test_success_exit_code_has_no_error():

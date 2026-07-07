@@ -120,7 +120,7 @@ class DesignProfileReservationRepository:
         return _reservation(row) if row else None
 
     def list_for_task(self, design_task_id: UUID) -> list[dto.DesignProfileReservation]:
-        rows = self.session.scalars(
+        rows = _all_scalars(self.session.scalars(
             sa.select(model.DesignProfileReservation)
             .where(model.DesignProfileReservation.design_task_id == design_task_id)
             .order_by(
@@ -128,7 +128,7 @@ class DesignProfileReservationRepository:
                 model.DesignProfileReservation.created_at.desc(),
                 model.DesignProfileReservation.id,
             )
-        ).all()
+        ))
         return [_reservation(row) for row in rows]
 
     def reserve_task(
@@ -291,6 +291,13 @@ def _reservation(row: model.DesignProfileReservation) -> dto.DesignProfileReserv
         committed_at=row.committed_at,
         released_at=row.released_at,
     )
+
+
+def _all_scalars(result):
+    all_method = getattr(result, "all", None)
+    if callable(all_method):
+        return all_method()
+    return list(result)
 
 
 def _ledger(row: model.DesignProfileLedger) -> dto.DesignProfileLedger:

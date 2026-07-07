@@ -93,6 +93,9 @@ class FakeDesignExecutor:
                 "workspace": Path(workspace),
             }
         )
+        if self.stdout:
+            Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(log_path).write_text(self.stdout, encoding="utf-8")
         return self.stdout, self.exit_code, 0.01
 
 
@@ -865,6 +868,33 @@ def test_timeout_path_records_timeout(
     assert result.design_task_status == "queued"
     assert result.attempt_status == "failed"
     assert result.error == "timeout"
+
+
+def test_rate_limit_failure_is_retryable_and_does_not_exhaust_attempt_budget(
+    session_factory: SessionFactory,
+    tmp_path: Path,
+):
+    task_id, _ = _seed(session_factory, max_attempts=1)
+    executor = FakeDesignExecutor(
+        stdout="HTTP 429 Too Many Requests: quota exceeded",
+        exit_code=1,
+    )
+    service = _service(tmp_path, session_factory, executor)
+
+    first = service.design_for_task(task_id, "alice")
+    executor.stdout = _valid_stdout()
+    executor.exit_code = 0
+    second = service.design_for_task(task_id, "alice")
+
+    assert first.design_task_status == "queued"
+    assert first.attempt_status == "failed"
+    assert first.error == "provider_rate_limited"
+    assert second.design_task_status == "designed"
+    assert second.attempt_status == "completed"
+    with session_factory() as session:
+        attempts = ChallengeDesignRepository(session).list_attempts(task_id)
+        assert [attempt.attempt for attempt in attempts] == [1, 2]
+        assert attempts[0].last_error == "provider_rate_limited"
 
 
 def test_missing_design_binding_falls_back_to_default_profile(

@@ -327,7 +327,7 @@ def test_profile_capacity_preserves_freeform_subtechniques() -> None:
         target_count=1,
         semantic_assignments=[
             {
-                "family": "stack",
+                "family": "format_string",
                 "sub_technique": "64 bit stack offset determination",
             }
         ],
@@ -335,8 +335,8 @@ def test_profile_capacity_preserves_freeform_subtechniques() -> None:
 
     assert result.can_allocate is True
     assert result.allocations[0].profile.semantic == {
-        "family": "stack",
-        "sub_technique": "64 bit stack offset determination",
+        "family": "format_string",
+        "sub_technique": "64_bit_stack_offset_determination",
     }
 
 
@@ -426,6 +426,56 @@ def test_unknown_subtechnique_is_preserved_as_open_semantic_key() -> None:
     )
 
     assert semantic == {"family": "stack", "sub_technique": "rainbow table"}
+
+
+def test_pwn_format_string_freeform_subtechniques_slug_instead_of_collapsing() -> None:
+    cases = {
+        "64 bit stack offset determination": "64_bit_stack_offset_determination",
+        "GOT overwrite with %n": "got_overwrite_with_n",
+        "Format string with stack pivot": "format_string_with_stack_pivot",
+        "byte by byte leak": "byte_by_byte_leak",
+    }
+
+    normalized = [
+        normalize_semantic_assignment(
+            taxonomy_for_category("pwn"),
+            {"family": "format_string", "sub_technique": raw},
+        )
+        for raw in cases
+    ]
+
+    assert [item["sub_technique"] for item in normalized] == list(cases.values())
+    assert "format_string_got" not in {item["sub_technique"] for item in normalized}
+
+
+def test_profile_capacity_preserves_pwn_format_string_freeform_subtechniques() -> None:
+    result = profile_capacity_check(
+        category="pwn",
+        target_count=3,
+        semantic_assignments=[
+            {
+                "family": "format_string",
+                "sub_technique": "64 bit stack offset determination",
+            },
+            {"family": "format_string", "sub_technique": "GOT overwrite with %n"},
+            {
+                "family": "format_string",
+                "sub_technique": "Format string with stack pivot",
+            },
+        ],
+    )
+
+    subtechniques = [
+        item.profile.semantic["sub_technique"] for item in result.allocations
+    ]
+    assert result.can_allocate is True
+    assert subtechniques == [
+        "64_bit_stack_offset_determination",
+        "got_overwrite_with_n",
+        "format_string_with_stack_pivot",
+    ]
+    assert len(set(subtechniques)) == 3
+    assert set(subtechniques) != {"format_string_got"}
 
 
 def test_capacity_check_accepts_new_subtechniques_for_any_category() -> None:

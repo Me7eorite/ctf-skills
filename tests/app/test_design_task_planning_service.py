@@ -30,7 +30,10 @@ from persistence.repositories import (
 from persistence.session import SessionFactory
 from services import DesignTaskPlanningService, ResearchJobService
 from services import design_task_planning_service as planning_module
-from services.design_task_planning_service import validate_finding_provenance
+from services.design_task_planning_service import (
+    _semantic_assignments_for_findings,
+    validate_finding_provenance,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -170,6 +173,116 @@ def test_generate_creates_target_count_drafts(session_factory: SessionFactory):
     assert all(t.generation_request_id == request.id for t in tasks)
     assert all(t.challenge_id.startswith("web-") for t in tasks)
     assert all(t.finding_ids for t in tasks)
+
+
+def test_generate_uses_distinct_finding_semantics_after_successful_research(
+    session_factory: SessionFactory,
+):
+    request, _ = _seed(
+        session_factory,
+        target_count=2,
+        distribution={"easy": 2},
+        finding_labels=["blind SQLi", "DOM XSS", "SSRF"],
+    )
+    service = DesignTaskPlanningService(session_factory)
+
+    tasks = service.generate_for_request(request.id)
+
+    assert len(tasks) == 2
+    assert {t.primary_technique for t in tasks} == {"blind SQLi", "DOM XSS"}
+    assert {t.diversity_flags["family"] for t in tasks} >= {"injection", "client_side"}
+
+
+def test_pwn_bss_variable_write_gets_matching_reservation_profile(
+    session_factory: SessionFactory,
+):
+    request, _ = _seed(
+        session_factory,
+        target_count=1,
+        distribution={"easy": 1},
+        category="pwn",
+        finding_labels=["BSS variable modification"],
+    )
+    service = DesignTaskPlanningService(session_factory)
+
+    [task] = service.generate_for_request(request.id)
+
+    assert task.primary_technique == "BSS variable modification"
+    assert task.diversity_flags["family"] == "integer_oob"
+    assert task.diversity_flags["sub_technique"] == "global_bss_write"
+    assert task.current_reservation_id is not None
+    with session_factory() as session:
+        reservation = DesignProfileReservationRepository(session).get(
+            task.current_reservation_id
+        )
+        assert reservation is not None
+        assert reservation.profile["semantic"] == {
+            "family": "integer_oob",
+            "sub_technique": "global_bss_write",
+        }
+        assert reservation.profile["solve"]["required_action"] == "write_what_where"
+        assert reservation.profile["solve"]["chain_shape"] == "global-write-win"
+
+
+def test_semantic_assignments_use_real_findings() -> None:
+    findings = [
+        {"kind": "technique", "label": "64-bit stack offset determination"},
+        {"kind": "technique", "label": "GOT overwrite with %n"},
+        {"kind": "technique", "label": "Format string with stack pivot"},
+    ]
+
+    assignments = _semantic_assignments_for_findings("pwn", findings)
+
+    assert {item["family"] for item in assignments} == {"format_string"}
+    assert [item["sub_technique"] for item in assignments] == [
+        "64_bit_stack_offset_determination",
+        "got_overwrite_with_n",
+        "format_string_with_stack_pivot",
+    ]
+    assert len({item["sub_technique"] for item in assignments}) == 3
+    assert {item["sub_technique"] for item in assignments} != {"format_string_got"}
+
+
+def test_generate_reservations_preserve_task_semantic_diversity(
+    session_factory: SessionFactory,
+):
+    request, _ = _seed(
+        session_factory,
+        target_count=5,
+        distribution={"easy": 5},
+        category="pwn",
+        finding_labels=[
+            "64-bit stack offset determination",
+            "GOT overwrite with %n",
+            "Format string with stack pivot",
+            "stack canary leak",
+            "byte by byte leak",
+        ],
+    )
+    service = DesignTaskPlanningService(session_factory)
+
+    tasks = service.generate_for_request(request.id)
+
+    assert len(tasks) == 5
+    assert all(task.current_reservation_id is not None for task in tasks)
+    with session_factory() as session:
+        reservations = list(
+            session.scalars(
+                sa.select(reservation_model.DesignProfileReservation)
+                .where(
+                    reservation_model.DesignProfileReservation.generation_request_id
+                    == request.id,
+                    reservation_model.DesignProfileReservation.state == "reserved",
+                )
+                .order_by(reservation_model.DesignProfileReservation.created_at)
+            )
+        )
+    subtechniques = [
+        str(row.profile["semantic"]["sub_technique"]) for row in reservations
+    ]
+    assert len(reservations) == 5
+    assert len(set(subtechniques)) > 1
+    assert set(subtechniques) != {"format_string_got"}
 
 
 def test_generated_challenge_ids_are_distinct_across_requests(

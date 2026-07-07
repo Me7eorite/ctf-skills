@@ -41,7 +41,7 @@ class DesignEvidenceRepository:
         return _evidence(row) if row else None
 
     def list_for_task(self, design_task_id: UUID) -> list[dto.DesignEvidence]:
-        rows = self.session.scalars(
+        rows = _all_scalars(self.session.scalars(
             sa.select(model.DesignEvidence)
             .where(model.DesignEvidence.design_task_id == design_task_id)
             .order_by(
@@ -49,7 +49,7 @@ class DesignEvidenceRepository:
                 model.DesignEvidence.created_at.desc(),
                 model.DesignEvidence.id,
             )
-        ).all()
+        ))
         return [_evidence(row) for row in rows]
 
     def list_live_for_request(
@@ -207,3 +207,10 @@ def _evidence(row: model.DesignEvidence) -> dto.DesignEvidence:
         superseded_by_evidence_id=row.superseded_by_evidence_id,
         supersession_reason=row.supersession_reason,
     )
+
+
+def _all_scalars(result):
+    all_method = getattr(result, "all", None)
+    if callable(all_method):
+        return all_method()
+    return list(result)

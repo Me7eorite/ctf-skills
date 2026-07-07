@@ -37,6 +37,7 @@ from domain.design.profile_taxonomy import (
     allocate_profile_batch,
     canonical_profile_signatures,
     load_profile_policy,
+    normalize_semantic_assignment,
     profile_capacity_check,
     taxonomy_for_category,
 )
@@ -417,12 +418,15 @@ class DesignTaskPlanningService:
             zip(tasks, candidates, strict=True),
             key=lambda item: item[0].task_no,
         )
+        taxonomy = taxonomy_for_category(generation_request.category)
         semantic_assignments = [
-            {
-                "family": str(candidate["diversity_flags"]["family"]),
-                "sub_technique": str(candidate["diversity_flags"]["sub_technique"]),
-            }
-            for _task, candidate in ordered
+            _normalized_candidate_semantic(
+                taxonomy,
+                candidate,
+                task.primary_technique,
+                category=generation_request.category,
+            )
+            for task, candidate in ordered
         ]
 
         for attempt in range(2):
@@ -960,12 +964,61 @@ def _semantic_assignments_for_findings(
     findings: Sequence[research_dto.ResearchFinding],
 ) -> list[dict[str, str]]:
     taxonomy = taxonomy_for_category(category)
-    family = next(iter(taxonomy.semantic.fields["family"]))
-    sub_technique = next(iter(taxonomy.semantic.fields["sub_technique"]))
     return [
-        {"family": family, "sub_technique": sub_technique}
-        for _finding in findings
+        _closed_semantic_assignment(
+            taxonomy,
+            family=resolve_family(finding, category=category),
+            sub_technique=resolve_sub_technique(finding),
+        )
+        for finding in findings
     ]
+
+
+def _normalized_candidate_semantic(
+    taxonomy,
+    candidate: Mapping[str, Any],
+    primary_technique: str,
+    *,
+    category: str,
+) -> dict[str, str]:
+    flags = dict(candidate.get("diversity_flags") or {})
+    semantic = _closed_semantic_assignment(
+        taxonomy,
+        family=str(
+            flags.get("family")
+            or resolve_family({"label": primary_technique}, category=category)
+        ),
+        sub_technique=str(
+            flags.get("sub_technique")
+            or resolve_sub_technique({"label": primary_technique})
+        ),
+    )
+    flags.update(semantic)
+    candidate_flags = candidate.get("diversity_flags")
+    if isinstance(candidate_flags, dict):
+        candidate_flags.update(semantic)
+    return semantic
+
+
+def _closed_semantic_assignment(
+    taxonomy,
+    *,
+    family: str,
+    sub_technique: str,
+) -> dict[str, str]:
+    allowed_families = taxonomy.semantic.fields["family"]
+    if family in allowed_families:
+        closed_family = family
+    else:
+        inferred = resolve_family({"label": sub_technique}, category=taxonomy.category)
+        closed_family = inferred if inferred in allowed_families else allowed_families[0]
+    return normalize_semantic_assignment(
+        taxonomy,
+        {
+            "family": closed_family,
+            "sub_technique": sub_technique,
+        },
+    )
 
 
 # Per-category advisory mechanism vocabulary. These examples help the model talk
