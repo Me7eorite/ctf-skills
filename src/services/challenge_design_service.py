@@ -191,19 +191,8 @@ class ChallengeDesignService:
                     started.max_attempts,
                 )
             log_text = _read_text_if_small(log_path)
-            exit_error = last_error_for_exit_code(
-                exit_code,
-                "\n".join((stdout, log_text)),
-            )
-            if exit_error is not None:
-                return self._fail_attempt(
-                    attempt,
-                    log_rel,
-                    exit_error,
-                    started.max_attempts,
-                    retryable=exit_error == PROVIDER_RATE_LIMITED_ERROR,
-                )
-            if is_provider_rate_limit_error("\n".join((stdout, log_text))):
+            combined_output = "\n".join((stdout, log_text))
+            if is_provider_rate_limit_error(combined_output):
                 return self._fail_attempt(
                     attempt,
                     log_rel,
@@ -212,7 +201,19 @@ class ChallengeDesignService:
                     retryable=True,
                 )
 
-            parsed = _parse_design_output_with_workspace_fallback(stdout, workspace)
+            exit_error = last_error_for_exit_code(exit_code, combined_output)
+            if exit_error is not None:
+                recovered = _recover_design_output_from_workspace(workspace)
+                if recovered is None:
+                    return self._fail_attempt(
+                        attempt,
+                        log_rel,
+                        exit_error,
+                        started.max_attempts,
+                    )
+                parsed = recovered
+            else:
+                parsed = _parse_design_output_with_workspace_fallback(stdout, workspace)
             parsed = normalize_design_payload_for_task(parsed, started.design_task)
             _write_design_snapshot(workspace, parsed)
             validated = validate_design_payload(parsed, started.design_task)

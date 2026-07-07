@@ -51,10 +51,10 @@ def invoke_design_agent(
 
     invoke_cwd = cwd or paths.root
     if cwd is not None:
-        hermes_process.configure_isolated_hermes_home(
+        hermes_process.configure_shared_hermes_home(
             environment_map,
             source_home=template_home,
-            session_root=invoke_cwd,
+            shared_home=_shared_design_hermes_home(paths, invoke_cwd),
             profile_name=profile_name,
         )
         terminal_backend = hermes_process.effective_terminal_backend(
@@ -84,3 +84,8 @@ def invoke_design_agent(
         environment=environment_map,
         timeout=timeout,
     )
+
+
+def _shared_design_hermes_home(paths: ProjectPaths, cwd: Path) -> Path:
+    del cwd
+    return paths.root / "work" / "design" / "hermes-home"

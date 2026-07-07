@@ -10,12 +10,14 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
 
 from core.jsonio import read_json
 from core.paths import ProjectPaths, category_of
+from domain.pwn_source_audit import PwnSourceAuditFinding, audit_pwn_c_sources
 from domain.resume import (
     ChallengeResumePlan,
     build_evidence,
@@ -387,6 +389,13 @@ def _light_contract_gate(challenge_dir: Path, category: str) -> dict[str, str] |
             hint="Make validate.sh executable with mode 0755 before validation.",
         )
     if category == "pwn":
+        source_audit = audit_pwn_c_sources(
+            challenge_dir,
+            metadata,
+            _embedded_build_contract(metadata),
+        )
+        if source_audit is not None:
+            return _pwn_source_audit_failure_detail(source_audit)
         artifact = metadata.get("artifact")
         if not isinstance(artifact, str) or not artifact.startswith("attachments/") or ".." in Path(artifact).parts:
             return validation_failure_detail(
@@ -445,6 +454,43 @@ def _metadata_contract_gate(challenge_dir: Path) -> dict[str, str] | None:
         path="metadata.json",
         hint="Create metadata.json at the challenge root before validation.",
     )
+
+
+def _embedded_build_contract(metadata: dict[str, Any]) -> dict[str, Any] | None:
+    value = metadata.get("build_contract")
+    return value if isinstance(value, dict) else None
+
+
+def _pwn_source_audit_failure_detail(finding: PwnSourceAuditFinding) -> dict[str, str]:
+    detail = validation_failure_detail(
+        phase="source_audit",
+        code=finding.code,
+        status="contract_failed",
+        message=finding.message,
+        path=finding.path,
+        hint=finding.hint,
+    )
+    detail["primitive"] = _source_audit_primitive(finding.technique)
+    detail["technique"] = finding.technique
+    detail["priority"] = finding.priority
+    if finding.line is not None:
+        detail["line"] = str(finding.line)
+    if finding.evidence:
+        detail["evidence"] = json.dumps(finding.evidence, ensure_ascii=False, sort_keys=True)
+    return detail
+
+
+def _source_audit_primitive(technique: str) -> str:
+    normalized = technique.replace("_", " ").replace("-", " ").lower()
+    if "format string" in normalized or "fsb" in normalized:
+        return "format_string"
+    if "ret2win" in normalized:
+        return "ret2win"
+    if "ret2libc" in normalized or "libc" in normalized:
+        return "ret2libc"
+    if "overflow" in normalized:
+        return "stack_overflow"
+    return "pwn"
 
 
 def _is_executable_file(path: Path) -> bool:

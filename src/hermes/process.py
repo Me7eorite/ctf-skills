@@ -303,6 +303,24 @@ def configure_isolated_hermes_home(
     return isolated_home
 
 
+def configure_shared_hermes_home(
+    environment: dict[str, str],
+    *,
+    source_home: Path,
+    shared_home: Path,
+    profile_name: str,
+) -> Path:
+    """Materialize a reusable Hermes home and point the invocation at it."""
+    materialize_isolated_hermes_home(
+        shared_home,
+        source_home=source_home,
+        profile_name=profile_name,
+    )
+    environment["HERMES_HOME"] = str(shared_home)
+    environment[_CTF_HERMES_HOME_ENV] = str(shared_home)
+    return shared_home
+
+
 def materialize_isolated_hermes_home(
     target_home: Path,
     *,

@@ -103,16 +103,56 @@ def test_invoke_design_agent_uses_supplied_cwd(
 
     assert captured_call_map["cwd"] == workspace
     assert captured_call_map["environment"]["HERMES_HOME"] == str(
-        workspace / "hermes-home"
+        tmp_path / "work" / "design" / "hermes-home"
     )
     assert captured_call_map["environment"]["CTF_SKILLS_HERMES_SESSION_HOME"] == str(
-        workspace / "hermes-home"
+        tmp_path / "work" / "design" / "hermes-home"
     )
     assert captured_call_map["environment"]["TERMINAL_CWD"] == "/workspace"
     assert json.loads(captured_call_map["environment"]["TERMINAL_DOCKER_VOLUMES"]) == [
         f"{workspace.resolve()}:/workspace"
     ]
     assert captured_call_map["environment"]["CTF_SKILLS_EXECUTION_ID"] == "attempt"
+
+
+def test_invoke_design_agent_reuses_shared_design_home(
+    monkeypatch,
+    tmp_path,
+):
+    homes = []
+
+    def fake_invoke_capture(_prompt_text, **keyword_args):
+        homes.append(keyword_args["environment"]["HERMES_HOME"])
+        return HermesProcessResult(returncode=0, stdout='{"event":{},"challenges":[]}', cancelled=False)
+
+    monkeypatch.setattr(
+        hermes_process,
+        "hermes_arguments",
+        lambda: ["hermes", "chat", "-Q", "-q"],
+    )
+    monkeypatch.setattr(hermes_process, "apply_legacy_custom_provider", lambda *_args: False)
+    monkeypatch.setattr(
+        hermes_process,
+        "effective_terminal_backend",
+        lambda *_args, **_kwargs: "docker",
+    )
+    monkeypatch.setattr(hermes_design, "invoke_capture", fake_invoke_capture)
+
+    project_paths = ProjectPaths(root=tmp_path, repository=tmp_path)
+    for attempt in ("attempt-a", "attempt-b"):
+        hermes_design.invoke_design_agent(
+            "Design one challenge.",
+            profile_name="design-bot",
+            log_path=tmp_path / f"{attempt}.log",
+            timeout=45,
+            paths=project_paths,
+            cwd=tmp_path / "work" / "design" / "executions" / attempt,
+        )
+
+    assert homes == [
+        str(tmp_path / "work" / "design" / "hermes-home"),
+        str(tmp_path / "work" / "design" / "hermes-home"),
+    ]
 
 
 def test_invoke_design_agent_sets_tool_cwd_when_backend_is_not_docker(

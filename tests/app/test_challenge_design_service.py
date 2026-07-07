@@ -801,9 +801,26 @@ def test_retry_prompt_includes_previous_draft_seed_path(
     tmp_path: Path,
 ):
     task_id, _ = _seed(session_factory, max_attempts=2)
+
     first_payload = json.loads(_valid_stdout())
-    first_payload["challenges"][0]["techniques"] = ["DOM XSS", "CSP bypass"]
-    executor = FakeDesignExecutor(stdout=json.dumps(first_payload))
+    first_payload["challenges"][0]["category"] = "pwn"
+
+    class InvalidWithDraftExecutor(FakeDesignExecutor):
+        def execute(self, prompt_text, profile_name, timeout_seconds, log_path, workspace):
+            self.calls.append(
+                {
+                    "prompt_text": prompt_text,
+                    "profile_name": profile_name,
+                    "timeout_seconds": timeout_seconds,
+                    "log_path": Path(log_path),
+                    "workspace": Path(workspace),
+                }
+            )
+            if len(self.calls) == 1:
+                return json.dumps(first_payload), 0, 0.01
+            return _valid_stdout(), 0, 0.01
+
+    executor = InvalidWithDraftExecutor()
     service = _service(tmp_path, session_factory, executor)
 
     service.design_for_task(task_id, "alice")
@@ -900,6 +917,29 @@ def test_timeout_path_records_timeout(
     assert result.design_task_status == "queued"
     assert result.attempt_status == "failed"
     assert result.error == "timeout"
+
+
+def test_timeout_with_workspace_design_output_completes_attempt(
+    session_factory: SessionFactory,
+    tmp_path: Path,
+):
+    task_id, _ = _seed(session_factory, max_attempts=2)
+
+    class TimeoutWithOutputExecutor(FakeDesignExecutor):
+        def execute(self, prompt_text, profile_name, timeout_seconds, log_path, workspace):
+            state = Path(workspace) / "state"
+            state.mkdir(parents=True, exist_ok=True)
+            (state / "design_output.json").write_text(_valid_stdout(), encoding="utf-8")
+            return "", HERMES_TIMEOUT_RETURNCODE, 0.01
+
+    executor = TimeoutWithOutputExecutor()
+
+    result = _service(tmp_path, session_factory, executor).design_for_task(task_id, "alice")
+
+    assert result.design_task_status == "designed"
+    assert result.attempt_status == "completed"
+    assert result.challenge_design is not None
+    assert result.error is None
 
 
 def test_rate_limit_failure_is_retryable_and_does_not_exhaust_attempt_budget(
